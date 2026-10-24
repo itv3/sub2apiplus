@@ -1,4 +1,4 @@
-.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-tools-prerequisites test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci egress-scanner-check check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-tools-prerequisites test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-gate-fast upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci egress-scanner-check check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -502,6 +502,23 @@ test-upstream-merge-tools:
 upstream-gate-full:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner full \
 		--codex-source-root "$(CODEX_0_149_1_SOURCE_ROOT)"
+
+# 试验 worktree 定型后、建正式 Plan 之前的快线：toolchain、secret-scan、出站规格、lint、前端与定向回归，跳过采集工具线和整套
+# go test（见 tools/upstream_merge/fast_lane.py）。先用 targeted-regression-plan 生成定向回归清单，再传入：
+#   UPSTREAM_GATE_TARGETED   定向回归清单 JSON 的绝对路径（必填）
+#   UPSTREAM_GATE_REQUEST    request 或标准模板路径，候选密钥扫描取其中的 secret_scan 门禁（缺省用仓库里的标准模板）
+#   UPSTREAM_GATE_STATUS_FILE 快线状态文件（写一次，缺省在日志目录下）；UPSTREAM_GATE_LOG_DIR 日志目录（须不存在）
+#   UPSTREAM_GATE_COMPARE_WITH 同一候选下 upstream-gate-full 的状态文件，用来记录耗时差
+# 快线记录不是 U-4 全量收据；结论 failed 时退出非 0，passed_pending_ledger（待台账闭合）退出 0。
+upstream-gate-fast:
+	@test -n "$(UPSTREAM_GATE_TARGETED)" || { echo "请设置 UPSTREAM_GATE_TARGETED（targeted-regression-plan 生成的定向回归清单）"; exit 2; }
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner fast \
+		--codex-source-root "$(CODEX_0_149_1_SOURCE_ROOT)" \
+		--targeted "$(UPSTREAM_GATE_TARGETED)" \
+		$(if $(UPSTREAM_GATE_REQUEST),--request "$(UPSTREAM_GATE_REQUEST)",) \
+		$(if $(UPSTREAM_GATE_STATUS_FILE),--status-file "$(UPSTREAM_GATE_STATUS_FILE)",) \
+		$(if $(UPSTREAM_GATE_LOG_DIR),--log-dir "$(UPSTREAM_GATE_LOG_DIR)",) \
+		$(if $(UPSTREAM_GATE_COMPARE_WITH),--compare-with "$(UPSTREAM_GATE_COMPARE_WITH)",)
 
 # 上游合并正式 plan-create 前的离线预检；输出报告必须放在主仓库之外，避免把
 # 非权威报告误当成提交内容。所有参数均由调用方显式提供，不覆盖既有报告。

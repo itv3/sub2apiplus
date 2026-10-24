@@ -60,6 +60,7 @@ from .contracts import (
     upstream_range_tags,
 )
 from .ci_jobs import ci_job_coverage
+from .gate_runner import FAST_STATUS_SCHEMA
 from .disposition_receipts import (
     validate_campaign,
     validate_original_business_receipt,
@@ -4101,11 +4102,17 @@ def _load_runner_status(
     *,
     exit_code: int,
 ) -> dict[str, Any]:
-    """校验编排脚本的状态文件：字段闭合、逐步状态与汇总一致、与退出码一致。"""
+    """校验编排脚本的状态文件：字段闭合、逐步状态与汇总一致、与退出码一致。
+
+    只接受 full 模式的 schema。试验区快线（``upstream-gate-fast``）的状态文件用独立 schema，
+    它跳过了采集工具线和整套 go test，永远不能当作 U-4 全量收据，这里先于字段校验明确拒绝。
+    """
 
     validate_artifact_binding(plan.evidence_root, binding, label)
     path = resolve_within(plan.evidence_root, binding["path"], label)
     document = expect_object(load_json(path, label), label)
+    if document.get("schema_version") == FAST_STATUS_SCHEMA or document.get("mode") == "fast":
+        raise UpstreamMergeError(f"{label} 是试验区快线记录（{FAST_STATUS_SCHEMA}），不是 U-4 全量收据，拒绝采信")
     expect_exact_fields(document, RUNNER_STATUS_FIELDS, label)
     if document.get("schema_version") != RUNNER_STATUS_SCHEMA:
         raise UpstreamMergeError(f"{label} schema_version 非法")

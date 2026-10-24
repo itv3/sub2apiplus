@@ -30,6 +30,12 @@
 ``backend`` 模式只跑 lint 与 go-tests 两条线，供 ``backend/Makefile`` 的 test-gate 使用；``full``
 模式跑全部五条，供根 Makefile 的 upstream-gate-full 使用。
 
+``fast`` 模式是试验 worktree 的快线（根 Makefile 的 upstream-gate-fast，实现见 ``fast_lane.py``）：检查线为
+toolchain、secret-scan、egress-spec、lint、frontend 与按定向回归清单生成的 targeted-regression，跳过采集工具线和
+整套 go test。它写独立的状态文件（``FAST_STATUS_SCHEMA``），``workflow._load_runner_status`` 只认 full 模式的
+schema，快线记录永远不能当作 U-4 收据。本模块提供的通用机制——内联步骤、失败归因、日志区间记录——都不改变
+full／backend 模式的行为与状态文件形状。
+
 同时运行的检查线数由 ``--jobs`` 或环境变量 ``UPSTREAM_GATE_JOBS`` 控制，默认 1：检查线
 依次执行，只有采集工具在线内按单元并行。实测五条线全部并行时（10 核、16 GiB）总耗时 1129
 秒，但满载下计时敏感用例会误判——``TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime``
@@ -58,18 +64,20 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from .fast_attribution import classify_egress_spec_summary, classify_go_test_output
 from .toolchain import LINT_BINARY_ENV
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "codex-cli-0.149.1"
 # go test 与 golangci-lint 共用的三组构建标签；空字符串表示默认标签。
 BUILD_TAGS = ("", "unit", "integration")
-MODES = ("backend", "full")
+MODES = ("backend", "full", "fast")
 GO_JSON_DIR_ENV = "UPSTREAM_GATE_GO_JSON_DIR"
 # integration 组的执行方式：auto 按本机 Docker 是否可用决定，run 强制执行，skip 强制不执行。
 INTEGRATION_ENV = "UPSTREAM_GATE_INTEGRATION"
@@ -79,6 +87,17 @@ STATUS_FILE_ENV = "UPSTREAM_GATE_STATUS_FILE"
 STATUS_SCHEMA = "official-egress-upstream-gate-runner-status/v1"
 # 统一调度执行器的记录目录（tools/ci/unit_executor.py 的 _out_dir 读取）。
 UNIT_EXECUTOR_OUT_DIR_ENV = "UNIT_EXECUTOR_OUT_DIR"
+# 试验区快线（fast 模式）：独立的状态文件 schema。workflow 的 U-4 读侧据此拒绝把快线记录当收据。
+FAST_STATUS_SCHEMA = "official-egress-upstream-gate-fast-status/v1"
+# 快线的输入（均可用命令行参数覆盖）：request 或标准模板（供候选密钥扫描）、定向回归清单、日志目录、
+# 与原全量状态文件对比耗时。
+REQUEST_ENV = "UPSTREAM_GATE_REQUEST"
+TARGETED_ENV = "UPSTREAM_GATE_TARGETED"
+LOG_DIR_ENV = "UPSTREAM_GATE_LOG_DIR"
+COMPARE_WITH_ENV = "UPSTREAM_GATE_COMPARE_WITH"
+# 步骤的失败归因种类：go test 输出（按日志区间）与出站规格线（按执行器汇总）。
+ATTRIBUTION_GO_TEST = "go_test"
+ATTRIBUTION_EGRESS_SPEC = "egress_spec"
 
 
 @dataclass(frozen=True)
@@ -96,6 +115,13 @@ class Step:
     unit_executor: bool = False
     # 需要本机 Docker 的步骤；Docker 不可用时记为 not_executed，由同一提交的 CI 证据补齐。
     requires_docker: bool = False
+    # 在本进程内执行的步骤（秒级的前置检查）：返回 (退出码, 写进日志的文本)，不起子进程。
+    inline: Callable[[], tuple[int, str]] | None = None
+    # 统一调度执行器汇总所在的子目录：make check-egress-spec 经 entry_gates 把汇总写在 <记录目录>/check-egress-spec 下。
+    unit_summary_subdir: str = ""
+    # 失败后做归因（快线用）：ATTRIBUTION_GO_TEST 读本步骤在线日志里的输出区间，
+    # ATTRIBUTION_EGRESS_SPEC 读执行器汇总。None 表示不归因。
+    attribution: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,10 +140,24 @@ class StepResult:
     exit_code: int | None
     duration_seconds: float
     reason: str | None = None
+    # 以下只在快线用：失败归因、归因依据、本步骤输出所在的线日志与字节区间、归因细节。
+    classification: str | None = None
+    classification_reason: str | None = None
+    log_path: str | None = None
+    log_range: tuple[int, int] | None = None
+    detail: dict | None = None
 
     @property
     def key(self) -> str:
         return f"{self.lane}/{self.step}"
+
+
+def _with(result: StepResult, **changes) -> StepResult:
+    """复制一份 StepResult 并替换指定字段（数据类是冻结的）。"""
+
+    values = {name: getattr(result, name) for name in result.__dataclass_fields__}
+    values.update(changes)
+    return StepResult(**values)
 
 
 def _tag_label(tag: str) -> str:
@@ -158,6 +198,8 @@ def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
 
     if mode not in MODES:
         raise ValueError(f"未知模式：{mode}")
+    if mode == "fast":
+        raise ValueError("fast 模式的检查线取决于定向回归清单，请用 fast_lane.build_fast_lanes")
     lint = Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS))
     go_tests = Lane("go-tests", tuple(_go_test_step(tag) for tag in BUILD_TAGS))
     if mode == "backend":
@@ -278,6 +320,8 @@ class _Runner:
             log.flush()
             return StepResult(lane.name, step.name, "not_executed", None, 0.0, reason)
         log.flush()
+        if step.inline is not None:
+            return self._run_inline_step(lane, step, log)
         env = dict(self.env)
         env.update(dict(step.env))
         unit_out_dir = self.log_dir / f"{lane.name}-{step.name}-units" if step.unit_executor else None
@@ -291,6 +335,8 @@ class _Runner:
             json_output = Path(self.go_json_dir) / step.go_json_name
             log.write(f"go test 事件流写入 {json_output}\n".encode("utf-8"))
             log.flush()
+        # 本步骤输出在线日志里的起点：子进程与本进程共用同一个文件描述符，位置只能看文件大小。
+        log_start = os.fstat(log.fileno()).st_size
         started = time.monotonic()
         stdout = json_output.open("wb") if json_output is not None else log
         try:
@@ -324,12 +370,93 @@ class _Runner:
         duration = time.monotonic() - started
         status = "passed" if exit_code == 0 else "failed"
         if unit_out_dir is not None:
-            _attach_unit_executor_failures(unit_out_dir, log)
+            _attach_unit_executor_failures(unit_out_dir / step.unit_summary_subdir, log)
         if json_output is not None:
             _append_go_json_failures(json_output, log)
+        log.flush()
+        log_end = os.fstat(log.fileno()).st_size
+        result = StepResult(
+            lane.name,
+            step.name,
+            status,
+            exit_code,
+            round(duration, 1),
+            log_path=str(self.log_path(lane)),
+            log_range=(log_start, log_end),
+        )
+        if status == "failed" and step.attribution is not None:
+            result = self._attribute(result, step, log, log_start, log_end, unit_out_dir)
+        log.write(f"--- [{lane.name}] {step.name}: 退出码 {exit_code}，{duration:.1f} 秒\n".encode("utf-8"))
+        if result.classification is not None:
+            log.write(f"--- [{lane.name}] {step.name}: 失败归因 {result.classification}：{result.classification_reason}\n".encode("utf-8"))
+        log.flush()
+        return result
+
+    def _run_inline_step(self, lane: Lane, step: Step, log) -> StepResult:
+        """在本进程内执行的秒级检查：输出文本写进线日志，异常一律记为失败。"""
+
+        assert step.inline is not None
+        log_start = os.fstat(log.fileno()).st_size
+        started = time.monotonic()
+        try:
+            exit_code, text = step.inline()
+        except Exception as error:  # noqa: BLE001 - 前置检查自身出错也必须成为可见的失败，而不是中断整条线
+            exit_code, text = 1, f"内联检查异常：{type(error).__name__}：{error}\n"
+        duration = time.monotonic() - started
+        log.write(text.encode("utf-8", errors="replace"))
+        log.flush()
+        log_end = os.fstat(log.fileno()).st_size
         log.write(f"--- [{lane.name}] {step.name}: 退出码 {exit_code}，{duration:.1f} 秒\n".encode("utf-8"))
         log.flush()
-        return StepResult(lane.name, step.name, status, exit_code, round(duration, 1))
+        return StepResult(
+            lane.name,
+            step.name,
+            "passed" if exit_code == 0 else "failed",
+            exit_code,
+            round(duration, 1),
+            log_path=str(self.log_path(lane)),
+            log_range=(log_start, log_end),
+        )
+
+    def _attribute(self, result: StepResult, step: Step, log, log_start: int, log_end: int, unit_out_dir: Path | None) -> StepResult:
+        """对失败步骤做归因（只记录，不改变通过／失败）。归因过程自身出错一律按功能失败处理。"""
+
+        try:
+            if step.attribution == ATTRIBUTION_EGRESS_SPEC:
+                if unit_out_dir is None:
+                    raise ValueError("出站规格归因需要统一调度执行器记录目录")
+                attribution = classify_egress_spec_summary(
+                    unit_out_dir / step.unit_summary_subdir / "summary.json", source_root=self.repository_root / "backend"
+                )
+            elif step.attribution == ATTRIBUTION_GO_TEST:
+                with open(self.log_path_of(log), "rb") as handle:
+                    handle.seek(log_start)
+                    text = handle.read(log_end - log_start).decode("utf-8", errors="replace")
+                attribution = classify_go_test_output(text, source_root=self.repository_root / "backend")
+            else:
+                raise ValueError(f"未知的归因种类：{step.attribution}")
+        except Exception as error:  # noqa: BLE001 - 归因失败时保守处理为功能失败
+            from .fast_attribution import CLASS_FUNCTIONAL
+
+            return _with(
+                result,
+                classification=CLASS_FUNCTIONAL,
+                classification_reason=f"归因过程出错，按功能失败处理：{type(error).__name__}：{error}",
+                log_path=self.log_path_of(log),
+                log_range=(log_start, log_end),
+            )
+        return _with(
+            result,
+            classification=attribution.classification,
+            classification_reason=attribution.reason,
+            log_path=self.log_path_of(log),
+            log_range=(log_start, log_end),
+            detail=attribution.as_detail(),
+        )
+
+    @staticmethod
+    def log_path_of(log) -> str:
+        return str(log.name)
 
     def stop_all(self) -> None:
         with self._lock:
@@ -410,6 +537,8 @@ def run_lanes(
     docker_skip_reason: str | None = None,
     status_file: Path | None = None,
     mode: str = "custom",
+    render: Callable[..., str] | None = None,
+    progress: Callable[..., str] | None = None,
 ) -> tuple[list[StepResult], float]:
     """执行检查线，返回结果与总耗时。
 
@@ -417,6 +546,8 @@ def run_lanes(
     并发时按结束先后整段写出、互不交错；全部结束后写汇总表（按检查线顺序）。中途被终止时已结束检查线
     的日志已经写出。status_file 非空时另写一份机器可读结果，只在全部结束后写一次，供 gates-run 判断
     是否有未执行、须由 CI 补齐的步骤。
+
+    ``render`` 与 ``progress`` 供快线替换汇总表与进度行（快线要区分功能失败和待台账闭合）；默认沿用 full 模式的写法。
     """
 
     if jobs < 1:
@@ -449,7 +580,9 @@ def run_lanes(
             if path.is_file():
                 with path.open("rb") as handle:
                     shutil.copyfileobj(handle, stream)
-            line = _progress_line(lane, lane_results, done=len(finished), total=len(lanes), elapsed=time.monotonic() - started)
+            line = (progress or _progress_line)(
+                lane, lane_results, done=len(finished), total=len(lanes), elapsed=time.monotonic() - started
+            )
             stream.write(line.encode("utf-8"))
             stream.flush()
         return lane_results
@@ -475,7 +608,7 @@ def run_lanes(
             signal.signal(signal.SIGTERM, previous_handler)
     elapsed = round(time.monotonic() - started, 1)
     ordered = [result for lane in lanes for result in results[lane.name]]
-    stream.write(render_summary(ordered, jobs=jobs, elapsed=elapsed).encode("utf-8"))
+    stream.write((render or render_summary)(ordered, jobs=jobs, elapsed=elapsed).encode("utf-8"))
     stream.flush()
     if status_file is not None:
         write_status_file(status_file, ordered, mode=mode, jobs=jobs, elapsed=elapsed)
@@ -574,15 +707,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python3 -m tools.upstream_merge.gate_runner",
         description="上游合并 U-4 门禁的编排：检查线遇错不停、采集工具走统一调度执行器、结束后统一汇总",
     )
-    parser.add_argument("mode", choices=MODES, help="backend 只跑 go test 与 lint；full 跑全部检查线")
-    parser.add_argument("--jobs", type=int, help="同时运行的检查线数；默认取 UPSTREAM_GATE_JOBS，未设置时为 1")
+    parser.add_argument(
+        "mode",
+        choices=MODES,
+        help="backend 只跑 go test 与 lint；full 跑全部检查线；fast 是试验区快线（需要 --targeted 定向回归清单）",
+    )
+    parser.add_argument("--jobs", type=int, help="同时运行的检查线数；默认取 UPSTREAM_GATE_JOBS，未设置时为 1；fast 模式恒为 1")
     parser.add_argument(
         "--codex-source-root",
         type=Path,
         default=DEFAULT_CODEX_SOURCE_ROOT,
         help="check-egress-spec-local-source 使用的只读 Codex 源码根",
     )
+    fast = parser.add_argument_group("fast 模式")
+    fast.add_argument("--targeted", type=Path, help=f"定向回归清单（targeted-regression-plan 生成）；默认取 {TARGETED_ENV}")
+    fast.add_argument(
+        "--request",
+        type=Path,
+        help=f"request 或标准模板，候选密钥扫描取其中的 secret_scan 门禁；默认取 {REQUEST_ENV}，再默认仓库里的标准模板",
+    )
+    fast.add_argument("--status-file", type=Path, help=f"快线状态文件（写一次）；默认取 {STATUS_FILE_ENV}，再默认日志目录下的 fast-status.json")
+    fast.add_argument("--log-dir", type=Path, help=f"快线日志目录（必须不存在，结束后保留）；默认取 {LOG_DIR_ENV}，再默认临时目录")
+    fast.add_argument(
+        "--compare-with",
+        type=Path,
+        help=f"同一候选、同一环境下 upstream-gate-full 的状态文件，用来记录耗时差；默认取 {COMPARE_WITH_ENV}",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.mode == "fast":
+        return _main_fast(arguments, parser)
     try:
         jobs = arguments.jobs if arguments.jobs is not None else default_jobs()
     except ValueError as error:
@@ -605,6 +758,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     # 未执行不算失败：退出码只反映已执行步骤；是否须由 CI 补齐看状态文件与汇总结论。
     return 1 if any(item.status == "failed" for item in results) else 0
+
+
+def _env_path(name: str) -> Path | None:
+    raw = os.environ.get(name, "").strip()
+    return Path(raw) if raw else None
+
+
+def _main_fast(arguments: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """fast 模式入口：启动前检查不过就拒绝（退出码 2，不执行任何检查线）；否则跑快线，failed 退出 1，其余 0。"""
+
+    # 延迟导入：fast_lane 依赖 workflow／gate_guard，而 workflow 经 ci_jobs 反过来导入本模块。
+    from .errors import UpstreamMergeError
+    from .fast_lane import prepare_fast_run, run_fast
+
+    try:
+        context = prepare_fast_run(
+            REPOSITORY_ROOT,
+            arguments.codex_source_root,
+            targeted=arguments.targeted or _env_path(TARGETED_ENV),
+            request=arguments.request or _env_path(REQUEST_ENV),
+            status_file=arguments.status_file or _env_path(STATUS_FILE_ENV),
+            log_dir=arguments.log_dir or _env_path(LOG_DIR_ENV),
+            compare_with=arguments.compare_with or _env_path(COMPARE_WITH_ENV),
+        )
+    except UpstreamMergeError as error:
+        print(f"快线拒绝启动：{error}", file=sys.stderr)
+        return 2
+    exit_code, _document = run_fast(context)
+    return exit_code
 
 
 if __name__ == "__main__":
