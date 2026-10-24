@@ -1,0 +1,725 @@
+{
+  "base_commit": "46b88637d34560ce144ee8765ca8bd0a05a44266",
+  "changed_path_count": 88,
+  "current_commit": "d172ed94301b215214480c3e1880b7a622ea74c7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6887,
+  "frozen_path_count": 2279,
+  "identity_sha256": "3ed294f56e43406d826f8c0d094b5365c9837fd3147bd9746cbff6bbb533c3b1",
+  "issued_at_utc": "2026-10-24T14:47:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "b43b4faaf50801f26aaf9ef01992dce7b3e3967283c053ecfe042bb0ec872f86"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-desktop-chatgpt-login-catalog-note-20261024-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-fix-20261024-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-readme-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "25145ac1e3cf4d87089abb9505a5f206c2029abde56d6897a9cfdce8fa9bc12a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/wire.go",
+      "predecessor_sha256s": [
+        "89d652336588c69061f351d9730f497d5dd4ae7bae292a3229daf99eba502b2d"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/cmd/server/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0339bdbb19d27cd484362c916dff6e0e9d3db6a6028fa4e41f8c1a8562c80080"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256s": [
+        "a9ef9cfa5793c80726662cefe20e6dc6bbada3c48f68716eec13b0219854efa8"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/cmd/server/wire_gen.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d4fa500bf12360f1674b17fea3e8a007b1778a126d5ccaaafcab78063856d148"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen_test.go",
+      "predecessor_sha256s": [
+        "3af6c1c2c2bcc80992fb0806cc64d6e9c59af4d26f4d754e6d8167576a75bd28"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/cmd/server/wire_gen_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9c75cc4812892e00887a4568507cd523bd89f8d750a48b8f608a3c76193f2c13"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/composite_platform_test.go",
+      "predecessor_sha256s": [
+        "4bc64bdea47f2dc6ce03b439d7beffde2674a0d44fc2cb70692b748a52ab89a6"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/handler/composite_platform_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0f11993f78d3e72d2f3c8c7baa7bd8b60a980eaf613cd5c28d03cba6a0ceb865"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/dto/mappers.go",
+      "predecessor_sha256s": [
+        "ee454577313bb2044fc74ae02cf8caad8ed80264bc35c93f808985da1c94417f"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/handler/dto/mappers.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ef2814f6f1d5d7037a085928514bacdfbeaaec376e1aec54cb220b054639038e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "0356bc96b1514514b9761fa0558fbb1d6c501616a1422baaa864d75ffc7e8385"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bc21b4dbe8b7eb98e5ea8d25505d938b293ff0347d01f244469a75e8c6ed8606"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo.go",
+      "predecessor_sha256s": [
+        "8548ce0689ce564e828e4e508e914892b302e649d5656e54b109e973c8730e2c"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d13ae3fbb2661c28ac785db6e1906f693cd8c948c6f662a7202f8954def7bab4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage.go",
+      "predecessor_sha256s": [
+        "ce69398e58b34ca5b91cd82e7fed2338781f0335d8d6350bfdeb27ea612d5c21"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo_ollama_cloud_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7ad17dc4daebb7c77f9aa8d447e50b18f67f075522c8ca99ce915248dc0629c1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage_integration_test.go",
+      "predecessor_sha256s": [
+        "9d57fe65877322c81beca5d0029783a1ced120d4353f3b1aa4a66b47462de607"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo_ollama_cloud_usage_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9a749743aa92134f67dac7e6a6b898c7586f15bc8829eff6b9f092c565885622"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage_test.go",
+      "predecessor_sha256s": [
+        "c7da1008cb51a60e8f608f49789b78c540cb470f76e5122663cfac78858af5a4"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo_ollama_cloud_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ff682a6c56182e430f69c43356fa472928f53413fac8e18f090777eeda98b4fd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "predecessor_sha256s": [
+        "38b0bb6250c5051c9f45ebdcec11880827a0acf4d43fd9019f8caee52af77207"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c905562ea8eb6e084a7febcf280af14eda4360e544725a691fc88ad6a1a48469"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "predecessor_sha256s": [
+        "a903ebccd346ca03ea53aeb2a355123795aadabd8587b87f509ad33836f4a301"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d06354d1ac36686494a6dbbc612b8339f3b90194162ca837ef78c1cd15f46e83"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_service.go",
+      "predecessor_sha256s": [
+        "a1de433900471384673bdf883839d41b90cbf019099859c03c4d05a503cb0960"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/account_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0cc8f0795f3f33566576bb979b4569adb8906adc9da00de0bb5863e17f626112"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256s": [
+        "d81fd484b70b00f41e4f796af3c0368772725e5ef00993bcf33a3b49838a3ba5"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/admin_account.go",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c88463ebede6a10979473d7e90630ea6a7a28c856d183bdaf32da18ff3794ff4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_model_protocol.go",
+      "predecessor_sha256s": [
+        "150b4e81d1b979e179331a71c1dc4aff8c0a1298f32672f0856e8d3441a76d52"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/composite_model_protocol.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "25bf004a43edc8ab944f42a85f0b7fd7084e35d417f6d10a073e45be66b321fe"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_protocol_catalog.go",
+      "predecessor_sha256s": [
+        "3d545fe7207d4cf4b05f20f1afd7d660b0ec8332f33ffa9cfbff284b93745659"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/model_protocol_catalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2acb385ef4261b426e49df6f59dc654849636904028fad33432d27f6ef84cc35"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ollama_cloud_usage.go",
+      "predecessor_sha256s": [
+        "4b51e2d8288272402026b261dfd47b957a9180f726e827a9cdc983cb89db7e0d"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/ollama_cloud_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "869d7b54b617ffe5c7d0f0f7a4bd38499cc95694fac0346feba92a0e3e6cf530"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ollama_cloud_usage_test.go",
+      "predecessor_sha256s": [
+        "6276b88544a1e93214ea7c681c57bb1df0e30e02caa6c3148ba63869371ea7c1"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/ollama_cloud_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6d46340f91f2930dd110a606612b1bc0a477f1ffe8dec03b896d146db92a28bb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_ollama_cloud_cc_reasoning.go",
+      "predecessor_sha256s": [
+        "1814f8275931da5306ada7159954ffd941a9ee657a6fc4f3bd785127eec5e90e"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/openai_gateway_ollama_cloud_cc_reasoning.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3dc9e9c5eb80b567b83a847b3234739d0358a042a7de2948fe72115ceb68c52d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "predecessor_sha256s": [
+        "87d6eef42b115602ef33faf702922bf8a3be60453c2ca728a03012f957b418a9"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/openai_gateway_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d2a8c423b45a27f744ecdcc594c9e9a1dc035f27f5f7a8f56ba4a171ef292caa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_usage.go",
+      "predecessor_sha256s": [
+        "bbf97974541f78fa5f9329ba822205f8265e632620709ee42bcd5311abaa1063"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/openai_gateway_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "45e939bc6f304f25eeb4d67955840d3bb4483117520e3fe20a4b7ca856629053"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "b9a87dce02835b4a07ea2b8eefc714aa9e29307380564527f25960c79df74b0f"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "170261b6126910df9b72deced237408dc5bdf9dbe8e2970289118c29acd7c236"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "14f0c7660b584f40fe46fe0a74f19aae75a0e0998b0ac52e86b877027f4ed97c"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/openai_ws_http_bridge.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "332f1ae875f8b79c162d76f519cc2f4c0fc3917b28dfa36ca8eaf446a1d4ff28"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256s": [
+        "cbf8523d7e0790ba1ffba6e74f947e9514143f25c80081ff750f8239f8941a66"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=backend/internal/service/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "79fc561874b1d457bec713035166f564374bf36139055468f0f122e3d7b12da4"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/api/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "c1ce08c835b279a66652cfd05078c9d70b378bbe864415d566b27fefca8f7bb7"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/api/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d633c146d6db816e107d41c36f86d83f71c02613bfc8950bef1c2d8120745e05"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/common/PlatformTypeBadge.vue",
+      "predecessor_sha256s": [
+        "64b86f79f818c3f590731e414fdea933dc872acb78d4efb000e3ee536e8492f0"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/components/common/PlatformTypeBadge.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3c8c58570a071143f635b181b570a3a09e621fd5872d88f32c804bc617f4b9fc"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "530edfa7dae639839b83840c25856b19c43ca7f7d0d7ab67f34f7a3349df0cf4"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b5548c6cc31a4f65f0737261fae89e145f9fa8723d439cec0f6102cbe6e83565"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "38c809269235e1c1b33adf4e4a2721c57dce245509c614a092c247f2d3eb32a3"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8022bb7b2fab4d1ce68f7b7e404f1f29d1c1d8dd16fd6da9c5b50217624eb821"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256s": [
+        "394857029433593575c6730b32f12d34f8707f56d8b458649e2e6b726d9aa8fa"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/types/index.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7b317c615a4c3e5d071b0c3de7c9a2da045f6ae86a480f2e15c7ea79ff201255"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/AccountsView.vue",
+      "predecessor_sha256s": [
+        "ad80be87464237b94bb28deb12bf1e90d55fe3792990d9edb4e370521aeeca32"
+      ],
+      "reason": "Codex WebSocket 接入候选池与无状态桥接、三方目录刷新与档案别名、Ollama 新版用量页适配 path=frontend/src/views/admin/AccountsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "64b1343a5311886cfe8795f335500e7d42bfe81016e9747553c9b40f9f22f53c"
+    }
+  ],
+  "unregistered_path_count": 57,
+  "unregistered_paths": [
+    "backend/internal/handler/admin/account_ollama_cloud_usage.go",
+    "backend/internal/handler/admin/account_ollama_cloud_usage_expiry_test.go",
+    "backend/internal/handler/admin/account_ollama_cloud_usage_test.go",
+    "backend/internal/handler/admin/codex_third_party_models_handler.go",
+    "backend/internal/handler/admin/codex_third_party_models_handler_test.go",
+    "backend/internal/handler/openai_gateway_ws_composite_pool.go",
+    "backend/internal/handler/openai_gateway_ws_composite_pool_test.go",
+    "backend/internal/repository/account_repo_ollama_cloud_usage_expiry_test.go",
+    "backend/internal/server/routes/admin_codex_third_party_models.go",
+    "backend/internal/server/routes/admin_codex_third_party_models_test.go",
+    "backend/internal/service/codex_third_party_admin.go",
+    "backend/internal/service/codex_third_party_catalog.go",
+    "backend/internal/service/codex_third_party_composite_pool_test.go",
+    "backend/internal/service/codex_third_party_contract.go",
+    "backend/internal/service/codex_third_party_profile_alias.go",
+    "backend/internal/service/codex_third_party_profile_alias_test.go",
+    "backend/internal/service/codex_third_party_profile_match_test.go",
+    "backend/internal/service/codex_third_party_profiles.go",
+    "backend/internal/service/codex_third_party_profiles_tag_test.go",
+    "backend/internal/service/codex_third_party_publication.go",
+    "backend/internal/service/codex_third_party_refresh.go",
+    "backend/internal/service/codex_third_party_refresh_test.go",
+    "backend/internal/service/codex_third_party_routes.go",
+    "backend/internal/service/composite_model_protocol_profiled_test.go",
+    "backend/internal/service/crs_sync_service.go",
+    "backend/internal/service/custom_platform_test.go",
+    "backend/internal/service/model_protocol_catalog_warmup.go",
+    "backend/internal/service/ollama_cloud_usage_newpage_test.go",
+    "backend/internal/service/ollama_cloud_usage_parser.go",
+    "backend/internal/service/ollama_cloud_usage_realpro_test.go",
+    "backend/internal/service/ollama_cloud_usage_total_test.go",
+    "backend/internal/service/openai_ws_stateless_http_bridge.go",
+    "backend/internal/service/openai_ws_stateless_http_bridge_test.go",
+    "backend/internal/service/testdata/ollama_settings_usage_free_2026.html",
+    "backend/internal/service/testdata/ollama_settings_usage_pro_2026.html",
+    "backend/internal/service/testdata/ollama_settings_usage_pro_synthetic.html",
+    "backend/internal/service/usage_log_request_id.go",
+    "backend/internal/service/usage_log_request_id_test.go",
+    "frontend/src/api/__tests__/admin.accounts.ollamaCloudUsageExpiry.spec.ts",
+    "frontend/src/api/admin/__tests__/codexThirdPartyModels.spec.ts",
+    "frontend/src/api/admin/codexThirdPartyModels.ts",
+    "frontend/src/components/account/OllamaCloudUsageCell.vue",
+    "frontend/src/components/account/OllamaCloudUsageSettings.vue",
+    "frontend/src/components/account/__tests__/OllamaCloudUsageCell.plans.spec.ts",
+    "frontend/src/components/account/__tests__/OllamaCloudUsageCell.spec.ts",
+    "frontend/src/components/account/__tests__/OllamaCloudUsageSettings.plans.spec.ts",
+    "frontend/src/components/admin/CodexModelVisibilityPanel.vue",
+    "frontend/src/components/admin/CodexProfileAliasDialog.vue",
+    "frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts",
+    "frontend/src/components/common/__tests__/PlatformTypeBadge.ollama.spec.ts",
+    "frontend/src/i18n/locales/en/admin/codexThirdPartyModels.ts",
+    "frontend/src/i18n/locales/zh/admin/codexThirdPartyModels.ts",
+    "frontend/src/utils/__tests__/ollamaCloudUsage.spec.ts",
+    "frontend/src/utils/ollamaCloudUsage.ts",
+    "frontend/src/views/admin/ApiKeyMimicSettingsView.vue",
+    "frontend/src/views/admin/__tests__/AccountsView.ollamaBadge.spec.ts",
+    "frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.codexTab.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
