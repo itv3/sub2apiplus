@@ -532,6 +532,82 @@ export function defaultCNAdaptiveBaseUrls(
   }
 }
 
+// ===== 自定义多协议平台（custom） =====
+// 平台 profile 不带任何默认地址：Chat Completions / Responses / Anthropic 三个协议的
+// 上游地址全部由管理员自填，凭据 api_base_urls 里哪个协议填了非空地址，账号就支持
+// 哪个协议。账号类型只有 API Key，API 协议固定为自适应（按入站协议选端点，入站协议
+// 没有对应端点时回落 Chat Completions），所以 Chat Completions 必填，其余可选。
+
+/** 自定义多协议平台的平台 ID（与后端 domain.PlatformCustom 一致）。 */
+export const CUSTOM_PLATFORM_ID = 'custom'
+
+export function isCustomPlatform(platform: string | null | undefined): boolean {
+  return platform === CUSTOM_PLATFORM_ID
+}
+
+/** 自定义平台表单的三个地址框（创建与编辑弹窗共用）；labelKey / hintKey 是 admin.accounts.customPlatform.* 子键。 */
+export const CUSTOM_ENDPOINT_FIELDS: ReadonlyArray<{
+  protocol: CnNativeApiProtocol
+  labelKey: string
+  hintKey: string
+  placeholder: string
+}> = [
+  { protocol: 'chat_completions', labelKey: 'chatCompletionsLabel', hintKey: 'chatCompletionsHint', placeholder: 'https://ollama.com/v1' },
+  { protocol: 'responses', labelKey: 'responsesLabel', hintKey: 'responsesHint', placeholder: 'https://ollama.com/v1' },
+  { protocol: 'anthropic', labelKey: 'anthropicLabel', hintKey: 'anthropicHint', placeholder: 'https://ollama.com' }
+]
+
+/** 三个地址框的初始值：全部为空，不补任何官方默认值。 */
+export function emptyCustomEndpointUrls(): Record<CnNativeApiProtocol, string> {
+  return { chat_completions: '', responses: '', anthropic: '' }
+}
+
+/**
+ * 从账号凭据回填三个地址框。chat_completions 缺失时回落旧字段 base_url
+ * （后端保存时把 base_url 归一为 Chat Completions 地址，两者应一致）。
+ */
+export function readCustomEndpointUrls(
+  credentials: Record<string, unknown> | null | undefined
+): Record<CnNativeApiProtocol, string> {
+  const urls = emptyCustomEndpointUrls()
+  const stored = credentials?.api_base_urls
+  if (stored && typeof stored === 'object') {
+    for (const protocol of NATIVE_API_PROTOCOLS) {
+      const value = (stored as Record<string, unknown>)[protocol]
+      if (typeof value === 'string') urls[protocol] = value.trim()
+    }
+  }
+  const legacyBaseUrl = credentials?.base_url
+  if (!urls.chat_completions && typeof legacyBaseUrl === 'string') {
+    urls.chat_completions = legacyBaseUrl.trim()
+  }
+  return urls
+}
+
+/** 三个地址框是否满足提交条件：Chat Completions 必填。 */
+export function customEndpointUrlsValid(urls: Record<CnNativeApiProtocol, string>): boolean {
+  return urls.chat_completions.trim() !== ''
+}
+
+/**
+ * 把三个地址框写入凭据：去首尾空白，空框不写键（不下发该协议的端点）。
+ * api_protocol 固定为 adaptive；base_url 同步写成 Chat Completions 地址
+ * （后端保存时也会做同样的归一，Ollama 用量识别只读这个旧字段）。
+ */
+export function applyCustomEndpointCredentials(
+  credentials: Record<string, unknown>,
+  urls: Record<CnNativeApiProtocol, string>
+): void {
+  const baseUrls: Record<string, string> = {}
+  for (const protocol of NATIVE_API_PROTOCOLS) {
+    const value = urls[protocol].trim()
+    if (value) baseUrls[protocol] = value
+  }
+  credentials.api_protocol = 'adaptive'
+  credentials.api_base_urls = baseUrls
+  credentials.base_url = baseUrls.chat_completions ?? ''
+}
+
 // ===== 国产供应商用量单元格可见性（单一事实源） =====
 // CNProviderQuotaCell / CNProviderBalanceCell 与 AccountUsageCell 的占位符判定
 // 共用，避免多处复制条件后一处改另一处漏改。

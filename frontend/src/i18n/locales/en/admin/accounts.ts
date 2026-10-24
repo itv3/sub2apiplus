@@ -175,6 +175,20 @@ export default {
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
       },
+      // Custom multi-protocol platform: API Key only, protocol fixed to adaptive,
+      // every upstream endpoint is filled in by the administrator.
+      customPlatform: {
+        intro: 'API Key accounts only. The API protocol is fixed to adaptive: a request uses the endpoint that matches its inbound protocol and falls back to Chat Completions when that protocol has no endpoint. No official default address is filled in.',
+        chatCompletionsLabel: 'Chat Completions (required)',
+        chatCompletionsHint: 'Enter the address up to the version segment; /chat/completions is appended automatically',
+        responsesLabel: 'Responses (optional)',
+        responsesHint: 'Enter the address up to the version segment; for sites with a special path you can enter the full endpoint URL',
+        anthropicLabel: 'Anthropic (optional)',
+        anthropicHint: 'Enter the address up to the domain; /v1/messages is appended automatically',
+        anthropicAuthSchemeDesc: 'Only applies to the Anthropic endpoint. Chat Completions and Responses endpoints always use Authorization: Bearer.',
+        chatCompletionsRequired: 'Please enter the Chat Completions address',
+        compositeModelHint: 'To join a Composite group, a model whitelist or model mapping is required. The Custom platform has no prefix rules, so an account that declares no models is never selected.',
+      },
       cnProviders: {
         accountMode: {
           title: 'Account Type',

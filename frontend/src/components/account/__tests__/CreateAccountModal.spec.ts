@@ -11,6 +11,7 @@ const {
   createAccountMock,
   probeUpstreamBillingMock,
   syncUpstreamModelsMock,
+  showErrorMock,
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
@@ -22,6 +23,7 @@ const {
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
+  showErrorMock: vi.fn(),
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
@@ -33,7 +35,7 @@ const {
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showWarning: showWarningMock,
   }),
@@ -215,6 +217,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
+    showErrorMock.mockReset()
     showWarningMock.mockReset()
     importCodexSessionMock.mockReset().mockResolvedValue({
       created: 1,
@@ -676,7 +679,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const labels = (testid: string) =>
       wrapper.get(`[data-testid="${testid}"]`).findAll('button').map(button => button.text().trim())
     expect(labels('platform-row-cn')).toEqual(['Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
-    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline'])
+    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline', '自定义'])
   })
 
   it('creates a Cline account without an account type and with only the Chat Completions endpoint', async () => {
@@ -701,6 +704,148 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.credentials).not.toHaveProperty('protocol_rules')
     expect(payload?.credentials?.api_base_urls).not.toHaveProperty('responses')
     expect(payload?.credentials?.api_base_urls).not.toHaveProperty('anthropic')
+  })
+
+  describe('custom multi-protocol platform', () => {
+    async function openCustomForm() {
+      const wrapper = mountModal()
+      await wrapper.get('[data-testid="platform-button-custom"]').trigger('click')
+      return wrapper
+    }
+
+    async function fillBasics(wrapper: ReturnType<typeof mountModal>) {
+      await wrapper.get('form#create-account-form input[type="text"]').setValue('custom account')
+      await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-custom')
+    }
+
+    it('offers API Key only, no protocol cards and three empty endpoint boxes', async () => {
+      const wrapper = await openCustomForm()
+      const text = wrapper.text()
+
+      // 账号类型只有 API Key：没有 OAuth / Claude Console / Bedrock 等类型卡片，也没有接入模式选择。
+      expect(text).not.toContain('OAuth')
+      expect(text).not.toContain('admin.accounts.claudeConsole')
+      expect(text).not.toContain('admin.accounts.bedrockLabel')
+      expect(wrapper.find('[data-testid="generic-account-mode"]').exists()).toBe(false)
+      // API 协议固定为自适应：不显示协议选择卡片（标题与各协议说明都不出现）。
+      expect(text).not.toContain('admin.accounts.cnProviders.apiProtocol.title')
+      expect(text).not.toContain('admin.accounts.cnProviders.apiProtocol.adaptiveDesc')
+      // 只有自定义平台自己的三个地址框，不再出现单一 Base URL 输入框。
+      expect(text).not.toContain('admin.accounts.baseUrl')
+      expect(wrapper.find('[data-testid="custom-endpoints"]').exists()).toBe(true)
+
+      const chat = wrapper.get<HTMLInputElement>('[data-testid="custom-base-url-chat_completions"]')
+      const responses = wrapper.get<HTMLInputElement>('[data-testid="custom-base-url-responses"]')
+      const anthropic = wrapper.get<HTMLInputElement>('[data-testid="custom-base-url-anthropic"]')
+      // 不自动补任何官方默认值：三个框全空，只有占位示例。
+      expect([chat.element.value, responses.element.value, anthropic.element.value]).toEqual(['', '', ''])
+      expect(chat.attributes('placeholder')).toBe('https://ollama.com/v1')
+      expect(responses.attributes('placeholder')).toBe('https://ollama.com/v1')
+      expect(anthropic.attributes('placeholder')).toBe('https://ollama.com')
+      // 提示与必填标记（测试里 t 直接返回键）。
+      expect(text).toContain('admin.accounts.customPlatform.chatCompletionsLabel')
+      expect(text).toContain('admin.accounts.customPlatform.chatCompletionsHint')
+      expect(text).toContain('admin.accounts.customPlatform.responsesHint')
+      expect(text).toContain('admin.accounts.customPlatform.anthropicHint')
+      // 进 Composite 分组需要模型白名单或映射的提示。
+      expect(wrapper.get('[data-testid="custom-composite-model-hint"]').text())
+        .toBe('admin.accounts.customPlatform.compositeModelHint')
+      wrapper.unmount()
+    })
+
+    it('shows the Anthropic auth scheme option only for the Anthropic endpoint', async () => {
+      const wrapper = await openCustomForm()
+      const block = wrapper.get('[data-testid="custom-anthropic-auth-scheme"]')
+      expect(block.findAll('option').map(option => option.attributes('value'))).toEqual(['x_api_key', 'authorization_bearer'])
+      expect(block.text()).toContain('admin.accounts.customPlatform.anthropicAuthSchemeDesc')
+      // Chat Completions / Responses 一律 Bearer：整个表单里认证头选项只有这一处。
+      expect(wrapper.findAll('select')).toHaveLength(1)
+      wrapper.unmount()
+    })
+
+    it('blocks submit until the Chat Completions endpoint is filled', async () => {
+      const wrapper = await openCustomForm()
+      await fillBasics(wrapper)
+      // 只填 Responses 与 Anthropic 不够：Chat Completions 是入站协议无端点时的回落地址。
+      await wrapper.get('[data-testid="custom-base-url-responses"]').setValue('https://ollama.com/v1')
+      await wrapper.get('[data-testid="custom-base-url-anthropic"]').setValue('https://ollama.com')
+
+      await wrapper.get('form#create-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      expect(createAccountMock).not.toHaveBeenCalled()
+      expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.customPlatform.chatCompletionsRequired')
+
+      // 空白字符不算填写。
+      await wrapper.get('[data-testid="custom-base-url-chat_completions"]').setValue('   ')
+      await wrapper.get('form#create-account-form').trigger('submit.prevent')
+      await flushPromises()
+      expect(createAccountMock).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('submits adaptive credentials with the three endpoints and the Bearer auth scheme', async () => {
+      const wrapper = await openCustomForm()
+      await fillBasics(wrapper)
+      await wrapper.get('[data-testid="custom-base-url-chat_completions"]').setValue(' https://ollama.com/v1 ')
+      await wrapper.get('[data-testid="custom-base-url-responses"]').setValue('https://ollama.com/v1')
+      await wrapper.get('[data-testid="custom-base-url-anthropic"]').setValue('https://ollama.com')
+      await wrapper.get('[data-testid="custom-anthropic-auth-scheme"] select').setValue('authorization_bearer')
+
+      await wrapper.get('form#create-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      expect(createAccountMock).toHaveBeenCalledTimes(1)
+      const payload = createAccountMock.mock.calls[0]?.[0]
+      expect(payload?.platform).toBe('custom')
+      expect(payload?.type).toBe('apikey')
+      expect(payload?.credentials).toMatchObject({
+        api_key: 'sk-custom',
+        account_mode: 'payg',
+        api_protocol: 'adaptive',
+        base_url: 'https://ollama.com/v1',
+        api_base_urls: {
+          chat_completions: 'https://ollama.com/v1',
+          responses: 'https://ollama.com/v1',
+          anthropic: 'https://ollama.com'
+        }
+      })
+      expect(payload?.credentials).not.toHaveProperty('protocol_rules')
+      expect(payload?.extra).toMatchObject({ anthropic_apikey_auth_scheme: 'authorization_bearer' })
+      wrapper.unmount()
+    })
+
+    it('only sends the endpoints that were filled and keeps the default x-api-key scheme', async () => {
+      const wrapper = await openCustomForm()
+      await fillBasics(wrapper)
+      await wrapper.get('[data-testid="custom-base-url-chat_completions"]').setValue('https://ollama.com/v1')
+
+      await wrapper.get('form#create-account-form').trigger('submit.prevent')
+      await flushPromises()
+
+      const payload = createAccountMock.mock.calls[0]?.[0]
+      expect(payload?.credentials).toMatchObject({
+        api_protocol: 'adaptive',
+        base_url: 'https://ollama.com/v1',
+        api_base_urls: { chat_completions: 'https://ollama.com/v1' }
+      })
+      expect(payload?.credentials?.api_base_urls).not.toHaveProperty('responses')
+      expect(payload?.credentials?.api_base_urls).not.toHaveProperty('anthropic')
+      expect(payload?.extra ?? {}).not.toHaveProperty('anthropic_apikey_auth_scheme')
+      wrapper.unmount()
+    })
+
+    it('starts from empty endpoints after another multi-protocol platform filled defaults', async () => {
+      const wrapper = mountModal()
+      await selectButtonByText(wrapper, 'Kimi')
+      expect(wrapper.find('[data-testid="custom-endpoints"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="platform-button-custom"]').trigger('click')
+
+      for (const protocol of ['chat_completions', 'responses', 'anthropic']) {
+        expect(wrapper.get<HTMLInputElement>(`[data-testid="custom-base-url-${protocol}"]`).element.value).toBe('')
+      }
+      wrapper.unmount()
+    })
   })
 
   it('submits adaptive Kimi protocol endpoints', async () => {

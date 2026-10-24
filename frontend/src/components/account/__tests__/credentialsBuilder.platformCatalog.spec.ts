@@ -7,19 +7,24 @@ import {
   type PlatformCatalog
 } from '@/constants/platformCatalog'
 import {
+  CUSTOM_ENDPOINT_FIELDS,
   DEFAULT_OPENCODE_GO_PROTOCOL_RULES,
   DEFAULT_OPENCODE_ZEN_PROTOCOL_RULES,
   OPENCODE_GO_ANTHROPIC_BASE_URL,
   OPENCODE_GO_BASE_URL,
   OPENCODE_ZEN_ANTHROPIC_BASE_URL,
   OPENCODE_ZEN_BASE_URL,
+  applyCustomEndpointCredentials,
   cnBalanceCellVisible,
   cnQuotaCellVisible,
   cnSupportsNativeResponses,
+  customEndpointUrlsValid,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   defaultOpenCodeProtocolRules,
   defaultProviderProtocolRules,
+  emptyCustomEndpointUrls,
+  isCustomPlatform,
   isHeaderOverrideCapable,
   isMultiProtocolApiKeyPlatform,
   providerAccountModes,
@@ -27,6 +32,7 @@ import {
   providerModeLabel,
   providerNativeProtocols,
   providerRoutesByModel,
+  readCustomEndpointUrls,
   resolveProviderAccountMode,
   type CnApiProtocol
 } from '../credentialsBuilder'
@@ -58,7 +64,7 @@ const legacyZenRules = [
 ]
 
 function legacyIsMultiProtocol(platform: string): boolean {
-  return ['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline'].includes(platform)
+  return ['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline', 'custom'].includes(platform)
 }
 
 function legacySupportsResponses(platform: string): boolean {
@@ -66,7 +72,7 @@ function legacySupportsResponses(platform: string): boolean {
 }
 
 function legacyHeaderOverride(platform: string, type: string): boolean {
-  if (['anthropic', 'openai', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline'].includes(platform)) {
+  if (['anthropic', 'openai', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'command_code', 'cline', 'custom'].includes(platform)) {
     return type === 'apikey'
   }
   if (platform === 'grok') return type === 'apikey' || type === 'oauth'
@@ -255,6 +261,75 @@ describe('credentialsBuilder built-in Cline provider', () => {
     expect(providerModeLabel('payg', t)).toBe('admin.accounts.cnProviders.accountMode.payg')
     expect(providerModeLabel('go', t)).toBe('admin.accounts.opencodeGo.accountMode.go')
     expect(providerModeLabel('standard', t)).toBe('standard')
+  })
+})
+
+describe('credentialsBuilder built-in Custom provider', () => {
+  it('is a multi-protocol API-key platform whose profile carries no default endpoint', () => {
+    expect(isCustomPlatform('custom')).toBe(true)
+    expect(isCustomPlatform('cline')).toBe(false)
+    expect(isCustomPlatform(undefined)).toBe(false)
+    expect(isMultiProtocolApiKeyPlatform('custom')).toBe(true)
+    expect(providerRoutesByModel('custom')).toBe(false)
+    expect(providerAccountModes('custom')).toEqual(['payg'])
+    // 地址全部自填：profile 里没有任何协议的默认端点，也不回落到官方域名。
+    expect(providerNativeProtocols('custom', 'payg')).toEqual([])
+    expect(defaultCNAdaptiveBaseUrls('custom', 'payg')).toEqual({ chat_completions: '', anthropic: '', responses: '' })
+    expect(defaultCNBaseUrl('custom', 'payg', 'adaptive')).toBe('')
+    expect(defaultProviderProtocolRules('custom', 'payg')).toEqual([])
+  })
+
+  it('never shows the CN quota or balance cells', () => {
+    const account = { platform: 'custom', type: 'apikey', credentials: { base_url: 'https://ollama.com/v1' } }
+    expect(cnQuotaCellVisible(account)).toBe(false)
+    expect(cnBalanceCellVisible(account)).toBe(false)
+  })
+
+  it('lists the three endpoint boxes with the Chat Completions box first', () => {
+    expect(CUSTOM_ENDPOINT_FIELDS.map(item => item.protocol)).toEqual(['chat_completions', 'responses', 'anthropic'])
+    expect(CUSTOM_ENDPOINT_FIELDS.map(item => item.placeholder)).toEqual([
+      'https://ollama.com/v1',
+      'https://ollama.com/v1',
+      'https://ollama.com'
+    ])
+  })
+
+  it('requires the Chat Completions endpoint', () => {
+    expect(customEndpointUrlsValid(emptyCustomEndpointUrls())).toBe(false)
+    expect(customEndpointUrlsValid({ chat_completions: '   ', responses: 'https://a.example/v1', anthropic: 'https://a.example' })).toBe(false)
+    expect(customEndpointUrlsValid({ chat_completions: ' https://ollama.com/v1 ', responses: '', anthropic: '' })).toBe(true)
+  })
+
+  it('writes trimmed endpoints, drops blank ones and mirrors the Chat Completions address into base_url', () => {
+    const credentials: Record<string, unknown> = { api_key: 'sk-x', api_protocol: 'anthropic' }
+    applyCustomEndpointCredentials(credentials, {
+      chat_completions: ' https://ollama.com/v1 ',
+      responses: '',
+      anthropic: ' https://ollama.com '
+    })
+    expect(credentials).toEqual({
+      api_key: 'sk-x',
+      api_protocol: 'adaptive',
+      api_base_urls: { chat_completions: 'https://ollama.com/v1', anthropic: 'https://ollama.com' },
+      base_url: 'https://ollama.com/v1'
+    })
+  })
+
+  it('reads the endpoints back, falling back to the legacy base_url for Chat Completions', () => {
+    expect(readCustomEndpointUrls({
+      base_url: 'https://stale.example/v1',
+      api_base_urls: { chat_completions: ' https://ollama.com/v1 ', responses: 'https://ollama.com/v1', anthropic: 5 }
+    })).toEqual({
+      chat_completions: 'https://ollama.com/v1',
+      responses: 'https://ollama.com/v1',
+      anthropic: ''
+    })
+    expect(readCustomEndpointUrls({ base_url: 'https://ollama.com/v1' })).toEqual({
+      chat_completions: 'https://ollama.com/v1',
+      responses: '',
+      anthropic: ''
+    })
+    expect(readCustomEndpointUrls(undefined)).toEqual(emptyCustomEndpointUrls())
   })
 })
 

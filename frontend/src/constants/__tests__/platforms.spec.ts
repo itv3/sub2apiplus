@@ -13,7 +13,7 @@ import { platformLabel } from '@/utils/platformColors'
 import { normalizePlatformQuotasMap, sanitizePlatformQuotasMap } from '@/api/admin/settings'
 import { platformQuotaPlatforms } from '@/api/admin/users'
 
-// 改为读取平台清单之前的平台字面量，加上之后内置登记的 Command Code。
+// 改为读取平台清单之前的平台字面量，加上之后内置登记的 Command Code、Cline 与自定义多协议平台。
 const concretePlatforms = [
   'anthropic',
   'openai',
@@ -27,7 +27,8 @@ const concretePlatforms = [
   'opencode_go',
   'typesafe',
   'command_code',
-  'cline'
+  'cline',
+  'custom'
 ]
 
 describe('platform option catalogs', () => {
@@ -60,13 +61,15 @@ describe('platform catalog with a newly registered platform', () => {
     expect(listPlatformIds()).toEqual(concretePlatforms)
     expect(compositePrecedencePlatformIds()).toEqual([
       'anthropic', 'gemini', 'openai', 'antigravity', 'grok',
-      'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe', 'command_code', 'cline'
+      'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe', 'command_code', 'cline', 'custom'
     ])
     expect(CONCRETE_PLATFORM_OPTIONS.map((option) => option.label)).toEqual([
       'Anthropic', 'OpenAI', 'Gemini', 'Antigravity', 'Grok',
-      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline'
+      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline', '自定义'
     ])
     expect(platformLabel('zhipu')).toBe('Zhipu GLM')
+    // 自定义多协议平台的展示名来自后端平台清单（domain/platforms.go），不随界面语言变化。
+    expect(platformLabel('custom')).toBe('自定义')
     expect(platformLabel('composite')).toBe('Composite')
     expect(platformLabel('')).toBe('API')
   })

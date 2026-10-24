@@ -206,6 +206,61 @@ describe('AccountUsageCell', () => {
     }
   )
 
+  it('自定义平台 apikey 账号 Ollama Cloud eligible 时复用 Ollama 用量单元格（按上游地址识别，显示条件不写死平台）', async () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 9005,
+          platform: 'custom',
+          type: 'apikey',
+          credentials: {
+            api_protocol: 'adaptive',
+            base_url: 'https://ollama.com/v1',
+            api_base_urls: { chat_completions: 'https://ollama.com/v1' }
+          },
+          ollama_cloud_usage: makeOllamaUsage(9005)
+        })
+      },
+      global: {
+        stubs: { ...cnUsageCellStubs, UsageProgressBar: true, AccountQuotaInfo: true }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="embedded-ollama"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="cn-quota-cell"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cn-balance-cell"]').exists()).toBe(false)
+    expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(false)
+  })
+
+  it('自定义平台指向非 Ollama 地址的账号不渲染 Ollama 单元格，额度与余额单元格都不可见（回落 `-` 占位符）', async () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 9006,
+          platform: 'custom',
+          type: 'apikey',
+          credentials: {
+            api_protocol: 'adaptive',
+            base_url: 'https://relay.example.com/v1',
+            api_base_urls: { chat_completions: 'https://relay.example.com/v1' }
+          }
+        })
+      },
+      global: {
+        stubs: { ...cnUsageCellStubs, UsageProgressBar: true, AccountQuotaInfo: true }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="embedded-ollama"]').exists()).toBe(false)
+    // 额度 / 余额子单元格在测试里被 stub 成恒渲染，可见性由 AccountUsageCell 的占位符判定体现：
+    // 两者都不可见时才显示 `-` 占位符。
+    expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(true)
+  })
+
   it('CN 平台 Ollama Cloud eligible 账号的用量更新经 account-updated 透传', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {

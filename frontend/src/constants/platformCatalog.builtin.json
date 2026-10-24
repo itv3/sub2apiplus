@@ -278,6 +278,22 @@
           }
         ]
       }
+    },
+    {
+      "id": "custom",
+      "display_name": "自定义",
+      "gateway": "openai",
+      "cn_provider": false,
+      "multi_protocol": {
+        "default_mode": "payg",
+        "routing": "by_inbound",
+        "modes": [
+          {
+            "mode": "payg",
+            "base_urls": {}
+          }
+        ]
+      }
     }
   ],
   "composite_precedence": [
@@ -293,6 +309,7 @@
     "opencode_go",
     "typesafe",
     "command_code",
-    "cline"
+    "cline",
+    "custom"
   ]
 }

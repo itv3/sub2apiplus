@@ -1052,6 +1052,7 @@ export default {
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
+        custom: 'Custom',
         composite: 'Composite',
       },
       deleteConfirm:

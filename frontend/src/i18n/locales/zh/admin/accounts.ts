@@ -378,6 +378,19 @@ export default {
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
       },
+      // 自定义多协议平台：只有 API Key，协议固定自适应，各协议上游地址全部由管理员自填。
+      customPlatform: {
+        intro: '仅支持 API Key 账号。API 协议固定为自适应：请求按入站协议选用对应端点，该协议没有填写地址时回落到 Chat Completions。不会自动补任何官方默认地址。',
+        chatCompletionsLabel: 'Chat Completions（必填）',
+        chatCompletionsHint: '填到版本号为止，自动追加 /chat/completions',
+        responsesLabel: 'Responses（可选）',
+        responsesHint: '填到版本号为止；站点路径特殊时可填到端点全路径',
+        anthropicLabel: 'Anthropic（可选）',
+        anthropicHint: '填到域名为止，自动追加 /v1/messages',
+        anthropicAuthSchemeDesc: '仅作用于 Anthropic 端点；Chat Completions 与 Responses 端点一律使用 Authorization: Bearer。',
+        chatCompletionsRequired: '请填写 Chat Completions 地址',
+        compositeModelHint: '进 Composite 分组必须配模型白名单或映射，自定义平台没有前缀规则，不声明模型的账号永远不会被选中。',
+      },
       cnProviders: {
         accountMode: {
           title: '账号类型',

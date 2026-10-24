@@ -7,15 +7,16 @@ import {
   setPlatformCatalog
 } from '@/constants/platformCatalog'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, showErrorMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  showErrorMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showInfo: vi.fn()
   })
@@ -638,6 +639,103 @@ describe('EditAccountModal', () => {
         },
         protocol_rules: [{ pattern: 'custom-*', protocol: 'anthropic' }]
       })
+    })
+  })
+
+  describe('custom multi-protocol platform', () => {
+    function customAccount(overrides: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+      const account = buildAccount()
+      account.platform = 'custom'
+      account.credentials = {
+        api_key: 'sk-custom',
+        account_mode: 'payg',
+        api_protocol: 'adaptive',
+        base_url: 'https://ollama.com/v1',
+        api_base_urls: {
+          chat_completions: 'https://ollama.com/v1',
+          responses: 'https://ollama.com/v1',
+          anthropic: 'https://ollama.com'
+        },
+        ...overrides
+      }
+      account.extra = extra
+      updateAccountMock.mockReset().mockResolvedValue(account)
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+      showErrorMock.mockReset()
+      return account
+    }
+
+    const endpointInput = (wrapper: ReturnType<typeof mountModal>, protocol: string) =>
+      wrapper.get<HTMLInputElement>(`[data-testid="edit-custom-base-url-${protocol}"]`)
+
+    it('echoes the three stored endpoints and the auth scheme without protocol cards', async () => {
+      const wrapper = mountModal(customAccount({}, { anthropic_apikey_auth_scheme: 'authorization_bearer' }))
+
+      expect(endpointInput(wrapper, 'chat_completions').element.value).toBe('https://ollama.com/v1')
+      expect(endpointInput(wrapper, 'responses').element.value).toBe('https://ollama.com/v1')
+      expect(endpointInput(wrapper, 'anthropic').element.value).toBe('https://ollama.com')
+      expect(wrapper.get<HTMLSelectElement>('[data-testid="edit-custom-anthropic-auth-scheme"] select').element.value)
+        .toBe('authorization_bearer')
+      // 协议固定自适应：不显示协议选择，也不出现单一 Base URL 输入框与接入模式选择。
+      const text = wrapper.text()
+      expect(text).not.toContain('admin.accounts.cnProviders.apiProtocol.title')
+      expect(text).not.toContain('admin.accounts.baseUrl')
+      expect(wrapper.find('[data-testid="edit-generic-account-mode"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="edit-custom-composite-model-hint"]').text())
+        .toBe('admin.accounts.customPlatform.compositeModelHint')
+    })
+
+    it('rewrites the endpoints on submit, dropping cleared boxes and keeping unrelated extra fields', async () => {
+      const wrapper = mountModal(customAccount({}, { anthropic_apikey_auth_scheme: 'authorization_bearer', keep_me: 1 }))
+      await endpointInput(wrapper, 'responses').setValue('  ')
+      await endpointInput(wrapper, 'anthropic').setValue(' https://relay.example.com ')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock).toHaveBeenCalledTimes(1)
+      const payload = updateAccountMock.mock.calls[0]?.[1]
+      expect(payload?.credentials).toMatchObject({
+        account_mode: 'payg',
+        api_protocol: 'adaptive',
+        base_url: 'https://ollama.com/v1',
+        api_base_urls: { chat_completions: 'https://ollama.com/v1', anthropic: 'https://relay.example.com' }
+      })
+      expect(payload?.credentials?.api_base_urls).not.toHaveProperty('responses')
+      expect(payload?.extra).toMatchObject({ anthropic_apikey_auth_scheme: 'authorization_bearer', keep_me: 1 })
+    })
+
+    it('switches the Anthropic auth scheme back to x-api-key by removing the extra flag', async () => {
+      const wrapper = mountModal(customAccount({}, { anthropic_apikey_auth_scheme: 'authorization_bearer' }))
+      await wrapper.get('[data-testid="edit-custom-anthropic-auth-scheme"] select').setValue('x_api_key')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock.mock.calls[0]?.[1]?.extra ?? {}).not.toHaveProperty('anthropic_apikey_auth_scheme')
+    })
+
+    it('falls back to the legacy base_url for Chat Completions and forces the adaptive protocol', async () => {
+      const wrapper = mountModal(customAccount({
+        api_protocol: 'chat_completions',
+        base_url: 'https://legacy.example.com/v1',
+        api_base_urls: undefined
+      }))
+      expect(endpointInput(wrapper, 'chat_completions').element.value).toBe('https://legacy.example.com/v1')
+      expect(endpointInput(wrapper, 'responses').element.value).toBe('')
+      expect(endpointInput(wrapper, 'anthropic').element.value).toBe('')
+
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+        api_protocol: 'adaptive',
+        base_url: 'https://legacy.example.com/v1',
+        api_base_urls: { chat_completions: 'https://legacy.example.com/v1' }
+      })
+    })
+
+    it('blocks submit when the Chat Completions endpoint is cleared', async () => {
+      const wrapper = mountModal(customAccount())
+      await endpointInput(wrapper, 'chat_completions').setValue('')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock).not.toHaveBeenCalled()
+      expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.customPlatform.chatCompletionsRequired')
     })
   })
 

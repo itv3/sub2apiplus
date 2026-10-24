@@ -28,7 +28,40 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
-        <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
+        <!-- 自定义多协议平台：三个协议的地址全部自填，不补任何官方默认值；Chat Completions 必填 -->
+        <div v-if="isCustomAccount" data-testid="edit-custom-endpoints">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.endpoints') }}</label>
+          <p class="input-hint">{{ t('admin.accounts.customPlatform.intro') }}</p>
+          <div class="mt-2 space-y-3">
+            <div v-for="item in CUSTOM_ENDPOINT_FIELDS" :key="item.protocol">
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t(`admin.accounts.customPlatform.${item.labelKey}`) }}
+              </label>
+              <input
+                v-model="editAdaptiveBaseUrls[item.protocol]"
+                type="text"
+                class="input"
+                :placeholder="item.placeholder"
+                :data-testid="`edit-custom-base-url-${item.protocol}`"
+              />
+              <p class="input-hint">{{ t(`admin.accounts.customPlatform.${item.hintKey}`) }}</p>
+            </div>
+          </div>
+          <!-- Anthropic 端点的认证头；Chat Completions 与 Responses 端点一律 Bearer，不提供该选项 -->
+          <div class="mt-3 flex items-center justify-between gap-4" data-testid="edit-custom-anthropic-auth-scheme">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.anthropic.apiKeyAuthScheme') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.customPlatform.anthropicAuthSchemeDesc') }}
+              </p>
+            </div>
+            <select v-model="anthropicAPIKeyAuthScheme" class="input w-52 text-sm">
+              <option value="x_api_key">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeXApiKey') }}</option>
+              <option value="authorization_bearer">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeBearer') }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-else-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -169,8 +202,8 @@
           </div>
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
         </div>
-        <!-- API Protocol Selection (CN providers / OpenCode) -->
-        <div v-if="isCNApiKeyAccount">
+        <!-- API Protocol Selection (CN providers / OpenCode)；自定义平台固定为自适应，不显示协议选择 -->
+        <div v-if="isCNApiKeyAccount && !isCustomAccount">
           <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -253,6 +286,10 @@
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+          <!-- 自定义平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
+          <p v-if="isCustomAccount" class="input-hint mb-2" data-testid="edit-custom-composite-model-hint">
+            {{ t('admin.accounts.customPlatform.compositeModelHint') }}
+          </p>
 
           <div
             v-if="isOpenAIModelRestrictionDisabled"
@@ -3202,16 +3239,21 @@ import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtoc
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
+  CUSTOM_ENDPOINT_FIELDS,
   applyAntigravityProjectID,
+  applyCustomEndpointCredentials,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
   applyPlanType,
   buildPlanTypeOptions,
   cloneOpenCodeGoProtocolRules,
+  customEndpointUrlsValid,
   defaultOpenCodeProtocolRules,
   defaultProviderProtocolRules,
+  isCustomPlatform,
   isMultiProtocolApiKeyPlatform,
+  readCustomEndpointUrls,
   parseOpenCodeGoProtocolRules,
   providerAccountModes,
   providerModeLabel,
@@ -3427,6 +3469,10 @@ const editApiKey = ref('')
 // 覆盖全部多协议 API Key 供应商（国产厂商、OpenCode 与走通用表单的供应商）。
 const isCNApiKeyAccount = computed(
   () => props.account?.type === 'apikey' && isMultiProtocolApiKeyPlatform(props.account.platform)
+)
+// 自定义多协议平台账号：API 协议固定自适应，三个协议的地址全部自填（复用 editAdaptiveBaseUrls 存放）。
+const isCustomAccount = computed(
+  () => props.account?.type === 'apikey' && isCustomPlatform(props.account.platform)
 )
 // 前端没有专属界面、走通用表单的多协议供应商：模式 / 协议 / 默认端点来自 profile。
 const isGenericMultiProtocolAccount = computed(
@@ -4356,6 +4402,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       ? 'authorization_bearer'
       : 'x_api_key'
   }
+  // 自定义多协议平台：只有 Anthropic 端点的认证头选项，不带透传开关。
+  if (isCustomPlatform(newAccount.platform) && newAccount.type === 'apikey') {
+    anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
+      ? 'authorization_bearer'
+      : 'x_api_key'
+  }
   if ((newAccount.platform === 'anthropic' || newAccount.platform === 'openai') && newAccount.type === 'apikey') {
     // 三态：string "default"/"enabled"/"disabled"，向后兼容旧 bool
     const wsVal = extra?.web_search_emulation
@@ -4534,6 +4586,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         nextAdaptiveBaseUrls[legacyProtocol] = legacyBaseUrl
       }
       editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
+      // 自定义平台：协议固定自适应，三个地址框直接回填凭据里的存储值（不补任何默认值）。
+      if (isCustomPlatform(newAccount.platform)) {
+        editApiProtocol.value = 'adaptive'
+        editAdaptiveBaseUrls.value = readCustomEndpointUrls(credentials)
+      }
       // 智谱团队版 Coding Plan：回填组织/项目 ID
       if (newAccount.platform === 'zhipu') {
         editZhipuOrganization.value = typeof credentials.zhipu_organization === 'string' ? credentials.zhipu_organization : ''
@@ -5247,6 +5304,12 @@ const handleSubmit = async () => {
 		}
 	}
 
+  // 自定义多协议平台：Chat Completions 地址必填（入站协议没有对应端点时回落到它）
+  if (isCustomAccount.value && !customEndpointUrlsValid(editAdaptiveBaseUrls.value)) {
+    appStore.showError(t('admin.accounts.customPlatform.chatCompletionsRequired'))
+    return
+  }
+
   const updatePayload: Record<string, unknown> = { ...form }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
@@ -5286,7 +5349,10 @@ const handleSubmit = async () => {
       if (isCNApiKeyAccount.value) {
         newCredentials.account_mode = currentOpenCodeOrCNMode()
         newCredentials.api_protocol = editApiProtocol.value
-        if (editApiProtocol.value === 'adaptive') {
+        if (isCustomAccount.value) {
+          // 自定义平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
+          applyCustomEndpointCredentials(newCredentials, editAdaptiveBaseUrls.value)
+        } else if (editApiProtocol.value === 'adaptive') {
           const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
           const protocolBaseUrls: Record<string, string> = {}
           for (const item of editAdaptiveProtocolOptions.value) {
@@ -5783,6 +5849,18 @@ const handleSubmit = async () => {
         delete newExtra.web_search_emulation
       } else {
         newExtra.web_search_emulation = webSearchEmulationMode.value
+      }
+      updatePayload.extra = newExtra
+    }
+
+    // 自定义多协议平台：extra 里只维护 Anthropic 端点的认证头选项（Chat Completions / Responses 一律 Bearer）
+    if (isCustomAccount.value) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
+        newExtra.anthropic_apikey_auth_scheme = 'authorization_bearer'
+      } else {
+        delete newExtra.anthropic_apikey_auth_scheme
       }
       updatePayload.extra = newExtra
     }

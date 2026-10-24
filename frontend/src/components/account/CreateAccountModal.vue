@@ -656,8 +656,8 @@
         </div>
       </div>
 
-      <!-- API Protocol Selection (Kimi / Zhipu / DeepSeek / OpenCode) -->
-      <div v-if="isMultiProtocolPlatform" class="mt-4">
+      <!-- API Protocol Selection (Kimi / Zhipu / DeepSeek / OpenCode)；自定义平台固定为自适应，不显示协议卡片 -->
+      <div v-if="isMultiProtocolPlatform && !isCustomSelected" class="mt-4">
         <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
         <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <button
@@ -1501,7 +1501,40 @@
 
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
       <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
-        <div v-if="!isMultiProtocolPlatform || apiProtocol !== 'adaptive'">
+        <!-- 自定义多协议平台：三个协议的地址全部自填，不自动补任何官方默认值；Chat Completions 必填 -->
+        <div v-if="isCustomSelected" data-testid="custom-endpoints">
+          <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.endpoints') }}</label>
+          <p class="input-hint">{{ t('admin.accounts.customPlatform.intro') }}</p>
+          <div class="mt-2 space-y-3">
+            <div v-for="item in CUSTOM_ENDPOINT_FIELDS" :key="item.protocol">
+              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                {{ t(`admin.accounts.customPlatform.${item.labelKey}`) }}
+              </label>
+              <input
+                v-model="adaptiveBaseUrls[item.protocol]"
+                type="text"
+                class="input"
+                :placeholder="item.placeholder"
+                :data-testid="`custom-base-url-${item.protocol}`"
+              />
+              <p class="input-hint">{{ t(`admin.accounts.customPlatform.${item.hintKey}`) }}</p>
+            </div>
+          </div>
+          <!-- Anthropic 端点的认证头；Chat Completions 与 Responses 端点一律 Bearer，不提供该选项 -->
+          <div class="mt-3 flex items-center justify-between gap-4" data-testid="custom-anthropic-auth-scheme">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.anthropic.apiKeyAuthScheme') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.customPlatform.anthropicAuthSchemeDesc') }}
+              </p>
+            </div>
+            <select v-model="anthropicAPIKeyAuthScheme" class="input w-52 text-sm">
+              <option value="x_api_key">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeXApiKey') }}</option>
+              <option value="authorization_bearer">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeBearer') }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-else-if="!isMultiProtocolPlatform || apiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="apiKeyBaseUrl"
@@ -1592,6 +1625,10 @@
         <!-- Model Restriction Section (Antigravity 已在上层条件排除) -->
         <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+          <!-- 自定义平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
+          <p v-if="isCustomSelected" class="input-hint mb-2" data-testid="custom-composite-model-hint">
+            {{ t('admin.accounts.customPlatform.compositeModelHint') }}
+          </p>
 
           <div
             v-if="isOpenAIModelRestrictionDisabled"
@@ -4091,17 +4128,22 @@ import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtoc
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
+  CUSTOM_ENDPOINT_FIELDS,
   applyAntigravityProjectID,
+  applyCustomEndpointCredentials,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyOpenCodeGoProtocolRules,
   cloneOpenCodeGoProtocolRules,
   cnSupportsNativeResponses,
+  customEndpointUrlsValid,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   defaultOpenCodeProtocolRules,
   defaultProviderProtocolRules,
+  emptyCustomEndpointUrls,
   isCNProviderPlatform,
+  isCustomPlatform,
   isHeaderOverrideCapable,
   isMultiProtocolApiKeyPlatform,
   providerAccountModes,
@@ -4339,6 +4381,9 @@ const adaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
 const isCNPlatform = computed(() => isCNProviderPlatform(form.platform))
 const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
 const isMultiProtocolPlatform = computed(() => isMultiProtocolApiKeyPlatform(form.platform))
+// 自定义多协议平台：只有 API Key、协议固定自适应，三个协议的地址全部自填
+// （复用 adaptiveBaseUrls 存放，模型同步预览等读取 chat_completions 的逻辑无需改动）。
+const isCustomSelected = computed(() => isCustomPlatform(form.platform))
 // 前端没有专属界面、走通用表单的多协议供应商：模式、协议、默认端点
 // 与分流规则全部来自平台清单中的 profile。
 const isGenericMultiProtocolPlatform = computed(
@@ -4459,6 +4504,13 @@ function selectGenericMultiProtocolPlatform(platform: string) {
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultProviderProtocolRules(platform, accountMode.value))
+  // 自定义平台：三个地址框从空白开始（profile 没有默认地址，defaultCNAdaptiveBaseUrls 即全空），
+  // Anthropic 认证头回到默认的 x-api-key。
+  if (isCustomPlatform(platform)) {
+    adaptiveBaseUrls.value = emptyCustomEndpointUrls()
+    apiKeyBaseUrl.value = ''
+    anthropicAPIKeyAuthScheme.value = 'x_api_key'
+  }
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(openCodeAccountMode, (mode, previousMode) => {
@@ -5757,6 +5809,17 @@ const buildOpenAICodexImportExtra = (): Record<string, unknown> | undefined => {
 }
 
 const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
+  // 自定义多协议平台只暴露 Anthropic 端点的认证头选项（Chat Completions / Responses 一律 Bearer），
+  // 不带透传与联网搜索模拟等 Anthropic 专属开关。
+  if (form.platform === 'custom') {
+    const extra: Record<string, unknown> = { ...(base || {}) }
+    if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
+      extra.anthropic_apikey_auth_scheme = 'authorization_bearer'
+    } else {
+      delete extra.anthropic_apikey_auth_scheme
+    }
+    return Object.keys(extra).length > 0 ? extra : undefined
+  }
   if (form.platform !== 'anthropic' || accountCategory.value !== 'apikey') {
     return base
   }
@@ -6034,6 +6097,13 @@ const handleSubmit = async () => {
     return
   }
 
+  // 自定义多协议平台：Chat Completions 地址必填（入站协议没有对应端点时回落到它），
+  // 地址框不补任何官方默认值，缺失会让请求无处可发。
+  if (isCustomSelected.value && !customEndpointUrlsValid(adaptiveBaseUrls.value)) {
+    appStore.showError(t('admin.accounts.customPlatform.chatCompletionsRequired'))
+    return
+  }
+
   // For apikey type, create directly
   if (!apiKeyValue.value.trim()) {
     appStore.showError(t('admin.accounts.pleaseEnterApiKey'))
@@ -6067,7 +6137,10 @@ const handleSubmit = async () => {
   if (isMultiProtocolApiKeyPlatform(form.platform)) {
     credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
     credentials.api_protocol = apiProtocol.value
-    if (apiProtocol.value === 'adaptive') {
+    if (isCustomSelected.value) {
+      // 自定义平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
+      applyCustomEndpointCredentials(credentials, adaptiveBaseUrls.value)
+    } else if (apiProtocol.value === 'adaptive') {
       const defaults = defaultCNAdaptiveBaseUrls(
         form.platform,
         form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
@@ -6082,7 +6155,7 @@ const handleSubmit = async () => {
     const resolvedCNBase = (
       apiKeyBaseUrl.value.trim() || defaultCNBaseUrl(form.platform, currentOpenCodeOrCNMode(), apiProtocol.value)
     ).trim()
-    if (apiProtocol.value !== 'adaptive' && resolvedCNBase) {
+    if (!isCustomSelected.value && apiProtocol.value !== 'adaptive' && resolvedCNBase) {
       credentials.base_url = resolvedCNBase
     }
     // 智谱团队版 Coding Plan：组织/项目 ID 写入凭据（非空才写）
