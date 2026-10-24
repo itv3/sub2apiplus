@@ -91,10 +91,10 @@ func (r *compositeCandidateRun) stickyCandidate(candidates []*compositeCandidate
 //  2. 响应归属表里查得到该响应 ID 的账号；
 //  3. 该账号是 OpenAI 平台账号（国产与自定义平台的 Responses 一律无状态，不存在可续的链），
 //     仍属于本分组且对该模型有声明（任意强度：续链已落在它身上，不能因声明强度层级变化而断链）；
-//  4. 该账号当前通过资格过滤。
+//  4. 该账号当前通过资格过滤（基于实时读取的账号）。
 //
 // 条件不满足时返回 nil，请求按普通请求处理（与现有调度器"续链账号不可用则落回普通调度"一致）。
-func (r *compositeCandidateRun) continuationOwner(accounts []Account) *Account {
+func (r *compositeCandidateRun) continuationOwner(groupCfg *compositeCandidateGroupConfig) *Account {
 	previousResponseID := r.previousResponseID()
 	if previousResponseID == "" || r.pool.openAI == nil {
 		return nil
@@ -107,20 +107,15 @@ func (r *compositeCandidateRun) continuationOwner(accounts []Account) *Account {
 	if err != nil || ownerID <= 0 {
 		return nil
 	}
-	for i := range accounts {
-		account := &accounts[i]
-		if account.ID != ownerID {
-			continue
-		}
-		if !account.IsOpenAI() || !CompositeAccountClaimsModel(account, r.model) {
-			return nil
-		}
-		if !r.evaluate(account, false).eligible {
-			return nil
-		}
-		return account
+	cfg := groupCfg.byID[ownerID]
+	if cfg == nil || !cfg.account.IsOpenAI() || cfg.strength(r.model) == CompositeClaimNone {
+		return nil
 	}
-	return nil
+	account := r.freshAccount(cfg)
+	if !r.evaluate(account, false).eligible {
+		return nil
+	}
+	return account
 }
 
 // lookupOpenAIFamilyBinding 按 OpenAI 网关族的契约计算会话哈希并查询绑定。

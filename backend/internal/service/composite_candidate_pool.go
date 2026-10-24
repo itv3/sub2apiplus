@@ -25,9 +25,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 )
 
 // compositeCandidatePoolEntryCtxKey 是入口标记的上下文键（包内私有类型，不占用 ctxkey 包）。
@@ -138,8 +138,9 @@ func CompositeAccountClaimAllowed(ctx context.Context, account *Account, publicM
 }
 
 // CompositeCandidateAccountLister 列出分组内按持久化配置启用的账号（不过滤限流等瞬态状态）。
-// AccountRepository 天然满足该接口；单独抽成接口是为了让候选池可以在测试里用桩替换，
-// 也便于接线阶段套一层缓存。
+// AccountRepository 天然满足该接口；单独抽成接口是为了让候选池可以在测试里用桩替换。
+// 候选池只把它的结果当作「配置态」按分组缓存（见 composite_candidate_pool_config.go），
+// 账号的运行态一律另行实时读取，所以这里不过滤瞬态状态也不影响冷却的及时生效。
 type CompositeCandidateAccountLister interface {
 	ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error)
 }
@@ -159,12 +160,15 @@ type CompositeCandidatePool struct {
 	openAI   *OpenAIGatewayService
 	gateway  *GatewayService
 	billing  *BillingCacheService
+	// configLoads 把并发请求对同一分组的配置态加载合并成一次。
+	configLoads singleflight.Group
 }
 
 var _ CompositeCandidatePoolResolver = (*CompositeCandidatePool)(nil)
 
 // NewCompositeCandidatePool 创建候选池。四个依赖都只被"只读地"使用：
-// accounts 扫账号，openAI 与 gateway 分别提供 OpenAI 网关族与 Anthropic 网关族的资格、
+// accounts 加载分组账号的配置态（按分组缓存，缓存复用 gateway 的模型列表缓存），
+// openAI 与 gateway 还负责声明命中账号的实时读取，并分别提供 OpenAI 网关族与 Anthropic 网关族的资格、
 // 会话哈希、粘性与续链查询，billing 提供用户 × 平台配额预检。
 // openAI 或 gateway 为空时，对应网关族的候选账号一律视为不合格。
 func NewCompositeCandidatePool(accounts CompositeCandidateAccountLister, openAI *OpenAIGatewayService, gateway *GatewayService, billing *BillingCacheService) *CompositeCandidatePool {
@@ -234,23 +238,24 @@ func (p *CompositeCandidatePool) resolve(ctx context.Context, groupID int64, mod
 		return unhandled, nil
 	}
 
-	accounts, err := p.accounts.ListModelAvailabilityCandidates(ctx, &groupID, domain.ConcretePlatformIDs(), false)
+	groupCfg, err := p.groupConfig(ctx, groupID)
 	if err != nil {
 		return unhandled, fmt.Errorf("list composite candidate accounts: %w", err)
 	}
-	tier, claimed := compositeClaimTierAccounts(accounts, model)
+	tier, claimed := groupCfg.claimTier(model)
 	if len(claimed) == 0 {
-		// 零声明：交回原流程，由归属判定与前缀猜测处理。
+		// 零声明：交回原流程，由归属判定与前缀猜测处理。只用了缓存里的配置态，没有任何账号读取。
 		return unhandled, nil
 	}
 
 	run := p.newRun(ctx, entry, groupID, model, endpoint, inbound)
 	outcome := compositeCandidatePoolOutcome{Tier: tier, Rejected: map[int64]string{}}
 
-	// 先评估所有声明账号的资格，被剔除的原因留作诊断。
+	// 声明命中的候选账号逐个实时读取，再评估资格；被剔除的原因留作诊断。
 	eligible := make([]*compositeCandidate, 0, len(claimed))
 	all := make([]*compositeCandidate, 0, len(claimed))
-	for _, account := range claimed {
+	for _, cfg := range claimed {
+		account := run.freshAccount(cfg)
 		candidate := &compositeCandidate{account: account}
 		all = append(all, candidate)
 		if verdict := run.evaluate(account, false); !verdict.eligible {
@@ -262,7 +267,7 @@ func (p *CompositeCandidatePool) resolve(ctx context.Context, groupID int64, mod
 	}
 
 	// 1. 续链优先：续链状态依附于首轮账号，换账号就续不上，所以集合只放归属账号。
-	if account := run.continuationOwner(accounts); account != nil {
+	if account := run.continuationOwner(groupCfg); account != nil {
 		outcome.Path = compositeCandidatePathContinuation
 		outcome.Decision = run.decision(account.Platform, []int64{account.ID})
 		run.logOutcome(outcome)
@@ -382,12 +387,15 @@ type compositeCandidateRun struct {
 	endpoint string
 	inbound  string
 
-	verdicts  map[compositeVerdictKey]compositeCandidateVerdict
-	quota     map[string]error
-	zeroConv  map[int64]bool
-	bound     map[string]int64
-	parsedReq *ParsedRequest
-	parsedErr bool
+	verdicts map[compositeVerdictKey]compositeCandidateVerdict
+	quota    map[string]error
+	zeroConv map[int64]bool
+	bound    map[string]int64
+	// fresh 是本次解析里已实时读取的账号；refreshFailed 记录读取或复核失败的账号及原因。
+	fresh         map[int64]*Account
+	refreshFailed map[int64]string
+	parsedReq     *ParsedRequest
+	parsedErr     bool
 }
 
 func (p *CompositeCandidatePool) newRun(ctx context.Context, entry CompositeCandidatePoolEntry, groupID int64, model, endpoint, inbound string) *compositeCandidateRun {
@@ -403,6 +411,9 @@ func (p *CompositeCandidatePool) newRun(ctx context.Context, entry CompositeCand
 		quota:    make(map[string]error),
 		zeroConv: make(map[int64]bool),
 		bound:    make(map[string]int64),
+
+		fresh:         make(map[int64]*Account),
+		refreshFailed: make(map[int64]string),
 	}
 }
 

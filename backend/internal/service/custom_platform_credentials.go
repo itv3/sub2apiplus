@@ -62,12 +62,25 @@ func mergeCredentialsTopLevel(existing, patch map[string]any) map[string]any {
 	return merged
 }
 
+// customBulkAccountPlan 是批量更新里单个 custom 账号的归一结果。
+type customBulkAccountPlan struct {
+	// baseURL 是归一后的 base_url（即合并后凭据里的 Chat Completions 地址）。
+	baseURL string
+	// identityChanged 表示归一后的 base_url 与账号当前保存的 base_url 不同，
+	// 也就是上游身份确实变了，旧的上游计费探测快照随之失效。
+	identityChanged bool
+}
+
+// customBulkPlan 是「账号 ID → 该账号的归一结果」，只包含 custom 账号。
+type customBulkPlan map[int64]customBulkAccountPlan
+
 // planCustomBulkBaseURLs 为批量更新里的 custom 账号规划 base_url 归一：按账号现有凭据与
-// 本次增量合并出完整凭据，逐个校验并取归一后的 base_url。返回「账号 ID → 归一后 base_url」，
-// 只包含 custom 账号；其它平台账号不出现、行为不变。任一 custom 账号校验失败即返回错误，
-// 调用方应在任何写操作之前整体拒绝。patch 为空（本次不改凭据）时无需校验，返回空 map。
-func planCustomBulkBaseURLs(targets []*Account, accountIDs []int64, patch map[string]any) (map[int64]string, error) {
-	plan := make(map[int64]string)
+// 本次增量合并出完整凭据，逐个校验并取归一后的 base_url，同时记录它与账号当前 base_url
+// 是否不同。返回值只包含 custom 账号；其它平台账号不出现、行为不变。任一 custom 账号校验
+// 失败即返回错误，调用方应在任何写操作之前整体拒绝。patch 为空（本次不改凭据）时无需校验，
+// 返回空规划。
+func planCustomBulkBaseURLs(targets []*Account, accountIDs []int64, patch map[string]any) (customBulkPlan, error) {
+	plan := make(customBulkPlan)
 	if len(patch) == 0 {
 		return plan, nil
 	}
@@ -87,50 +100,70 @@ func planCustomBulkBaseURLs(targets []*Account, accountIDs []int64, patch map[st
 			return nil, err
 		}
 		baseURL, _ := merged[credentialKeyBaseURL].(string)
-		plan[account.ID] = baseURL
+		currentBaseURL, _ := account.Credentials[credentialKeyBaseURL].(string)
+		plan[account.ID] = customBulkAccountPlan{
+			baseURL:         baseURL,
+			identityChanged: strings.TrimSpace(currentBaseURL) != strings.TrimSpace(baseURL),
+		}
 	}
 	return plan, nil
 }
 
 // splitBulkAccountIDsByCustomBaseURL 把批量更新的目标账号拆成互不相交的几组：
-// 非 custom 账号一组（沿用原增量，行为不变），custom 账号按归一后的 base_url 各成一组
-// （增量里追加 base_url）。按 base_url 排序保证调用顺序稳定。
-func splitBulkAccountIDsByCustomBaseURL(accountIDs []int64, plan map[int64]string) (others []int64, customGroups []customBulkGroup) {
-	byURL := make(map[string][]int64)
+// 非 custom 账号一组（沿用原增量，行为不变），custom 账号按（归一后的 base_url，上游身份是否
+// 变化）各成一组（增量里追加 base_url）。按 base_url 再按「未变化在前」排序保证调用顺序稳定。
+func splitBulkAccountIDsByCustomBaseURL(accountIDs []int64, plan customBulkPlan) (others []int64, customGroups []customBulkGroup) {
+	type groupKey struct {
+		baseURL         string
+		identityChanged bool
+	}
+	byKey := make(map[groupKey][]int64)
 	for _, id := range accountIDs {
-		baseURL, ok := plan[id]
+		accountPlan, ok := plan[id]
 		if !ok {
 			others = append(others, id)
 			continue
 		}
-		byURL[baseURL] = append(byURL[baseURL], id)
+		key := groupKey{baseURL: accountPlan.baseURL, identityChanged: accountPlan.identityChanged}
+		byKey[key] = append(byKey[key], id)
 	}
-	urls := make([]string, 0, len(byURL))
-	for baseURL := range byURL {
-		urls = append(urls, baseURL)
+	keys := make([]groupKey, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
 	}
-	sort.Strings(urls)
-	for _, baseURL := range urls {
-		customGroups = append(customGroups, customBulkGroup{baseURL: baseURL, ids: byURL[baseURL]})
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].baseURL != keys[j].baseURL {
+			return keys[i].baseURL < keys[j].baseURL
+		}
+		return !keys[i].identityChanged && keys[j].identityChanged
+	})
+	for _, key := range keys {
+		customGroups = append(customGroups, customBulkGroup{baseURL: key.baseURL, identityChanged: key.identityChanged, ids: byKey[key]})
 	}
 	return others, customGroups
 }
 
-// customBulkGroup 是批量更新里 base_url 归一结果相同的一组 custom 账号。
+// customBulkGroup 是批量更新里 base_url 归一结果与上游身份变化情况都相同的一组 custom 账号。
 type customBulkGroup struct {
-	baseURL string
-	ids     []int64
+	baseURL         string
+	identityChanged bool
+	ids             []int64
 }
 
 // bulkUpdateAccountColumns 执行批量更新的列与 JSONB 写入。没有 custom 账号需要归一时
 // 与原来完全一致（一次调用）；否则非 custom 账号沿用原增量一次写入，custom 账号按归一后的
-// base_url 分组，每组的凭据增量追加 base_url（并按身份变化重置上游计费探测快照）。
-func (s *adminServiceImpl) bulkUpdateAccountColumns(ctx context.Context, accountIDs []int64, updates AccountBulkUpdate, customBaseURLs map[int64]string) error {
-	if len(customBaseURLs) == 0 {
+// base_url 与上游身份是否变化分组，每组的凭据增量追加 base_url。
+//
+// 上游计费探测快照的失效口径与原逻辑一致：增量本身带上游身份字段（api_key、base_url、
+// 请求头覆写）或改了代理时，调用方已在增量 Extra 里置空快照，这里原样沿用；增量没带这些字段，
+// 只是 api_base_urls 变动时，仅当某组账号归一后的 base_url 确实与当前不同才置空，
+// 只补充 Responses、Anthropic 地址这类不影响身份的改动不清快照。
+func (s *adminServiceImpl) bulkUpdateAccountColumns(ctx context.Context, accountIDs []int64, updates AccountBulkUpdate, customPlan customBulkPlan) error {
+	if len(customPlan) == 0 {
 		_, err := s.accountRepo.BulkUpdate(ctx, accountIDs, updates)
 		return err
 	}
-	others, customGroups := splitBulkAccountIDsByCustomBaseURL(accountIDs, customBaseURLs)
+	others, customGroups := splitBulkAccountIDsByCustomBaseURL(accountIDs, customPlan)
 	if len(others) > 0 {
 		if _, err := s.accountRepo.BulkUpdate(ctx, others, updates); err != nil {
 			return err
@@ -140,13 +173,13 @@ func (s *adminServiceImpl) bulkUpdateAccountColumns(ctx context.Context, account
 		groupUpdates := updates
 		groupUpdates.Credentials = maps.Clone(updates.Credentials)
 		groupUpdates.Credentials[credentialKeyBaseURL] = group.baseURL
-		// base_url 属于上游身份：本组归一后的 base_url 即使不在原增量里，也要让旧的
-		// 上游计费探测快照失效，与原增量直接带 base_url 时的处理一致。
-		groupUpdates.Extra = maps.Clone(updates.Extra)
-		if groupUpdates.Extra == nil {
-			groupUpdates.Extra = make(map[string]any, 1)
+		if group.identityChanged {
+			groupUpdates.Extra = maps.Clone(updates.Extra)
+			if groupUpdates.Extra == nil {
+				groupUpdates.Extra = make(map[string]any, 1)
+			}
+			groupUpdates.Extra[UpstreamBillingProbeExtraKey] = nil
 		}
-		groupUpdates.Extra[UpstreamBillingProbeExtraKey] = nil
 		if _, err := s.accountRepo.BulkUpdate(ctx, group.ids, groupUpdates); err != nil {
 			return err
 		}

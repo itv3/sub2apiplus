@@ -337,3 +337,89 @@ func TestAdminBulkUpdateCustomAccountsNormalizesOnlyCustom(t *testing.T) {
 		require.Len(t, recorder.calls, 1)
 	})
 }
+
+// 批量更新 custom 账号时，上游计费探测快照只在上游身份确实变化时才失效，
+// 与原有 updatesUpstreamBillingProbeIdentity 的口径对齐：
+//   - 增量本身带 api_key、base_url、请求头覆写（或改了代理）：整批沿用原逻辑，一律失效；
+//   - 增量只是 api_base_urls 变动：只有归一后的 base_url 与账号当前不同的账号才失效，
+//     只补充 Responses、Anthropic 地址这类不影响身份的改动不清快照。
+func TestAdminBulkUpdateCustomAccountsClearsProbeOnlyWhenIdentityChanges(t *testing.T) {
+	customAccount := func(id int64, chatURL string) *Account {
+		return &Account{
+			ID: id, Platform: PlatformCustom, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"api_key":       "sk-old",
+				"api_protocol":  APIProtocolAdaptive,
+				"api_base_urls": map[string]any{APIProtocolChatCompletions: chatURL},
+				"base_url":      chatURL,
+			},
+		}
+	}
+	hasProbeReset := func(update AccountBulkUpdate) bool {
+		value, present := update.Extra[UpstreamBillingProbeExtraKey]
+		return present && value == nil
+	}
+	run := func(t *testing.T, patch map[string]any, accounts ...*Account) *customBulkRecorder {
+		t.Helper()
+		ids := make([]int64, 0, len(accounts))
+		for _, account := range accounts {
+			ids = append(ids, account.ID)
+		}
+		recorder := &customBulkRecorder{accountRepoStubForBulkUpdate: &accountRepoStubForBulkUpdate{getByIDsAccounts: accounts}}
+		svc := &adminServiceImpl{accountRepo: recorder}
+		_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{AccountIDs: ids, Credentials: patch})
+		require.NoError(t, err)
+		return recorder
+	}
+
+	t.Run("只补充 Responses 地址：Chat Completions 地址没变，不清快照", func(t *testing.T) {
+		recorder := run(t, map[string]any{"api_base_urls": map[string]any{
+			APIProtocolChatCompletions: "https://a.example.com/v1",
+			APIProtocolResponses:       "https://a.example.com/v1",
+		}}, customAccount(1, "https://a.example.com/v1"))
+		require.Len(t, recorder.calls, 1)
+		require.Equal(t, "https://a.example.com/v1", recorder.calls[0].updates.Credentials["base_url"])
+		require.False(t, hasProbeReset(recorder.calls[0].updates), "上游身份没变，探测快照应保留")
+	})
+
+	t.Run("Chat Completions 地址变了：清快照", func(t *testing.T) {
+		recorder := run(t, map[string]any{"api_base_urls": map[string]any{APIProtocolChatCompletions: "https://new.example.com/v1"}},
+			customAccount(1, "https://a.example.com/v1"))
+		require.Len(t, recorder.calls, 1)
+		require.True(t, hasProbeReset(recorder.calls[0].updates))
+	})
+
+	t.Run("同批里有的账号身份变了有的没变：拆成两次写入，只清变了的", func(t *testing.T) {
+		recorder := run(t, map[string]any{"api_base_urls": map[string]any{APIProtocolChatCompletions: "https://new.example.com/v1"}},
+			customAccount(1, "https://new.example.com/v1"),
+			customAccount(3, "https://old.example.com/v1"))
+		require.Len(t, recorder.calls, 2)
+		require.Equal(t, []int64{1}, recorder.calls[0].ids)
+		require.False(t, hasProbeReset(recorder.calls[0].updates))
+		require.Equal(t, []int64{3}, recorder.calls[1].ids)
+		require.True(t, hasProbeReset(recorder.calls[1].updates))
+		for _, call := range recorder.calls {
+			require.Equal(t, "https://new.example.com/v1", call.updates.Credentials["base_url"])
+		}
+	})
+
+	t.Run("增量带 api_key：沿用原逻辑，即使地址没变也清快照", func(t *testing.T) {
+		recorder := run(t, map[string]any{
+			"api_key":       "sk-new",
+			"api_base_urls": map[string]any{APIProtocolChatCompletions: "https://a.example.com/v1"},
+		}, customAccount(1, "https://a.example.com/v1"))
+		require.Len(t, recorder.calls, 1)
+		require.True(t, hasProbeReset(recorder.calls[0].updates))
+	})
+
+	t.Run("账号当前 base_url 与 Chat Completions 地址不一致：归一后算身份变化", func(t *testing.T) {
+		stale := customAccount(1, "https://a.example.com/v1")
+		stale.Credentials["base_url"] = "https://stale.example.com"
+		recorder := run(t, map[string]any{"api_base_urls": map[string]any{
+			APIProtocolChatCompletions: "https://a.example.com/v1",
+			APIProtocolAnthropic:       "https://a.example.com",
+		}}, stale)
+		require.Len(t, recorder.calls, 1)
+		require.True(t, hasProbeReset(recorder.calls[0].updates))
+	})
+}

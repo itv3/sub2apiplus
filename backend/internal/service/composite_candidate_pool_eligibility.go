@@ -25,6 +25,7 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -53,6 +54,12 @@ func (r *compositeCandidateRun) evaluate(account *Account, sticky bool) composit
 	if verdict, ok := r.verdicts[key]; ok {
 		return verdict
 	}
+	if reason, failed := r.refreshFailed[account.ID]; failed {
+		// 实时读取或复核失败的账号一律不合格，原因照记。
+		verdict := compositeCandidateVerdict{eligible: false, reason: reason}
+		r.verdicts[key] = verdict
+		return verdict
+	}
 	// 每个候选在写入了自己平台的上下文里评估。
 	ctx := WithResolvedTargetPlatform(r.ctx, account.Platform)
 	var reason string
@@ -63,12 +70,23 @@ func (r *compositeCandidateRun) evaluate(account *Account, sticky bool) composit
 	}
 	if reason == "" {
 		if err := r.userPlatformQuotaError(ctx, account.Platform); err != nil {
-			reason = "user_platform_quota_exhausted"
+			reason = compositeUserPlatformQuotaReason(err)
 		}
 	}
 	verdict := compositeCandidateVerdict{eligible: reason == "", reason: reason}
 	r.verdicts[key] = verdict
 	return verdict
+}
+
+// compositeUserPlatformQuotaReason 区分用户平台配额预检被拒的原因：配额真的用尽，
+// 还是预检本身出错（Redis、DB 故障等）。两种情况都剔除该平台，只是诊断标签不同。
+func compositeUserPlatformQuotaReason(err error) string {
+	if errors.Is(err, ErrUserPlatformDailyQuotaExhausted) ||
+		errors.Is(err, ErrUserPlatformWeeklyQuotaExhausted) ||
+		errors.Is(err, ErrUserPlatformMonthlyQuotaExhausted) {
+		return "user_platform_quota_exhausted"
+	}
+	return "user_platform_quota_check_error"
 }
 
 // openAIFamilyIneligibleReason 对 OpenAI 网关族账号调用调度器现有的资格判断，返回首个否决原因（通过为空串）。

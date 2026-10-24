@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	gocache "github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,24 +23,85 @@ const (
 	compositePoolModel   = "deepseek-flash"
 )
 
-// compositePoolLister 是候选池使用的账号目录桩，记录调用次数。
+// compositePoolLister 同时扮演候选池的账号目录（配置态加载）和两套网关服务的账号仓储
+// （按 ID 实时读取，对应调度器终检读的来源），分别记录调用次数。
+// 测试可以随时改 accounts / byIDErr / byIDMissing，模拟账号状态在两次请求之间变化。
 type compositePoolLister struct {
-	mu       sync.Mutex
-	accounts []Account
-	err      error
-	calls    int
+	AccountRepository
+	mu          sync.Mutex
+	accounts    []Account
+	err         error
+	calls       int
+	byIDCalls   int
+	byIDErr     map[int64]error
+	byIDMissing map[int64]bool
+	listDelay   time.Duration
 }
 
 func (l *compositePoolLister) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]Account, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.calls++
-	if l.err != nil {
-		return nil, l.err
-	}
+	delay, err := l.listDelay, l.err
 	out := make([]Account, len(l.accounts))
 	copy(out, l.accounts)
+	l.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	if err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func (l *compositePoolLister) GetByID(_ context.Context, id int64) (*Account, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.byIDCalls++
+	if err := l.byIDErr[id]; err != nil {
+		return nil, err
+	}
+	if l.byIDMissing[id] {
+		return nil, nil
+	}
+	for i := range l.accounts {
+		if l.accounts[i].ID == id {
+			account := l.accounts[i]
+			return &account, nil
+		}
+	}
+	return nil, ErrAccountNotFound
+}
+
+func (l *compositePoolLister) loadCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.calls
+}
+
+func (l *compositePoolLister) readCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.byIDCalls
+}
+
+// update 原地修改某个账号（模拟管理员改配置或账号进入冷却）。
+func (l *compositePoolLister) update(id int64, mutate func(*Account)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.accounts {
+		if l.accounts[i].ID == id {
+			mutate(&l.accounts[i])
+			return
+		}
+	}
+}
+
+// add 追加一个账号（模拟管理员新增声明账号）。
+func (l *compositePoolLister) add(account Account) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.accounts = append(l.accounts, account)
 }
 
 // compositePoolQuotaRepo 按平台返回用户配额记录，并记录各平台被查询的次数。
@@ -90,14 +153,20 @@ func newCompositePoolFixture(t *testing.T, accounts ...Account) *compositePoolFi
 	rpm := &userRPMCacheStub{}
 	cfg := &config.Config{}
 	billing := &BillingCacheService{cfg: cfg, userPlatformQuotaRepo: quota, userRPMCache: rpm}
-	openAI := &OpenAIGatewayService{cache: cache, cfg: cfg, openaiWSStateStore: store}
-	gateway := &GatewayService{cache: cache, cfg: cfg}
 	lister := &compositePoolLister{accounts: accounts}
+	openAI := &OpenAIGatewayService{accountRepo: lister, cache: cache, cfg: cfg, openaiWSStateStore: store}
+	gateway := &GatewayService{accountRepo: lister, cache: cache, cfg: cfg}
 	return &compositePoolFixture{
 		t: t, lister: lister, cache: cache, openAI: openAI, gateway: gateway,
 		billing: billing, quota: quota, rpm: rpm, store: store,
 		pool: NewCompositeCandidatePool(lister, openAI, gateway, billing),
 	}
+}
+
+// enableConfigCache 给网关服务装上与线上相同类型的模型列表缓存（候选池的配置态缓存复用它）。
+func (f *compositePoolFixture) enableConfigCache(ttl time.Duration) {
+	f.gateway.modelsListCache = gocache.New(ttl, time.Minute)
+	f.gateway.modelsListCacheTTL = ttl
 }
 
 // ctxFor 构造带入口标记的请求上下文。
@@ -185,6 +254,10 @@ func compositePoolAccount(id int64, platform string, priority int, credentials m
 		ID: id, Name: platform, Platform: platform, Type: AccountTypeAPIKey,
 		Status: StatusActive, Schedulable: true, Priority: priority, Concurrency: 1,
 		Credentials: creds,
+		GroupIDs:    []int64{compositePoolGroupID},
+		AccountGroups: []AccountGroup{
+			{AccountID: id, GroupID: compositePoolGroupID},
+		},
 	}
 }
 

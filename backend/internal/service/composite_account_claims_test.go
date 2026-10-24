@@ -183,17 +183,28 @@ func TestCompositeClaimTierAccounts(t *testing.T) {
 	none := compositeClaimTestAccount(4, PlatformOpenAI, map[string]any{"other": "gpt-5"})
 	emptyMapping := Account{ID: 5, Platform: PlatformDeepseek, Type: AccountTypeAPIKey}
 
-	tier, picked := compositeClaimTierAccounts([]Account{strongA, weak, none, emptyMapping, strongB}, model)
+	tier, picked := compositeClaimTierOf([]Account{strongA, weak, none, emptyMapping, strongB}, model)
 	require.Equal(t, CompositeClaimExplicit, tier)
 	require.Equal(t, []int64{1, 2}, compositeTestAccountIDs(picked), "强声明压制弱声明，空映射与无关映射不入池")
 
-	tier, picked = compositeClaimTierAccounts([]Account{weak, none, emptyMapping}, model)
+	tier, picked = compositeClaimTierOf([]Account{weak, none, emptyMapping}, model)
 	require.Equal(t, CompositeClaimWildcard, tier)
 	require.Equal(t, []int64{3}, compositeTestAccountIDs(picked), "完全没有强声明时才使用弱声明账号")
 
-	tier, picked = compositeClaimTierAccounts([]Account{none, emptyMapping}, model)
+	tier, picked = compositeClaimTierOf([]Account{none, emptyMapping}, model)
 	require.Equal(t, CompositeClaimNone, tier)
 	require.Empty(t, picked, "零声明时不生成集合")
+}
+
+// compositeClaimTierOf 对账号切片按声明强度分层，返回指向切片元素的指针。
+func compositeClaimTierOf(accounts []Account, model string) (CompositeClaimStrength, []*Account) {
+	pointers := make([]*Account, len(accounts))
+	for i := range accounts {
+		pointers[i] = &accounts[i]
+	}
+	return compositeClaimTier(pointers, func(account *Account) CompositeClaimStrength {
+		return CompositeAccountClaimStrength(account, model)
+	})
 }
 
 func compositeTestAccountIDs(accounts []*Account) []int64 {

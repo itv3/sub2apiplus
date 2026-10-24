@@ -56,21 +56,21 @@ func CompositeAccountClaimStrength(account *Account, model string) CompositeClai
 		// 空映射账号不入池：本方案不再允许账号凭"没写映射"去冒领任何模型。
 		return CompositeClaimNone
 	}
-	return compositeMappingClaimStrength(account, mapping, model)
+	return compositeMappingClaimStrength(account.Platform, mapping, model)
 }
 
 // compositeMappingClaimStrength 按账号映射的实际命中路径分级，匹配顺序与转发阶段
 // 解析映射一致：原始模型精确 → 原始通配 → 归一化精确 → 归一化通配，命中即终止。
 // 映射目标为空的条目不构成声明，也不回落到通配（显式条目对通配具有遮蔽性，
 // 转发阶段同样走不到通配）。
-func compositeMappingClaimStrength(account *Account, mapping map[string]string, model string) CompositeClaimStrength {
+func compositeMappingClaimStrength(platform string, mapping map[string]string, model string) CompositeClaimStrength {
 	if mapped, exists := mapping[model]; exists {
 		return compositeClaimStrengthForTarget(mapped, true)
 	}
 	if mapped, matched := matchWildcardMappingResult(mapping, model); matched {
 		return compositeClaimStrengthForTarget(mapped, false)
 	}
-	normalized := normalizeRequestedModelForLookup(account.Platform, model)
+	normalized := normalizeRequestedModelForLookup(platform, model)
 	if normalized != model {
 		if mapped, exists := mapping[normalized]; exists {
 			return compositeClaimStrengthForTarget(mapped, true)
@@ -98,18 +98,18 @@ func CompositeAccountClaimsModel(account *Account, model string) bool {
 	return CompositeAccountClaimStrength(account, model) != CompositeClaimNone
 }
 
-// compositeClaimTierAccounts 按声明强度分层挑出可入候选池的账号：
-// 存在强声明账号时只返回强声明账号；完全没有强声明账号才返回弱声明账号；
+// compositeClaimTier 按声明强度分层挑出可入候选池的条目：
+// 存在强声明条目时只返回强声明条目；完全没有强声明条目才返回弱声明条目；
 // 都没有则返回 nil。返回值保持输入顺序，tier 是实际采用的强度层级。
-func compositeClaimTierAccounts(accounts []Account, model string) (tier CompositeClaimStrength, picked []*Account) {
-	var strong, weak []*Account
-	for i := range accounts {
-		account := &accounts[i]
-		switch CompositeAccountClaimStrength(account, model) {
+// 泛型参数 T 可以是账号，也可以是候选池缓存的配置态快照，强度由调用方给出。
+func compositeClaimTier[T any](items []T, strength func(T) CompositeClaimStrength) (tier CompositeClaimStrength, picked []T) {
+	var strong, weak []T
+	for _, item := range items {
+		switch strength(item) {
 		case CompositeClaimExplicit:
-			strong = append(strong, account)
+			strong = append(strong, item)
 		case CompositeClaimWildcard:
-			weak = append(weak, account)
+			weak = append(weak, item)
 		}
 	}
 	if len(strong) > 0 {
