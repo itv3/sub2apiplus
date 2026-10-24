@@ -1,0 +1,73 @@
+{
+  "base_commit": "db1eb782b56f6ee5c3e4751dfb8f0dbf6baffe8b",
+  "changed_path_count": 14,
+  "current_commit": "0c088f6252dca364cb360714f2d5854e0091a7ed",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6865,
+  "frozen_path_count": 2279,
+  "identity_sha256": "55a1be8af4b56fb092409174380f86285b9fdc296046fa5c0fb41165b7ba7aae",
+  "issued_at_utc": "2026-10-24T08:40:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-custom-platform-candidate-pool-fix-20261024-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "predecessor_sha256s": [
+        "94be3a4af1e7a1ff7929fe1ddc1f227d137737cd979e993121efcda338820422"
+      ],
+      "reason": "README 新增候选池章节后原章节顺延，测试注释中的章节引用同步（区间内同时含候选池缓存修复，其新增文件不在冻结台账） path=backend/internal/service/account_test_service_openai_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-closeout-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1dcb31302d38a4e8c7fc3a00f35e9e1d0b1a9236a23db738e94fb54af1157e51"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_upstream_http_test.go",
+      "predecessor_sha256s": [
+        "d337c0fb8302508f3231eedd9d3e1142c9f02c3b1fad4471291ad64f3a57442e"
+      ],
+      "reason": "README 新增候选池章节后原章节顺延，测试注释中的章节引用同步（区间内同时含候选池缓存修复，其新增文件不在冻结台账） path=backend/internal/service/openai_upstream_http_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e03dffa1ae8690b205e4b1c2098c5d371d0b97cea784b3d2e40c1d433e3d93af"
+    }
+  ],
+  "unregistered_path_count": 12,
+  "unregistered_paths": [
+    "backend/internal/server/routes/composite_candidate_pool_e2e_test.go",
+    "backend/internal/service/composite_account_claims.go",
+    "backend/internal/service/composite_account_claims_test.go",
+    "backend/internal/service/composite_candidate_pool.go",
+    "backend/internal/service/composite_candidate_pool_cache_test.go",
+    "backend/internal/service/composite_candidate_pool_config.go",
+    "backend/internal/service/composite_candidate_pool_eligibility.go",
+    "backend/internal/service/composite_candidate_pool_fixture_test.go",
+    "backend/internal/service/composite_candidate_pool_sticky.go",
+    "backend/internal/service/composite_candidate_pool_test.go",
+    "backend/internal/service/custom_platform_credentials.go",
+    "backend/internal/service/custom_platform_credentials_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
