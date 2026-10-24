@@ -98,8 +98,9 @@ class WorkflowFindingsTest(unittest.TestCase):
         # 三个步骤，三种标签各一次；全部引用单一来源。
         self.assertEqual(sorted(step["build_tags"] for step in facts["lint_steps"]), ["", "integration", "unit"])
         self.assertEqual({step["version"] for step in facts["lint_steps"]}, {"${{ env.GOLANGCI_LINT_VERSION }}"})
-        # 不再出现字面的 lint 版本写法。
-        self.assertNotRegex(text, r"version:\s*v[0-9]+\.[0-9]+\.[0-9]+")
+        # lint 步骤不再出现字面版本：由上面的 findings 为空保证（只看 lint 步骤，不对整个文件做正则，
+        # 免得上游为别的 action 加了 version: vX.Y.Z 时误报）。
+        self.assertIn("GOLANGCI_LINT_VERSION: v", text)
 
     def test_real_repository_declaration_is_consistent_with_go_mod(self) -> None:
         declared = declared_toolchain(SOURCE_ROOT)

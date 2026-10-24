@@ -783,6 +783,15 @@ def run_gates_with_prechecks(
         raise UpstreamMergeError(
             f"U-4 启动前检查未通过（共 {len(blockers)} 项，没有创建 attempt {attempt}，没有启动任何执行组）：\n{listed}"
         )
+    latest = disposition["latest_attempt"]
+    previous = (
+        f"上一轮 attempt {latest}（{disposition['latest_result']}）无未处置的失败项" if latest else "没有上一轮 attempt"
+    )
+    notify(
+        f"启动前检查通过（候选提交 {source['source_commit'][:12]}）：{previous}；"
+        f"工具链 Go {toolchain['actual']['go']['version']}、lint {toolchain['actual']['golangci_lint']['version']} "
+        f"与候选声明一致；候选密钥扫描通过（{scan['scan']['gate_id']}）"
+    )
     return run_verification_gates(plan, attempt, only=only, from_attempt=from_attempt)
 
 

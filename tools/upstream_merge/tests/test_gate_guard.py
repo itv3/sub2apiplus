@@ -232,7 +232,12 @@ class OrderingAndPrecheckTest(GuardFixture):
         receipt = self.prechecked_run("attempt-001", notify=messages.append)
         self.assertEqual(receipt["result"], "passed")
         self.assertEqual((receipt["gate_count"], receipt["skipped_gate_count"], receipt["failed_gate_ids"]), (12, 0, []))
-        self.assertEqual(messages, [])
+        # 通过时只有一行启动前检查摘要，没有任何提示或阻断
+        self.assertEqual(len(messages), 1)
+        self.assertIn("启动前检查通过", messages[0])
+        self.assertIn("没有上一轮 attempt", messages[0])
+        self.assertIn("lint 2.14.0", messages[0])
+        self.assertIn("候选密钥扫描通过", messages[0])
         loaded = load_verification_receipt(self.plan, self.attempt_dir("attempt-001") / "receipt.json", require_passed=True)
         self.assertEqual(loaded["identity_sha256"], receipt["identity_sha256"])
         status = attempt_status(self.plan, "attempt-001")
@@ -365,10 +370,12 @@ class OrderingAndPrecheckTest(GuardFixture):
         messages: list[str] = []
         receipt = self.prechecked_run("attempt-001", notify=messages.append)
         self.assertEqual(receipt["result"], "passed")
-        self.assertEqual(len(messages), 1)
+        # 第一条是对半截目录的提示，最后一条是启动前检查通过的摘要
+        self.assertEqual(len(messages), 2)
         self.assertIn("attempt-000", messages[0])
         self.assertIn("没有 receipt.json", messages[0])
         self.assertIn("不算已知失败", messages[0])
+        self.assertIn("启动前检查通过", messages[1])
         status = attempt_status(self.plan, "attempt-000")
         self.assertEqual((status["result"], status["receipt"]), ("incomplete", None))
 
@@ -894,7 +901,8 @@ class CommandLineExitStatusTest(GuardFixture):
 
 
 def _passing_toolchain() -> dict:
-    return {"schema_version": "x", "role": "candidate", "repository": "x", "expected": {}, "actual": {}, "mismatches": [], "hints": [], "result": "passed"}
+    actual = {"go": {"version": "go1.27.3"}, "golangci_lint": {"version": "2.14.0"}}
+    return {"schema_version": "x", "role": "candidate", "repository": "x", "expected": {}, "actual": actual, "mismatches": [], "hints": [], "result": "passed"}
 
 
 if __name__ == "__main__":
