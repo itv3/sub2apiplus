@@ -151,6 +151,7 @@ func accountSupportsCompositeModelListProtocol(account *Account, protocol string
 			return false
 		}
 	default:
-		return false
+		// profile 没有默认地址的平台（自定义多协议）按 profile 与账号凭据判定。
+		return customPlatformSupportsModelListProtocol(account, protocol)
 	}
 }

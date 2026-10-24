@@ -37,7 +37,11 @@ const (
 	PlatformCommandCode = "command_code"
 	// PlatformCline 是 Cline API（多模型聚合，OpenAI 兼容 Chat Completions；按量积分计费，
 	// 另有 ClinePass 订阅）。
-	PlatformCline     = "cline"
+	PlatformCline = "cline"
+	// PlatformCustom 是「自定义多协议」平台：管理员自填 Chat Completions /
+	// Responses / Anthropic 三种协议的上游地址，按入站协议自适应分流；
+	// profile 不带任何默认地址，凭据里填了哪个协议的地址就支持哪个协议。
+	PlatformCustom    = "custom"
 	PlatformComposite = "composite"
 )
 

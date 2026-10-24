@@ -130,8 +130,9 @@ func deleteOpenAIResponsesNoneReasoningEffortFromObject(account *Account, body m
 }
 
 // normalizeDeepSeekResponsesRequestBody 适配无状态 CN Responses 端点：
-// 强制 store=false 并清除 previous_response_id（DeepSeek / Kimi 官方
-// Responses 均不支持服务端状态存储，携带这些字段会被拒绝）。
+// 强制 store=false 并清除 previous_response_id 与 conversation（DeepSeek / Kimi 官方
+// Responses 均不支持服务端状态存储，携带这些字段会被拒绝）。自定义多协议平台（custom）
+// 填了 Responses 地址的账号经 UsesNativeCNResponses 同样走这条无状态归一化。
 //
 // DeepSeek 另需把 Codex/OpenAI 的 input_image.image_url 写成线上 serde
 // 要求的 url 字段；openai 平台但 base_url 指向 api.deepseek.com 的映射
@@ -155,6 +156,11 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 		}
 		normalized = patched
 		if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
+			normalized = stripped
+		}
+		// conversation（服务端会话对象）同样依赖服务端状态：国产原生 Responses 与自定义
+		// 多协议平台的 Responses 端点都不支持，一并删除，客户端需自带完整上下文。
+		if stripped, err := sjson.DeleteBytes(normalized, "conversation"); err == nil {
 			normalized = stripped
 		}
 	}

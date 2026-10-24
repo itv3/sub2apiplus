@@ -10,22 +10,24 @@ import (
 )
 
 // 以下为重构前各处手写的平台列表 / switch，作为平台清单派生结果的等价基准；
-// 重构后新登记的平台（Command Code、Cline）按同类平台（OpenCode）的位置补入。
+// 重构后新登记的平台（Command Code、Cline、自定义）按同类平台（OpenCode）的位置补入。
 var (
 	legacyAllPlatforms = []string{
 		PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe,
 		PlatformCommandCode,
 		PlatformCline,
+		PlatformCustom,
 	}
 	legacySchedulerSnapshotPlatforms = []string{
 		PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe,
 		PlatformCommandCode,
 		PlatformCline,
+		PlatformCustom,
 	}
 	legacyCompositeMatchingPlatforms = legacySchedulerSnapshotPlatforms
-	legacyMultiProtocolProviders     = []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline}
+	legacyMultiProtocolProviders     = []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline, PlatformCustom}
 	platformProbeValues              = append(append([]string{}, legacyAllPlatforms...), PlatformComposite, "", "moonshot", "Kimi", "openai ", "glm", "bogus")
 	platformProbeAccountTypes        = []string{AccountTypeAPIKey, AccountTypeOAuth, AccountTypeSetupToken, AccountTypeUpstream, ""}
 )
@@ -39,12 +41,12 @@ func legacyIsCNProvider(platform string) bool {
 }
 
 func legacyIsOpenAICompatible(platform string) bool {
-	return platform == PlatformOpenAI || platform == PlatformGrok || legacyIsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformCommandCode || platform == PlatformCline
+	return platform == PlatformOpenAI || platform == PlatformGrok || legacyIsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformCommandCode || platform == PlatformCline || platform == PlatformCustom
 }
 
 func legacyNormalizeOpenAICompatiblePlatform(platform string) string {
 	switch platform {
-	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline:
+	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline, PlatformCustom:
 		return platform
 	}
 	return PlatformOpenAI
@@ -57,7 +59,7 @@ func legacyIsUpstreamBillingProbeIdentity(platform, accountType string) bool {
 	switch platform {
 	case PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo,
-		PlatformTypeSafe, PlatformCommandCode, PlatformCline:
+		PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformCustom:
 		return true
 	}
 	return false
@@ -65,7 +67,7 @@ func legacyIsUpstreamBillingProbeIdentity(platform, accountType string) bool {
 
 func legacyIsHeaderOverrideEligible(platform, accountType string) bool {
 	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline:
+	case PlatformAnthropic, PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode, PlatformCline, PlatformCustom:
 		return accountType == AccountTypeAPIKey
 	case PlatformGrok:
 		return accountType == AccountTypeAPIKey || accountType == AccountTypeOAuth
@@ -127,9 +129,10 @@ func TestProviderProfilesUseOpenAIGateway(t *testing.T) {
 func TestProviderProfileAccountPredicatesMatchLegacy(t *testing.T) {
 	for _, platform := range platformProbeValues {
 		account := &Account{Platform: platform, Type: AccountTypeAPIKey}
-		// Cline 只有 Chat Completions 一个端点，按入站协议分流（其余入站转换）。
-		require.Equal(t, legacyIsCNProvider(platform) || platform == PlatformCline, account.RoutesProtocolByInbound(), platform)
-		require.Equal(t, legacyIsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformCommandCode || platform == PlatformCline, account.IsMultiProtocolAPIKey(), platform)
+		// Cline 只有 Chat Completions 一个端点，按入站协议分流（其余入站转换）；
+		// 自定义多协议平台按入站协议分流，端点由凭据决定。
+		require.Equal(t, legacyIsCNProvider(platform) || platform == PlatformCline || platform == PlatformCustom, account.RoutesProtocolByInbound(), platform)
+		require.Equal(t, legacyIsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformCommandCode || platform == PlatformCline || platform == PlatformCustom, account.IsMultiProtocolAPIKey(), platform)
 	}
 	var nilAccount *Account
 	require.False(t, nilAccount.RoutesProtocolByInbound())

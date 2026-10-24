@@ -1023,11 +1023,11 @@ func OllamaCloudUsageStateFromAccount(account *Account) *OllamaCloudUsageState {
 // isOllamaCloudUsagePlatform 收敛 Ollama Cloud 用量窗口的平台白名单。官方
 // ollama.com base_url 除官方两平台外，也允许挂在经 OpenAI 网关转发的国产
 // OpenAI 兼容平台下（用户把 Ollama Cloud key 挂在 kimi/zhipu/deepseek 分组
-// 里跑托管的 glm/kimi/deepseek 模型）。repository 侧 SQL 白名单
+// 里跑托管的 glm/kimi/deepseek 模型），自定义多协议平台（custom）同样继承。repository 侧 SQL 白名单
 // （ollamaCloudUsagePlatformsSQL）是本列表的镜像，两侧必须同步修改。
 func isOllamaCloudUsagePlatform(platform string) bool {
 	switch platform {
-	case PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+	case PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformCustom:
 		return true
 	default:
 		return false

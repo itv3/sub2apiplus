@@ -148,6 +148,11 @@ func TestProviderProfile_BaseURLKeysAreNativeProtocols(t *testing.T) {
 
 	for platform, profile := range providerProfiles {
 		for mode, endpoints := range profile.Modes {
+			if profile.CredentialEndpoints {
+				// 端点完全由账号凭据决定的平台（自定义多协议）不带任何默认地址。
+				require.Empty(t, endpoints.BaseURLs, "%s/%s must not carry default bases", platform, mode)
+				continue
+			}
 			require.NotEmpty(t, endpoints.BaseURLs[APIProtocolChatCompletions], "%s/%s must have a chat_completions base", platform, mode)
 			for protocol, baseURL := range endpoints.BaseURLs {
 				require.True(t, isNativeUpstreamProtocol(protocol), "%s/%s has unknown protocol key %q", platform, mode, protocol)

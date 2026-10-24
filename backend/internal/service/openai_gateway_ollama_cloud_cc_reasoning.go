@@ -14,6 +14,11 @@ import (
 // 双向补齐，不改 CC↔Responses / Anthropic / Grok 桥。
 
 func isOllamaCloudRawChatCompletionsAccount(account *Account) bool {
+	// 自定义多协议平台没有「强制 Chat Completions」开关，按实际 Chat Completions
+	// 出站地址是否 Ollama Cloud 主机判定（见 custom_platform.go）。
+	if account != nil && account.Platform == PlatformCustom {
+		return isOllamaCloudCustomOutboundAccount(account)
+	}
 	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey {
 		return false
 	}

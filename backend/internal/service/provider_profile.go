@@ -45,6 +45,9 @@ type ProviderProfile struct {
 	// ModelCatalog 表示上游 {Chat Completions 基址}/models 为每个模型给出
 	// supported_endpoints；按模型分流时据此判断模型支持哪些协议（见 model_protocol_catalog.go）。
 	ModelCatalog bool
+	// CredentialEndpoints 为 true 表示该供应商的端点完全由账号凭据决定：profile 不带任何
+	// 默认地址，凭据 api_base_urls 里某协议填了非空地址才算支持该协议（自定义多协议平台）。
+	CredentialEndpoints bool
 }
 
 // providerDefaultTestModel 返回账号连接测试未指定模型时的默认模型；非多协议供应商或
@@ -221,6 +224,17 @@ var providerProfiles = map[string]*ProviderProfile{
 			},
 		},
 	},
+	// 自定义多协议平台：按入站协议分流（adaptive），profile 不写任何默认地址，
+	// 各协议是否可用、发往哪里全部由账号凭据 api_base_urls 决定，见 custom_platform.go。
+	PlatformCustom: {
+		Platform:            PlatformCustom,
+		DefaultMode:         AccountModePayG,
+		Routing:             ProviderRoutingByInbound,
+		CredentialEndpoints: true,
+		Modes: map[string]ProviderEndpoints{
+			AccountModePayG: {BaseURLs: map[string]string{}},
+		},
+	},
 }
 
 // LookupProviderProfile 返回 platform 对应的多协议供应商 profile；非此类平台返回 nil。
@@ -246,9 +260,17 @@ func (a *Account) defaultProviderBaseURL(protocol string) string {
 }
 
 // providerSupportsProtocol 报告账号所在供应商在其 account_mode 下是否提供该协议的原生端点。
+// profile 没有默认地址的供应商（自定义多协议平台）改为看账号凭据：api_base_urls 里该协议
+// 填了非空地址才算支持。
 func (a *Account) providerSupportsProtocol(protocol string) bool {
 	profile := a.providerProfile()
-	return profile != nil && profile.SupportsProtocol(a.GetCredential("account_mode"), protocol)
+	if profile == nil {
+		return false
+	}
+	if profile.CredentialEndpoints {
+		return a.credentialEndpointFor(protocol) != ""
+	}
+	return profile.SupportsProtocol(a.GetCredential("account_mode"), protocol)
 }
 
 // routesByModel 报告账号所在供应商是否按模型名分流上游协议（多模型聚合平台）。
