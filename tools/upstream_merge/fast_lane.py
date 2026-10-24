@@ -4,15 +4,16 @@ v0.2.17 试验区全量门禁 64 分 29 秒，其中采集工具线 33 分 38 �
 冻结摘要类（试验区还没生成台账，本来就会红），没有一条功能问题。快线跳过这两条整线，换成“冲突相关的定向回归”，
 功能问题仍在试验区发现，正式 U-4 全量兜底。
 
-检查线（按执行顺序，遇错不停，便宜的在前）：
+检查线（按执行顺序，遇错不停，按实测耗时从短到长，首条结论在一分钟内给出）：
 
-* ``toolchain``：候选 ``toolchain-check``（候选树自己声明的 Go／lint 版本与本机实际版本一致）；
-* ``secret-scan``：候选密钥扫描，与 U-4 同一份 ``secret_scan`` 门禁（取自 request 或标准模板）；
-* ``egress-spec``：``make -k check-egress-spec``，归因只认 ``egress-spec-go-test`` 里的冻结摘要比对；
-* ``lint``：golangci-lint 默认、unit、integration 三种标签（遵循 ``UPSTREAM_GATE_GOLANGCI_LINT``）；
-* ``frontend``：lint:check、typecheck、关键 vitest；
-* ``targeted-regression``：定向回归清单（见 ``targeted_regression.py``）里的 go test、vitest related、
-  部署脚本检查等；清单要求退回全量时跑三组全量 go test；
+* ``toolchain``：候选 ``toolchain-check``（候选树自己声明的 Go／lint 版本与本机实际版本一致），约 0.1 秒；
+* ``secret-scan``：候选密钥扫描，与 U-4 同一份 ``secret_scan`` 门禁（取自 request 或标准模板），不到 1 秒；
+* ``lint``：golangci-lint 默认、unit、integration 三种标签（遵循 ``UPSTREAM_GATE_GOLANGCI_LINT``），约 12 秒；
+* ``frontend``：lint:check、typecheck、关键 vitest，约 28 秒；
+* ``targeted-regression``：定向回归清单（见 ``targeted_regression.py``）里的 go test、前端用例、部署脚本检查等；
+  清单要求退回全量时跑三组全量 go test；v0.2.18 演示清单约 10 分钟；
+* ``egress-spec``：``make -k check-egress-spec``，归因只认 ``egress-spec-go-test`` 里的冻结摘要比对。试验区没有台账时
+  冻结测试失败，执行器还会单独重跑一次失败单元做诊断，实测约 17 分钟，是最长的一条，所以放在功能检查之后；
 * ``worktree``：全部检查结束后候选树必须仍然干净。
 
 失败归因：``functional`` 阻断；``frozen_digest_pending_ledger``（冻结摘要类，台账尚未生成）记为“待台账闭合”，
@@ -342,6 +343,16 @@ def build_fast_lanes(context: FastContext) -> list[Lane]:
     return [
         Lane("toolchain", (_inline_step("toolchain-check", "toolchain-check --role candidate", _toolchain_inline(context)),)),
         Lane("secret-scan", (_inline_step("candidate-secret-scan", "candidate-secret-scan", _secret_scan_inline(context)),)),
+        Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS)),
+        Lane(
+            "frontend",
+            (
+                Step("frontend-lint", ("pnpm", "--dir", "frontend", "run", "lint:check")),
+                Step("frontend-typecheck", ("pnpm", "--dir", "frontend", "run", "typecheck")),
+                Step("frontend-critical-vitest", ("make", "test-frontend-critical")),
+            ),
+        ),
+        Lane("targeted-regression", tuple(_targeted_steps(context))),
         Lane(
             "egress-spec",
             (
@@ -354,16 +365,6 @@ def build_fast_lanes(context: FastContext) -> list[Lane]:
                 ),
             ),
         ),
-        Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS)),
-        Lane(
-            "frontend",
-            (
-                Step("frontend-lint", ("pnpm", "--dir", "frontend", "run", "lint:check")),
-                Step("frontend-typecheck", ("pnpm", "--dir", "frontend", "run", "typecheck")),
-                Step("frontend-critical-vitest", ("make", "test-frontend-critical")),
-            ),
-        ),
-        Lane("targeted-regression", tuple(_targeted_steps(context))),
         Lane("worktree", (_inline_step("clean-after-run", "候选树仍干净", _worktree_inline(context)),)),
     ]
 

@@ -31,7 +31,7 @@
 模式跑全部五条，供根 Makefile 的 upstream-gate-full 使用。
 
 ``fast`` 模式是试验 worktree 的快线（根 Makefile 的 upstream-gate-fast，实现见 ``fast_lane.py``）：检查线为
-toolchain、secret-scan、egress-spec、lint、frontend 与按定向回归清单生成的 targeted-regression，跳过采集工具线和
+toolchain、secret-scan、lint、frontend、按定向回归清单生成的 targeted-regression 与 egress-spec（按实测耗时由短到长），跳过采集工具线和
 整套 go test。它写独立的状态文件（``FAST_STATUS_SCHEMA``），``workflow._load_runner_status`` 只认 full 模式的
 schema，快线记录永远不能当作 U-4 收据。本模块提供的通用机制——内联步骤、失败归因、日志区间记录——都不改变
 full／backend 模式的行为与状态文件形状。

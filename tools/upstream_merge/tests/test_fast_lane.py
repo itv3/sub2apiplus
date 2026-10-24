@@ -321,7 +321,7 @@ class LaneBuildingTest(FastFixture):
         lanes = build_fast_lanes(self.prepare())
         self.assertEqual(
             [lane.name for lane in lanes],
-            ["toolchain", "secret-scan", "egress-spec", "lint", "frontend", "targeted-regression", "worktree"],
+            ["toolchain", "secret-scan", "lint", "frontend", "targeted-regression", "egress-spec", "worktree"],
         )
         names = {lane.name for lane in lanes}
         self.assertNotIn("capture-tools", names)
@@ -357,7 +357,7 @@ class LaneBuildingTest(FastFixture):
     def test_fallback_manifest_runs_the_three_full_go_test_sets(self) -> None:
         context = self.prepare()
         context.manifest["go"]["fallback_full_go"] = True
-        steps = build_fast_lanes(context)[5].steps
+        steps = build_fast_lanes(context)[4].steps
         self.assertEqual(
             [step.argv for step in steps[1:]],
             [
@@ -377,7 +377,7 @@ class LaneBuildingTest(FastFixture):
             {"tests": "tools/upstream_merge/tests", "argv": ["python3", "-m", "unittest", "discover"], "cwd": ".", "files": [], "reason": "r"}
         ]
         manifest["shell"]["commands"] = [["/bin/sh", "deploy/tests/a.sh"], ["/bin/bash", "-n", "deploy/b.sh"]]
-        steps = {step.name: step for step in build_fast_lanes(context)[5].steps}
+        steps = {step.name: step for step in build_fast_lanes(context)[4].steps}
         self.assertEqual(
             steps["frontend-vitest-specs"].argv,
             ("pnpm", "--dir", "frontend", "exec", "vitest", "run", "src/__tests__/x.spec.ts", "src/__tests__/y.spec.ts"),
