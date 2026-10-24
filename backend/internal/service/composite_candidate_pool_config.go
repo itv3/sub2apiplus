@@ -206,7 +206,7 @@ func (r *compositeCandidateRun) readFreshAccount(cfg *compositeCandidateConfig) 
 	}
 	// 持久停用（状态不是 active，或可调度开关被关）的账号不声明任何模型，与账号归属解析一致：
 	// 瞬态的限流、过载、临时不可调度不算停用，仍参与分层，只在资格评估里不合格。
-	if account.Status != StatusActive || !account.Schedulable {
+	if !compositeAccountPersistentlyEnabled(account) {
 		return nil, "not_schedulable", true
 	}
 	if !CompositeAccountClaimsModel(account, r.model) {

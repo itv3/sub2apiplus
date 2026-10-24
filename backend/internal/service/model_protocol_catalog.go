@@ -108,6 +108,19 @@ func (c *modelProtocolCatalog) lookup(ctx context.Context, key, model string, no
 	return entry.models[strings.ToLower(strings.TrimSpace(model))]
 }
 
+// peek 只读地查询 key 目录中 model 支持的协议：不触发刷新、不等待冷启动，
+// 目录尚未就绪（含过期后仍保留的旧目录视为就绪）或模型不在目录中时返回 nil。
+// 静态页面（Codex 三方模型目录）用它参与协议判定，避免读页面时向上游发请求。
+func (c *modelProtocolCatalog) peek(key, model string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.models == nil {
+		return nil
+	}
+	return entry.models[strings.ToLower(strings.TrimSpace(model))]
+}
+
 // store 写入一次刷新的结果；失败时保留旧目录并进入退避。
 func (c *modelProtocolCatalog) store(key string, models map[string][]string, err error, now time.Time) {
 	c.mu.Lock()
@@ -172,24 +185,50 @@ func parseModelProtocolCatalog(body []byte) (map[string][]string, error) {
 	return models, nil
 }
 
-// modelCatalogProtocols 返回上游模型目录中 model 支持的协议；平台不提供目录、账号固定了
-// 上游协议或目录尚未就绪时返回 nil。
-func (s *OpenAIGatewayService) modelCatalogProtocols(ctx context.Context, account *Account, model string) []string {
-	if s == nil || s.httpUpstream == nil || strings.TrimSpace(model) == "" || !account.routesByModel() {
-		return nil
+// modelCatalogEndpoint 返回账号对应的上游模型目录地址与缓存键；平台不提供目录、
+// 账号固定了上游协议或没有可用的 Chat Completions 基址时 ok 为 false。
+// modelCatalogProtocols 与 modelCatalogProtocolsCached 共用这一套判定。
+func modelCatalogEndpoint(account *Account, model string) (url, key string, ok bool) {
+	if strings.TrimSpace(model) == "" || !account.routesByModel() {
+		return "", "", false
 	}
 	if profile := account.providerProfile(); profile == nil || !profile.ModelCatalog {
-		return nil
+		return "", "", false
 	}
 	if account.GetAPIProtocol() != APIProtocolAdaptive {
-		return nil
+		return "", "", false
 	}
 	base := strings.TrimSpace(account.GetCNProtocolBaseURL(APIProtocolChatCompletions))
 	if base == "" {
+		return "", "", false
+	}
+	url = buildOpenAIModelsURL(base)
+	return url, modelProtocolCatalogKey(account, url), true
+}
+
+// modelCatalogProtocolsCached 只读缓存版的 modelCatalogProtocols：目录没缓存就返回 nil，
+// 不发上游请求、不触发后台刷新、不等待。运行时请求预热过的目录在这里可见，结果与请求路径一致。
+func (s *OpenAIGatewayService) modelCatalogProtocolsCached(account *Account, model string) []string {
+	if s == nil || s.httpUpstream == nil {
 		return nil
 	}
-	url := buildOpenAIModelsURL(base)
-	key := modelProtocolCatalogKey(account, url)
+	_, key, ok := modelCatalogEndpoint(account, model)
+	if !ok {
+		return nil
+	}
+	return upstreamModelProtocols.peek(key, model)
+}
+
+// modelCatalogProtocols 返回上游模型目录中 model 支持的协议；平台不提供目录、账号固定了
+// 上游协议或目录尚未就绪时返回 nil。
+func (s *OpenAIGatewayService) modelCatalogProtocols(ctx context.Context, account *Account, model string) []string {
+	if s == nil || s.httpUpstream == nil {
+		return nil
+	}
+	url, key, ok := modelCatalogEndpoint(account, model)
+	if !ok {
+		return nil
+	}
 	headers := modelProtocolCatalogHeaders(account, url)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

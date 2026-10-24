@@ -180,30 +180,22 @@ func (p *CompositeCandidatePool) checkUserPlatformQuota(ctx context.Context, ent
 }
 
 // isZeroConversion 判定账号对本次入站协议是否无需协议转换即可直通上游（结果按账号记忆）。
-//
-//   - OpenAI 网关族账号：resolveUpstreamProtocolFor 返回的上游协议等于入站协议即零转换，
-//     按模型分流的账号带上游模型目录一并判定；
-//   - Grok 在 Responses 与 Chat Completions 入口有专属直通链路（resolveUpstreamProtocol 的说明要求
-//     调用前先分流），这两种入站对它视为零转换，Anthropic 入站需要转换；
-//   - Anthropic 平台账号只对 Anthropic 入站（含 count_tokens）零转换；
-//     其余 Anthropic 网关族平台（Gemini、Antigravity、TypeSafe）上游不是 Anthropic 原生协议，一律需转换。
+// 判定规则（OpenAI 网关族看上游协议、Grok 专属直通、Anthropic 平台只对 Anthropic 入站零转换）
+// 见 compositeAccountZeroConversion。
 func (r *compositeCandidateRun) isZeroConversion(account *Account) bool {
 	if zero, ok := r.zeroConv[account.ID]; ok {
 		return zero
 	}
-	var zero bool
-	switch {
-	case domain.UsesOpenAIGateway(account.Platform):
-		if account.IsGrok() {
-			zero = r.inbound == APIProtocolResponses || r.inbound == APIProtocolChatCompletions
-			break
-		}
+	// 判定本身由 compositeAccountZeroConversion 统一给出（目录页也用同一个函数），
+	// 这里只负责取得按模型分流账号所需的路由模型名与上游模型目录。
+	var routingModel string
+	var catalog []string
+	if domain.UsesOpenAIGateway(account.Platform) && !account.IsGrok() {
 		ctx := WithResolvedTargetPlatform(r.ctx, account.Platform)
-		routingModel := upstreamRoutingModel(account, r.entry.Body, "")
-		zero = r.pool.openAI.resolveUpstreamProtocolFor(ctx, account, r.inbound, routingModel) == r.inbound
-	default:
-		zero = account.Platform == PlatformAnthropic && r.inbound == APIProtocolAnthropic
+		routingModel = upstreamRoutingModel(account, r.entry.Body, "")
+		catalog = r.pool.openAI.modelCatalogProtocols(ctx, account, routingModel)
 	}
+	zero := compositeAccountZeroConversion(account, r.inbound, routingModel, catalog)
 	r.zeroConv[account.ID] = zero
 	return zero
 }

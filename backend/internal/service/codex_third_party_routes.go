@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -52,6 +53,11 @@ type codexTPRoute struct {
 	Protocols      []string
 	AccountIDs     []int64
 	EndpointDigest string
+
+	// Primary 与 Alternates 仅在 Composite 分组按账号级跨平台候选池承接时有值：
+	// Primary 是首选账号（决定 TargetPlatform），Alternates 是同一承接分组里的其余账号。
+	Primary    *CodexThirdPartyRouteAccount
+	Alternates []CodexThirdPartyRouteAccount
 }
 
 // codexTPSession 缓存一次目录编排里的账号列表与路由分析结果。
@@ -60,6 +66,11 @@ type codexTPSession struct {
 	group    *Group
 	accounts []Account
 	memo     map[string]*codexTPRoute
+
+	// 跨平台承接分组用的全平台账号缓存（见 allPlatformAccounts）：只在遇到跨平台歧义时才加载。
+	allLoaded   bool
+	allAccounts []*Account
+	allErr      error
 
 	// 分组默认模型名单的会话内缓存（见 groupModelNames）。
 	listingLoaded bool
@@ -139,6 +150,9 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 	group := sess.group
 
 	// 第一步：目标平台。Composite 走真实解析器，其它分组固定为分组平台。
+	// receivers 非空表示按账号级跨平台候选池承接：同一模型名被多个平台的账号声明时，
+	// 真实请求由候选池在这些账号里选号，目录必须对其中全部账号成立。
+	var receivers []*Account
 	if group.Platform == PlatformComposite {
 		resolver := sess.svc.resolver
 		if resolver == nil {
@@ -148,51 +162,106 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		if err != nil {
 			return nil, fmt.Errorf("resolve composite route for %s: %w", slug, err)
 		}
+		ambiguous := decision.OAuthAmbiguous() || decision.Reason == CompositeRouteReasonAmbiguous
+		if ambiguous {
+			// 旧归属判定遇到多平台同时声明只会报歧义；真实请求走账号级候选池，这里复用同一套规则。
+			var perr error
+			if receivers, perr = sess.compositeReceivers(ctx, slug); perr != nil {
+				return nil, fmt.Errorf("resolve composite receivers for %s: %w", slug, perr)
+			}
+		}
 		switch {
-		case decision.OAuthAmbiguous() || decision.Reason == CompositeRouteReasonAmbiguous:
+		case ambiguous && len(receivers) == 0:
 			route.Conflict = true
 			route.Reasons = append(route.Reasons, "该模型名在多个平台的账号上同时声明，需先配置显式 Composite 路由")
 			return route, nil
+		case ambiguous:
+			route.TargetPlatform = receivers[0].Platform
 		case !decision.Matched:
 			route.Unavailable = true
 			route.Reasons = append(route.Reasons, "Composite 路由无法确认目标平台："+codexTPTrimReason(decision.Reason))
 			return route, nil
-		}
-		route.TargetPlatform = decision.TargetPlatform
-		if upstream := strings.TrimSpace(decision.UpstreamModel); upstream != "" {
-			route.RouteModel = upstream
+		default:
+			route.TargetPlatform = decision.TargetPlatform
+			if upstream := strings.TrimSpace(decision.UpstreamModel); upstream != "" {
+				route.RouteModel = upstream
+			}
 		}
 	} else {
 		route.TargetPlatform = group.Platform
 	}
-	if !domain.UsesOpenAIGateway(route.TargetPlatform) {
+	if len(receivers) > 0 {
+		// 承接集合里只要有一个账号不经 Responses 网关，整组就无法提供 Codex 目录。
+		for _, account := range receivers {
+			if !domain.UsesOpenAIGateway(account.Platform) {
+				route.Unavailable = true
+				route.Reasons = append(route.Reasons, fmt.Sprintf("目标平台 %s 不经 Responses 网关，无法提供 Codex 目录", account.Platform))
+				return route, nil
+			}
+		}
+	} else if !domain.UsesOpenAIGateway(route.TargetPlatform) {
 		route.Unavailable = true
 		route.Reasons = append(route.Reasons, fmt.Sprintf("目标平台 %s 不经 Responses 网关，无法提供 Codex 目录", route.TargetPlatform))
 		return route, nil
 	}
 
 	// 第二步：渠道映射。查询失败必须报错，不能当作「没有渠道改写」。
+	// 渠道映射按账号所在平台分别查（跨平台承接时各账号平台不同）；MappedModel 记录首选账号平台的结果。
 	route.MappedModel = route.RouteModel
-	if sess.svc.channels != nil {
-		lookupCtx := WithResolvedTargetPlatform(ctx, route.TargetPlatform)
-		lk, err := sess.svc.channels.lookupGroupChannel(lookupCtx, group.ID)
-		if err != nil {
-			return nil, fmt.Errorf("lookup channel mapping for %s: %w", slug, err)
+	mappedByPlatform := map[string]string{}
+	channelMapped := func(platform string) (string, error) {
+		if mapped, ok := mappedByPlatform[platform]; ok {
+			return mapped, nil
 		}
-		if lk != nil {
-			if mapped := strings.TrimSpace(resolveMapping(lk, group.ID, route.RouteModel).MappedModel); mapped != "" {
-				route.MappedModel = mapped
+		mapped := route.RouteModel
+		if sess.svc.channels != nil {
+			lookupCtx := WithResolvedTargetPlatform(ctx, platform)
+			lk, err := sess.svc.channels.lookupGroupChannel(lookupCtx, group.ID)
+			if err != nil {
+				return "", fmt.Errorf("lookup channel mapping for %s: %w", slug, err)
+			}
+			if lk != nil {
+				if rewritten := strings.TrimSpace(resolveMapping(lk, group.ID, route.RouteModel).MappedModel); rewritten != "" {
+					mapped = rewritten
+				}
 			}
 		}
+		mappedByPlatform[platform] = mapped
+		return mapped, nil
+	}
+	var err error
+	if route.MappedModel, err = channelMapped(route.TargetPlatform); err != nil {
+		return nil, err
 	}
 
-	// 第三步：账号映射与协议。
-	for i := range sess.accounts {
-		account := &sess.accounts[i]
-		if account.Platform != route.TargetPlatform || !account.IsModelSupported(route.MappedModel) {
+	// 第三步：账号映射与协议。承接账号按各自平台的渠道映射结果逐个计算最终上游型号。
+	type receiverAccount struct {
+		account *Account
+		mapped  string
+	}
+	var takers []receiverAccount
+	if len(receivers) > 0 {
+		for _, account := range receivers {
+			mapped, merr := channelMapped(account.Platform)
+			if merr != nil {
+				return nil, merr
+			}
+			takers = append(takers, receiverAccount{account: account, mapped: mapped})
+		}
+	} else {
+		for i := range sess.accounts {
+			takers = append(takers, receiverAccount{account: &sess.accounts[i], mapped: route.MappedModel})
+		}
+	}
+	for _, taker := range takers {
+		account, mappedModel := taker.account, taker.mapped
+		if len(receivers) == 0 && account.Platform != route.TargetPlatform {
 			continue
 		}
-		final := strings.TrimSpace(ResolveOpenAIAccountUpstreamModelForRequest(account, route.MappedModel, false))
+		if !account.IsModelSupported(mappedModel) {
+			continue
+		}
+		final := strings.TrimSpace(ResolveOpenAIAccountUpstreamModelForRequest(account, mappedModel, false))
 		if final == "" {
 			continue
 		}
@@ -200,7 +269,7 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		// 或管理员显式映射过的名称；对未知别名，空映射账号虽被调度过滤放行，但上游并不能真正服务，
 		// 不能把它算作该别名的承接账号（否则同组第三方站点上的别名会被误判为归属冲突）。
 		if account.IsOpenAIOAuthLike() || isOfficialOpenAICodexAccount(account) {
-			if _, mapped := account.ResolveMappedModel(route.MappedModel); !mapped && !isOfficialOpenAICodexCatalogModel(final) && !sess.upstreamListsModel(account, final) {
+			if _, mapped := account.ResolveMappedModel(mappedModel); !mapped && !isOfficialOpenAICodexCatalogModel(final) && !sess.upstreamListsModel(account, final) {
 				continue
 			}
 		}
@@ -210,6 +279,14 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 			Protocol:      codexTPAccountProtocol(account),
 			NativeCapable: codexTPNativeCapable(account, final),
 		})
+	}
+	if len(receivers) > 0 && len(route.Accounts) > 0 {
+		// 跨平台承接：以实际进入集合的首个账号（排序后的首选）为准写出目标平台、首选与备选。
+		route.TargetPlatform = route.Accounts[0].Account.Platform
+		route.Primary = codexTPRouteAccountRef(route.Accounts[0].Account)
+		for _, item := range route.Accounts[1:] {
+			route.Alternates = append(route.Alternates, *codexTPRouteAccountRef(item.Account))
+		}
 	}
 	if len(route.Accounts) == 0 {
 		route.Unavailable = true
@@ -266,6 +343,64 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 	}
 	route.EndpointDigest = codexTPEndpointDigest(route.Accounts)
 	return route, nil
+}
+
+// codexTPRouteAccountRef 生成路由结构里的账号展示信息（不含凭据）。
+func codexTPRouteAccountRef(account *Account) *CodexThirdPartyRouteAccount {
+	return &CodexThirdPartyRouteAccount{ID: account.ID, Name: account.Name, Platform: account.Platform}
+}
+
+// allPlatformAccounts 读取分组内持久启用的全部具体平台账号（含不经 OpenAI 网关的平台），
+// 与 Composite 账号归属解析读取同一批账号；结果在一次编排内缓存，仅跨平台歧义时才会触发。
+func (sess *codexTPSession) allPlatformAccounts(ctx context.Context) ([]*Account, error) {
+	if sess.allLoaded {
+		return sess.allAccounts, sess.allErr
+	}
+	sess.allLoaded = true
+	repo := sess.svc.accountRepo
+	if repo == nil || sess.group == nil {
+		sess.allErr = fmt.Errorf("codex third party: account repository unavailable")
+		return nil, sess.allErr
+	}
+	groupID := sess.group.ID
+	accounts, err := repo.ListModelAvailabilityCandidates(ctx, &groupID, domain.ConcretePlatformIDs(), false)
+	if err != nil {
+		sess.allErr = fmt.Errorf("list group accounts of all platforms: %w", err)
+		return nil, sess.allErr
+	}
+	sess.allAccounts = make([]*Account, 0, len(accounts))
+	for i := range accounts {
+		sess.allAccounts = append(sess.allAccounts, &accounts[i])
+	}
+	return sess.allAccounts, nil
+}
+
+// compositeReceivers 按账号级候选池的同一套规则（声明强弱分层、零转换优先、Priority 与账号 ID 排序）
+// 求 Responses 请求可能落到的全部账号，首项是首选账号。只看配置态，不看冷却、限流等瞬态。
+func (sess *codexTPSession) compositeReceivers(ctx context.Context, slug string) ([]*Account, error) {
+	accounts, err := sess.allPlatformAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := compositeConfigReceivers(accounts, slug, func(account *Account) bool {
+		return sess.svc.responsesZeroConversion(account, slug)
+	})
+	return set.Accounts, nil
+}
+
+// responsesZeroConversion 判定账号对 Responses 入站是否零转换：规则与候选池同一个函数，
+// 按模型分流的账号带上游模型目录的缓存结果（只读缓存，页面读取不发上游请求）。
+func (s *CodexThirdPartyCatalogService) responsesZeroConversion(account *Account, slug string) bool {
+	var routingModel string
+	var catalog []string
+	if domain.UsesOpenAIGateway(account.Platform) && !account.IsGrok() {
+		body, _ := json.Marshal(map[string]string{"model": slug})
+		routingModel = upstreamRoutingModel(account, body, "")
+		if lister, ok := s.fetcher.(codexThirdPartyProtocolCataloger); ok {
+			catalog = lister.CachedModelProtocols(account, routingModel)
+		}
+	}
+	return compositeAccountZeroConversion(account, APIProtocolResponses, routingModel, catalog)
 }
 
 // upstreamListsModel 判断官方账号最近一次拉到的上游目录是否列出了该型号（正向证据）。

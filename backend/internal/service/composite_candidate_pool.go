@@ -362,23 +362,11 @@ func compositeCandidateLess(a, b *compositeCandidate) bool {
 // 集合成员取"所选组里与首选账号同平台"的账号：下游两套调度器都是单平台的，
 // 跨平台账号放进集合只会被平台门挡掉，没有意义。返回的成员 ID 升序。
 func compositePickPrimary(candidates []*compositeCandidate) (*compositeCandidate, []int64) {
-	var zero, convert []*compositeCandidate
-	for _, candidate := range candidates {
-		if candidate.zeroConversion {
-			zero = append(zero, candidate)
-		} else {
-			convert = append(convert, candidate)
-		}
-	}
-	group := zero
-	if len(group) == 0 {
-		group = convert
-	}
-	if len(group) == 0 {
+	// 承接分组的选择与排序由 compositeReceiverGroup 统一给出（目录页也用同一个函数）。
+	sorted := compositeReceiverGroup(candidates)
+	if len(sorted) == 0 {
 		return nil, nil
 	}
-	sorted := append([]*compositeCandidate(nil), group...)
-	sort.SliceStable(sorted, func(i, j int) bool { return compositeCandidateLess(sorted[i], sorted[j]) })
 	primary := sorted[0]
 	members := make([]int64, 0, len(sorted))
 	for _, candidate := range sorted {

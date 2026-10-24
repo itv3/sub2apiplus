@@ -50,6 +50,12 @@ type codexThirdPartyBaseFetcher interface {
 	MergeGroupModels(ctx context.Context, group *Group, body []byte) ([]byte, error)
 }
 
+// codexThirdPartyProtocolCataloger 是可选能力：只读缓存地查询按模型分流账号的上游模型目录里
+// 某型号支持的协议（不发请求、不触发刷新），供跨平台承接分组的零转换判定使用。
+type codexThirdPartyProtocolCataloger interface {
+	CachedModelProtocols(account *Account, model string) []string
+}
+
 // codexThirdPartyUpstreamLister 是可选能力：判断某个账号最近一次拉到的上游目录是否列出了某型号。
 type codexThirdPartyUpstreamLister interface {
 	UpstreamListsModel(account *Account, model string) bool
@@ -87,6 +93,15 @@ func (f openAICodexBaseFetcher) MergeGroupModels(ctx context.Context, group *Gro
 		return nil, err
 	}
 	return manifest.Body, nil
+}
+
+// CachedModelProtocols 只读缓存地返回按模型分流账号的上游模型目录里 model 支持的协议；
+// 目录没缓存时返回 nil，调用方按内置规则判定。与请求路径共用同一份目录缓存。
+func (f openAICodexBaseFetcher) CachedModelProtocols(account *Account, model string) []string {
+	if f.svc == nil || account == nil {
+		return nil
+	}
+	return f.svc.modelCatalogProtocolsCached(account, model)
 }
 
 // UpstreamListsModel 读取账号能力快照（只读）：快照未过期且上游清单列出了该型号。
@@ -465,6 +480,9 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 			Capabilities:   pub.Summary,
 			EntryBytes:     len(pub.Entry),
 			Fingerprint:    pub.Fingerprint,
+			// 以下两项仅跨平台候选池承接时有值，其余情形为空，序列化时省略。
+			PrimaryAccount:    route.Primary,
+			AlternateAccounts: route.Alternates,
 		}
 		if len(route.Protocols) == 1 {
 			candidate.Protocol = route.Protocols[0]

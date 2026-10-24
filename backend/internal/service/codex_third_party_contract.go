@@ -422,6 +422,13 @@ type CodexThirdPartyCapabilitySummary struct {
 	WebSearchToolType     string   `json:"web_search_tool_type,omitempty"`
 }
 
+// CodexThirdPartyRouteAccount 是路由结构里一个承接账号的展示信息，不含任何凭据。
+type CodexThirdPartyRouteAccount struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+}
+
 // CodexThirdPartyCandidate 是一个公开模型在当前分组下的评估结果。
 type CodexThirdPartyCandidate struct {
 	Slug        string `json:"slug"`
@@ -442,6 +449,10 @@ type CodexThirdPartyCandidate struct {
 	TargetPlatform string   `json:"target_platform,omitempty"`
 	UpstreamModel  string   `json:"upstream_model,omitempty"`
 	AccountIDs     []int64  `json:"account_ids,omitempty"`
+	// PrimaryAccount 与 AlternateAccounts 仅在 Composite 分组按账号级跨平台候选池承接时出现：
+	// 首选账号决定 TargetPlatform，备选账号是同一承接分组里的其余账号（只读展示，不含凭据）。
+	PrimaryAccount    *CodexThirdPartyRouteAccount  `json:"primary_account,omitempty"`
+	AlternateAccounts []CodexThirdPartyRouteAccount `json:"alternate_accounts,omitempty"`
 	// Protocol 是实际上游通路：responses_native 或 responses_via_chat。
 	Protocol  string `json:"protocol,omitempty"`
 	ProfileID string `json:"profile_id,omitempty"`
