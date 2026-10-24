@@ -48,6 +48,11 @@ type modelProtocolCatalogEntry struct {
 	fetchedAt  time.Time
 	retryAt    time.Time
 	refreshing bool
+	// successes 是刷新成功的累计次数，lastErr 是最近一次刷新的结果（成功为 nil）。
+	// 等待别处刷新的调用方据此判断“那一次刷新”的实际结果：失败时旧目录会保留，
+	// 不能只看目录是否存在。
+	successes uint64
+	lastErr   error
 	// done 在进行中的刷新结束时关闭。
 	done chan struct{}
 	// firstLoadDeadline 是本轮冷启动刷新共享的等待截止时间。
@@ -142,6 +147,7 @@ func (c *modelProtocolCatalog) storeWithBackoff(key string, models map[string][]
 		entry.done = nil
 	}
 	if err != nil {
+		entry.lastErr = err
 		if retryAt := now.Add(backoff); retryAt.After(entry.retryAt) {
 			entry.retryAt = retryAt
 		}
@@ -150,36 +156,31 @@ func (c *modelProtocolCatalog) storeWithBackoff(key string, models map[string][]
 	entry.models = models
 	entry.fetchedAt = now
 	entry.retryAt = time.Time{}
+	entry.successes++
+	entry.lastErr = nil
 }
 
-// state 只读地返回 key 目录是否已加载成功（含过期后仍保留的旧目录），以及失败退避的截止时间。
-// 不创建条目、不触发刷新。页面用它区分“目录还没拉过”和“拉过了但没有该模型”。
-func (c *modelProtocolCatalog) state(key string) (loaded bool, retryAt time.Time) {
+// info 只读地返回 key 目录的完整缓存信息（不创建条目、不触发刷新）。
+func (c *modelProtocolCatalog) info(key string) (loaded bool, retryAt, fetchedAt time.Time, models int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
 	if !ok {
-		return false, time.Time{}
+		return false, time.Time{}, time.Time{}, 0
 	}
-	return entry.models != nil, entry.retryAt
+	return entry.models != nil, entry.retryAt, entry.fetchedAt, len(entry.models)
 }
 
 // refreshNow 同步刷新 key 目录：忽略 TTL 与失败退避（管理员主动要求），调用 fetch 拉取并写入缓存，
 // 返回目录里的模型数。与后台刷新（lookup 触发）共用 refreshing 标记：
-// 已有刷新在进行时先等它结束，目录已就绪就直接采用，否则自己再拉一次；等待受 ctx 约束。
+// 已有刷新在进行时等它结束，并以那一次刷新的实际结果为准：成功才算成功，失败返回它的错误
+// （失败时旧目录会保留，不能因为目录还在就报成功）；等待受 ctx 约束。
 // 失败只进入短退避（modelProtocolCatalogManualRetryBackoff），并保留旧目录。
 func (c *modelProtocolCatalog) refreshNow(ctx context.Context, key string, fetch func(context.Context) (map[string][]string, error)) (int, error) {
-	const maxWaits = 2
-	for waits := 0; ; waits++ {
-		c.mu.Lock()
-		entry := c.entryLocked(key)
-		if !entry.refreshing {
-			entry.refreshing = true
-			entry.done = make(chan struct{})
-			c.mu.Unlock()
-			break
-		}
-		done := entry.done
+	c.mu.Lock()
+	entry := c.entryLocked(key)
+	if entry.refreshing {
+		done, successesBefore := entry.done, entry.successes
 		c.mu.Unlock()
 		select {
 		case <-done:
@@ -187,16 +188,20 @@ func (c *modelProtocolCatalog) refreshNow(ctx context.Context, key string, fetch
 			return 0, ctx.Err()
 		}
 		c.mu.Lock()
-		count, ready := len(entry.models), entry.models != nil
-		c.mu.Unlock()
-		if ready {
-			// 别处刚结束的刷新已经把目录拉到了，直接采用。
-			return count, nil
+		defer c.mu.Unlock()
+		if entry.successes != successesBefore && entry.models != nil {
+			// 别处刚结束的那次刷新成功了，直接采用它的结果。
+			return len(entry.models), nil
 		}
-		if waits+1 >= maxWaits {
-			return 0, fmt.Errorf("model list refresh already failed")
+		if entry.lastErr != nil {
+			return 0, entry.lastErr
 		}
+		return 0, fmt.Errorf("model list refresh failed")
 	}
+	entry.refreshing = true
+	entry.done = make(chan struct{})
+	c.mu.Unlock()
+
 	finished := false
 	defer func() {
 		if !finished {
@@ -301,6 +306,13 @@ func (s *OpenAIGatewayService) modelCatalogProtocolsCached(account *Account, mod
 	return upstreamModelProtocols.peek(key, model)
 }
 
+// 手动刷新目录的触发来源，写进日志用来区分：启动预热、管理页「刷新」、预览与保存时的开启补拉。
+const (
+	modelCatalogTriggerStartupWarmup  = "startup_warmup"
+	modelCatalogTriggerPageRefresh    = "page_refresh"
+	modelCatalogTriggerEnablePrefetch = "enable_prefetch"
+)
+
 // modelCatalogCacheState 是账号上游模型目录在进程内缓存里的只读状态。
 type modelCatalogCacheState struct {
 	// Needed 为 true 表示该账号的协议判定要用上游模型目录（按模型分流、平台提供目录、未固定协议）。
@@ -309,6 +321,9 @@ type modelCatalogCacheState struct {
 	Loaded bool
 	// RetryAt 是失败退避的截止时间；零值表示不在退避期。
 	RetryAt time.Time
+	// FetchedAt 与 ModelCount 是最近一次成功加载的时间与目录里的模型数（Loaded 时有值）。
+	FetchedAt  time.Time
+	ModelCount int
 }
 
 // modelCatalogCacheStateOf 只读地查询账号的目录缓存状态：不发请求、不创建条目、不触发刷新。
@@ -320,14 +335,15 @@ func (s *OpenAIGatewayService) modelCatalogCacheStateOf(account *Account) modelC
 	if !ok {
 		return modelCatalogCacheState{}
 	}
-	loaded, retryAt := upstreamModelProtocols.state(key)
-	return modelCatalogCacheState{Needed: true, Loaded: loaded, RetryAt: retryAt}
+	loaded, retryAt, fetchedAt, models := upstreamModelProtocols.info(key)
+	return modelCatalogCacheState{Needed: true, Loaded: loaded, RetryAt: retryAt, FetchedAt: fetchedAt, ModelCount: models}
 }
 
 // refreshModelProtocolCatalog 同步拉取账号的上游模型目录并写入缓存，返回目录里的模型数。
 // 复用 fetchModelProtocolCatalog（请求形态、请求头、代理与运行时后台刷新完全一致），
-// 只是触发时机由管理员操作、开启补拉或启动预热决定。账号不需要目录时返回错误。
-func (s *OpenAIGatewayService) refreshModelProtocolCatalog(ctx context.Context, account *Account) (int, error) {
+// 只是触发时机由管理员操作、开启补拉或启动预热决定，trigger 写进日志用来区分（见 modelCatalogTrigger*）。
+// 账号不需要目录时返回错误。
+func (s *OpenAIGatewayService) refreshModelProtocolCatalog(ctx context.Context, account *Account, trigger string) (int, error) {
 	if s == nil || s.httpUpstream == nil {
 		return 0, fmt.Errorf("upstream client unavailable")
 	}
@@ -344,9 +360,9 @@ func (s *OpenAIGatewayService) refreshModelProtocolCatalog(ctx context.Context, 
 	return upstreamModelProtocols.refreshNow(ctx, key, func(ctx context.Context) (map[string][]string, error) {
 		models, err := s.fetchModelProtocolCatalog(ctx, url, headers, proxyURL, accountID, concurrency)
 		if err != nil {
-			slog.Warn("model_protocol_catalog_refresh_failed", "account_id", accountID, "url", url, "error", err, "trigger", "manual")
+			slog.Warn("model_protocol_catalog_refresh_failed", "account_id", accountID, "url", url, "error", err, "trigger", trigger)
 		} else {
-			slog.Info("model_protocol_catalog_refreshed", "account_id", accountID, "url", url, "models", len(models), "trigger", "manual")
+			slog.Info("model_protocol_catalog_refreshed", "account_id", accountID, "url", url, "models", len(models), "trigger", trigger)
 		}
 		return models, err
 	})

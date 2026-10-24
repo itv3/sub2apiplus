@@ -55,6 +55,9 @@ const (
 	// 防止连点把上游打满。
 	codexTPRefreshReuseWindow = 10 * time.Second
 
+	// codexTPRefreshPanicReason 是刷新协程 panic 时给管理员看的说明，细节只在日志里。
+	codexTPRefreshPanicReason = "刷新异常，详见日志"
+
 	// codexTPCatalogNotReadyReason 是上游模型目录没拉过（缓存缺失）时给管理员的可照做提示。
 	codexTPCatalogNotReadyReason = "上游模型目录尚未就绪，点右上角「刷新」拉取后再试"
 )
@@ -100,6 +103,8 @@ type codexTPRefreshTuning struct {
 	missingTotal   time.Duration
 	concurrency    int
 	reuseWindow    time.Duration
+	// onBatch 仅供测试注入：每个批次协程（model_protocol、official_base）开始时调用，用来模拟批次 panic。
+	onBatch func(kind string)
 }
 
 func (t codexTPRefreshTuning) withDefaults() codexTPRefreshTuning {
@@ -137,6 +142,14 @@ const (
 	// 官方账号基础目录由评估本身拉取，这里不重复。
 	codexTPRefreshMissing
 )
+
+// trigger 返回写进日志的触发来源：页面「刷新」或预览与保存时的开启补拉。
+func (m codexTPRefreshMode) trigger() string {
+	if m == codexTPRefreshMissing {
+		return modelCatalogTriggerEnablePrefetch
+	}
+	return modelCatalogTriggerPageRefresh
+}
 
 // RefreshCodexThirdPartyCatalogs 同步刷新分组页面判定依赖的全部上游目录（页面「刷新」按钮）。
 // 同一分组在合并窗口内重复调用直接复用上次结果；并发调用合并为一次执行。
@@ -235,12 +248,40 @@ func (s *CodexThirdPartyCatalogService) runRefresh(ctx context.Context, sess *co
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		protocolItems = s.refreshProtocolCatalogs(ctx, targets, tuning)
+		defer func() {
+			// 整批协议目录刷新发生 panic：这批账号全部计为失败并记日志，不能让进程退出。
+			if r := recover(); r != nil {
+				slog.Error("codex_third_party_catalog_refresh_batch_panic", "kind", CodexCatalogRefreshKindModelProtocol, "panic", fmt.Sprint(r))
+				protocolItems = protocolItems[:0]
+				for _, account := range targets {
+					protocolItems = append(protocolItems, CodexCatalogRefreshItem{
+						AccountID: account.ID, AccountName: account.Name, Platform: account.Platform,
+						Kind: CodexCatalogRefreshKindModelProtocol, Reason: codexTPRefreshPanicReason,
+					})
+				}
+			}
+		}()
+		if tuning.onBatch != nil {
+			tuning.onBatch(CodexCatalogRefreshKindModelProtocol)
+		}
+		protocolItems = s.refreshProtocolCatalogs(ctx, targets, tuning, mode.trigger())
 	}()
 	if mode == codexTPRefreshAll {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				// 官方账号基础目录这一批发生 panic：无法确认是哪个账号，记一条该批失败。
+				if r := recover(); r != nil {
+					slog.Error("codex_third_party_catalog_refresh_batch_panic", "kind", CodexCatalogRefreshKindOfficialBase, "panic", fmt.Sprint(r))
+					officialItems = []CodexCatalogRefreshItem{{
+						AccountName: "官方账号目录", Kind: CodexCatalogRefreshKindOfficialBase, Reason: codexTPRefreshPanicReason,
+					}}
+				}
+			}()
+			if tuning.onBatch != nil {
+				tuning.onBatch(CodexCatalogRefreshKindOfficialBase)
+			}
 			officialItems = s.refreshOfficialBases(ctx, sess)
 		}()
 	}
@@ -310,7 +351,7 @@ func (s *CodexThirdPartyCatalogService) protocolCatalogTargets(ctx context.Conte
 }
 
 // refreshProtocolCatalogs 限并发、限时地逐账号同步拉取协议目录，单账号失败不影响其它账号。
-func (s *CodexThirdPartyCatalogService) refreshProtocolCatalogs(ctx context.Context, targets []*Account, tuning codexTPRefreshTuning) []CodexCatalogRefreshItem {
+func (s *CodexThirdPartyCatalogService) refreshProtocolCatalogs(ctx context.Context, targets []*Account, tuning codexTPRefreshTuning, trigger string) []CodexCatalogRefreshItem {
 	if len(targets) == 0 {
 		return nil
 	}
@@ -341,14 +382,14 @@ func (s *CodexThirdPartyCatalogService) refreshProtocolCatalogs(ctx context.Cont
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("codex_third_party_catalog_refresh_panic", "account_id", account.ID, "panic", fmt.Sprint(r))
-					item.OK, item.Reason = false, "刷新异常，详见日志"
+					item.OK, item.Reason = false, codexTPRefreshPanicReason
 				}
 				item.ElapsedMS = time.Since(started).Milliseconds()
 				items[i] = item
 			}()
 			accountCtx, cancel := context.WithTimeout(ctx, tuning.accountTimeout)
 			defer cancel()
-			count, err := refresher.RefreshModelCatalog(accountCtx, account)
+			count, err := refresher.RefreshModelCatalog(accountCtx, account, trigger)
 			if err != nil {
 				item.Reason = codexTPRefreshReason(err)
 				return
@@ -389,6 +430,17 @@ func (s *CodexThirdPartyCatalogService) refreshOfficialBases(ctx context.Context
 		items = append(items, item)
 	}
 	return items
+}
+
+// ModelCatalogCacheStatus 只读地返回账号上游模型目录的缓存状态，供管理页的账号源状态与刷新写入的是同一份：
+// needed 表示该账号用上游模型目录；loaded 为 true 时 models、fetchedAt 是最近一次成功加载的结果。
+func (s *CodexThirdPartyCatalogService) ModelCatalogCacheStatus(account *Account) (needed, loaded bool, models int, fetchedAt time.Time) {
+	refresher, ok := s.fetcher.(codexThirdPartyProtocolCatalogRefresher)
+	if !ok || account == nil {
+		return false, false, 0, time.Time{}
+	}
+	state := refresher.ModelCatalogState(account)
+	return state.Needed, state.Loaded, state.ModelCount, state.FetchedAt
 }
 
 // modelCatalogNotReady 判断账号的协议判定是否因上游模型目录缺失而无法确认：

@@ -390,9 +390,9 @@ func TestCustomAccountSupportsCompositeModelListProtocol(t *testing.T) {
 			require.Equal(t, tc.wantAnthropic, accountSupportsCompositeModelListProtocol(tc.account, CompositeModelListProtocolAnthropic))
 		})
 	}
-	// 既有平台行为不变：Command Code / Cline 等没有登记过的平台仍不进入。
-	require.False(t, accountSupportsCompositeModelListProtocol(&Account{Platform: PlatformCline}, CompositeModelListProtocolOpenAI))
-	require.False(t, accountSupportsCompositeModelListProtocol(&Account{Platform: PlatformCommandCode}, CompositeModelListProtocolOpenAI))
+	// Command Code / Cline 等其它多协议 profile 平台现在也按 profile 与凭据判定，
+	// 详见 composite_model_protocol_profiled_test.go；不是多协议 profile 的平台仍不进入。
+	require.False(t, accountSupportsCompositeModelListProtocol(&Account{Platform: PlatformGemini}, CompositeModelListProtocolOpenAI))
 }
 
 func TestCompositeProtocolModelSourcesIncludeCustomAccounts(t *testing.T) {

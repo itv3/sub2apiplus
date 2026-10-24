@@ -99,6 +99,12 @@ type codexThirdPartyUpstreamSyncer interface {
 	SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error)
 }
 
+// codexThirdPartyModelCatalogReader 是评估器可选实现的只读能力：账号上游模型目录的缓存状态。
+// 页面「刷新」写入的就是这份缓存，账号源状态据此展示，避免刷新成功后仍显示 missing。
+type codexThirdPartyModelCatalogReader interface {
+	ModelCatalogCacheStatus(account *Account) (needed, loaded bool, models int, fetchedAt time.Time)
+}
+
 // codexThirdPartyAdminSettings 读取展示配置，并读写账号源快照。*SettingService 满足该接口。
 type codexThirdPartyAdminSettings interface {
 	LoadCodexModelVisibility(ctx context.Context, groupID int64) (CodexModelVisibilityConfig, bool, error)
@@ -745,7 +751,9 @@ func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accoun
 		if mode == codexSourceForceRefresh {
 			s.startBackgroundRefresh(account)
 		}
-		statuses = append(statuses, s.buildSourceStatus(&account, snap, found, loadErr, now))
+		status := s.buildSourceStatus(&account, snap, found, loadErr, now)
+		s.applyModelCatalogStatus(&status, &account, now)
+		statuses = append(statuses, status)
 	}
 	return statuses
 }
@@ -766,6 +774,27 @@ func buildOfficialSkippedSourceStatus(account *Account) CodexThirdPartySourceSta
 		AccountStatus: account.Status,
 		Status:        codexThirdPartySourceStatusOfficialSkipped,
 	}
+}
+
+// applyModelCatalogStatus 让按模型分流账号的源状态与页面「刷新」写入的上游模型目录缓存一致：
+// 目录已加载时以它为准（complete、模型数、加载时间、是否超过缓存有效期），不再显示 missing。
+// 目录还没加载时保留快照给出的状态。
+func (s *CodexThirdPartyAdminService) applyModelCatalogStatus(status *CodexThirdPartySourceStatus, account *Account, now time.Time) {
+	reader, ok := s.evaluator.(codexThirdPartyModelCatalogReader)
+	if !ok {
+		return
+	}
+	needed, loaded, models, fetchedAt := reader.ModelCatalogCacheStatus(account)
+	if !needed || !loaded {
+		return
+	}
+	status.Status = string(CodexCatalogSourceComplete)
+	status.ModelCount = models
+	status.FingerprintMatches = true
+	status.LastError = ""
+	synced := fetchedAt
+	status.SyncedAt, status.AttemptedAt = &synced, &synced
+	status.Stale = now.Sub(fetchedAt) >= modelProtocolCatalogTTL
 }
 
 func (s *CodexThirdPartyAdminService) buildSourceStatus(account *Account, snap CodexCatalogSourceSnapshot, found bool, loadErr error, now time.Time) CodexThirdPartySourceStatus {

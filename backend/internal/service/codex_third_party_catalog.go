@@ -63,8 +63,8 @@ type codexThirdPartyProtocolCataloger interface {
 type codexThirdPartyProtocolCatalogRefresher interface {
 	// ModelCatalogState 只读地返回账号的目录缓存状态（不发请求）。
 	ModelCatalogState(account *Account) modelCatalogCacheState
-	// RefreshModelCatalog 同步拉取账号的目录并写入缓存，返回目录里的模型数。
-	RefreshModelCatalog(ctx context.Context, account *Account) (int, error)
+	// RefreshModelCatalog 同步拉取账号的目录并写入缓存，返回目录里的模型数；trigger 只用于日志区分触发来源。
+	RefreshModelCatalog(ctx context.Context, account *Account, trigger string) (int, error)
 }
 
 // codexThirdPartyUpstreamLister 是可选能力：判断某个账号最近一次拉到的上游目录是否列出了某型号。
@@ -124,11 +124,11 @@ func (f openAICodexBaseFetcher) ModelCatalogState(account *Account) modelCatalog
 }
 
 // RefreshModelCatalog 同步拉取账号的上游模型目录并写入缓存。
-func (f openAICodexBaseFetcher) RefreshModelCatalog(ctx context.Context, account *Account) (int, error) {
+func (f openAICodexBaseFetcher) RefreshModelCatalog(ctx context.Context, account *Account, trigger string) (int, error) {
 	if f.svc == nil || account == nil {
 		return 0, fmt.Errorf("openai gateway service unavailable")
 	}
-	return f.svc.refreshModelProtocolCatalog(ctx, account)
+	return f.svc.refreshModelProtocolCatalog(ctx, account, trigger)
 }
 
 // UpstreamListsModel 读取账号能力快照（只读）：快照未过期且上游清单列出了该型号。

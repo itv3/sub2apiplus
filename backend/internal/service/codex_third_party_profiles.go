@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -247,6 +248,19 @@ func (s *codexThirdPartyProfileSet) match(upstreamModel string) *codexThirdParty
 	if key == "" {
 		return nil
 	}
+	if p := s.matchKey(key); p != nil {
+		return p
+	}
+	// 精确匹配不到：Ollama 风格的 `名称:标签` 写法（例如 deepseek-v4.1-flash:1017、:latest、:cloud）
+	// 去掉标签再匹配一次。参数规模标签（31b、120b 等）不剥离，见 codexThirdPartyStripOllamaTag。
+	if base, ok := codexThirdPartyStripOllamaTag(key); ok {
+		return s.matchKey(base)
+	}
+	return nil
+}
+
+// matchKey 按已规范化的匹配键精确查找档案。
+func (s *codexThirdPartyProfileSet) matchKey(key string) *codexThirdPartyProfile {
 	for _, p := range s.profiles {
 		for _, model := range p.UpstreamModels {
 			if codexThirdPartyProfileKey(model) == key {
@@ -255,6 +269,24 @@ func (s *codexThirdPartyProfileSet) match(upstreamModel string) *codexThirdParty
 		}
 	}
 	return nil
+}
+
+// codexThirdPartyParameterSizeTag 识别 Ollama 的参数规模标签（31b、120b、0.6b、70m 等）。
+// 这类标签是模型规格的一部分，不能当作版本标签剥离：gemma4:31b 与 gemma4:8b 是不同的模型。
+var codexThirdPartyParameterSizeTag = regexp.MustCompile(`(?i)^\d+(\.\d+)?[bkmt]$`)
+
+// codexThirdPartyStripOllamaTag 去掉匹配键末尾的 Ollama 风格 `:标签`（只去最后一个 `:` 及其后缀），
+// 例如 deepseek-v4.1-flash:1017 得到 deepseek-v4.1-flash。没有标签、标签为空、
+// 或标签是参数规模形态时不剥离，返回 false。
+func codexThirdPartyStripOllamaTag(key string) (string, bool) {
+	index := strings.LastIndex(key, ":")
+	if index <= 0 || index == len(key)-1 {
+		return "", false
+	}
+	if codexThirdPartyParameterSizeTag.MatchString(key[index+1:]) {
+		return "", false
+	}
+	return key[:index], true
 }
 
 // matchAll 为一组最终上游型号（来自不同承接账号）找出同一份档案。

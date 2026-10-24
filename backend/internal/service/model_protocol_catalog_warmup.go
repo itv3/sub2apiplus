@@ -10,6 +10,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -146,6 +147,16 @@ func (s *ModelProtocolCatalogWarmupService) runOnce(ctx context.Context) (refres
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			recorded := false
+			defer func() {
+				// 单个账号的拉取发生 panic：计为该账号失败并记日志，不能让进程退出。
+				if r := recover(); r != nil && !recorded {
+					slog.Error("model_protocol_catalog_warmup_panic", "account_id", account.ID, "panic", fmt.Sprint(r))
+					mu.Lock()
+					failed++
+					mu.Unlock()
+				}
+			}()
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -154,9 +165,10 @@ func (s *ModelProtocolCatalogWarmupService) runOnce(ctx context.Context) (refres
 			defer func() { <-sem }()
 			accountCtx, cancel := context.WithTimeout(ctx, s.accountTimeout)
 			defer cancel()
-			_, err := s.openAI.refreshModelProtocolCatalog(accountCtx, account)
+			_, err := s.openAI.refreshModelProtocolCatalog(accountCtx, account, modelCatalogTriggerStartupWarmup)
 			mu.Lock()
 			defer mu.Unlock()
+			recorded = true
 			if err != nil {
 				failed++
 				slog.Warn("model_protocol_catalog_warmup_failed", "account_id", account.ID, "reason", codexTPRefreshReason(err))

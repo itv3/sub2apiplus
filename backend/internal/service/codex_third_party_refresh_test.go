@@ -6,9 +6,11 @@ package service
 // 开启（预览与保存评估）补拉、DMIT 重启后场景复现、管理服务刷新入口、目录缓存的同步刷新。
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,7 @@ type cxtpRefreshFetcher struct {
 	// refresh 是单账号刷新的实现；为空时直接成功并返回 12 个模型。
 	refresh     func(ctx context.Context, account *Account) (int, error)
 	calls       map[int64]int
+	triggers    []string
 	inflight    int
 	maxInflight int
 }
@@ -50,7 +53,10 @@ func (f *cxtpRefreshFetcher) ModelCatalogState(account *Account) modelCatalogCac
 	return f.states[account.ID]
 }
 
-func (f *cxtpRefreshFetcher) RefreshModelCatalog(ctx context.Context, account *Account) (int, error) {
+func (f *cxtpRefreshFetcher) RefreshModelCatalog(ctx context.Context, account *Account, trigger string) (int, error) {
+	f.mu.Lock()
+	f.triggers = append(f.triggers, trigger)
+	f.mu.Unlock()
 	f.mu.Lock()
 	f.calls[account.ID]++
 	f.inflight++
@@ -84,6 +90,12 @@ func (f *cxtpRefreshFetcher) totalCalls() int {
 		total += n
 	}
 	return total
+}
+
+// catalogState 只读地取目录是否已加载与失败退避的截止时间。
+func catalogState(c *modelProtocolCatalog, key string) (loaded bool, retryAt time.Time) {
+	loaded, retryAt, _, _ = c.info(key)
+	return loaded, retryAt
 }
 
 // cxtpRefreshCommandCode 构造持久启用、按模型分流的 CommandCode 账号（需要上游模型目录）。
@@ -121,7 +133,7 @@ func cxtpRefreshItemsByKey(report CodexCatalogRefreshReport) map[string]CodexCat
 func TestModelProtocolCatalogRefreshNowStoresAndReportsState(t *testing.T) {
 	var catalog modelProtocolCatalog
 	const key = "https://catalog.example/v1/models#account=1"
-	loaded, retryAt := catalog.state(key)
+	loaded, retryAt := catalogState(&catalog, key)
 	require.False(t, loaded)
 	require.True(t, retryAt.IsZero())
 	_, created := catalog.entries[key]
@@ -131,7 +143,7 @@ func TestModelProtocolCatalogRefreshNowStoresAndReportsState(t *testing.T) {
 	count, err := catalog.refreshNow(t.Context(), key, func(context.Context) (map[string][]string, error) { return models, nil })
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
-	loaded, retryAt = catalog.state(key)
+	loaded, retryAt = catalogState(&catalog, key)
 	require.True(t, loaded)
 	require.True(t, retryAt.IsZero())
 	require.Equal(t, []string{APIProtocolResponses}, catalog.peek(key, "GPT-5.5"))
@@ -147,7 +159,7 @@ func TestModelProtocolCatalogRefreshNowFailureKeepsOldCatalogWithShortBackoff(t 
 	_, err := catalog.refreshNow(t.Context(), key, func(context.Context) (map[string][]string, error) { return nil, errors.New("boom") })
 	require.Error(t, err)
 	require.Equal(t, []string{APIProtocolResponses}, catalog.peek(key, "gpt-5.5"), "失败保留旧目录")
-	loaded, retryAt := catalog.state(key)
+	loaded, retryAt := catalogState(&catalog, key)
 	require.True(t, loaded)
 	require.WithinRange(t, retryAt, before.Add(modelProtocolCatalogManualRetryBackoff), time.Now().Add(modelProtocolCatalogManualRetryBackoff),
 		"手动刷新失败只进短退避，不压住运行时 5 分钟")
@@ -155,10 +167,10 @@ func TestModelProtocolCatalogRefreshNowFailureKeepsOldCatalogWithShortBackoff(t 
 
 	// 已经有更晚的运行时退避时，手动失败不缩短它。
 	catalog.store(key, nil, errors.New("runtime failure"), time.Now())
-	_, laterRetry := catalog.state(key)
+	_, laterRetry := catalogState(&catalog, key)
 	_, err = catalog.refreshNow(t.Context(), key, func(context.Context) (map[string][]string, error) { return nil, errors.New("boom") })
 	require.Error(t, err)
-	_, afterManual := catalog.state(key)
+	_, afterManual := catalogState(&catalog, key)
 	require.False(t, afterManual.Before(laterRetry))
 }
 
@@ -194,6 +206,63 @@ func TestModelProtocolCatalogRefreshNowWaitsForInFlightRefresh(t *testing.T) {
 	cancel()
 	_, err := catalog.refreshNow(ctx, "busy", fetch)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestModelProtocolCatalogRefreshNowReportsTheWaitedRefreshResult(t *testing.T) {
+	// 等待进行中的后台刷新：以那一次刷新的实际结果为准。后台刷新失败时旧目录会保留，
+	// 但这次刷新不能被报成成功。
+	const key = "https://catalog.example/v1/models#account=7"
+	models := map[string][]string{"gpt-5.5": {APIProtocolResponses}}
+	neverFetch := func(context.Context) (map[string][]string, error) {
+		t.Fatal("已有刷新在进行时不应再发起拉取")
+		return nil, nil
+	}
+	startInFlight := func(catalog *modelProtocolCatalog) {
+		catalog.mu.Lock()
+		entry := catalog.entryLocked(key)
+		entry.refreshing = true
+		entry.done = make(chan struct{})
+		catalog.mu.Unlock()
+	}
+
+	t.Run("后台刷新失败：返回失败，旧目录保留", func(t *testing.T) {
+		var catalog modelProtocolCatalog
+		catalog.store(key, models, nil, time.Now())
+		startInFlight(&catalog)
+		result := make(chan error, 1)
+		go func() { _, err := catalog.refreshNow(t.Context(), key, neverFetch); result <- err }()
+		time.Sleep(20 * time.Millisecond)
+		catalog.store(key, nil, errors.New("model list returned HTTP 502"), time.Now())
+		err := <-result
+		require.Error(t, err, "旧目录还在，但等待的那次刷新失败了")
+		require.Equal(t, "上游返回 HTTP 502", codexTPRefreshReason(err), "对外只给分类文案")
+		require.Equal(t, []string{APIProtocolResponses}, catalog.peek(key, "gpt-5.5"), "失败仍保留旧目录")
+	})
+
+	t.Run("后台刷新成功：返回成功与模型数", func(t *testing.T) {
+		var catalog modelProtocolCatalog
+		catalog.store(key, map[string][]string{"old": {APIProtocolResponses}}, nil, time.Now())
+		startInFlight(&catalog)
+		type outcome struct {
+			count int
+			err   error
+		}
+		result := make(chan outcome, 1)
+		go func() { count, err := catalog.refreshNow(t.Context(), key, neverFetch); result <- outcome{count, err} }()
+		time.Sleep(20 * time.Millisecond)
+		catalog.store(key, map[string][]string{"a": {APIProtocolResponses}, "b": {APIProtocolChatCompletions}}, nil, time.Now())
+		got := <-result
+		require.NoError(t, got.err)
+		require.Equal(t, 2, got.count)
+	})
+
+	t.Run("后台刷新失败后，下一次手动刷新仍可重新拉取", func(t *testing.T) {
+		var catalog modelProtocolCatalog
+		catalog.store(key, nil, errors.New("boom"), time.Now())
+		count, err := catalog.refreshNow(t.Context(), key, func(context.Context) (map[string][]string, error) { return models, nil })
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+	})
 }
 
 func TestModelCatalogEndpointKeepsRequiringAModel(t *testing.T) {
@@ -661,11 +730,18 @@ func TestCodexTPReasonKeepsOriginalWordingWhenCatalogLoadedButNoVerdict(t *testi
 
 type codexAdminRefreshEvaluator struct {
 	*codexAdminFakeEvaluator
-	report CodexCatalogRefreshReport
-	err    error
-	groups []int64
+	// catalogStatus 模拟账号上游模型目录的缓存状态（与刷新写入的是同一份）。
+	catalogStatus map[int64]modelCatalogCacheState
+	report        CodexCatalogRefreshReport
+	err           error
+	groups        []int64
 	// order 记录刷新与评估的先后：刷新必须发生在重新读取状态之前。
 	order []string
+}
+
+func (e *codexAdminRefreshEvaluator) ModelCatalogCacheStatus(account *Account) (needed, loaded bool, models int, fetchedAt time.Time) {
+	state := e.catalogStatus[account.ID]
+	return state.Needed, state.Loaded, state.ModelCount, state.FetchedAt
 }
 
 func (e *codexAdminRefreshEvaluator) RefreshCodexThirdPartyCatalogs(_ context.Context, group *Group) (CodexCatalogRefreshReport, error) {
@@ -829,4 +905,235 @@ func TestModelProtocolCatalogWarmupStopCancelsPendingStart(t *testing.T) {
 	defer upstream.mu.Unlock()
 	require.Empty(t, upstream.requests)
 	svc.Stop() // 重复 Stop 无副作用
+}
+
+// ---------------------------------------------------------------------------
+// 子协程 panic：计为失败并记日志，不让进程退出
+// ---------------------------------------------------------------------------
+
+type panickingHTTPUpstream struct{ HTTPUpstream }
+
+func (panickingHTTPUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	panic("上游客户端异常")
+}
+
+func TestModelProtocolCatalogWarmupPanicCountsAsFailure(t *testing.T) {
+	base := fmt.Sprintf("http://cc-warm-panic-%d.example/provider/v1", time.Now().UnixNano())
+	account := warmupAccount(61, base)
+	t.Cleanup(func() {
+		upstreamModelProtocols.mu.Lock()
+		defer upstreamModelProtocols.mu.Unlock()
+		delete(upstreamModelProtocols.entries, modelProtocolCatalogKey(&account, buildOpenAIModelsURL(base)))
+	})
+	svc := NewModelProtocolCatalogWarmupService(&warmupRepo{accounts: []Account{account}},
+		&OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: panickingHTTPUpstream{}})
+
+	require.NotPanics(t, func() {
+		refreshed, failed := svc.runOnce(t.Context())
+		require.Zero(t, refreshed)
+		require.Equal(t, 1, failed, "panic 计为该账号失败")
+	})
+	// 刷新标记已释放，目录不会永远处于“刷新中”。
+	_, key, _ := accountModelCatalogEndpoint(&account)
+	upstreamModelProtocols.mu.Lock()
+	defer upstreamModelProtocols.mu.Unlock()
+	require.False(t, upstreamModelProtocols.entries[key].refreshing)
+}
+
+func TestCodexTPRefreshBatchPanicCountsAsFailure(t *testing.T) {
+	accounts := []Account{cxtpRefreshCommandCode(11, "CommandCode"), cxtpRefreshCommandCode(12, "CommandCode-2"), cxtpOAuthAccount(20)}
+	fetcher := newCXTPRefreshFetcher()
+	fetcher.states[11] = modelCatalogCacheState{Needed: true}
+	fetcher.states[12] = modelCatalogCacheState{Needed: true}
+	fetcher.bodies[20] = []byte(`{"models":[{"slug":"gpt-5.5"}]}`)
+
+	t.Run("协议目录批次 panic：这批账号全部计为失败", func(t *testing.T) {
+		svc, _ := cxtpRefreshService(t, accounts, fetcher)
+		svc.refreshTuning.onBatch = func(kind string) {
+			if kind == CodexCatalogRefreshKindModelProtocol {
+				panic("批次异常")
+			}
+		}
+		var report CodexCatalogRefreshReport
+		require.NotPanics(t, func() {
+			var err error
+			report, err = svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
+			require.NoError(t, err)
+		})
+		items := cxtpRefreshItemsByKey(report)
+		for _, id := range []int64{11, 12} {
+			item := items[fmt.Sprintf("model_protocol:%d", id)]
+			require.False(t, item.OK)
+			require.Equal(t, codexTPRefreshPanicReason, item.Reason)
+		}
+		require.True(t, items["official_base:20"].OK, "另一批不受影响")
+		require.Equal(t, 2, report.Failed)
+	})
+
+	t.Run("官方基础目录批次 panic：记一条该批失败，协议目录不受影响", func(t *testing.T) {
+		svc, _ := cxtpRefreshService(t, accounts, fetcher)
+		svc.refreshTuning.onBatch = func(kind string) {
+			if kind == CodexCatalogRefreshKindOfficialBase {
+				panic("批次异常")
+			}
+		}
+		var report CodexCatalogRefreshReport
+		require.NotPanics(t, func() {
+			var err error
+			report, err = svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
+			require.NoError(t, err)
+		})
+		items := cxtpRefreshItemsByKey(report)
+		require.True(t, items["model_protocol:11"].OK)
+		require.True(t, items["model_protocol:12"].OK)
+		batch := items["official_base:0"]
+		require.False(t, batch.OK)
+		require.Equal(t, codexTPRefreshPanicReason, batch.Reason)
+		require.Equal(t, 1, report.Failed)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// 账号源状态与刷新写入的是同一份目录缓存
+// ---------------------------------------------------------------------------
+
+func TestCodexAdminSourcesFollowRefreshedModelCatalog(t *testing.T) {
+	h := newCodexAdminHarness(t)
+	commandCode := cxtpRefreshCommandCode(11, "CommandCode")
+	plain := codexAdminAccount(12, "普通账号", "sk-plain")
+	h.accounts.byGroup[codexAdminTestGroupID] = []Account{commandCode, plain}
+	evaluator := &codexAdminRefreshEvaluator{
+		codexAdminFakeEvaluator: h.evaluator,
+		catalogStatus:           map[int64]modelCatalogCacheState{11: {Needed: true}},
+	}
+	h.svc.evaluator = evaluator
+	statusOf := func(state *CodexThirdPartyGroupState, id int64) CodexThirdPartySourceStatus {
+		for _, source := range state.Sources {
+			if source.AccountID == id {
+				return source
+			}
+		}
+		t.Fatalf("sources 里没有账号 %d", id)
+		return CodexThirdPartySourceStatus{}
+	}
+
+	// 目录还没加载：沿用快照给出的状态（从未同步 = missing）。
+	state, err := h.svc.GetGroupState(t.Context(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	require.Equal(t, codexThirdPartySourceStatusMissing, statusOf(state, 11).Status)
+	require.Zero(t, statusOf(state, 11).ModelCount)
+
+	// 刷新写入目录缓存之后：读取到的源状态与它一致，不再是 missing / 0。
+	fetched := h.now().Add(-time.Minute)
+	evaluator.catalogStatus[11] = modelCatalogCacheState{Needed: true, Loaded: true, ModelCount: 93, FetchedAt: fetched}
+	state, err = h.svc.GetGroupState(t.Context(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	source := statusOf(state, 11)
+	require.Equal(t, string(CodexCatalogSourceComplete), source.Status)
+	require.Equal(t, 93, source.ModelCount)
+	require.False(t, source.Stale)
+	require.True(t, source.FingerprintMatches)
+	require.NotNil(t, source.SyncedAt)
+	require.True(t, source.SyncedAt.Equal(fetched))
+	require.Empty(t, source.LastError)
+
+	// 不使用上游模型目录的账号不受影响。
+	require.Equal(t, codexThirdPartySourceStatusMissing, statusOf(state, 12).Status)
+
+	// 超过缓存有效期后标记过期。
+	h.advance(modelProtocolCatalogTTL + time.Minute)
+	state, err = h.svc.GetGroupState(t.Context(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	require.True(t, statusOf(state, 11).Stale)
+}
+
+func TestCodexTPModelCatalogCacheStatusReadsTheRefreshedCache(t *testing.T) {
+	upstream := &commandCodeAlphaUpstream{responses: map[string]commandCodeAlphaResponse{
+		"/provider/v1/models": {status: http.StatusOK, body: cxtpRefreshDMITModels},
+	}}
+	svc, _ := cxtpRefreshDMITService(t, upstream)
+	accounts, err := svc.accountRepo.ListModelAvailabilityCandidates(t.Context(), nil, []string{PlatformCommandCode}, true)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+
+	needed, loaded, _, _ := svc.ModelCatalogCacheStatus(&accounts[0])
+	require.True(t, needed)
+	require.False(t, loaded)
+
+	_, err = svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
+	require.NoError(t, err)
+	needed, loaded, models, fetchedAt := svc.ModelCatalogCacheStatus(&accounts[0])
+	require.True(t, needed)
+	require.True(t, loaded)
+	require.Equal(t, 2, models)
+	require.WithinDuration(t, time.Now(), fetchedAt, time.Minute)
+
+	// 不需要上游模型目录的账号：needed 为 false。
+	deepseek := compositePoolAdaptive(10, PlatformDeepseek, 1)
+	needed, _, _, _ = svc.ModelCatalogCacheStatus(&deepseek)
+	require.False(t, needed)
+}
+
+// ---------------------------------------------------------------------------
+// 日志里的触发来源
+// ---------------------------------------------------------------------------
+
+func TestCodexTPRefreshTriggersAreDistinguishable(t *testing.T) {
+	accounts := []Account{cxtpRefreshCommandCode(11, "CommandCode")}
+	fetcher := newCXTPRefreshFetcher()
+	fetcher.states[11] = modelCatalogCacheState{Needed: true}
+	svc, _ := cxtpRefreshService(t, accounts, fetcher)
+
+	_, err := svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
+	require.NoError(t, err)
+	sess, err := svc.newSession(t.Context(), cxtpCompositeGroup())
+	require.NoError(t, err)
+	svc.refreshMissingModelCatalogs(t.Context(), sess)
+	require.Equal(t, []string{modelCatalogTriggerPageRefresh, modelCatalogTriggerEnablePrefetch}, fetcher.triggers)
+	require.NotEqual(t, modelCatalogTriggerStartupWarmup, modelCatalogTriggerPageRefresh)
+	require.NotEqual(t, modelCatalogTriggerPageRefresh, modelCatalogTriggerEnablePrefetch)
+}
+
+// logCapture 临时替换默认 slog 输出，收集日志文本。
+func logCapture(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return buf
+}
+
+func TestModelCatalogRefreshLogCarriesTheRealTrigger(t *testing.T) {
+	upstream := &commandCodeAlphaUpstream{responses: map[string]commandCodeAlphaResponse{
+		"/provider/v1/models": {status: http.StatusOK, body: cxtpRefreshDMITModels},
+	}}
+	buf := logCapture(t)
+
+	// 启动预热。
+	base := fmt.Sprintf("http://cc-trigger-%d.example/provider/v1", time.Now().UnixNano())
+	account := warmupAccount(71, base)
+	t.Cleanup(func() {
+		upstreamModelProtocols.mu.Lock()
+		defer upstreamModelProtocols.mu.Unlock()
+		delete(upstreamModelProtocols.entries, modelProtocolCatalogKey(&account, buildOpenAIModelsURL(base)))
+	})
+	warmup := NewModelProtocolCatalogWarmupService(&warmupRepo{accounts: []Account{account}}, &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream})
+	refreshed, _ := warmup.runOnce(t.Context())
+	require.Equal(t, 1, refreshed)
+	require.Contains(t, buf.String(), "trigger=startup_warmup")
+	require.NotContains(t, buf.String(), "trigger=manual")
+
+	// 页面刷新与开启补拉。
+	buf.Reset()
+	svc, _ := cxtpRefreshDMITService(t, upstream)
+	_, err := svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "trigger=page_refresh")
+
+	buf.Reset()
+	svc2, _ := cxtpRefreshDMITService(t, upstream)
+	_, err = svc2.EvaluateCodexThirdPartyCatalog(t.Context(), cxtpCompositeGroup(), NewCodexModelVisibilityConfig())
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "trigger=enable_prefetch")
 }

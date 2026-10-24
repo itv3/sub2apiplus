@@ -151,7 +151,41 @@ func accountSupportsCompositeModelListProtocol(account *Account, protocol string
 			return false
 		}
 	default:
-		// profile 没有默认地址的平台（自定义多协议）按 profile 与账号凭据判定。
+		// 其余多协议 profile 平台（自定义、Command Code、Cline、OpenCode Go 等）按 profile 与账号凭据判定。
+		return profiledPlatformSupportsModelListProtocol(account, protocol)
+	}
+}
+
+// profiledPlatformSupportsModelListProtocol 判定多协议 profile 平台账号能否出现在指定协议的 Composite 模型列表里。
+// 只看 profile 与账号凭据（providerSupportsProtocol），不依赖运行时才有的上游模型目录缓存：
+//   - 端点完全由凭据决定的自定义平台：沿用 customPlatformSupportsModelListProtocol；
+//   - 固定协议：Chat Completions / Responses 归入 openai 列表，Anthropic 归入 anthropic 列表，
+//     且 profile 与凭据确有该协议的地址；
+//   - adaptive（含按模型分流平台的缺省值）：支持 Chat Completions 或 Responses 就进 openai 列表，
+//     支持 Anthropic 就进 anthropic 列表。
+//
+// 不是多协议 profile 的平台（Gemini、Antigravity 等）一律返回 false。
+func profiledPlatformSupportsModelListProtocol(account *Account, protocol string) bool {
+	profile := account.providerProfile()
+	if profile == nil {
+		return false
+	}
+	if profile.CredentialEndpoints {
 		return customPlatformSupportsModelListProtocol(account, protocol)
 	}
+	switch fixed := account.GetAPIProtocol(); fixed {
+	case APIProtocolAnthropic:
+		return protocol == CompositeModelListProtocolAnthropic && account.providerSupportsProtocol(APIProtocolAnthropic)
+	case APIProtocolChatCompletions, APIProtocolResponses:
+		return protocol == CompositeModelListProtocolOpenAI && account.providerSupportsProtocol(fixed)
+	case APIProtocolAdaptive:
+		switch protocol {
+		case CompositeModelListProtocolOpenAI:
+			return account.providerSupportsProtocol(APIProtocolChatCompletions) ||
+				account.providerSupportsProtocol(APIProtocolResponses)
+		case CompositeModelListProtocolAnthropic:
+			return account.providerSupportsProtocol(APIProtocolAnthropic)
+		}
+	}
+	return false
 }
