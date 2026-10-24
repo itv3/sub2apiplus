@@ -203,7 +203,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		return nil
 	}
-	forceHTTPBridge := account.Platform == PlatformGrok ||
+	// Grok 与其它「上游不提供 Responses WebSocket」的平台（command_code、custom、
+	// deepseek 等）一律走 WS→HTTP 桥接；判据集中在 OpenAIPlatformUsesWSHTTPBridge。
+	forceHTTPBridge := OpenAIPlatformUsesWSHTTPBridge(account.Platform) ||
 		(!officialEgressEnabled && s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
@@ -295,7 +297,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	wsHost := "-"
 	wsPath := "-"
 	if forceHTTPBridge {
-		wsHost = "xai-http-bridge"
+		wsHost = openAIWSHTTPBridgeLogHost(account)
 		wsPath = "/v1/responses"
 	} else {
 		var err error
@@ -808,6 +810,91 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayLimits := s.openAIWSReplayInputLimits()
 		bridgeReplayState := openAIWSReplayInputState{}
 		bridgeAccountFailoverState := openAIWSReplayInputState{}
+		// 无状态桥接平台（command_code、custom、deepseek 等，不含 Grok）：上游不保存 response 链，
+		// 桥接又会剥离 previous_response_id，所以对话上下文只能由本循环自己保存并在每轮还原。
+		// Grok 与 openai 平台的桥接行为保持原样，不进入下面任何新增分支。
+		statelessBridge := isOpenAIWSStatelessBridgeAccount(account)
+		// lastBridgeResponseID 是本连接上一轮产生的响应 ID，只有它能作为合法的 previous_response_id。
+		lastBridgeResponseID := ""
+		// 判定用最终发往上游的模型名：Composite 显式路由会把公开别名换成路由的上游模型，
+		// 按模型分流的账号要看这个名字才能选对协议；缺省时退回客户端模型名。
+		bridgeRoutingModel := strings.TrimSpace(gjson.GetBytes(currentBridgePayload.payloadRaw, "model").String())
+		if bridgeRoutingModel == "" {
+			bridgeRoutingModel = currentBridgePayload.originalModel
+		}
+		if statelessBridge && !s.openAIWSStatelessBridgeNativeResponses(ctx, account, bridgeRoutingModel) {
+			// 桥接只会把 Responses 请求原样发往上游 Responses 端点；上游是 Chat Completions 或
+			// Anthropic 协议的账号需要协议转换，转换链路只存在于 HTTP 入口，这里无法服务。
+			logOpenAIWSModeInfo(
+				"ingress_ws_http_bridge_upstream_unsupported account_id=%d platform=%s model=%s",
+				account.ID,
+				account.Platform,
+				truncateOpenAIWSLogValue(currentBridgePayload.originalModel, openAIWSLogValueMaxLen),
+			)
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				openAIWSStatelessBridgeUnsupportedUpstreamMessage,
+				ErrOpenAIWSBridgeUnsupportedUpstream,
+			)
+		}
+		// advanceBridgeTurn 在一轮结束（或被本地拒绝）后释放本轮正文引用、登记内存，
+		// 并读取、解析客户端的下一帧写入 currentBridgePayload。done=true 表示客户端已正常断开，
+		// 调用方应直接返回 nil。轮次已结束，仅重放历史、Grok 种子和上下文工具状态继续持有正文。
+		advanceBridgeTurn := func(turn int) (done bool, err error) {
+			currentBridgePayload = openAIWSClientPayload{}
+			retained := openAIWSRetainedReplayPayloads([][]byte{grokCacheSeedPayload}, bridgeReplayState, bridgeAccountFailoverState)
+			if err := retainContextMemory(); err != nil {
+				return false, err
+			}
+			if err := requestMemory.FinishTurn("service", retained...); err != nil {
+				return false, err
+			}
+			nextClientMessage, readErr := readClientMessage()
+			if readErr != nil {
+				if isOpenAIWSSessionPreempted(ctx) {
+					return false, errOpenAIWSSessionPreempted
+				}
+				if isOpenAIWSClientDisconnectError(readErr) {
+					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
+					logOpenAIWSModeInfo(
+						"ingress_ws_http_bridge_client_closed account_id=%d close_status=%s close_reason=%s",
+						account.ID,
+						closeStatus,
+						truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
+					)
+					return true, nil
+				}
+				return false, fmt.Errorf("read client websocket request: %w", readErr)
+			}
+			nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			currentBridgePayload = nextPayload
+			return false, nil
+		}
+		// rejectBridgeContinuation 拒绝一个本连接无法续链的帧：回复 previous_response_not_found，
+		// 不访问上游，不改动重放历史，然后读取客户端的下一帧（Codex 会改发完整 input）。
+		rejectBridgeContinuation := func(turn int) (done bool, err error) {
+			previousResponseID := currentBridgePayload.previousResponseID
+			logOpenAIWSModeInfo(
+				"ingress_ws_http_bridge_continuation_rejected account_id=%d platform=%s turn=%d previous_response_id=%s last_response_id=%s replay_unavailable=%v",
+				account.ID,
+				account.Platform,
+				turn,
+				truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(lastBridgeResponseID, openAIWSIDValueMaxLen),
+				bridgeReplayState.unavailable,
+			)
+			if writeErr := writeClientMessage(buildOpenAIWSBridgePreviousResponseNotFoundEvent(previousResponseID)); writeErr != nil {
+				return false, wrapOpenAIWSIngressTurnError("write_client", fmt.Errorf("write websocket http bridge continuation error: %w", writeErr), false)
+			}
+			if hooks != nil && hooks.AfterTurn != nil {
+				// 没有产生上游结果：只让调用方释放本轮并发槽位与正文引用，不记用量。
+				hooks.AfterTurn(turn, nil, nil)
+			}
+			return advanceBridgeTurn(turn)
+		}
 		for turn := 1; ; turn++ {
 			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
 				if err := hooks.BeforeRequest(turn, currentBridgePayload.rawForHash, currentBridgePayload.originalModel); err != nil {
@@ -824,6 +911,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if c != nil && sessionHash != "" {
 				c.Set(openAIWSIngressSessionHashContextKey, sessionHash)
+			}
+			// 无状态桥接平台：客户端带了 previous_response_id，但它不是本连接上一轮产生的响应，
+			// 或重放历史已因超限不可用，就无法还原完整上下文。绝不把只有增量的请求发给无状态上游，
+			// 回复 previous_response_not_found 让客户端改发完整 input。
+			if statelessBridge && openAIWSStatelessBridgeContinuationBroken(
+				currentBridgePayload.previousResponseID, lastBridgeResponseID, bridgeReplayState,
+			) {
+				done, advanceErr := rejectBridgeContinuation(turn)
+				if advanceErr != nil {
+					return advanceErr
+				}
+				if done {
+					return nil
+				}
+				continue
 			}
 			// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 			// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
@@ -884,6 +986,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 			}
 			if needsBridgeReplay && turnReplayState.unavailable {
+				if statelessBridge {
+					// 历史合并后超出重放上限：客户端手里有完整历史，让它改发完整 input。
+					done, advanceErr := rejectBridgeContinuation(turn)
+					if advanceErr != nil {
+						return advanceErr
+					}
+					if done {
+						return nil
+					}
+					continue
+				}
 				return newOpenAIWSReplayUnavailableCloseError(replayInputErr)
 			}
 			// 两份状态共享不可变的 RawMessage 正文，但使用独立的切片头数组，
@@ -948,21 +1061,48 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if currentBridgePayload.deferredIngress != nil {
 				bridgeCtx = context.WithValue(ctx, openAIWSDeferredIngressBodyContextKey{}, currentBridgePayload.deferredIngress)
 			}
-			result, bridgeErr := s.proxyOpenAIWSHTTPBridgeTurn(
-				bridgeCtx,
-				c,
-				account,
-				token,
-				bridgePayloadRaw,
-				bridgePayloadBytes,
-				currentBridgePayload.originalModel,
-				currentBridgePayload.imageBillingModel,
-				currentBridgePayload.imageSizeTier,
-				currentBridgePayload.imageInputSize,
-				grokCacheIdentity,
-				turn,
-				writeClientMessage,
-			)
+			var result *OpenAIForwardResult
+			var bridgeErr error
+			// syntheticTurn 表示本轮由网关本地应答，没有上游响应可绑定、也没有输出项可并入历史。
+			syntheticTurn := false
+			if statelessBridge && isOpenAIWSGenerateFalseFrame(currentBridgePayload.payloadRaw) {
+				// generate=false 是 Codex 会话开始时的预热帧：真实 OpenAI 只建立基线、不生成内容。
+				// HTTP 桥接没有「不生成」的语义，原样转发会白白调用一次模型并让输出污染对话历史，
+				// 因此本地合成应答；预热帧的 input 已在上面并入重放历史，作为后续增量的基线。
+				syntheticTurn = true
+				result, bridgeErr = answerOpenAIWSBridgeWarmupTurn(
+					currentBridgePayload.originalModel,
+					strings.TrimSpace(gjson.GetBytes(bridgePayloadRaw, "model").String()),
+					time.Now(),
+					writeClientMessage,
+				)
+				if bridgeErr == nil && result != nil {
+					logOpenAIWSModeInfo(
+						"ingress_ws_http_bridge_warmup_answered account_id=%d platform=%s turn=%d response_id=%s input_items=%d",
+						account.ID,
+						account.Platform,
+						turn,
+						truncateOpenAIWSLogValue(result.RequestID, openAIWSIDValueMaxLen),
+						len(turnReplayState.items),
+					)
+				}
+			} else {
+				result, bridgeErr = s.proxyOpenAIWSHTTPBridgeTurn(
+					bridgeCtx,
+					c,
+					account,
+					token,
+					bridgePayloadRaw,
+					bridgePayloadBytes,
+					currentBridgePayload.originalModel,
+					currentBridgePayload.imageBillingModel,
+					currentBridgePayload.imageSizeTier,
+					currentBridgePayload.imageInputSize,
+					grokCacheIdentity,
+					turn,
+					writeClientMessage,
+				)
+			}
 			if bridgeErr != nil && isOpenAIWSSessionPreempted(ctx) {
 				return errOpenAIWSSessionPreempted
 			}
@@ -995,11 +1135,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return errors.New("websocket http bridge turn result is nil")
 			}
 			bridgeReplayState = turnReplayState
-			if result.wsReplayInputExists {
+			replayOutputItems, replayOutputExists := result.wsReplayInput, result.wsReplayInputExists
+			if statelessBridge {
+				// 无状态上游只认请求里带的 input：助手文本、推理项也必须并入历史，
+				// 否则下一轮的增量请求会少掉模型自己上一轮的回答。
+				replayOutputItems, replayOutputExists = result.wsAccountFailoverReplayInput, len(result.wsAccountFailoverReplayInput) > 0
+			}
+			if replayOutputExists {
 				var appendErr error
 				bridgeReplayState, appendErr = appendOpenAIWSReplayInputState(
 					bridgeReplayState,
-					result.wsReplayInput,
+					replayOutputItems,
 					replayLimits,
 				)
 				if appendErr != nil {
@@ -1039,43 +1185,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			responseID := strings.TrimSpace(result.RequestID)
-			if responseID != "" && stateStore != nil {
+			if statelessBridge {
+				lastBridgeResponseID = responseID
+			}
+			if responseID != "" && stateStore != nil && !syntheticTurn {
 				ttl := s.openAIWSResponseStickyTTL()
 				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			}
 			// 轮次已结束，仅重放历史、Grok 种子和上下文工具状态继续持有正文。
-			currentBridgePayload = openAIWSClientPayload{}
 			turnReplayState, turnAccountFailoverState = openAIWSReplayInputState{}, openAIWSReplayInputState{}
 			result = nil
-			retained := openAIWSRetainedReplayPayloads([][]byte{grokCacheSeedPayload}, bridgeReplayState, bridgeAccountFailoverState)
-			if err := retainContextMemory(); err != nil {
-				return err
+			done, advanceErr := advanceBridgeTurn(turn)
+			if advanceErr != nil {
+				return advanceErr
 			}
-			if err := requestMemory.FinishTurn("service", retained...); err != nil {
-				return err
+			if done {
+				return nil
 			}
-			nextClientMessage, readErr := readClientMessage()
-			if readErr != nil {
-				if isOpenAIWSSessionPreempted(ctx) {
-					return errOpenAIWSSessionPreempted
-				}
-				if isOpenAIWSClientDisconnectError(readErr) {
-					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
-					logOpenAIWSModeInfo(
-						"ingress_ws_http_bridge_client_closed account_id=%d close_status=%s close_reason=%s",
-						account.ID,
-						closeStatus,
-						truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
-					)
-					return nil
-				}
-				return fmt.Errorf("read client websocket request: %w", readErr)
-			}
-			nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
-			if parseErr != nil {
-				return parseErr
-			}
-			currentBridgePayload = nextPayload
 		}
 	}
 

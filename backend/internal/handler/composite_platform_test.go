@@ -51,14 +51,21 @@ func TestOpenAICompatibleTextTargetAllowsCompositeProviders(t *testing.T) {
 	}
 }
 
-// WS ingress 对 CN 账号既过不了 transport 过滤、HTTP 桥也没有 Responses 转换，
-// 放行只会把明确的策略拒绝换成 "no available account"，因此 WS 白名单保持 openai+grok。
-func TestResponsesWebSocketCompositePlatformGuardKeepsOpenAIAndGrokOnly(t *testing.T) {
-	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformOpenAI))
-	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformGrok))
+// WS 白名单放行 OpenAI 网关族全部平台：openai 沿用上游 WebSocket，grok 与国产厂商、
+// opencode_go、command_code、cline、custom 经「客户端 WS → 上游 HTTP」桥接服务（选号时按 HTTP
+// 传输选，见 requiredTransport）。Anthropic 网关族不走 OpenAI 网关，仍然拒绝。
+// 此前的白名单只放行 openai 与 grok，是因为桥接当时只服务 Grok。
+func TestResponsesWebSocketCompositePlatformGuardAllowsOpenAIGatewayFamily(t *testing.T) {
 	for _, platform := range []string{
+		service.PlatformOpenAI, service.PlatformGrok,
 		service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax,
-		service.PlatformAnthropic, service.PlatformGemini,
+		service.PlatformOpenCodeGo, service.PlatformCommandCode, service.PlatformCline, service.PlatformCustom,
+	} {
+		require.True(t, isResponsesWebSocketCompositePlatform(platform), "platform=%s", platform)
+	}
+	for _, platform := range []string{
+		service.PlatformAnthropic, service.PlatformGemini, service.PlatformAntigravity, service.PlatformTypeSafe,
+		service.PlatformComposite, "", "unknown-platform",
 	} {
 		require.False(t, isResponsesWebSocketCompositePlatform(platform), "platform=%s", platform)
 	}

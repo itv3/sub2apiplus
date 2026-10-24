@@ -151,7 +151,8 @@ func (s *OpenAIGatewayService) openAIWSHTTPBridgeThresholdBytes() int64 {
 }
 
 func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloadBytes int, previousResponseID string) bool {
-	if account != nil && account.Platform == PlatformGrok {
+	// Grok 与其它上游不提供 Responses WebSocket 的平台一律桥接。
+	if account != nil && OpenAIPlatformUsesWSHTTPBridge(account.Platform) {
 		return true
 	}
 	if !s.openAIWSHTTPBridgeEnabled() {
@@ -165,7 +166,7 @@ func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloa
 }
 
 func (s *OpenAIGatewayService) shouldBridgeOpenAIWSPassthroughFirstMessage(account *Account, payload []byte) bool {
-	if account != nil && account.Platform == PlatformGrok {
+	if account != nil && OpenAIPlatformUsesWSHTTPBridge(account.Platform) {
 		return true
 	}
 	if !s.openAIWSHTTPBridgeEnabled() || int64(len(payload)) < s.openAIWSHTTPBridgeThresholdBytes() {
@@ -883,6 +884,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
+	if isOpenAIWSStatelessBridgeAccount(account) {
+		// HTTP 入口对所有平台统一修复工具参数根的 null 或缺失 type（Codex 的 MCP 工具常见），
+		// 国产厂商上游不接受这种 Schema。WS 帧在入口处的兼容归一化只覆盖 openai 平台账号，
+		// 无状态桥接平台需要在这里补上同一步，WS 与 HTTP 才不会出现「HTTP 正常、WS 报 400」。
+		sanitizedBody, schemaChanged, schemaErr := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform)
+		if schemaErr != nil {
+			return nil, fmt.Errorf("sanitize http bridge tool schemas: %w", schemaErr)
+		}
+		if schemaChanged {
+			body = sanitizedBody
+		}
+	}
 	if profileErr != nil {
 		return nil, fmt.Errorf("resolve official egress config: %w", profileErr)
 	}
@@ -918,7 +931,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		grokExplicitToolIntent = hasGrokResponsesToolIntent(grokIntentSourceBody)
 	}
 	var clientToolMapping apicompat.ResponsesClientToolMapping
-	functionToolUpstream := (account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey) || account.Platform == PlatformGrok
+	functionToolUpstream := openAIWSHTTPBridgeAdaptsClientTools(account)
 	if functionToolUpstream {
 		if account.Platform == PlatformGrok {
 			body, err = sanitizeGrokResponsesInput(body)

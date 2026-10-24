@@ -85,7 +85,9 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 	var memoryErr *service.OpenAIWSRequestMemoryError
 	// 本地正文限额、内存准入及磁盘暂存错误不反映账号健康，不能影响账号调度。
-	return err != nil && !errors.As(err, &memoryErr) && !service.IsRequestBodyStorageError(err) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
+	return err != nil && !errors.As(err, &memoryErr) && !service.IsRequestBodyStorageError(err) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err) &&
+		// 上游需要协议转换而桥接无法服务：请求级能力拒绝，不是账号故障。
+		!errors.Is(err, service.ErrOpenAIWSBridgeUnsupportedUpstream)
 }
 
 // openAIWSIngressEndedByClient reports whether a finished ingress WebSocket turn
@@ -348,16 +350,17 @@ func openAICompatibleTextTargetAllowed(c *gin.Context, apiKey *service.APIKey, m
 }
 
 // isResponsesWebSocketCompositePlatform 限定 composite 分组在 Responses WebSocket
-// 上可服务的目标平台。CN 供应商（kimi/zhipu/deepseek）刻意排除：其账号无法通过
-// WSv2 ingress 的 transport 过滤，且 WS HTTP 桥没有面向 CN 的 Responses 转换，
-// 放行只会把明确的策略拒绝变成误导性的 "no available account"。
+// 上可服务的目标平台：OpenAI 网关族全部放行。
+//
+//   - openai 平台沿用上游 WebSocket；
+//   - grok 与 kimi、zhipu、deepseek、minimax、opencode_go、command_code、cline、custom 的上游
+//     不提供 Responses WebSocket，选号时按 HTTP 传输选，进入转发器后走「客户端 WS → 上游 HTTP」
+//     桥接（service.OpenAIPlatformUsesWSHTTPBridge）。桥接只服务上游原生 Responses 的账号，
+//     需要协议转换的账号由转发器在入口处以明确原因关闭连接。
+//
+// Anthropic 网关族（anthropic、gemini、antigravity、typesafe）不走 OpenAI 网关，仍然拒绝。
 func isResponsesWebSocketCompositePlatform(platform string) bool {
-	switch platform {
-	case service.PlatformOpenAI, service.PlatformGrok:
-		return true
-	default:
-		return false
-	}
+	return domain.UsesOpenAIGateway(platform)
 }
 
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
@@ -2712,7 +2715,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// Apply the resolved upstream model through MapRequestModel on every turn.
 	wsRouteModel := reqModel
 	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
-		decision, resolveErr := h.compositeResolver.Resolve(c.Request.Context(), apiKey.Group.ID, reqModel, service.CompositeRouteEndpointResponses)
+		// 候选池入口标记：与 HTTP 入口一致，让跨平台同名模型按账号级候选池选首选平台，
+		// 而不是退回「声明平台数大于一就判歧义」的旧流程（见 compositeCandidatePoolContextForResponsesWS）。
+		decision, resolveErr := h.compositeResolver.Resolve(
+			compositeCandidatePoolContextForResponsesWS(c, apiKey, subject, firstMessage),
+			apiKey.Group.ID, reqModel, service.CompositeRouteEndpointResponses,
+		)
 		if resolveErr != nil {
 			reqLog.Error("openai.websocket_composite_route_failed", zap.Error(resolveErr))
 			closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "Failed to resolve composite model route")
@@ -2857,7 +2865,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(ctx, apiKey)
 	requiredTransport := service.OpenAIUpstreamTransportResponsesWebsocketV2Ingress
-	if requestPlatform == service.PlatformGrok {
+	if requestPlatform == service.PlatformGrok ||
+		(apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite &&
+			service.OpenAIPlatformUsesWSHTTPBridge(requestPlatform)) {
+		// Grok 与 Composite 分组里上游不提供 Responses WebSocket 的平台由转发器桥接到 HTTP，
+		// 账号无需（也不可能）通过上游 WebSocket 传输过滤。
 		requiredTransport = service.OpenAIUpstreamTransportHTTPSSE
 	}
 	if err := h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
@@ -3436,7 +3448,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
 			// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
 			// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
-			if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+			//
+			// 无状态桥接平台（command_code、custom、deepseek 等）除外：它们的上游不保存响应链，
+			// 剥离后只剩增量 input，上游看到的上下文就不完整；保留 previous_response_id，
+			// 由转发器判定它是否是本连接上一轮产生的响应，不是就回复 previous_response_not_found，
+			// 让客户端改发完整 input。
+			if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove &&
+				!service.OpenAIPlatformIsStatelessWSHTTPBridge(account.Platform) {
 				wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
 				reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
 					zap.Int64("account_id", account.ID),
