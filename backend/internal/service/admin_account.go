@@ -430,6 +430,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
+	// 自定义多协议平台：写库前校验类型、协议与 Chat Completions 地址，并归一 base_url。
+	// 创建、复制与导入（导入逐条走 CreateAccount）共用这一处。
+	if err := NormalizeCustomPlatformCredentials(input.Platform, input.Type, input.Credentials); err != nil {
+		return nil, err
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -808,6 +813,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		// Strip SSO/password residue that must never sit next to OAuth tokens.
 		account.Credentials = SanitizeStoredCredentials(account.Platform, account.Credentials)
+	}
+	// 自定义多协议平台：类型或凭据有改动时，按合并后的完整凭据校验并归一 base_url。
+	if account.IsCustom() && (input.Type != "" || len(input.Credentials) > 0) {
+		if err := NormalizeCustomPlatformCredentials(account.Platform, account.Type, account.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
@@ -1295,6 +1306,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		input.Credentials = SanitizeStoredCredentials("", input.Credentials)
 	}
 
+	// 自定义多协议平台：批量增量按 JSONB 顶层键合并，目标可能混合平台，所以逐个 custom
+	// 账号用「现有凭据 + 增量」的完整凭据校验并算出归一后的 base_url；其它平台账号不受影响。
+	// 校验放在任何写操作之前，失败整体拒绝。
+	customBaseURLs, err := planCustomBulkBaseURLs(cachedTargets, input.AccountIDs, input.Credentials)
+	if err != nil {
+		return nil, err
+	}
+
 	// Prepare bulk updates for columns and JSONB fields.
 	repoUpdates := AccountBulkUpdate{
 		Credentials:                input.Credentials,
@@ -1351,7 +1370,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	// Run bulk update for column/jsonb fields first.
-	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
+	if err := s.bulkUpdateAccountColumns(ctx, input.AccountIDs, repoUpdates, customBaseURLs); err != nil {
 		return nil, err
 	}
 
