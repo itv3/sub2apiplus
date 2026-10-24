@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -300,35 +301,128 @@ func TestCodexTPCompositePoolARM64ShapeWithoutUpstreamCatalog(t *testing.T) {
 	require.Equal(t, []CodexThirdPartyRouteAccount{{ID: 10, Name: "DeepSeek", Platform: PlatformDeepseek}}, candidate.AlternateAccounts)
 }
 
-func TestCodexTPCompositePoolModelRoutedAccountUsesCachedUpstreamCatalog(t *testing.T) {
-	// 运行时请求已经预热过 CommandCode 的上游模型目录（该模型支持 Responses）：目录页读同一份缓存，
-	// 结论与候选池一致（CommandCode 进零转换组并按 Priority 成为首选）；读页面不向上游发请求。
-	// 按模型分流的账号无法静态确认 Responses 通路，状态停在"能力依据不足"并给出该原因。
-	baseURL := fmt.Sprintf("http://cc-pool-warm-%d.example/provider/v1", time.Now().UnixNano())
-	commandCode := cxtpPoolCommandCode(11, 5, baseURL)
-	accounts := []Account{cxtpPoolNamed(compositePoolAdaptive(10, PlatformDeepseek, 30), "DeepSeek"), commandCode}
-	key := modelProtocolCatalogKey(&commandCode, buildOpenAIModelsURL(baseURL))
-	upstreamModelProtocols.store(key, map[string][]string{compositePoolModel: {APIProtocolChatCompletions, APIProtocolResponses}}, nil, time.Now())
+// cxtpPoolWarmCatalog 把 CommandCode 账号的上游模型目录写进进程内缓存（模拟运行时请求已预热），
+// 目录里的键就是该账号对公开模型名的路由模型名；返回清理函数。
+func cxtpPoolWarmCatalog(t *testing.T, account *Account, baseURL string, protocols []string) {
+	t.Helper()
+	routingModel := upstreamRoutingModel(account, []byte(`{"model":"`+compositePoolModel+`"}`), "")
+	key := modelProtocolCatalogKey(account, buildOpenAIModelsURL(baseURL))
+	upstreamModelProtocols.store(key, map[string][]string{strings.ToLower(routingModel): protocols}, nil, time.Now())
 	t.Cleanup(func() {
 		upstreamModelProtocols.mu.Lock()
 		defer upstreamModelProtocols.mu.Unlock()
 		delete(upstreamModelProtocols.entries, key)
 	})
+}
+
+// cxtpPoolARM64Accounts 是 ARM64 分组 8 的形态：DeepSeek（优先级 1）、CommandCode（2，映射到带厂商前缀的上游型号）、
+// HUB_OpenAI（openai 平台中转，10）、Cline（只有 Chat Completions）。
+func cxtpPoolARM64Accounts(baseURL string) []Account {
+	commandCode := compositePoolWithMapping(cxtpPoolCommandCode(11, 2, baseURL), map[string]any{compositePoolModel: "deepseek/deepseek-v4.1-flash"})
+	hub := compositePoolAccount(13, PlatformOpenAI, 10, map[string]any{
+		"base_url":      "https://hub.example.com/v1",
+		"model_mapping": compositePoolMapping(compositePoolModel),
+	})
+	hub.Name = "HUB_OpenAI"
+	return []Account{
+		cxtpPoolNamed(compositePoolAdaptive(10, PlatformDeepseek, 1), "DeepSeek"),
+		commandCode,
+		hub,
+		cxtpPoolNamed(cxtpPoolChatOnly(14, PlatformCline, 5, compositePoolMapping(compositePoolModel)), "Cline"),
+	}
+}
+
+func TestCodexTPCompositePoolModelRoutedAccountUsesCachedUpstreamCatalog(t *testing.T) {
+	// 运行时请求已经预热过 CommandCode 的上游模型目录（该模型支持 Responses）：目录页读同一份缓存，
+	// CommandCode 进零转换组，协议记为原生 Responses，与 DeepSeek、HUB 同属一个能力档案，整组可发布；
+	// 首选按 Priority 是 DeepSeek，CommandCode 与 HUB 是备选；读页面不向上游发请求。
+	baseURL := fmt.Sprintf("http://cc-pool-warm-%d.example/provider/v1", time.Now().UnixNano())
+	accounts := cxtpPoolARM64Accounts(baseURL)
+	cxtpPoolWarmCatalog(t, &accounts[1], baseURL, []string{APIProtocolChatCompletions, APIProtocolResponses})
 
 	f := newCompositePoolFixture(t, accounts...)
 	upstream := &recordingHTTPUpstream{}
 	f.openAI.httpUpstream = upstream
 	outcome := f.resolveHandled(f.ctxFor(CompositeRouteEndpointResponses, compositePoolResponsesBody(""), nil), CompositeRouteEndpointResponses)
-	require.Equal(t, PlatformCommandCode, outcome.Decision.TargetPlatform, "候选池：CommandCode 零转换且 Priority 最高")
+	require.Equal(t, PlatformDeepseek, outcome.Decision.TargetPlatform, "候选池：DeepSeek 零转换且 Priority 最高")
 
 	svc := cxtpPoolService(t, accounts)
 	svc.fetcher = openAICodexBaseFetcher{svc: f.openAI}
 	candidate := cxtpPoolEvaluate(t, svc)
-	require.Equal(t, PlatformCommandCode, candidate.TargetPlatform, "目录页与候选池首选平台一致")
-	require.Equal(t, []int64{10, 11}, candidate.AccountIDs)
+	require.Equal(t, PlatformDeepseek, candidate.TargetPlatform, "目录页与候选池首选平台一致")
+	require.Equal(t, []int64{10, 11, 13}, candidate.AccountIDs, "Cline 只有 Chat Completions，不在零转换组里")
+	require.Equal(t, CodexModelStatusConfigurable, candidate.Status, "原因：%v", candidate.Reasons)
+	require.True(t, candidate.CanEnable)
+	require.Equal(t, CodexThirdPartyProtocolNative, candidate.Protocol)
+	require.Equal(t, "deepseek-flash", candidate.ProfileID)
+	require.Equal(t, int64(10), candidate.PrimaryAccount.ID)
+	require.Equal(t, []CodexThirdPartyRouteAccount{
+		{ID: 11, Name: "CommandCode", Platform: PlatformCommandCode},
+		{ID: 13, Name: "HUB_OpenAI", Platform: PlatformOpenAI},
+	}, candidate.AlternateAccounts)
+	require.Contains(t, candidate.UpstreamModel, "deepseek/deepseek-v4.1-flash", "CommandCode 的最终上游型号带厂商前缀")
+	require.Zero(t, upstream.calls, "读目录页不得向上游发请求")
+}
+
+func TestCodexTPCompositePoolModelRoutedProtocolFollowsCachedCatalog(t *testing.T) {
+	// 按模型分流账号的协议跟随已缓存的上游模型目录：支持 Responses 为原生通路，只支持 Chat Completions
+	// 为转换通路；缓存缺失、该模型不在目录里、目录给出其它协议时维持"无法静态确认"（空串）。
+	cases := []struct {
+		name      string
+		warm      bool
+		protocols []string
+		want      string
+	}{
+		{"目录支持 Responses", true, []string{APIProtocolChatCompletions, APIProtocolResponses}, CodexThirdPartyProtocolNative},
+		{"目录只有 Chat Completions", true, []string{APIProtocolChatCompletions}, CodexThirdPartyProtocolViaChat},
+		{"目录没有缓存", false, nil, ""},
+		{"目录给出其它协议", true, []string{APIProtocolAnthropic}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseURL := fmt.Sprintf("http://cc-proto-%d.example/provider/v1", time.Now().UnixNano())
+			commandCode := cxtpPoolCommandCode(11, 2, baseURL)
+			if tc.warm {
+				cxtpPoolWarmCatalog(t, &commandCode, baseURL, tc.protocols)
+			}
+			svc := cxtpPoolService(t, []Account{commandCode})
+			svc.fetcher = openAICodexBaseFetcher{svc: &OpenAIGatewayService{httpUpstream: &recordingHTTPUpstream{}}}
+			require.Equal(t, tc.want, svc.accountProtocol(&commandCode, compositePoolModel))
+		})
+	}
+	// 普通账号不受影响：沿用账号自身配置。
+	svc := cxtpPoolService(t, nil)
+	deepseek := compositePoolAdaptive(10, PlatformDeepseek, 1)
+	require.Equal(t, codexTPAccountProtocol(&deepseek), svc.accountProtocol(&deepseek, compositePoolModel))
+}
+
+func TestCodexTPCompositePoolModelRoutedCacheMissingKeepsOriginalReason(t *testing.T) {
+	// 缓存缺失：CommandCode 按内置规则走 Chat Completions，需转换，不在零转换组，整组仍可发布。
+	// 只有当它被迫进入承接集合（零转换组为空）且目录没有缓存时，才停在"无法静态确认 Responses 通路"。
+	baseURL := fmt.Sprintf("http://cc-pool-cold2-%d.example/provider/v1", time.Now().UnixNano())
+	commandCode := compositePoolWithMapping(cxtpPoolCommandCode(11, 2, baseURL), map[string]any{compositePoolModel: "deepseek/deepseek-v4.1-flash"})
+	cline := cxtpPoolChatOnly(14, PlatformCline, 5, compositePoolMapping(compositePoolModel))
+	svc := cxtpPoolService(t, []Account{commandCode, cline})
+	svc.fetcher = openAICodexBaseFetcher{svc: &OpenAIGatewayService{httpUpstream: &recordingHTTPUpstream{}}}
+	candidate := cxtpPoolEvaluate(t, svc)
+	require.Equal(t, []int64{11, 14}, candidate.AccountIDs, "两个账号都需转换，退到需转换组")
 	require.Equal(t, CodexModelStatusNeedsCapability, candidate.Status)
 	require.Contains(t, candidate.Reasons, "部分承接账号按模型分流上游协议，无法静态确认 Responses 通路")
-	require.Zero(t, upstream.calls, "读目录页不得向上游发请求")
+}
+
+func TestCodexTPCompositePoolConvertGroupWithCachedChatCatalogIsViaChat(t *testing.T) {
+	// 两个账号都需转换（CommandCode 缓存目录只有 Chat Completions，Cline 固定 Chat Completions）：
+	// 协议确定为转换通路，整组按"Responses 经 Chat 转换"发布。
+	baseURL := fmt.Sprintf("http://cc-pool-chat-%d.example/provider/v1", time.Now().UnixNano())
+	commandCode := compositePoolWithMapping(cxtpPoolCommandCode(11, 2, baseURL), map[string]any{compositePoolModel: "deepseek/deepseek-v4.1-flash"})
+	cxtpPoolWarmCatalog(t, &commandCode, baseURL, []string{APIProtocolChatCompletions})
+	cline := cxtpPoolChatOnly(14, PlatformCline, 5, compositePoolMapping(compositePoolModel))
+	svc := cxtpPoolService(t, []Account{commandCode, cline})
+	svc.fetcher = openAICodexBaseFetcher{svc: &OpenAIGatewayService{httpUpstream: &recordingHTTPUpstream{}}}
+	candidate := cxtpPoolEvaluate(t, svc)
+	require.Equal(t, []int64{11, 14}, candidate.AccountIDs)
+	require.Equal(t, CodexThirdPartyProtocolViaChat, candidate.Protocol, "原因：%v", candidate.Reasons)
+	require.NotEqual(t, CodexModelStatusNeedsCapability, candidate.Status, "原因：%v", candidate.Reasons)
 }
 
 func TestModelProtocolCatalogPeekNeverRefreshes(t *testing.T) {

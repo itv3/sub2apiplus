@@ -276,7 +276,7 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		route.Accounts = append(route.Accounts, codexTPAccountRoute{
 			Account:       account,
 			Final:         final,
-			Protocol:      codexTPAccountProtocol(account),
+			Protocol:      sess.svc.accountProtocol(account, slug),
 			NativeCapable: codexTPNativeCapable(account, final),
 		})
 	}
@@ -388,19 +388,47 @@ func (sess *codexTPSession) compositeReceivers(ctx context.Context, slug string)
 	return set.Accounts, nil
 }
 
-// responsesZeroConversion 判定账号对 Responses 入站是否零转换：规则与候选池同一个函数，
-// 按模型分流的账号带上游模型目录的缓存结果（只读缓存，页面读取不发上游请求）。
-func (s *CodexThirdPartyCatalogService) responsesZeroConversion(account *Account, slug string) bool {
-	var routingModel string
-	var catalog []string
-	if domain.UsesOpenAIGateway(account.Platform) && !account.IsGrok() {
-		body, _ := json.Marshal(map[string]string{"model": slug})
-		routingModel = upstreamRoutingModel(account, body, "")
-		if lister, ok := s.fetcher.(codexThirdPartyProtocolCataloger); ok {
-			catalog = lister.CachedModelProtocols(account, routingModel)
-		}
+// routingModelAndCatalog 返回账号参与协议分流的模型名，以及按模型分流账号在上游模型目录缓存里
+// 该模型支持的协议（只读缓存，页面读取不发上游请求；没有缓存、不是按模型分流账号或 Grok 时 catalog 为空）。
+// 零转换判定与协议判定共用这一份输入，两者永远基于同一份缓存目录。
+func (s *CodexThirdPartyCatalogService) routingModelAndCatalog(account *Account, slug string) (routingModel string, catalog []string) {
+	if account == nil || !domain.UsesOpenAIGateway(account.Platform) || account.IsGrok() {
+		return "", nil
 	}
+	body, _ := json.Marshal(map[string]string{"model": slug})
+	routingModel = upstreamRoutingModel(account, body, "")
+	if lister, ok := s.fetcher.(codexThirdPartyProtocolCataloger); ok {
+		catalog = lister.CachedModelProtocols(account, routingModel)
+	}
+	return routingModel, catalog
+}
+
+// responsesZeroConversion 判定账号对 Responses 入站是否零转换：规则与候选池同一个函数，
+// 按模型分流的账号带上游模型目录的缓存结果。
+func (s *CodexThirdPartyCatalogService) responsesZeroConversion(account *Account, slug string) bool {
+	routingModel, catalog := s.routingModelAndCatalog(account, slug)
 	return compositeAccountZeroConversion(account, APIProtocolResponses, routingModel, catalog)
+}
+
+// accountProtocol 判定账号对 Responses 请求的实际通路，无法静态确认时返回空串。
+// 普通账号看账号自身配置（codexTPAccountProtocol）；按模型分流的账号要看上游模型目录：
+// 目录缓存里该模型支持 Responses 就是原生通路，只支持 Chat Completions 就是转换通路；
+// 目录没有缓存、该模型不在目录里或目录给出的是其它协议时维持「无法静态确认」。
+func (s *CodexThirdPartyCatalogService) accountProtocol(account *Account, slug string) string {
+	if account == nil || !account.routesByModel() {
+		return codexTPAccountProtocol(account)
+	}
+	routingModel, catalog := s.routingModelAndCatalog(account, slug)
+	if len(catalog) == 0 {
+		return ""
+	}
+	switch resolveUpstreamProtocol(account, APIProtocolResponses, routingModel, catalog) {
+	case APIProtocolResponses:
+		return CodexThirdPartyProtocolNative
+	case APIProtocolChatCompletions:
+		return CodexThirdPartyProtocolViaChat
+	}
+	return ""
 }
 
 // upstreamListsModel 判断官方账号最近一次拉到的上游目录是否列出了该型号（正向证据）。
