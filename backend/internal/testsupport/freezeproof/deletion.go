@@ -178,58 +178,198 @@ func manualActionsAccepted(root string, receipt deletionReceipt) bool {
 		return false
 	}
 	for _, action := range receipt.ManualActions {
-		if action.Kind != "single_hop_file" || action.File != "docs/egress/maintenance/scanner-algorithm-successor.json" ||
+		if action.Kind != "single_hop_file" || action.File != scannerSuccessorFile ||
 			action.Rule != "scanner-algorithm-successor" || !safePath(action.Path) ||
-			!strings.HasPrefix(action.Path, "backend/cmd/egressscan/") || !strings.HasSuffix(action.Path, ".go") {
+			!strings.HasPrefix(action.Path, scannerSourceDir) || !strings.HasSuffix(action.Path, ".go") {
 			return false
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "docs/egress/maintenance/scanner-algorithm-successor.json"))
-	var successor struct {
-		Schema   string `json:"schema_version"`
-		From     string `json:"from_sha256"`
-		To       string `json:"to_sha256"`
-		Source   string `json:"source_transition"`
-		Reviewer string `json:"reviewed_by"`
-		Reason   string `json:"reason"`
-	}
-	if err != nil || json.Unmarshal(raw, &successor) != nil || successor.Schema != "official-egress-scanner-algorithm-successor/v1" ||
-		!digestValid(successor.From) || !digestValid(successor.To) || !safePath(successor.Source) ||
-		!strings.HasPrefix(successor.Source, "docs/egress/maintenance/") || strings.TrimSpace(successor.Reviewer) == "" || strings.TrimSpace(successor.Reason) == "" {
+	raw, err := os.ReadFile(filepath.Join(root, scannerSuccessorFile))
+	if err != nil {
 		return false
 	}
-	lockRaw, err := os.ReadFile(filepath.Join(root, "docs/egress/maintenance/bootstrap-inventory-lock.json"))
+	current, ok := parseScannerSuccessor(raw)
+	if !ok {
+		return false
+	}
+	lockRaw, err := os.ReadFile(filepath.Join(root, scannerLockFile))
+	if err != nil {
+		return false
+	}
+	if lock, ok := lockAlgorithmDigest(lockRaw); !ok || lock != current.From {
+		return false
+	}
+	// 当前单跳必须仍与工作树里的扫描器源码一致，待办名相同不等于已完成。
+	if digest, ok := scannerDigestInWorktree(root); !ok || digest != current.To {
+		return false
+	}
+	source, ok := readIdentityReceipt(root, current.Source)
+	if !ok {
+		return false
+	}
+	// 判据一：单跳仍直接指向这份删除收据，即删除之后扫描器没有再变过。
+	if source.BaseCommit == receipt.BaseCommit && source.CurrentCommit == receipt.CurrentCommit {
+		return true
+	}
+	// 判据二：扫描器每次变更都必须把同一个单跳文件推进到新收据，所以单跳早晚会离开删除收据。
+	// 此时改按 Git 历史核对“删除当时它确实指向这份收据”，并确认后续推进来自同一 Bootstrap。
+	return historicalSingleHopAccepted(root, receipt, current, source)
+}
+
+// 扫描器算法单跳文件、Bootstrap 锁文件与扫描器源码目录的仓库内路径，以及封存收据的架构名。
+const (
+	scannerSuccessorFile = "docs/egress/maintenance/scanner-algorithm-successor.json"
+	scannerLockFile      = "docs/egress/maintenance/bootstrap-inventory-lock.json"
+	scannerSourceDir     = "backend/cmd/egressscan/"
+	freezeReceiptSchema  = "official-egress-upstream-freeze-successor/v1"
+)
+
+// scannerSuccessor 是扫描器算法单跳文件的结构；同一文件任何时刻只能表达“Bootstrap 摘要 -> 当前摘要”这一跳。
+type scannerSuccessor struct {
+	Schema   string `json:"schema_version"`
+	From     string `json:"from_sha256"`
+	To       string `json:"to_sha256"`
+	Source   string `json:"source_transition"`
+	Reviewer string `json:"reviewed_by"`
+	Reason   string `json:"reason"`
+}
+
+// parseScannerSuccessor 只做结构校验，不判断它与哪份收据绑定。
+func parseScannerSuccessor(raw []byte) (scannerSuccessor, bool) {
+	var successor scannerSuccessor
+	if json.Unmarshal(raw, &successor) != nil || successor.Schema != "official-egress-scanner-algorithm-successor/v1" ||
+		!digestValid(successor.From) || !digestValid(successor.To) || !safePath(successor.Source) ||
+		!strings.HasPrefix(successor.Source, "docs/egress/maintenance/") ||
+		strings.TrimSpace(successor.Reviewer) == "" || strings.TrimSpace(successor.Reason) == "" {
+		return scannerSuccessor{}, false
+	}
+	return successor, true
+}
+
+// lockAlgorithmDigest 从 Bootstrap 锁文件原文取出扫描器算法摘要。
+func lockAlgorithmDigest(raw []byte) (string, bool) {
 	var lock struct {
 		Algorithm string `json:"scanner_algorithm_sha256"`
 	}
-	if err != nil || json.Unmarshal(lockRaw, &lock) != nil || lock.Algorithm != successor.From {
-		return false
+	if json.Unmarshal(raw, &lock) != nil || !digestValid(lock.Algorithm) {
+		return "", false
 	}
-	sourceRaw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(successor.Source)))
+	return lock.Algorithm, true
+}
+
+// readIdentityReceipt 读取单跳指向的收据文件，要求身份摘要自洽并能解析出提交区间。
+func readIdentityReceipt(root, relative string) (deletionReceipt, bool) {
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
 	var source deletionReceipt
-	if err != nil || json.Unmarshal(sourceRaw, &source) != nil || !identityValid(sourceRaw) || source.BaseCommit != receipt.BaseCommit || source.CurrentCommit != receipt.CurrentCommit {
-		return false
+	if err != nil || json.Unmarshal(raw, &source) != nil || !identityValid(raw) {
+		return deletionReceipt{}, false
 	}
-	// 与扫描器自己的算法摘要合同一致：按文件名排序，只覆盖非测试 Go 源码。
-	files, err := filepath.Glob(filepath.Join(root, "backend/cmd/egressscan/*.go"))
-	if err != nil || len(files) == 0 {
-		return false
-	}
+	return source, true
+}
+
+// scannerDigestOfFiles 与扫描器自己的算法摘要合同一致：按文件名排序，只覆盖非测试 Go 源码，
+// 每个文件依次写入“文件名、0 字节、内容、0 字节”。
+func scannerDigestOfFiles(names []string, read func(string) ([]byte, error)) (string, bool) {
 	hash := sha256.New()
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
+	count := 0
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		content, err := os.ReadFile(file)
+		content, err := read(name)
 		if err != nil {
-			return false
+			return "", false
 		}
-		_, _ = hash.Write([]byte(filepath.Base(file)))
+		_, _ = hash.Write([]byte(name))
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write(content)
 		_, _ = hash.Write([]byte{0})
+		count++
 	}
-	return hex.EncodeToString(hash.Sum(nil)) == successor.To
+	return hex.EncodeToString(hash.Sum(nil)), count > 0
+}
+
+// scannerDigestInWorktree 计算工作树里当前扫描器源码的算法摘要。
+func scannerDigestInWorktree(root string) (string, bool) {
+	files, err := filepath.Glob(filepath.Join(root, scannerSourceDir+"*.go"))
+	if err != nil || len(files) == 0 {
+		return "", false
+	}
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		names = append(names, filepath.Base(file))
+	}
+	return scannerDigestOfFiles(names, func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(root, scannerSourceDir, name))
+	})
+}
+
+// scannerDigestAtCommit 按同一合同计算某个历史提交上的扫描器源码摘要；Git 取不到对象即判失败。
+func scannerDigestAtCommit(root, commit string) (string, bool) {
+	listing, err := gitOutput(root, "ls-tree", "-z", commit, "--", scannerSourceDir)
+	if err != nil {
+		return "", false
+	}
+	var names []string
+	for _, entry := range bytes.Split(listing, []byte{0}) {
+		if len(entry) == 0 {
+			continue
+		}
+		// 每项形如“<mode> blob <sha>TAB<path>”，只接受目录下直接的普通文件，拒绝符号链接与子模块。
+		meta, path, found := strings.Cut(string(entry), "\t")
+		fields := strings.Fields(meta)
+		if !found || len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") ||
+			!strings.HasPrefix(path, scannerSourceDir) || strings.Contains(strings.TrimPrefix(path, scannerSourceDir), "/") {
+			continue
+		}
+		names = append(names, strings.TrimPrefix(path, scannerSourceDir))
+	}
+	slices.Sort(names)
+	return scannerDigestOfFiles(names, func(name string) ([]byte, error) {
+		return gitOutput(root, "show", commit+":"+scannerSourceDir+name)
+	})
+}
+
+// historicalSingleHopAccepted 在当前单跳已推进到后续收据时，证明删除收据对应的扫描器待办在当时已经完成：
+//  1. 删除收据的 current_commit 上，单跳文件结构合法，from 等于当时 Bootstrap 锁的算法摘要，
+//     to 等于当时的扫描器源码摘要，并指向一份提交区间与删除收据完全一致的收据；
+//  2. 当前单跳与历史单跳从同一个 Bootstrap 摘要出发；
+//  3. 当前单跳指向的后续收据同样是合法的封存收据，其 base 提交是删除收据 current_commit 的后代，
+//     且整个区间都在当前 HEAD 的历史之内。
+//
+// 任何 Git 命令失败（对象缺失、浅克隆）都判不接受，不会放松。
+func historicalSingleHopAccepted(root string, receipt deletionReceipt, current scannerSuccessor, next deletionReceipt) bool {
+	if !commitValid(receipt.BaseCommit) || !commitValid(receipt.CurrentCommit) ||
+		next.SchemaVersion != freezeReceiptSchema || next.Mode != "commit" ||
+		!commitValid(next.BaseCommit) || !commitValid(next.CurrentCommit) || next.BaseCommit == next.CurrentCommit {
+		return false
+	}
+	historicalRaw, err := gitOutput(root, "show", receipt.CurrentCommit+":"+scannerSuccessorFile)
+	if err != nil {
+		return false
+	}
+	historical, ok := parseScannerSuccessor(historicalRaw)
+	if !ok || historical.From != current.From {
+		return false
+	}
+	historicalLock, err := gitOutput(root, "show", receipt.CurrentCommit+":"+scannerLockFile)
+	if err != nil {
+		return false
+	}
+	if lock, ok := lockAlgorithmDigest(historicalLock); !ok || lock != historical.From {
+		return false
+	}
+	if digest, ok := scannerDigestAtCommit(root, receipt.CurrentCommit); !ok || digest != historical.To {
+		return false
+	}
+	// 历史单跳指向的收据从当前工作树读取，其提交区间必须与删除收据一致。
+	bound, ok := readIdentityReceipt(root, historical.Source)
+	if !ok || bound.BaseCommit != receipt.BaseCommit || bound.CurrentCommit != receipt.CurrentCommit {
+		return false
+	}
+	return gitSucceeds(root, "merge-base", "--is-ancestor", receipt.CurrentCommit, next.BaseCommit) &&
+		gitSucceeds(root, "merge-base", "--is-ancestor", next.BaseCommit, next.CurrentCommit) &&
+		gitSucceeds(root, "merge-base", "--is-ancestor", next.CurrentCommit, "HEAD")
 }
 
 func safePath(path string) bool {
