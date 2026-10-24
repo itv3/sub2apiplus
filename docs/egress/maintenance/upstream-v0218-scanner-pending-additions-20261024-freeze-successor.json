@@ -1,0 +1,47 @@
+{
+  "base_commit": "0de704bb0c3665352f5e85c313f090c0f6179894",
+  "changed_path_count": 2,
+  "current_commit": "3a2fa22bf20da6f40d1893d4606df872995ac696",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6940,
+  "frozen_path_count": 2279,
+  "identity_sha256": "1805d091f3498f01aa478a46f832a95d1491c5a7ea6c6b79b787c25aa2faa041",
+  "issued_at_utc": "2026-10-24T22:39:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。合并前预先登记上游新增发送点时，预检写出的登记补丁（sink-registration-draft）已含这一跳。",
+      "path": "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0218-scanner-pending-additions-20261024-freeze-successor",
+  "transitions": [],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+    "docs/egress/maintenance/scanner-algorithm-successor.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "cd backend && go run ./cmd/egressscan -mode self-test"
+  ]
+}
