@@ -1,0 +1,393 @@
+{
+  "base_commit": "e62d855b716a09324d434cd2eb346e8ae1d3645e",
+  "changed_path_count": 35,
+  "current_commit": "366054816f25d70ee8a4efc1ab3b82bbfec8748a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6868,
+  "frozen_path_count": 2279,
+  "identity_sha256": "0b5cb42e17397c63147ebd61688e78a08b6cc30922bf5783e603e85e6a88948f",
+  "issued_at_utc": "2026-10-24T10:10:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-custom-platform-codex-catalog-20261024-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "e65958ee43a389824b19afa76bdf0936664bfc4675054973a2eda61a7dc6bac9"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-desktop-chatgpt-login-catalog-note-20261024-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-fix-20261024-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-readme-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b43b4faaf50801f26aaf9ef01992dce7b3e3967283c053ecfe042bb0ec872f86"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/platforms.go",
+      "predecessor_sha256s": [
+        "be56f740bfb0c586d0ce193aa323384976f1d6774cb77a064fd50ad0198b7c71"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=backend/internal/domain/platforms.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "068d7b90c9d8209edb7fc6832c72b86379344a3f2ae94e5c0a7141956b6886c1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/platforms_test.go",
+      "predecessor_sha256s": [
+        "2a45c568b1557044177c8912c3b0ac1e4a9549fd388ebbca94dee5793b3593ad"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=backend/internal/domain/platforms_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9dd79ea22e8588bc188f03bb685dca95cd2af86761ec494c69625043bfa2ae11"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_protocol_catalog.go",
+      "predecessor_sha256s": [
+        "5bdda32a6bff8289737e8abbb9feed32514a32792475a715c2b1a83c8066f933"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=backend/internal/service/model_protocol_catalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3d545fe7207d4cf4b05f20f1afd7d660b0ec8332f33ffa9cfbff284b93745659"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/platform_list_test.go",
+      "predecessor_sha256s": [
+        "ef2dd02cfd89963600a49827531520fc3b27d32855ee29320e6182937cd0ff12"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=backend/internal/service/platform_list_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5c6ebf09e41c991d059a7bb3b0df0a5a3a529dff4961f33b1613c790aa72ed2f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256s": [
+        "264cda624cad13108d6a8606cc40b08f972e78b7bb56337409992e4b94636342"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/account/CreateAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d6010f3547e3b1e8994b23fcb32145db9faeba2206ead0db49a844702302f2e0"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256s": [
+        "3b95511997e198d22007d40b5d33876431aee4abcd2e19a5f19bccc7b8b9a166"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/account/EditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "27033f24e53e0ffdfabd9ee68e648309e4208c1d8dbaeab7f7412a09c399895c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "predecessor_sha256s": [
+        "697b09adb9a9556388b3c8734eecdde7643ed833a6fe5f3a72269aa7c24191b4"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "db9a694e9d077f070fe0fb6691fbff10beb9d9507a2e6fc05cf7a93ca465c275"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/CreateAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "c40429763e49c50e2e6a4ede71643a3729bfeb0366431c4cd23a08675342b5c7"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/account/__tests__/CreateAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c589ca5551c281d2869b5cacf2ad7f59a3a4103f7237ba22f92e88eef73becb6"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/credentialsBuilder.ts",
+      "predecessor_sha256s": [
+        "2253f146f29c123e2df392d313afec599a43b17f3ad81b49a1fd939e1cb86b8c"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/account/credentialsBuilder.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cefa9d05eb8501507279c39bc3dd4d92a774b75510f2030e2f42182c34a9863f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256s": [
+        "627d2bb118a2f7b0e9d70e59f442ff7340d33447909270bf9f92c7e7a5b7a2f7"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/components/keys/UseKeyModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "92eba550ac020ea96b825af63eb1199fe4b08203a7e611829550b3acac9c1c8b"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/constants/__tests__/platforms.spec.ts",
+      "predecessor_sha256s": [
+        "7d29014d4ea94e09c2c14fef0bb6566335c83d6f3683e04fafc1ec59148bbc1c"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/constants/__tests__/platforms.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f2f6a33f27008ef3546dbfce52e95683ca5b0e78b7de71d72a4fd806e6e0388d"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/constants/platformCatalog.builtin.json",
+      "predecessor_sha256s": [
+        "ecb14aeea1e73a835bce548fa22977a0862d7673fd17289155b4c6daa0eab28b"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/constants/platformCatalog.builtin.json",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d8075b807fc74c60bd09c290d838e082fd57325eef60d2f53f82cb403b1c1839"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "c4e7687d03cc306b06984909c21964ec2a820dade45f9cdbb1617c150cd4196f"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "530edfa7dae639839b83840c25856b19c43ca7f7d0d7ab67f34f7a3349df0cf4"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/overview.ts",
+      "predecessor_sha256s": [
+        "377ca1d83ddc38aa0f0caeb17d7422d3dfe29bae0a35024fcad2554e33f140a5"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/i18n/locales/en/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3843beb59e165c595c404a7b8714ead92864bb7a44804857d133f7d4e69875e7"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "06f145478d8446b1c50a639e82b329ef75e7d65cc220f14b85578344535656eb"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "38c809269235e1c1b33adf4e4a2721c57dce245509c614a092c247f2d3eb32a3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/overview.ts",
+      "predecessor_sha256s": [
+        "f032bc2c90dd8d42115004c6810a24c74fc03791400e34dda1c950d4aa074e1d"
+      ],
+      "reason": "Codex 三方目录接入账号级跨平台候选池（含按模型分流账号的协议跟随缓存目录）与平台显示名改为自定义多协议 path=frontend/src/i18n/locales/zh/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9ee60c0de3345f80fe05e99b61187e69bc8208ffb99bc892ec81bbec2322446d"
+    }
+  ],
+  "unregistered_path_count": 18,
+  "unregistered_paths": [
+    "backend/internal/server/routes/composite_candidate_pool_e2e_test.go",
+    "backend/internal/service/codex_third_party_catalog.go",
+    "backend/internal/service/codex_third_party_composite_pool_test.go",
+    "backend/internal/service/codex_third_party_contract.go",
+    "backend/internal/service/codex_third_party_routes.go",
+    "backend/internal/service/composite_candidate_pool.go",
+    "backend/internal/service/composite_candidate_pool_config.go",
+    "backend/internal/service/composite_candidate_pool_eligibility.go",
+    "backend/internal/service/composite_candidate_pool_receivers.go",
+    "backend/internal/service/composite_candidate_pool_sticky.go",
+    "backend/internal/service/composite_candidate_pool_test.go",
+    "backend/internal/service/custom_platform_test.go",
+    "frontend/src/api/admin/codexThirdPartyModels.ts",
+    "frontend/src/components/admin/CodexModelVisibilityPanel.vue",
+    "frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts",
+    "frontend/src/i18n/locales/en/admin/codexThirdPartyModels.ts",
+    "frontend/src/i18n/locales/zh/admin/codexThirdPartyModels.ts",
+    "frontend/src/utils/__tests__/platformColors.custom.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
