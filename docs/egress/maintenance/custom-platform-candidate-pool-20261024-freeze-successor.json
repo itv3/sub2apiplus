@@ -1,0 +1,926 @@
+{
+  "base_commit": "a3d054b31c3ddb558feab2860f8b93ab1a3ae34b",
+  "changed_path_count": 64,
+  "current_commit": "e78508a500a3372e59cd98f5ae17b2acdd81768d",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6816,
+  "frozen_path_count": 2279,
+  "identity_sha256": "062d2aacbf5e9b6ef69dd1ed4be453e4baa07bd4ef871c9198535688a6847249",
+  "issued_at_utc": "2026-10-24T07:13:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-custom-platform-candidate-pool-20261024-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/constants.go",
+      "predecessor_sha256s": [
+        "bfd4658e8ff76e2940b2eba26e83286b2e6b973242564c5c73d4ddf5ef80ffe0"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/domain/constants.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "af2f9eb3b7d61ce205f28ef21095d84f34d7d1ef2bfcbd7ac5d8fdde7a7e982b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/platforms.go",
+      "predecessor_sha256s": [
+        "255f65e97fce140479f79607847e599f4882639effebef19741460adf4313e56"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/domain/platforms.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "be56f740bfb0c586d0ce193aa323384976f1d6774cb77a064fd50ad0198b7c71"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/platforms_test.go",
+      "predecessor_sha256s": [
+        "5b6fd6840b83e7cd18073069b0fc2b7951a7ce7a51fa1ba3eb09377d058e9b18"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/domain/platforms_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2a45c568b1557044177c8912c3b0ac1e4a9549fd388ebbca94dee5793b3593ad"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/wire.go",
+      "predecessor_sha256s": [
+        "2cfbad198504b302528a0b776a9b7a770f4c8eb3c53fc8c6d4b6eba041b66324"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/handler/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e378a0a2334ac1f283c0496609063933c8612516a9aa1f5939181e61cc4c15bd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/model/error_passthrough_rule_test.go",
+      "predecessor_sha256s": [
+        "211dbcc5c7bc1d956f44e9a07845090cd3965dff1840aa7df624e36611021f52"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/model/error_passthrough_rule_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "821426cb3640e2a1920ec3a97c2c0724ad43e6eaf64a1546287896304570a33c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage.go",
+      "predecessor_sha256s": [
+        "b0130b88cb5e3155467e11772033690d95f38fdebd99ce2ac5894943c2819eec"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/repository/account_repo_ollama_cloud_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ce69398e58b34ca5b91cd82e7fed2338781f0335d8d6350bfdeb27ea612d5c21"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage_test.go",
+      "predecessor_sha256s": [
+        "71179c8a30fa9875896b491b3318cbb5dd9474efb91602341224736b06953a42"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/repository/account_repo_ollama_cloud_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c7da1008cb51a60e8f608f49789b78c540cb470f76e5122663cfac78858af5a4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/proxy_repo_upstream_billing_probe_test.go",
+      "predecessor_sha256s": [
+        "eb1d2c0d8f9465c80fe90dfc8ea32aba499ce7c522195a0536e54df9b99e1e82"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/repository/proxy_repo_upstream_billing_probe_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1f696bcf6154e3b6f28631c973683e173baed5c84b3dd043d4052047eb9ad68e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/api_contract_test.go",
+      "predecessor_sha256s": [
+        "886d342dfaa6617c9b6fab6edac6b41c0546a983068c10203842d3d5d473e75d"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/server/api_contract_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0154-closeout-ci-fixes-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f5bcbb24abaefec84143c641a7716a93b86594f4e70122eb822db68863a5e28d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/gateway.go",
+      "predecessor_sha256s": [
+        "ed7d1bc2f37fc20227acaa6154af095ba82b7e7abb7476675fdd02b9d05f9e61"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/server/routes/gateway.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ded5210c1e793cc19e5dd5124d64d46b7f2bb15d9754491b3e2e81e749ac620e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256s": [
+        "504f2f1f56c55a61e85af8ec7dcd9494c7c3d62779630d073e821268aca65053"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/admin_account.go",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d81fd484b70b00f41e4f796af3c0368772725e5ef00993bcf33a3b49838a3ba5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/channel_service_test.go",
+      "predecessor_sha256s": [
+        "8b4b6d48e538cb88d8d43a1f5b6e6d68cd1819f608204cadfde3aacae60ac360"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/channel_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dafd773438d0f199687e023c59d05565b58a06b05dd072d51ce6e22341203a4e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_model_protocol.go",
+      "predecessor_sha256s": [
+        "4410811ffc6c714f37e000199e365ea6e465eac800c127ab0edd360bb2017959"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/composite_model_protocol.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "150b4e81d1b979e179331a71c1dc4aff8c0a1298f32672f0856e8d3441a76d52"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_model_route.go",
+      "predecessor_sha256s": [
+        "b7fcbb51945d2a466063dc87c212b1688f268ba5dd0bd0f6c1231270412da7c2"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/composite_model_route.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6cb66395fc65a59b3855ed40c001455073ea8ea61e0bd3e11925475c111d10cf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_platform.go",
+      "predecessor_sha256s": [
+        "0dcac1c9e8483666ac4ef48b89279db2a4d7c4587ed5bfb334010bb9d81786db"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/composite_platform.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "92d17a14bdfd6ccc2645b6218148e1ff883b7cce1ba0c8a16ecdf94ed24cd926"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_platform_test.go",
+      "predecessor_sha256s": [
+        "e446ecc55e57cd6ee130bcc998b75cd1d12a409f8f4031cf5b366432a4041380"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/composite_platform_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5939afc4e239de6be030ab48e3f96ac9f3efc67d67cb8378ae67e5fc88c42eb3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/composite_route_resolver.go",
+      "predecessor_sha256s": [
+        "cea6b5b44ec39d6fc62b59bb0fb4e2be2338abac373e9493d249b2e42c0bbaa2"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/composite_route_resolver.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "949cbf2323a4074a53eb3ff26e7f4c16a8acbaf2d799729d21fa76283d81b50f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/domain_constants.go",
+      "predecessor_sha256s": [
+        "f0a948d0fde167e604bf4e29e739e7161da8e6d78c05dd42bd886d0426191a84"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/domain_constants.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0857f424ca49286a68e0f24849db579837cb25f40275107238eb306e914491df"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_scheduling.go",
+      "predecessor_sha256s": [
+        "96096690f14ad4098be776b1c63cf4f4ea9ded3d814d23768e6c21e1ac43a365"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/gateway_scheduling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "50fd6c6ca3e2f9f81d544ff7ede458da7256ac6bae42580c3441057726383cce"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ollama_cloud_usage.go",
+      "predecessor_sha256s": [
+        "3386b72825dcae60f97370bb0f114ffe2aede5d568c94229f0eb4b24ba49f142"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/ollama_cloud_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4b51e2d8288272402026b261dfd47b957a9180f726e827a9cdc983cb89db7e0d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_account_scheduler.go",
+      "predecessor_sha256s": [
+        "6e174c9b3740eb84be95d71c8c0745644e7c0ab9d46384f5a9341426b846c316"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/openai_account_scheduler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "40e0c87ae36e359f415867b0f644aebed74b7996856e007da2b4d1906a98fa49"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_ollama_cloud_cc_reasoning.go",
+      "predecessor_sha256s": [
+        "4995823176928344701ef454f9dbd81e92a9be296b2d595ea8c1ecb253446607"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/openai_gateway_ollama_cloud_cc_reasoning.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1814f8275931da5306ada7159954ffd941a9ee657a6fc4f3bd785127eec5e90e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "757b2452af49df57ccb1b9a0260b709084d0193c99cff5ad6a40381a0e981e11"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/openai_gateway_request_body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a9cff3c738823ec92ec5f483e52e990ae24b0117ba8ba7ec88b1e956934461a3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_scheduling.go",
+      "predecessor_sha256s": [
+        "9997bbace75e02b0b14d5006c29fcb14f95891819805c6d0eb9dee0f9f821a22"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/openai_gateway_scheduling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2d4dbbc3b3477e45800622f04507a39a3eaa532142488ebbdbf7f8fee7c5e4f2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/platform_list_test.go",
+      "predecessor_sha256s": [
+        "203552fae44a2032e521618a3e6b846a0f252bac5eda19ddb6d1e0f2ca1b2058"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/platform_list_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ef2dd02cfd89963600a49827531520fc3b27d32855ee29320e6182937cd0ff12"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/provider_profile.go",
+      "predecessor_sha256s": [
+        "bd7eef2600ff60f35960537e777c35619b2d138848d4d50e5fe363c574191d33"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/provider_profile.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b854b62535dc8fdbd2ce9e5e27b32d43179f3e574e7b6f33813ab50f33214e17"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/provider_profile_test.go",
+      "predecessor_sha256s": [
+        "962d80d10a11a0f0dc146d864ce872c617d8c892f90ec3398bf64816ff73ab21"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=backend/internal/service/provider_profile_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6b26f8440944af9fa859378fc39a5efeb78b82607cfd1c398ecdd89354977b3e"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/api/__tests__/settings.authSourceDefaults.spec.ts",
+      "predecessor_sha256s": [
+        "7f039d78dda896336978ab3f0436f8b518d36820280a8a86cc500b679defbb80"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/api/__tests__/settings.authSourceDefaults.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "716860279a6119a5721d0d7310245d4e31eb42e88ef1c9d5ee3be430177ed59f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256s": [
+        "adc75a053bde0d7d0c4d8ecabe95fbc429f7ea9b613e09822d5b11a97c509f44"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/CreateAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "264cda624cad13108d6a8606cc40b08f972e78b7bb56337409992e4b94636342"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256s": [
+        "a1f857071b325e828b18db0c01219e719d02b79bcaff50e093c1a5aa36005a09"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/EditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3b95511997e198d22007d40b5d33876431aee4abcd2e19a5f19bccc7b8b9a166"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "predecessor_sha256s": [
+        "401908200c070be8f91de5d4f895ba3791eae53441f11db24dffc4775008a085"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "697b09adb9a9556388b3c8734eecdde7643ed833a6fe5f3a72269aa7c24191b4"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/CreateAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "b1e3a6e34eab4e98d7a3ea370801d268fabe6d6fc4040fdc575ed1f018e86718"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/__tests__/CreateAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c40429763e49c50e2e6a4ede71643a3729bfeb0366431c4cd23a08675342b5c7"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "8240b42e2dd4ae599b6e3572bfc83ea6e2a2d53fabe1b5f8a4a09ae8ea8da9f3"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "78a748b34f8dbe7183190ebc2715710c8cf49d8c31643143f676f17824ee1d48"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/credentialsBuilder.platformCatalog.spec.ts",
+      "predecessor_sha256s": [
+        "63f82b000792053a475c016be1c137741e816c5e0003d55aaefd7c39015416b3"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/__tests__/credentialsBuilder.platformCatalog.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "382610155d69fb2b4a647f0884bfc0f7b986e3ba9f4bd66201a8329f89fc7f9c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/credentialsBuilder.ts",
+      "predecessor_sha256s": [
+        "27e8444ec04804764f5ce1190fe3b1939b8170a998ff715545269aeb7d1d5654"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/account/credentialsBuilder.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2253f146f29c123e2df392d313afec599a43b17f3ad81b49a1fd939e1cb86b8c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts",
+      "predecessor_sha256s": [
+        "ce32a6af2b439b0fd4c5358ccfb0de4e9bf121a63670740df0a292eab871bbfc"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f0487b7a2231cd8a2be0d963f0ccf85ce7c768b2ecbe55732324c02d200f6324"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/common/PlatformIcon.vue",
+      "predecessor_sha256s": [
+        "15d61738ed0122fc60461cf69e6f4bb148f001cef6dcc801bfbc368dcd4101c2"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/common/PlatformIcon.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "427fe504ff4a89471d5a93ddcc4995790726bd866e3922f05b9c01bef0fa1adc"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256s": [
+        "389a1d526a0ba6ee0050a1cc53f3fc95f66516e72cc06884b97e21c06ccd5280"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/components/keys/UseKeyModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "627d2bb118a2f7b0e9d70e59f442ff7340d33447909270bf9f92c7e7a5b7a2f7"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/constants/__tests__/platforms.spec.ts",
+      "predecessor_sha256s": [
+        "756737ca0a095210868b34c88a00f26a96bdd2f26a226fd8b194d0f6ad583e5e"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/constants/__tests__/platforms.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7d29014d4ea94e09c2c14fef0bb6566335c83d6f3683e04fafc1ec59148bbc1c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/constants/platformCatalog.builtin.json",
+      "predecessor_sha256s": [
+        "4b623716857f74de963940450e3bc8e0542f4dcdefefac94cac46da243d3bbc2"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/constants/platformCatalog.builtin.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ecb14aeea1e73a835bce548fa22977a0862d7673fd17289155b4c6daa0eab28b"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "2bc35cc70c7cd803e7c6da2565d77f899a84d147b2a970230d59d8d08387c19b"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c4e7687d03cc306b06984909c21964ec2a820dade45f9cdbb1617c150cd4196f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/overview.ts",
+      "predecessor_sha256s": [
+        "23fec8f55a0d7f4a45b34c4502a532928a8de84de442ac3093086354a7ce455a"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/i18n/locales/en/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "377ca1d83ddc38aa0f0caeb17d7422d3dfe29bae0a35024fcad2554e33f140a5"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "37d0b33cd03c21d07d30a26a889fe886f25771a6faec38f68b981cd2236124d3"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "06f145478d8446b1c50a639e82b329ef75e7d65cc220f14b85578344535656eb"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/overview.ts",
+      "predecessor_sha256s": [
+        "2fedd66670a55eaeaeef3283f2aabdd6e3aae2b5b3bfce883293a4bcd03c356f"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/i18n/locales/zh/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f032bc2c90dd8d42115004c6810a24c74fc03791400e34dda1c950d4aa074e1d"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256s": [
+        "aa15a81ca0e5efe514350be709368d840a916533cf330b2e5bcc774b944fe1a3"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/types/index.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "394857029433593575c6730b32f12d34f8707f56d8b458649e2e6b726d9aa8fa"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/utils/keyGroupProviders.ts",
+      "predecessor_sha256s": [
+        "974aa4a43831fb5135406498c47b300a2ce9764aca5fbe42585d9ada2f497c1f"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/utils/keyGroupProviders.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00f0ecaa2a11c1009a35384369145a0053ac715d09ef0ad1483c9e3a4c5373bc"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/utils/platformColors.ts",
+      "predecessor_sha256s": [
+        "57e1d54e0e93893f37e411344b85bf184f49be815c7af0542d8c69ac1e2ababd"
+      ],
+      "reason": "新增「自定义多协议平台（custom）」与账号级跨平台候选池：平台登记、账号校验与归一、前端表单；Composite 路由解析挂钩、入口标记接点、网关处理器装配接线，以及三处调度声明闸门改用候选集合谓词。候选池主体与 custom 平台逻辑均为新文件，既有文件只做注册、调用与接线，不改变官方客户端画像、Persona 与 wire。 path=frontend/src/utils/platformColors.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d077bb901120e893da76b56661e0a367f15f8f17ea3524d3731a536b12c32d86"
+    }
+  ],
+  "unregistered_path_count": 17,
+  "unregistered_paths": [
+    "backend/internal/server/routes/composite_candidate_pool_e2e_test.go",
+    "backend/internal/server/routes/composite_candidate_pool_entry.go",
+    "backend/internal/service/composite_account_claims.go",
+    "backend/internal/service/composite_account_claims_test.go",
+    "backend/internal/service/composite_candidate_pool.go",
+    "backend/internal/service/composite_candidate_pool_custom_test.go",
+    "backend/internal/service/composite_candidate_pool_eligibility.go",
+    "backend/internal/service/composite_candidate_pool_fixture_test.go",
+    "backend/internal/service/composite_candidate_pool_resolver_test.go",
+    "backend/internal/service/composite_candidate_pool_sticky.go",
+    "backend/internal/service/composite_candidate_pool_sticky_test.go",
+    "backend/internal/service/composite_candidate_pool_test.go",
+    "backend/internal/service/custom_platform.go",
+    "backend/internal/service/custom_platform_credentials.go",
+    "backend/internal/service/custom_platform_credentials_test.go",
+    "backend/internal/service/custom_platform_test.go",
+    "frontend/src/utils/__tests__/platformColors.custom.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
