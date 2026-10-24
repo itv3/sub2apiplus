@@ -469,3 +469,26 @@ func TestOllamaCloudHooksJudgeByOutboundAddress(t *testing.T) {
 	require.False(t, isOllamaCloudRawChatCompletionsAccount(zhipu))
 	require.Equal(t, int64(200000), gjson.GetBytes(clampOllamaCloudUpstreamMaxTokens(zhipu, big), "max_tokens").Int())
 }
+
+// ---------- 各类「允许平台」白名单 ----------
+
+// custom 是 OpenAI 网关族、API Key 计费的普通上游平台，对齐 cline / command_code：
+// 由平台清单派生的白名单自动包含它；依赖具体用量窗口实现的白名单不包含它。
+func TestCustomPlatformAllowedPlatformLists(t *testing.T) {
+	// 用户 × 平台配额、系统与认证来源默认配额共用同一份白名单。
+	require.True(t, IsAllowedQuotaPlatform(PlatformCustom))
+	require.NoError(t, validateDefaultPlatformQuotaMap(map[string]*DefaultPlatformQuotaSetting{
+		PlatformCustom: {},
+	}))
+	// 错误透传规则平台、渠道定价（Composite 逐平台匹配）、调度快照都由平台清单派生。
+	require.Contains(t, schedulerSnapshotPlatforms(), PlatformCustom)
+	require.Contains(t, matchingPlatforms(PlatformComposite), PlatformCustom)
+	require.Equal(t, []string{PlatformCustom}, matchingPlatforms(PlatformCustom))
+
+	// 自动停调阈值只对有原生 / Coding Plan 用量窗口的平台开放，custom 没有这类窗口。
+	require.NotContains(t, AllowedSchedulingThresholdPlatforms, PlatformCustom)
+	_, err := validateAndNormalizeAccountSchedulingThresholds(map[string]int{PlatformCustom: 80})
+	require.Error(t, err)
+	// 与同类按量平台一致。
+	require.NotContains(t, AllowedSchedulingThresholdPlatforms, PlatformCline)
+}
