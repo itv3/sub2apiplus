@@ -84,6 +84,24 @@
           </template>
           <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.models') }}</span>
           <span class="break-words text-gray-900 dark:text-white">{{ modelSummary }}</span>
+          <!-- 新版页面「Recent requests」：时间保留页面原文，仅编辑页展示（列表不展示），最多 10 行 -->
+          <template v-if="snapshot.data?.recent_requests?.length">
+            <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.recentRequests') }}</span>
+            <ul class="min-w-0 space-y-0.5" data-testid="ollama-cloud-recent-requests">
+              <li
+                v-for="(request, index) in snapshot.data.recent_requests.slice(0, 10)"
+                :key="index"
+                class="flex min-w-0 items-baseline gap-2 text-gray-900 dark:text-white"
+              >
+                <span class="shrink-0 text-gray-400">{{ request.time_text }}</span>
+                <span class="min-w-0 flex-1 truncate" :title="request.model">{{ request.model }}</span>
+                <span class="shrink-0 tabular-nums text-gray-500 dark:text-gray-400">{{ request.cost || '-' }}</span>
+              </li>
+              <li v-if="snapshot.data.recent_requests.length > 10" class="text-gray-400">
+                {{ t('admin.accounts.ollamaCloud.recentRequestsMore', { count: snapshot.data.recent_requests.length - 10 }) }}
+              </li>
+            </ul>
+          </template>
           <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.status') }}</span>
           <span class="break-words font-medium text-gray-900 dark:text-white">{{ statusLabel }}</span>
           <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.updatedAt') }}</span>

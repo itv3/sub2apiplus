@@ -387,6 +387,8 @@ export default {
         windowTooltipReset: 'Quota resets {reset}',
         monthlyUsed: '{used} used ({percent})',
         freeModels: 'Free models',
+        recentRequests: 'Recent requests',
+        recentRequestsMore: '{count} more not shown',
         email: 'Login email',
         resetApprox: '~{reset}',
         cookieExpiresLabel: 'Cookie expiry (optional)',

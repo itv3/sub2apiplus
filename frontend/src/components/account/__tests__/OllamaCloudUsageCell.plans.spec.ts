@@ -139,6 +139,16 @@ describe('OllamaCloudUsageCell plans', () => {
     expect(barLabels(wrapper)).toEqual(['admin.accounts.ollamaCloud.monthlyShort', '5h', '7d'])
   })
 
+  it('does not list recent requests or free models in the account list cell', () => {
+    const wrapper = mountCell(stateWith({
+      plan: 'Free',
+      free_models: ['beam', 'gemma4:31b'],
+      recent_requests: [{ time_text: '21 minutes ago', model: 'gemma4:31b', cost: '<$0.01' }]
+    }))
+    expect(wrapper.text()).not.toContain('21 minutes ago')
+    expect(wrapper.text()).not.toContain('beam')
+  })
+
   it('renders the usual placeholder for accounts that are not Ollama eligible', () => {
     const wrapper = mountCell(stateWith({ plan: 'Pro' }, { eligible: false }))
     expect(wrapper.find('[data-testid="ollama-cloud-usage-cell"]').exists()).toBe(false)

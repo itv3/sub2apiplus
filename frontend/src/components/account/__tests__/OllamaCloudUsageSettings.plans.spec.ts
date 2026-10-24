@@ -123,6 +123,24 @@ describe('OllamaCloudUsageSettings plans and Cookie expiry', () => {
     expect(freeBar.props('label')).toBe('admin.accounts.ollamaCloud.freeUsageShort')
   })
 
+  it('edit page lists the latest ten recent requests with raw time text, model and cost', async () => {
+    const recent = Array.from({ length: 12 }, (_, i) => ({ time_text: `${i + 1} minutes ago`, model: `model-${i}`, cost: '<$0.01' }))
+    const wrapper = mountSettings(stateWith({ plan: 'Pro', recent_requests: recent }))
+    await flushPromises()
+
+    const list = wrapper.get('[data-testid="ollama-cloud-recent-requests"]')
+    expect(list.findAll('li')).toHaveLength(11) // 10 行 + 「另有 N 条」
+    expect(list.text()).toContain('1 minutes ago')
+    expect(list.text()).toContain('model-9')
+    expect(list.text()).not.toContain('model-10')
+    expect(list.text()).toContain('<$0.01')
+    expect(list.text()).toContain('"count":2')
+
+    const none = mountSettings(stateWith({ plan: 'Pro' }))
+    await flushPromises()
+    expect(none.find('[data-testid="ollama-cloud-recent-requests"]').exists()).toBe(false)
+  })
+
   it('legacy page keeps the 5 hour and 7 day rows and has no monthly or free row', async () => {
     const wrapper = mountSettings(stateWith({
       plan: 'max',

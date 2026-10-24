@@ -219,6 +219,8 @@ export default {
         windowTooltipReset: '额度重置 {reset}',
         monthlyUsed: '已用 {used}（{percent}）',
         freeModels: '免费可用模型',
+        recentRequests: '最近请求',
+        recentRequestsMore: '另有 {count} 条未显示',
         email: '登录邮箱',
         resetApprox: '约 {reset}',
         cookieExpiresLabel: 'Cookie 到期时间（可选）',
