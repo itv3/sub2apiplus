@@ -16,7 +16,9 @@
 
 选择规则（每一项都写 ``reason``）：
 
-* Go（``backend`` 模块）：受影响的包＝涉及文件所在的包＋模块内直接导入这些包的包（``go list -json`` 离线求反向依赖）。
+* Go（``backend`` 模块）：受影响的包＝涉及文件所在的包＋模块内直接导入这些包的包（``go list -json`` 离线求反向依赖），
+  再加上传递导入者：沿反向依赖一直扩到模块内的传递闭包，按距离由近到远，在耗时预算内尽量纳入；预算放不下的传递导入者
+  不静默丢弃，清单与快线输出里明确列为“传递导入者未纳入（预算），由正式 U-4 兜底”。
   默认标签与 unit 标签各一组 ``go test -count=1``；integration 标签依赖 Docker，不在快线内，交给 U-4／CI，清单里写明。
   ``internal/officialegress`` 等已被出站规格线（``make check-egress-spec`` 里的 ``egress-spec-go-test``）按默认标签
   完整跑过的包，不在默认标签组里重复；这份包清单从 Makefile 该目标现取，不写死。
@@ -24,7 +26,9 @@
   指令变化、go.sum 单独变化、Go 文件找不到所属包，一律退回全量（``fallback_full_go``）。
   估算耗时超过预算（见 ``TARGETED_GO_BUDGET_SECONDS``）也退回全量，因为定向已不比全量省。
 * 前端：涉及 ``frontend/src`` 下的文件，按 import 依赖图选出（传递）引用它们的用例，只跑这些用例（``vitest related``
-  在本仓库崩溃，不可用）；前端检查线本身已含 lint、typecheck 与关键用例。
+  在本仓库崩溃，不可用）；前端检查线本身已含 lint、typecheck 与关键用例。**局限**：前端只对冲突文件与实际修改选用例，
+  上游单侧改动且与上游相同的前端文件不选（与 Go 不对称——Go 要覆盖“上游改了某个包、fork 在别处调用它”的语义冲突）；
+  这类文件只有 lint、typecheck、关键用例覆盖，U-4 与 CI 的前端线同样只有这三项，清单与快线输出里写明这一局限和数量。
 * 部署脚本：``deploy/`` 下的改动执行 CI ``shell`` 作业里的那批命令（从 ``backend-ci.yml`` 现取）。
 * ``tools/`` 下 Python：有测试目录的工具包（``upstream_merge``、``official_client_control``）跑它们的 unittest；
   被 Makefile 直接调用的脚本由出站规格线覆盖；采集工具树要整条采集线（约 33 分钟）才测得全，快线不含，列入 ``unresolved``。
@@ -545,6 +549,10 @@ FRONTEND_KNOWN_BASELINE_FAILURES = {
         "U-4 前端线与 CI 只跑 lint、typecheck、关键用例，不含它"
     ),
 }
+FRONTEND_LIMITATION = (
+    "前端只对冲突文件与实际修改选用例；上游单侧改动且与上游相同的前端文件不选用例（与 Go 不对称），"
+    "这类文件只有 lint、typecheck、关键用例覆盖（U-4 与 CI 的前端线同样只有这三项）"
+)
 # 全部用例都会加载的测试公共文件（vitest.config.ts 的 setupFiles）：它变化等于所有用例相关。
 FRONTEND_GLOBAL_SETUP = ("src/__tests__/setup.ts",)
 _FRONTEND_IMPORT_RE = re.compile(
@@ -894,6 +902,7 @@ def plan_targeted_regression(
 
     # ---- Go 受影响包 = 种子包 + 直接导入它们的包 ----
     packages: dict[str, dict[str, Any]] = {}
+    strong_seed: set[str] = set()
     if index is not None:
         for import_path, files in seeds.items():
             package = index.by_import[import_path]
@@ -902,12 +911,13 @@ def plan_targeted_regression(
                 "seed_files": [{"path": path, "origin": labels} for path, labels in sorted(files)],
                 "dependency_modules": [],
                 "importer_of": [],
+                "transitive_via": [],
                 "reasons": [],
             }
         for import_path, modules in dependency_seeds.items():
             package = index.by_import[import_path]
             entry = packages.setdefault(
-                import_path, {"dir": package.rel_dir, "seed_files": [], "dependency_modules": [], "importer_of": [], "reasons": []}
+                import_path, {"dir": package.rel_dir, "seed_files": [], "dependency_modules": [], "importer_of": [], "transitive_via": [], "reasons": []}
             )
             entry["dependency_modules"] = sorted(modules)
         # 直接导入者
@@ -923,7 +933,7 @@ def plan_targeted_regression(
             for importer in sorted(index.importers.get(import_path, ())):
                 target = index.by_import[importer]
                 entry = packages.setdefault(
-                    importer, {"dir": target.rel_dir, "seed_files": [], "dependency_modules": [], "importer_of": [], "reasons": []}
+                    importer, {"dir": target.rel_dir, "seed_files": [], "dependency_modules": [], "importer_of": [], "transitive_via": [], "reasons": []}
                 )
                 if import_path not in entry["importer_of"]:
                     entry["importer_of"].append(import_path)
@@ -943,33 +953,42 @@ def plan_targeted_regression(
 
     # ---- 标签组与出站规格线去重 ----
     patterns = egress_spec_go_test_patterns(makefile_text)
-    tag_sets: dict[str, dict[str, Any]] = {}
-    for label, tags in GO_TAG_SETS:
-        selected: list[str] = []
-        covered: list[str] = []
-        no_tests: list[str] = []
-        for import_path in sorted(packages, key=lambda item: packages[item]["dir"]):
-            assert index is not None
-            package = index.by_import[import_path]
-            if not package.present.get(label):
-                continue
-            rel_dir = package.rel_dir
-            if not package.has_tests.get(label):
-                no_tests.append(rel_dir)
-                continue
-            if label == "default" and any(_pattern_covers(pattern, rel_dir) for pattern in patterns):
-                covered.append(rel_dir)
-                continue
-            selected.append(rel_dir)
-        tag_sets[label] = {
-            "tags": tags,
-            "packages": selected,
-            "covered_by_egress_spec_lane": covered,
-            "no_test_files": no_tests,
-            "estimated_seconds": estimate_seconds(selected, label),
-        }
-    total_packages = len({rel for data in tag_sets.values() for rel in data["packages"]})
-    estimated = sum(data["estimated_seconds"] for data in tag_sets.values())
+
+    def compute_tag_sets() -> tuple[dict[str, dict[str, Any]], int, int]:
+        """按当前受影响包算各标签组的包清单、出站规格线已覆盖的包、无测试的包，以及包数与估算耗时。"""
+
+        result: dict[str, dict[str, Any]] = {}
+        for label, tags in GO_TAG_SETS:
+            selected: list[str] = []
+            covered: list[str] = []
+            no_tests: list[str] = []
+            for import_path in sorted(packages, key=lambda item: packages[item]["dir"]):
+                assert index is not None
+                package = index.by_import[import_path]
+                if not package.present.get(label):
+                    continue
+                rel_dir = package.rel_dir
+                if not package.has_tests.get(label):
+                    no_tests.append(rel_dir)
+                    continue
+                if label == "default" and any(_pattern_covers(pattern, rel_dir) for pattern in patterns):
+                    covered.append(rel_dir)
+                    continue
+                selected.append(rel_dir)
+            result[label] = {
+                "tags": tags,
+                "packages": selected,
+                "covered_by_egress_spec_lane": covered,
+                "no_test_files": no_tests,
+                "estimated_seconds": estimate_seconds(selected, label),
+            }
+        return (
+            result,
+            len({rel for data in result.values() for rel in data["packages"]}),
+            sum(data["estimated_seconds"] for data in result.values()),
+        )
+
+    tag_sets, total_packages, estimated = compute_tag_sets()
     unresolved_go = [item for item in unresolved if item["go_related"]]
     if unresolved_go:
         fallback_reasons.append(f"backend 下有 {len(unresolved_go)} 个归不了类的文件，影响面说不清（见 unresolved）")
@@ -979,6 +998,61 @@ def plan_targeted_regression(
         fallback_reasons.append(f"定向 go test 估算 {estimated} 秒，超过预算 {budget_seconds} 秒，定向已不比全量省")
     fallback = bool(fallback_reasons)
 
+    # ---- 传递导入者：沿反向依赖扩到模块内的传递闭包，按距离由近到远在预算内纳入 ----
+    # 种子包与直接导入者是必选的（上面已按预算判断过是否退回全量）；更远的传递导入者受预算约束，
+    # 放不下的明确列出，由正式 U-4 全量兜底，不静默丢弃。没有任何标签组下有测试的包不花时间，不在此列。
+    transitive_included: list[str] = []
+    transitive_not_included: list[dict[str, Any]] = []
+    if not fallback and index is not None and packages:
+        seen = set(packages)
+        # upstream_only_importers=False 时只从冲突／实际修改／依赖变化的种子包（及其直接导入者）往外扩。
+        current = sorted(
+            import_path
+            for import_path, entry in packages.items()
+            if upstream_only_importers or import_path in strong_seed or entry["importer_of"]
+        )
+        candidates: list[tuple[int, str, str]] = []
+        distance = 1
+        while current:
+            distance += 1
+            found: dict[str, str] = {}
+            for import_path in current:
+                for importer in sorted(index.importers.get(import_path, ())):
+                    if importer not in seen and importer not in found:
+                        found[importer] = import_path
+            seen.update(found)
+            candidates.extend((distance, importer, via) for importer, via in found.items())
+            current = sorted(found)
+        for distance, import_path, via in sorted(candidates, key=lambda item: (item[0], index.by_import[item[1]].rel_dir)):
+            target = index.by_import[import_path]
+            if not any(target.has_tests.get(label) for label, _tags in GO_TAG_SETS):
+                continue
+            via_dir = index.by_import[via].rel_dir or "."
+            packages[import_path] = {
+                "dir": target.rel_dir,
+                "seed_files": [],
+                "dependency_modules": [],
+                "importer_of": [],
+                "transitive_via": [via],
+                "reasons": [f"传递导入受影响的包 {via_dir}（距离 {distance}）"],
+            }
+            trial_sets, trial_total, trial_estimated = compute_tag_sets()
+            if trial_estimated <= budget_seconds and trial_total <= max_packages:
+                tag_sets, total_packages, estimated = trial_sets, trial_total, trial_estimated
+                transitive_included.append(target.rel_dir)
+            else:
+                del packages[import_path]
+                transitive_not_included.append(
+                    {
+                        "package": target.rel_dir,
+                        "distance": distance,
+                        "via": via_dir,
+                        "reason": (
+                            f"传递导入者未纳入（预算）：经 {via_dir} 间接导入受影响的包；纳入后估算 {trial_estimated} 秒、"
+                            f"{trial_total} 个包，超过预算 {budget_seconds} 秒或包数上限 {max_packages}；由正式 U-4 全量兜底"
+                        ),
+                    }
+                )
     # ---- 其余类别 ----
     frontend_files = sorted(frontend_related)
     frontend_specs: dict[str, list[str]] = {}
@@ -1053,8 +1127,15 @@ def plan_targeted_regression(
             "fallback_reasons": sorted(set(fallback_reasons)),
             "go_mod": go_mod_section,
             "removed_packages": removed_packages,
+            "transitive_included": transitive_included,
+            "transitive_not_included": transitive_not_included,
             "affected_packages": [
-                {"package": import_path, "dir": entry["dir"], "reasons": entry["reasons"], **{k: entry[k] for k in ("seed_files", "dependency_modules", "importer_of")}}
+                {
+                    "package": import_path,
+                    "dir": entry["dir"],
+                    "reasons": entry["reasons"],
+                    **{k: entry[k] for k in ("seed_files", "dependency_modules", "importer_of", "transitive_via")},
+                }
                 for import_path, entry in sorted(packages.items(), key=lambda item: item[1]["dir"])
             ],
             "tag_sets": tag_sets,
@@ -1074,6 +1155,8 @@ def plan_targeted_regression(
                 for spec, files in frontend_specs.items()
             },
             "without_spec": frontend_without_spec,
+            "upstream_only_unselected_count": sum(1 for item in facts.upstream_only if item.startswith("frontend/")),
+            "limitation": FRONTEND_LIMITATION,
             "excluded_specs": frontend_excluded,
             "command": frontend_vitest_argv(["<spec_files>"]) if frontend_specs else None,
             "note": "vitest related 在本仓库崩溃（见 related_frontend_specs），改用 import 依赖图选用例",
@@ -1094,6 +1177,8 @@ def plan_targeted_regression(
             "actual_modified_count": len(facts.actual_modified),
             "affected_go_package_count": len(packages),
             "targeted_go_package_count": total_packages,
+            "transitive_included_count": len(transitive_included),
+            "transitive_not_included_count": len(transitive_not_included),
             "fallback_full_go": fallback,
             "frontend_changed_file_count": len(frontend_files),
             "frontend_spec_count": len(frontend_specs),

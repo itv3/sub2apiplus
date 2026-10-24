@@ -21,7 +21,15 @@ v0.2.17 试验区全量门禁 64 分 29 秒，其中采集工具线 33 分 38 �
 
 * ``passed``：全部通过；
 * ``passed_pending_ledger``：失败项**只有**冻结摘要类，可以建正式 Plan，台账在 Plan 的最终 revision 由工具一次性生成；
+* ``passed_with_gaps``：没有功能失败，但定向回归清单里有归不了类的文件（``unresolved``），快线不能证明它们被测过；
+  用独立的退出码 3，输出逐项列出须补足的验证，补足并在汇报里写明之前不要建 Plan；
 * ``failed``：有功能失败（含归因不清的），不得建 Plan，按现行修复规则处理。
+
+结论优先级：failed > passed_with_gaps > passed_pending_ledger > passed。有待台账闭合项时，状态文件的 ``pending_ledger``
+和输出照样逐项列出，不因为结论被更高优先级盖过而消失。
+
+退出码：passed／passed_pending_ledger 为 0，failed 为 1，passed_with_gaps 为 3。``make`` 会把配方的任何非 0 退出码统一成 2，
+所以经 make 运行时要靠输出末尾固定的 ``FAST-RESULT`` 一行或状态文件的 ``result`` 区分，不能只看退出码。
 
 快线记录不是 U-4 全量收据：状态文件用独立 schema（``FAST_STATUS_SCHEMA``），``workflow._load_runner_status``
 只认 full 模式的 schema，拒绝快线记录；正式 U-4 保留完整验收，不因快线通过而缺项。
@@ -68,13 +76,23 @@ from .toolchain import check_toolchain, describe_mismatches
 
 RESULT_PASSED = "passed"
 RESULT_PENDING = "passed_pending_ledger"
+RESULT_GAPS = "passed_with_gaps"
 RESULT_FAILED = "failed"
-RESULTS = (RESULT_PASSED, RESULT_PENDING, RESULT_FAILED)
+RESULTS = (RESULT_PASSED, RESULT_PENDING, RESULT_GAPS, RESULT_FAILED)
+# 退出码：failed 与“有须补足的验证”各用独立的非 0 码，监视脚本能区分（经 make 时被统一成 2，见模块说明）。
+EXIT_FAILED = 1
+EXIT_GAPS = 3
+FAST_RESULT_PREFIX = "FAST-RESULT"
 DEFAULT_REQUEST_RELATIVE = "tools/upstream_merge/request_template_v2.json"
 PENDING_LEDGER_LABEL = "待台账闭合"
 NOT_U4_NOTICE = (
     "本记录是试验区快线记录，不是 U-4 全量收据：正式 U-4 仍执行完整的 12 类门禁（含采集工具线与整套 go test），"
     "快线通过不减少 U-4 的任何覆盖项"
+)
+# 对比用的全量状态文件里可能带的候选提交位置（full 模式现行的状态文件没有这个字段；将来加了或人工附上就能机器核对）。
+COMPARE_COMMIT_PATHS = (("repository", "commit"), ("candidate_commit",), ("commit",))
+IDENTITY_UNVERIFIED_NOTE = (
+    "候选身份未经机器核对：对比用的全量状态文件不带候选提交号，两次运行是否针对同一候选只能靠操作员保证"
 )
 CACHE_NOTES = (
     "对比耗时的两次运行必须是同一候选、同一台机器；Go 编译缓存会影响先后两次的耗时（无法关闭），go test 一律 -count=1 不用结果缓存",
@@ -107,6 +125,8 @@ class FastContext:
     commit: str
     tree: str
     compare_with: Path | None = None
+    # 对比用全量状态文件的读取结果（见 load_compare_status）；没有 --compare-with 时为 None。
+    compare: dict[str, Any] | None = None
     # 内联前置检查记下的环境事实（Go／lint 版本、密钥扫描门禁 id），写进状态文件。
     records: dict[str, Any] = field(default_factory=dict)
 
@@ -170,8 +190,11 @@ def prepare_fast_run(
         if not resolved_status.parent.is_dir():
             # 状态文件在整轮结束后才写；目录不存在要在开跑前就拒绝，不能跑完才发现写不出结果。
             raise UpstreamMergeError(f"快线状态文件所在目录不存在：{resolved_status.parent}")
-    if compare_with is not None and not compare_with.is_file():
-        raise UpstreamMergeError(f"对比用的全量状态文件不存在：{compare_with}")
+    compare = None
+    if compare_with is not None:
+        if not compare_with.is_file():
+            raise UpstreamMergeError(f"对比用的全量状态文件不存在：{compare_with}")
+        compare = load_compare_status(compare_with, commit)
     # 全部校验通过之后才创建日志目录，拒绝启动不留垃圾。
     if resolved_log_dir is None:
         resolved_log_dir = Path(tempfile.mkdtemp(prefix="upstream-gate-fast-"))
@@ -192,6 +215,7 @@ def prepare_fast_run(
         commit=commit,
         tree=commit_tree(root, commit),
         compare_with=compare_with,
+        compare=compare,
     )
 
 
@@ -265,12 +289,16 @@ def render_checklist(manifest: dict[str, Any]) -> str:
                 lines.append(f"    不重复执行 {covered}：出站规格线已按默认标签完整跑过")
         for entry in go["affected_packages"]:
             lines.append(f"  包 {entry['dir'] or '.'}：{'；'.join(entry['reasons'])}")
+        if go["transitive_not_included"]:
+            lines.append(f"传递导入者未纳入（预算）{len(go['transitive_not_included'])} 个，由正式 U-4 兜底：")
+            lines.extend(f"  - 包 {item['package']}（距离 {item['distance']}）：{item['reason']}" for item in go["transitive_not_included"])
     frontend = manifest["frontend"]
     if frontend["spec_files"]:
         lines.append(f"前端：{len(frontend['changed_files'])} 个改动文件，按 import 依赖图选出 {len(frontend['spec_files'])} 个用例：")
         lines.extend(f"  - {spec}（{frontend['specs'][spec]['reason']}）" for spec in frontend["spec_files"])
     for spec, reason in frontend.get("excluded_specs", {}).items():
         lines.append(f"前端用例 {spec} 不跑：{reason}")
+    lines.append(f"前端局限：{frontend['limitation']}（本次上游单侧改动的前端文件 {frontend['upstream_only_unselected_count']} 个）")
     for suite in manifest["python"]:
         lines.append(f"Python：{' '.join(suite['argv'])}（{suite['reason']}；涉及 {len(suite['files'])} 个文件）")
     for command in manifest["shell"]["commands"]:
@@ -385,21 +413,31 @@ def classification_of(result: StepResult) -> str | None:
     return result.classification if result.classification in CLASSIFICATIONS else CLASS_FUNCTIONAL
 
 
-def fast_result(results: Sequence[StepResult]) -> str:
-    """failed：有功能失败（含归因不清的）；passed_pending_ledger：失败项只有冻结摘要类；否则 passed。"""
+def fast_result(results: Sequence[StepResult], *, supplement_required: bool = False) -> str:
+    """结论，优先级 failed > passed_with_gaps > passed_pending_ledger > passed。
+
+    failed：有功能失败（含归因不清的）；passed_with_gaps：没有功能失败，但清单里有须补足验证的文件
+    （``supplement_required``）；passed_pending_ledger：失败项只有冻结摘要类；否则 passed。
+    """
 
     classes = [classification_of(item) for item in results if item.status == "failed"]
     if any(item != CLASS_FROZEN_PENDING for item in classes):
         return RESULT_FAILED
+    if supplement_required:
+        return RESULT_GAPS
     if classes:
         return RESULT_PENDING
     return RESULT_PASSED
 
 
 def fast_exit_code(result: str) -> int:
-    """passed 与 passed_pending_ledger 退出 0（待台账闭合不阻断），failed 非 0。"""
+    """passed 与 passed_pending_ledger 退出 0（待台账闭合不阻断），failed 退出 1，passed_with_gaps 退出 3。"""
 
-    return 1 if result == RESULT_FAILED else 0
+    if result == RESULT_FAILED:
+        return EXIT_FAILED
+    if result == RESULT_GAPS:
+        return EXIT_GAPS
+    return 0
 
 
 def _lane_seconds(results: Sequence[StepResult]) -> dict[str, float]:
@@ -409,12 +447,50 @@ def _lane_seconds(results: Sequence[StepResult]) -> dict[str, float]:
     return totals
 
 
-def timing_comparison(results: Sequence[StepResult], elapsed: float, compare_with: Path | None) -> dict[str, Any]:
-    """快线与原全量的耗时对比字段：全量的状态文件由 ``--compare-with`` 给出（同一候选、同一环境下另跑一次 upstream-gate-full）。"""
+def load_compare_status(path: Path, commit: str) -> dict[str, Any]:
+    """读取对比用的全量状态文件：必须是 full 模式的 schema；记录文件 sha256；能取到候选提交号就与当前 HEAD 比对。
+
+    full 模式现行的状态文件不带候选提交号，取不到时 ``candidate_identity`` 记 ``unverified``，并在对比字段的
+    ``cache_notes`` 里写明“候选身份未经机器核对”；带了提交号而与当前 HEAD 不一致，直接拒绝（对比没有意义，宁可不记）。
+    """
+
+    document = expect_object(load_json(path, "对比用的全量状态文件"), "对比用的全量状态文件")
+    if document.get("schema_version") != STATUS_SCHEMA or document.get("mode") != "full":
+        raise UpstreamMergeError("--compare-with 必须是 upstream-gate-full 的状态文件（full 模式）")
+    recorded: str | None = None
+    for keys in COMPARE_COMMIT_PATHS:
+        value: Any = document
+        for key in keys:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, str) and value:
+            recorded = value
+            break
+    if recorded is not None and recorded != commit:
+        raise UpstreamMergeError(
+            f"对比用的全量状态文件针对的候选提交 {recorded[:12]} 不是快线的候选提交 {commit[:12]}：同一候选才能比耗时"
+        )
+    return {
+        "path": str(path),
+        "sha256": file_binding(path)["sha256"],
+        "document": document,
+        "candidate_commit": recorded,
+        "candidate_identity": "verified" if recorded is not None else "unverified",
+    }
+
+
+def timing_comparison(results: Sequence[StepResult], elapsed: float, compare: dict[str, Any] | None) -> dict[str, Any]:
+    """快线与原全量的耗时对比字段：全量的状态文件由 ``--compare-with`` 给出（同一候选、同一环境下另跑一次 upstream-gate-full）。
+
+    ``compare`` 是 ``load_compare_status`` 的结果。记录对比文件的路径与 sha256、能取到的候选提交号和核对状态；
+    取不到候选提交号时在 ``cache_notes`` 里写明“候选身份未经机器核对”。
+    """
 
     fast_lanes = _lane_seconds(results)
     document: dict[str, Any] = {
-        "full_status_file": str(compare_with) if compare_with else None,
+        "full_status_file": compare["path"] if compare else None,
+        "full_status_sha256": compare["sha256"] if compare else None,
+        "full_candidate_commit": compare["candidate_commit"] if compare else None,
+        "candidate_identity": compare["candidate_identity"] if compare else None,
         "fast_elapsed_seconds": elapsed,
         "full_elapsed_seconds": None,
         "saved_seconds": None,
@@ -424,11 +500,11 @@ def timing_comparison(results: Sequence[StepResult], elapsed: float, compare_wit
         "targeted_regression_seconds": fast_lanes.get("targeted-regression"),
         "cache_notes": list(CACHE_NOTES),
     }
-    if compare_with is None:
+    if compare is None:
         return document
-    full = expect_object(load_json(compare_with, "对比用的全量状态文件"), "对比用的全量状态文件")
-    if full.get("schema_version") != STATUS_SCHEMA or full.get("mode") != "full":
-        raise UpstreamMergeError("--compare-with 必须是 upstream-gate-full 的状态文件（full 模式）")
+    if compare["candidate_identity"] == "unverified":
+        document["cache_notes"].append(IDENTITY_UNVERIFIED_NOTE)
+    full = compare["document"]
     full_results = [
         StepResult(
             str(step["lane"]), str(step["step"]), str(step["status"]), step["exit_code"], float(step["duration_seconds"])
@@ -457,7 +533,7 @@ def fast_status_document(
 ) -> dict[str, Any]:
     """快线的机器可读结果：实际执行项、逐项结论与归因、日志位置、耗时，以及绑定的清单摘要。"""
 
-    verdict = fast_result(results)
+    verdict = fast_result(results, supplement_required=bool(context.manifest["supplement_required"]))
     steps = []
     for item in results:
         steps.append(
@@ -499,6 +575,7 @@ def fast_status_document(
             "fallback_reasons": manifest["go"]["fallback_reasons"],
             "supplement_required": manifest["supplement_required"],
             "supplement_reasons": manifest["supplement_reasons"],
+            "transitive_not_included": manifest["go"]["transitive_not_included"],
             "summary": manifest["summary"],
         },
         "request": {"path": str(context.request_path), "sha256": context.request_sha256},
@@ -511,9 +588,10 @@ def fast_status_document(
         "executed": [item.key for item in results if item.status in ("passed", "failed")],
         "failed_functional": [item.key for item in results if classification_of(item) == CLASS_FUNCTIONAL],
         "pending_ledger": [item.key for item in results if classification_of(item) == CLASS_FROZEN_PENDING],
+        "gaps": list(context.manifest["supplement_reasons"]),
         "not_executed": [item.key for item in results if item.status == "not_executed"],
         "lane_seconds": _lane_seconds(results),
-        "timing_comparison": timing_comparison(results, elapsed, context.compare_with),
+        "timing_comparison": timing_comparison(results, elapsed, context.compare),
         "result": verdict,
     }
 
@@ -541,7 +619,9 @@ def _label(item: StepResult) -> str:
     return item.status
 
 
-def render_fast_summary(results: Sequence[StepResult], *, jobs: int, elapsed: float) -> str:
+def render_fast_summary(
+    results: Sequence[StepResult], *, jobs: int, elapsed: float, supplement_reasons: Sequence[str] = ()
+) -> str:
     lines = [
         "",
         f"===== 试验区快线汇总（总耗时 {elapsed} 秒）=====",
@@ -554,10 +634,18 @@ def render_fast_summary(results: Sequence[StepResult], *, jobs: int, elapsed: fl
     skipped = [item.key for item in results if item.status == "not_executed"]
     if functional:
         lines.append(f"结论：failed（功能失败 {len(functional)} 项，阻断，不得建正式 Plan）：{', '.join(functional)}")
+    elif supplement_reasons:
+        lines.append(
+            f"结论：passed_with_gaps（退出码 {EXIT_GAPS}）——没有功能失败，但有 {len(supplement_reasons)} 项须补足验证，"
+            "快线不能证明它们被测过；补足并在汇报里写明之前不要建正式 Plan"
+        )
     elif pending:
         lines.append(f"结论：passed_pending_ledger——{PENDING_LEDGER_LABEL}，不阻断快线")
     else:
         lines.append("结论：passed")
+    if supplement_reasons and not functional:
+        lines.append("【须补足的验证】")
+        lines.extend(f"  - {reason}" for reason in supplement_reasons)
     if pending:
         lines.append(
             f"【{PENDING_LEDGER_LABEL}】冻结摘要类失败 {len(pending)} 项：{', '.join(pending)}；"
@@ -585,8 +673,12 @@ def render_fast_progress(lane: Lane, results: Sequence[StepResult], *, done: int
 
 
 def render_closing(context: FastContext, document: dict[str, Any], status_sha256: str) -> str:
+    suffix = {
+        RESULT_PENDING: f"（{PENDING_LEDGER_LABEL}）",
+        RESULT_GAPS: f"（有 {len(document['gaps'])} 项须补足验证，退出码 {EXIT_GAPS}）",
+    }.get(document["result"], "")
     lines = [
-        f"快线结论：{document['result']}" + (f"（{PENDING_LEDGER_LABEL}）" if document["result"] == RESULT_PENDING else ""),
+        f"快线结论：{document['result']}{suffix}",
         NOT_U4_NOTICE,
         f"状态文件：{context.status_file}（sha256 {status_sha256}）",
         f"日志目录：{context.log_dir}",
@@ -597,13 +689,38 @@ def render_closing(context: FastContext, document: dict[str, Any], status_sha256
             "【须补足验证】定向回归清单里有归不了类的文件，快线不能证明它们被测过；补足验证并在汇报里写明之前，不要把本次快线当作建 Plan 的依据："
         )
         lines.extend(f"  - {item}" for item in document["targeted"]["supplement_reasons"])
+    if document["pending_ledger"] and document["result"] != RESULT_PENDING:
+        lines.append(f"【{PENDING_LEDGER_LABEL}】同时还有冻结摘要类失败 {len(document['pending_ledger'])} 项：{', '.join(document['pending_ledger'])}")
+    skipped = document["targeted"]["transitive_not_included"]
+    if skipped:
+        listed = "、".join(item["package"] for item in skipped[:10]) + (" 等" if len(skipped) > 10 else "")
+        lines.append(
+            f"【传递导入者未纳入（预算）】{len(skipped)} 个传递导入的包没有进定向回归（{listed}），由正式 U-4 全量兜底；原因见清单 go.transitive_not_included"
+        )
     comparison = document["timing_comparison"]
     if comparison["full_elapsed_seconds"] is not None:
         lines.append(
             f"耗时对比：快线 {comparison['fast_elapsed_seconds']} 秒，原全量 {comparison['full_elapsed_seconds']} 秒，"
-            f"节省 {comparison['saved_seconds']} 秒（定向回归线 {comparison['targeted_regression_seconds']} 秒）"
+            f"节省 {comparison['saved_seconds']} 秒（定向回归线 {comparison['targeted_regression_seconds']} 秒）；"
+            f"对比文件 sha256 {comparison['full_status_sha256']}"
         )
+        if comparison["candidate_identity"] == "unverified":
+            lines.append(f"  注意：{IDENTITY_UNVERIFIED_NOTE}")
+    lines.append(fast_result_line(context, document))
     return "\n".join(lines) + "\n"
+
+
+def fast_result_line(context: FastContext, document: dict[str, Any]) -> str:
+    """输出末尾固定格式的一行结论，监视脚本读它（经 make 运行时退出码被统一成 2，区分不出 failed 与 passed_with_gaps）。"""
+
+    def joined(items: Sequence[str]) -> str:
+        return ",".join(items) if items else "-"
+
+    return (
+        f"{FAST_RESULT_PREFIX} result={document['result']} exit={fast_exit_code(document['result'])} "
+        f"failed={joined(document['failed_functional'])} pending={joined(document['pending_ledger'])} "
+        f"gaps={len(document['gaps'])} status={context.status_file}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +756,9 @@ def run_fast(
         run_docker_steps=run_docker_steps,
         docker_skip_reason=skip_reason,
         mode="fast",
-        render=render_fast_summary,
+        render=lambda results, *, jobs, elapsed: render_fast_summary(
+            results, jobs=jobs, elapsed=elapsed, supplement_reasons=context.manifest["supplement_reasons"]
+        ),
         progress=render_fast_progress,
     )
     document = fast_status_document(context, results, started_at=started_at, finished_at=_now(), elapsed=elapsed)

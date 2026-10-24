@@ -20,12 +20,15 @@ from tools.upstream_merge.canonical import artifact_binding, file_binding, write
 from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.fast_attribution import CLASS_FROZEN_PENDING, CLASS_FUNCTIONAL
 from tools.upstream_merge.fast_lane import (
+    EXIT_GAPS,
     RESULT_FAILED,
+    RESULT_GAPS,
     RESULT_PASSED,
     RESULT_PENDING,
     build_fast_lanes,
     fast_exit_code,
     fast_result,
+    load_compare_status,
     prepare_fast_run,
     render_checklist,
     run_fast,
@@ -119,6 +122,22 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(fast_result(pending), RESULT_PENDING)
         self.assertEqual(fast_result(functional), RESULT_FAILED)
         self.assertEqual([fast_exit_code(item) for item in (RESULT_PASSED, RESULT_PENDING, RESULT_FAILED)], [0, 0, 1])
+
+    def test_gaps_verdict_and_priority_failed_over_gaps_over_pending_over_passed(self) -> None:
+        passed = [self.result("passed")]
+        pending = [self.result("passed"), self.result("failed", CLASS_FROZEN_PENDING)]
+        functional = [self.result("failed", CLASS_FUNCTIONAL)]
+        self.assertEqual(fast_result(passed, supplement_required=True), RESULT_GAPS)
+        self.assertEqual(fast_result(pending, supplement_required=True), RESULT_GAPS)  # gaps 盖过 pending
+        self.assertEqual(fast_result(functional, supplement_required=True), RESULT_FAILED)  # failed 盖过 gaps
+        self.assertEqual(fast_result(pending, supplement_required=False), RESULT_PENDING)
+        self.assertEqual(fast_result(passed), RESULT_PASSED)
+
+    def test_exit_codes_are_independent_for_failed_and_gaps(self) -> None:
+        codes = {result: fast_exit_code(result) for result in (RESULT_PASSED, RESULT_PENDING, RESULT_GAPS, RESULT_FAILED)}
+        self.assertEqual(codes, {RESULT_PASSED: 0, RESULT_PENDING: 0, RESULT_GAPS: 3, RESULT_FAILED: 1})
+        self.assertEqual(EXIT_GAPS, 3)
+        self.assertEqual(len(set(codes.values())), 3)
 
     def test_a_failure_without_any_attribution_is_functional(self) -> None:
         self.assertEqual(fast_result([self.result("failed", None)]), RESULT_FAILED)
@@ -237,6 +256,66 @@ class RunFastTest(FastFixture):
         self.assertEqual(document["failed_functional"], ["targeted/go-test-default-targeted"])
         self.assertEqual(document["pending_ledger"], ["egress/go-test"])
         self.assertIn("不得建正式 Plan", output)
+
+    def set_gaps(self, context) -> None:
+        context.manifest["supplement_required"] = True
+        context.manifest["supplement_reasons"] = [
+            "tools/official_client_capture/cap.py：采集工具树要整条采集线才测得全",
+            "frontend/src/__tests__/setup.ts：vitest 的 setupFiles",
+        ]
+
+    def test_unresolved_files_make_the_verdict_passed_with_gaps_with_their_own_exit_code_and_listing(self) -> None:
+        context = self.prepare()
+        self.set_gaps(context)
+        stream = io.BytesIO()
+        code, document = run_fast(
+            context, lanes=[Lane("a", (python_step("one", "pass"),))], stream=stream, integration=(True, None)
+        )
+        output = stream.getvalue().decode("utf-8")
+        self.assertEqual(code, EXIT_GAPS)
+        self.assertEqual(document["result"], RESULT_GAPS)
+        self.assertEqual(len(document["gaps"]), 2)
+        self.assertIn("结论：passed_with_gaps（退出码 3）", output)
+        self.assertIn("【须补足的验证】", output)
+        self.assertIn("tools/official_client_capture/cap.py", output)
+        self.assertIn("frontend/src/__tests__/setup.ts", output)
+        # 固定的结论行：经 make 运行时退出码被统一成 2，监视靠这一行
+        last = output.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("FAST-RESULT result=passed_with_gaps exit=3 failed=- pending=- gaps=2 status="), last)
+
+    def test_failed_beats_gaps_and_pending_items_are_still_listed_under_gaps(self) -> None:
+        context = self.prepare()
+        self.set_gaps(context)
+        lanes = [
+            Lane("egress", (failing_output_step("go-test", FROZEN_GO_OUTPUT),)),
+            Lane("targeted", (failing_output_step("go-test-default-targeted", FUNCTIONAL_GO_OUTPUT),)),
+        ]
+        stream = io.BytesIO()
+        code, document = run_fast(context, lanes=lanes, stream=stream, integration=(True, None))
+        self.assertEqual((code, document["result"]), (1, RESULT_FAILED))
+        self.assertIn("FAST-RESULT result=failed exit=1 failed=targeted/go-test-default-targeted pending=egress/go-test gaps=2", stream.getvalue().decode("utf-8"))
+
+    def test_pending_ledger_items_stay_visible_when_gaps_take_priority(self) -> None:
+        context = self.prepare()
+        self.set_gaps(context)
+        stream = io.BytesIO()
+        code, document = run_fast(
+            context, lanes=[Lane("egress", (failing_output_step("go-test", FROZEN_GO_OUTPUT),))], stream=stream, integration=(True, None)
+        )
+        output = stream.getvalue().decode("utf-8")
+        self.assertEqual((code, document["result"]), (EXIT_GAPS, RESULT_GAPS))
+        self.assertEqual(document["pending_ledger"], ["egress/go-test"])
+        self.assertIn("同时还有冻结摘要类失败 1 项：egress/go-test", output)
+        self.assertIn("pending=egress/go-test gaps=2", output)
+
+    def test_clean_run_ends_with_a_passed_result_line(self) -> None:
+        stream = io.BytesIO()
+        context = self.prepare()
+        code, _document = run_fast(
+            context, lanes=[Lane("a", (python_step("one", "pass"),))], stream=stream, integration=(True, None)
+        )
+        self.assertEqual(code, 0)
+        self.assertRegex(stream.getvalue().decode("utf-8").strip().splitlines()[-1], r"^FAST-RESULT result=passed exit=0 failed=- pending=- gaps=0 status=")
 
     def test_unattributed_failures_are_functional(self) -> None:
         lanes = [Lane("lint", (failing_output_step("golangci-lint-default", "lint error\n", attribution=None),))]
@@ -395,6 +474,32 @@ class LaneBuildingTest(FastFixture):
         self.assertIn("不重复执行 internal/covered", text)
         self.assertIn("integration 不在快线内", text)
 
+    def test_checklist_and_closing_list_the_transitive_importers_left_to_u4(self) -> None:
+        document = json.loads(json.dumps(self.document))
+        document["go"]["transitive_not_included"] = [
+            {"package": "internal/c", "distance": 2, "via": "internal/b", "reason": "传递导入者未纳入（预算）：示例；由正式 U-4 全量兜底"}
+        ]
+        text = render_checklist(document)
+        self.assertIn("传递导入者未纳入（预算）1 个，由正式 U-4 兜底", text)
+        self.assertIn("包 internal/c（距离 2）", text)
+
+    def test_status_and_closing_output_name_the_transitive_importers_not_covered(self) -> None:
+        context = self.prepare()
+        context.manifest["go"]["transitive_not_included"] = [
+            {"package": "internal/c", "distance": 2, "via": "internal/b", "reason": "传递导入者未纳入（预算）：示例"}
+        ]
+        stream = io.BytesIO()
+        _code, document = run_fast(context, lanes=[Lane("a", (python_step("one", "pass"),))], stream=stream, integration=(True, None))
+        self.assertEqual(document["targeted"]["transitive_not_included"][0]["package"], "internal/c")
+        self.assertIn("【传递导入者未纳入（预算）】1 个传递导入的包", stream.getvalue().decode("utf-8"))
+
+    def test_checklist_states_the_frontend_asymmetry_for_upstream_only_changes(self) -> None:
+        text = render_checklist(self.document)
+        self.assertIn("前端局限：前端只对冲突文件与实际修改选用例", text)
+        self.assertIn("上游单侧改动且与上游相同的前端文件不选用例（与 Go 不对称）", text)
+        self.assertIn("lint、typecheck、关键用例覆盖", text)
+        self.assertIn("本次上游单侧改动的前端文件", text)
+
     def test_checklist_prompts_for_supplementary_verification_when_unresolved(self) -> None:
         document = json.loads(json.dumps(self.document))
         document["unresolved"] = [{"path": "scripts/x.sh", "reason": "无法归类", "go_related": False, "origin": ""}]
@@ -463,30 +568,39 @@ class InlineStepTest(FastFixture):
         self.assertEqual(document["environment"]["worktree_after_run"], ["stray.txt"])
 
 
+COMMIT = "a" * 40
+
+
+def full_status_document(**extra) -> dict:
+    return {
+        "schema_version": STATUS_SCHEMA,
+        "mode": "full",
+        "elapsed_seconds": 3869.2,
+        "steps": [
+            {"lane": "egress-spec", "step": "check-egress-spec", "status": "failed", "exit_code": 2, "duration_seconds": 911.4, "reason": None},
+            {"lane": "capture-tools", "step": "capture-tools", "status": "failed", "exit_code": 2, "duration_seconds": 2018.3, "reason": None},
+            {"lane": "go-tests", "step": "go-test-default", "status": "failed", "exit_code": 1, "duration_seconds": 431.1, "reason": None},
+        ],
+        **extra,
+    }
+
+
 class TimingComparisonTest(unittest.TestCase):
+    def write_full(self, directory: str, **extra) -> Path:
+        path = Path(directory) / "full.json"
+        path.write_text(json.dumps(full_status_document(**extra)), encoding="utf-8")
+        return path
+
+    def fast_results(self) -> list[StepResult]:
+        return [
+            StepResult("egress-spec", "check-egress-spec", "failed", 2, 900.0),
+            StepResult("targeted-regression", "go-test-default-targeted", "passed", 0, 250.5),
+        ]
+
     def test_full_status_gives_elapsed_difference_and_lane_breakdown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            full = Path(directory) / "full.json"
-            full.write_text(
-                json.dumps(
-                    {
-                        "schema_version": STATUS_SCHEMA,
-                        "mode": "full",
-                        "elapsed_seconds": 3869.2,
-                        "steps": [
-                            {"lane": "egress-spec", "step": "check-egress-spec", "status": "failed", "exit_code": 2, "duration_seconds": 911.4, "reason": None},
-                            {"lane": "capture-tools", "step": "capture-tools", "status": "failed", "exit_code": 2, "duration_seconds": 2018.3, "reason": None},
-                            {"lane": "go-tests", "step": "go-test-default", "status": "failed", "exit_code": 1, "duration_seconds": 431.1, "reason": None},
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            fast = [
-                StepResult("egress-spec", "check-egress-spec", "failed", 2, 900.0),
-                StepResult("targeted-regression", "go-test-default-targeted", "passed", 0, 250.5),
-            ]
-            comparison = timing_comparison(fast, 1200.0, full)
+            compare = load_compare_status(self.write_full(directory), COMMIT)
+            comparison = timing_comparison(self.fast_results(), 1200.0, compare)
         self.assertEqual(comparison["full_elapsed_seconds"], 3869.2)
         self.assertEqual(comparison["saved_seconds"], 2669.2)
         self.assertEqual(comparison["skipped_lanes"], ["capture-tools", "go-tests"])
@@ -495,10 +609,43 @@ class TimingComparisonTest(unittest.TestCase):
         self.assertEqual(comparison["lane_seconds"]["full"]["capture-tools"], 2018.3)
         self.assertTrue(comparison["cache_notes"])
 
+    def test_the_comparison_file_is_bound_by_sha256_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_full(directory)
+            compare = load_compare_status(path, COMMIT)
+            comparison = timing_comparison(self.fast_results(), 1200.0, compare)
+            self.assertEqual(comparison["full_status_sha256"], file_binding(path)["sha256"])
+            self.assertEqual(comparison["full_status_file"], str(path))
+
+    def test_without_a_candidate_commit_in_the_file_the_identity_is_marked_unverified(self) -> None:
+        # full 模式现行的状态文件不带候选提交号：记 unverified，并在 cache_notes 写明“候选身份未经机器核对”。
+        with tempfile.TemporaryDirectory() as directory:
+            compare = load_compare_status(self.write_full(directory), COMMIT)
+            comparison = timing_comparison(self.fast_results(), 1200.0, compare)
+        self.assertEqual(comparison["candidate_identity"], "unverified")
+        self.assertIsNone(comparison["full_candidate_commit"])
+        self.assertIn("候选身份未经机器核对", " ".join(comparison["cache_notes"]))
+
+    def test_a_candidate_commit_in_the_file_is_compared_and_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            compare = load_compare_status(self.write_full(directory, repository={"commit": COMMIT}), COMMIT)
+            comparison = timing_comparison(self.fast_results(), 1200.0, compare)
+        self.assertEqual(comparison["candidate_identity"], "verified")
+        self.assertEqual(comparison["full_candidate_commit"], COMMIT)
+        self.assertNotIn("候选身份未经机器核对", " ".join(comparison["cache_notes"]))
+
+    def test_a_file_for_another_candidate_commit_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for extra in ({"repository": {"commit": "b" * 40}}, {"candidate_commit": "b" * 40}, {"commit": "b" * 40}):
+                with self.subTest(extra=extra), self.assertRaisesRegex(UpstreamMergeError, "同一候选才能比耗时"):
+                    load_compare_status(self.write_full(directory, **extra), COMMIT)
+
     def test_without_a_full_status_the_fields_exist_but_are_empty(self) -> None:
         comparison = timing_comparison([StepResult("a", "b", "passed", 0, 1.0)], 5.0, None)
         self.assertIsNone(comparison["full_elapsed_seconds"])
         self.assertIsNone(comparison["saved_seconds"])
+        self.assertIsNone(comparison["full_status_sha256"])
+        self.assertIsNone(comparison["candidate_identity"])
         self.assertEqual(comparison["fast_elapsed_seconds"], 5.0)
 
     def test_a_non_full_status_file_is_rejected(self) -> None:
@@ -506,7 +653,28 @@ class TimingComparisonTest(unittest.TestCase):
             other = Path(directory) / "other.json"
             other.write_text(json.dumps({"schema_version": FAST_STATUS_SCHEMA, "mode": "fast", "elapsed_seconds": 1, "steps": []}), encoding="utf-8")
             with self.assertRaises(UpstreamMergeError):
-                timing_comparison([], 1.0, other)
+                load_compare_status(other, COMMIT)
+
+
+class CompareThroughRunTest(FastFixture):
+    def test_the_status_file_carries_the_bound_comparison_and_the_unverified_note(self) -> None:
+        full = self.out / "full.json"
+        full.write_text(json.dumps(full_status_document()), encoding="utf-8")
+        context = self.prepare(compare_with=full)
+        self.assertEqual(context.compare["candidate_identity"], "unverified")
+        stream = io.BytesIO()
+        _code, document = run_fast(context, lanes=[Lane("a", (python_step("one", "pass"),))], stream=stream, integration=(True, None))
+        comparison = document["timing_comparison"]
+        self.assertEqual(comparison["full_status_sha256"], file_binding(full)["sha256"])
+        self.assertIn("候选身份未经机器核对", " ".join(comparison["cache_notes"]))
+        self.assertIn("候选身份未经机器核对", stream.getvalue().decode("utf-8"))
+
+    def test_a_comparison_file_for_another_commit_stops_the_run_before_it_starts(self) -> None:
+        full = self.out / "other-full.json"
+        full.write_text(json.dumps(full_status_document(repository={"commit": "b" * 40})), encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "同一候选才能比耗时"):
+            self.prepare(compare_with=full, log_dir=self.out / "fresh")
+        self.assertFalse((self.out / "fresh").exists())
 
 
 class FastRecordIsNotAU4ReceiptTest(FastFixture):

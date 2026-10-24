@@ -509,7 +509,8 @@ upstream-gate-full:
 #   UPSTREAM_GATE_REQUEST    request 或标准模板路径，候选密钥扫描取其中的 secret_scan 门禁（缺省用仓库里的标准模板）
 #   UPSTREAM_GATE_STATUS_FILE 快线状态文件（写一次，缺省在日志目录下）；UPSTREAM_GATE_LOG_DIR 日志目录（须不存在）
 #   UPSTREAM_GATE_COMPARE_WITH 同一候选下 upstream-gate-full 的状态文件，用来记录耗时差
-# 快线记录不是 U-4 全量收据；结论 failed 时退出非 0，passed_pending_ledger（待台账闭合）退出 0。
+# 快线记录不是 U-4 全量收据。脚本退出码：passed／passed_pending_ledger（待台账闭合）为 0，failed 为 1，passed_with_gaps（有须补足验证）为 3；
+# make 会把配方的非 0 退出码统一成 2，所以监视读输出末尾的 FAST-RESULT 一行或状态文件的 result，不要只看退出码。
 upstream-gate-fast:
 	@test -n "$(UPSTREAM_GATE_TARGETED)" || { echo "请设置 UPSTREAM_GATE_TARGETED（targeted-regression-plan 生成的定向回归清单）"; exit 2; }
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner fast \

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.upstream_merge import targeted_regression as tr
 from tools.upstream_merge.canonical import bind_identity, write_json_once
@@ -302,6 +303,87 @@ class GoSelectionTest(TargetedRegressionTestCase):
         self.assertTrue(document["supplement_required"])
 
 
+CHAIN_PACKAGES = {
+    "internal/a": package("internal/a"),
+    "internal/b": package("internal/b", imports=["internal/a"]),
+    "internal/c": package("internal/c", imports=["internal/b"]),
+    "internal/d": package("internal/d", imports=["internal/c"]),
+    "internal/e": package("internal/e"),
+}
+
+
+class TransitiveImportersTest(TargetedRegressionTestCase):
+    """改 a 时，直接导入者 b、传递导入者 c（距离 2）和 d（距离 3）都受影响；放不下预算的明确列出，不静默丢弃。"""
+
+    def plan(self, **kwargs) -> dict:
+        fork, upstream = self.scenario.build(
+            {"backend/internal/a/a.go": "package a // fork\n"},
+            {"backend/internal/a/a.go": "package a // upstream\n"},
+            {"backend/internal/a/a.go": "package a // merged\n"},
+        )
+        return self.scenario.plan(fork, upstream, CHAIN_PACKAGES, **kwargs)
+
+    def test_the_whole_transitive_closure_is_included_when_the_budget_allows(self) -> None:
+        document = self.plan()
+        affected = {item["dir"]: item for item in document["go"]["affected_packages"]}
+        self.assertEqual(set(affected), {"internal/a", "internal/b", "internal/c", "internal/d"})
+        self.assertNotIn("internal/e", affected)
+        self.assertEqual(document["go"]["transitive_included"], ["internal/c", "internal/d"])
+        self.assertEqual(document["go"]["transitive_not_included"], [])
+        self.assertIn("传递导入受影响的包 internal/b（距离 2）", affected["internal/c"]["reasons"])
+        self.assertIn("传递导入受影响的包 internal/c（距离 3）", affected["internal/d"]["reasons"])
+        self.assertEqual(affected["internal/c"]["transitive_via"], [f"{MODULE}/internal/b"])
+        self.assertEqual(document["go"]["tag_sets"]["default"]["packages"], ["internal/a", "internal/b", "internal/c", "internal/d"])
+        self.assertEqual(document["summary"]["transitive_included_count"], 2)
+        self.assertEqual(document["summary"]["transitive_not_included_count"], 0)
+
+    def test_a_transitive_importer_that_does_not_fit_the_budget_is_listed_not_dropped(self) -> None:
+        # c 很重：纳入后超过预算，列为未纳入；更远但很轻的 d 仍在预算内纳入。
+        with mock.patch.dict(tr.GO_PACKAGE_SECONDS, {"internal/c": (500, 500)}):
+            document = self.plan(budget_seconds=100)
+        self.assertFalse(document["go"]["fallback_full_go"])
+        self.assertEqual(document["go"]["transitive_included"], ["internal/d"])
+        skipped = document["go"]["transitive_not_included"]
+        self.assertEqual([(item["package"], item["distance"], item["via"]) for item in skipped], [("internal/c", 2, "internal/b")])
+        self.assertIn("传递导入者未纳入（预算）", skipped[0]["reason"])
+        self.assertIn("由正式 U-4 全量兜底", skipped[0]["reason"])
+        self.assertNotIn("internal/c", document["go"]["tag_sets"]["default"]["packages"])
+        self.assertEqual(document["summary"]["transitive_not_included_count"], 1)
+
+    def test_the_package_cap_also_bounds_the_transitive_closure(self) -> None:
+        document = self.plan(max_packages=3)
+        self.assertEqual(document["go"]["transitive_included"], ["internal/c"])
+        self.assertEqual([item["package"] for item in document["go"]["transitive_not_included"]], ["internal/d"])
+        self.assertIn("包数上限 3", document["go"]["transitive_not_included"][0]["reason"])
+
+    def test_a_fallback_plan_has_no_transitive_lists(self) -> None:
+        document = self.plan(budget_seconds=1)
+        self.assertTrue(document["go"]["fallback_full_go"])
+        self.assertEqual((document["go"]["transitive_included"], document["go"]["transitive_not_included"]), ([], []))
+
+    def test_transitive_importers_without_any_tests_are_not_a_budget_question(self) -> None:
+        packages = {**CHAIN_PACKAGES, "internal/c": package("internal/c", imports=["internal/b"], tests=False)}
+        fork, upstream = self.scenario.build(
+            {"backend/internal/a/a.go": "package a // fork\n"},
+            {"backend/internal/a/a.go": "package a // upstream\n"},
+            {"backend/internal/a/a.go": "package a // merged\n"},
+        )
+        document = self.scenario.plan(fork, upstream, packages)
+        self.assertNotIn("internal/c", document["go"]["tag_sets"]["default"]["packages"])
+        self.assertEqual(document["go"]["transitive_not_included"], [])
+
+    def test_the_narrow_switch_does_not_spread_from_upstream_only_packages(self) -> None:
+        fork, upstream = self.scenario.build(
+            {"backend/internal/e/e.go": "package e // fork\n"},
+            {"backend/internal/a/a.go": "package a // upstream\n"},
+            {},
+        )
+        narrow = self.scenario.plan(fork, upstream, CHAIN_PACKAGES, upstream_only_importers=False)
+        self.assertEqual({item["dir"] for item in narrow["go"]["affected_packages"]}, {"internal/a"})
+        wide = self.scenario.plan(fork, upstream, CHAIN_PACKAGES)
+        self.assertEqual({item["dir"] for item in wide["go"]["affected_packages"]}, {"internal/a", "internal/b", "internal/c", "internal/d"})
+
+
 class FallbackTest(TargetedRegressionTestCase):
     def test_go_directive_change_falls_back_to_full(self) -> None:
         new_mod = f"module {MODULE}\n\ngo 1.27.2\n\nrequire (\n\texample.com/dep v1.0.0\n)\n"
@@ -511,6 +593,19 @@ class FrontendScenarioTest(TargetedRegressionTestCase):
         self.assertEqual(document["frontend"]["spec_files"], ["src/x.spec.ts"])
         self.assertEqual(list(document["frontend"]["excluded_specs"]), [broken[len("frontend/") :]])
         self.assertIn("主干基线即失败", next(iter(document["frontend"]["excluded_specs"].values())))
+
+    def test_upstream_only_frontend_files_get_no_specs_and_the_limitation_is_recorded(self) -> None:
+        fork, upstream = self.scenario.build(
+            {"frontend/src/y.ts": "export const y = 2\n"},
+            {"frontend/src/x.ts": "export const x = 5\n", "frontend/src/x.spec.ts": "import { x } from './x'\n"},
+            {},
+        )
+        document = self.scenario.plan(fork, upstream, STANDARD_PACKAGES)
+        # x.ts／x.spec.ts 只有上游改动且与上游相同：不算实际修改，不选用例
+        self.assertEqual(document["frontend"]["spec_files"], [])
+        self.assertEqual(document["frontend"]["upstream_only_unselected_count"], 2)
+        self.assertIn("与 Go 不对称", document["frontend"]["limitation"])
+        self.assertIn("lint、typecheck、关键用例", document["frontend"]["limitation"])
 
     def test_setup_file_change_is_unresolved(self) -> None:
         fork, upstream = self.scenario.build(
