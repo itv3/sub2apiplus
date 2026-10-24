@@ -242,6 +242,45 @@ describe('CodexModelVisibilityPanel 分组与表格', () => {
     expect(wrapper.get('[data-testid="codex-status-glm-5.3"]').text()).toBe('admin.codexThirdPartyModels.status.needs_capability')
   })
 
+  it('跨平台承接：实际目标列显示首选账号，并在下面列出备选账号；单平台行不显示这两行', async () => {
+    const crossPlatform = candidate({
+      slug: 'deepseek-flash',
+      target_platform: 'custom',
+      upstream_model: 'deepseek-flash',
+      protocol: 'responses_native',
+      account_ids: [12, 10, 11, 14, 15],
+      primary_account: { id: 12, name: 'Custom-主账号', platform: 'custom' },
+      alternate_accounts: [
+        { id: 10, name: 'DeepSeek', platform: 'deepseek' },
+        { id: 11, name: '', platform: 'command_code' },
+        { id: 14, name: '备用 A', platform: 'deepseek' },
+        { id: 15, name: '备用 B', platform: 'deepseek' }
+      ],
+      fingerprint: 'fp-cross'
+    })
+    const wrapper = await mountPanel(
+      groupState({ candidates: [...defaultCandidates(), crossPlatform], sources: [source({ account_id: 101, account_name: 'kimi-主账号' })] })
+    )
+
+    const primary = wrapper.get('[data-testid="codex-primary-deepseek-flash"]').text()
+    expect(primary).toContain('admin.codexThirdPartyModels.target.primary')
+    expect(primary).toContain('Custom-主账号')
+    const alternates = wrapper.get('[data-testid="codex-alternates-deepseek-flash"]').text()
+    expect(alternates).toContain('admin.codexThirdPartyModels.target.alternates')
+    expect(alternates).toContain('DeepSeek')
+    expect(alternates).toContain('#11')
+    expect(alternates).toContain('备用 A')
+    // 备选最多列 3 个，其余折叠成“等 N 个”。
+    expect(alternates).not.toContain('备用 B')
+    expect(alternates).toContain('admin.codexThirdPartyModels.target.more')
+    // 有首选账号时不再重复显示“账号：…”那一行。
+    expect(wrapper.get('[data-testid="codex-row-deepseek-flash"]').text()).not.toContain('admin.codexThirdPartyModels.target.accounts')
+
+    // 单平台行：没有首选/备选行，沿用原来的“账号：”显示。
+    expect(wrapper.find('[data-testid="codex-primary-kimi-k3"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-alternates-kimi-k3"]').exists()).toBe(false)
+  })
+
   it('不能开启的行：开关禁用并显示原因', async () => {
     const wrapper = await mountPanel()
     expect(sw(wrapper, 'glm-5.3').attributes('disabled')).toBeDefined()

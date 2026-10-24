@@ -65,6 +65,8 @@ export default {
     target: {
       native: 'Native GPT (from the base catalog)',
       accounts: 'Accounts: ',
+      primary: 'Primary: {account}',
+      alternates: 'Alternates: {accounts}',
       unknown: 'Ownership not confirmed',
       more: '+{count} more'
     },

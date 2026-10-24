@@ -65,6 +65,8 @@ export default {
     target: {
       native: '原生 GPT（沿用基础目录）',
       accounts: '账号：',
+      primary: '首选：{account}',
+      alternates: '备选：{accounts}',
       unknown: '未确认归属',
       more: '等 {count} 个'
     },

@@ -55,6 +55,13 @@ export interface CodexCapabilitySummary {
   web_search_tool_type?: string
 }
 
+/** 跨平台承接时路由结构里的一个账号（只含展示信息，不含凭据）。 */
+export interface CodexThirdPartyRouteAccount {
+  id: number
+  name: string
+  platform: string
+}
+
 export interface CodexThirdPartyCandidate {
   slug: string
   display_name: string
@@ -72,6 +79,12 @@ export interface CodexThirdPartyCandidate {
   target_platform?: string
   upstream_model?: string
   account_ids?: number[]
+  /**
+   * 仅 Composite 分组按账号级跨平台候选池承接时出现：首选账号决定 target_platform，
+   * 备选账号是同一承接分组里的其余账号（只读展示）。
+   */
+  primary_account?: CodexThirdPartyRouteAccount
+  alternate_accounts?: CodexThirdPartyRouteAccount[]
   protocol?: string
   profile_id?: string
   fingerprint?: string

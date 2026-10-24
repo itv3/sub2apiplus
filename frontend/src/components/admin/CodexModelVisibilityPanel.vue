@@ -235,7 +235,17 @@
                   <div v-if="row.target_platform">{{ platformDisplayName(row.target_platform) }}</div>
                   <div v-if="row.upstream_model" class="font-mono">{{ row.upstream_model }}</div>
                   <div v-if="row.protocol" class="text-gray-500 dark:text-gray-400">{{ protocolLabel(row.protocol) }}</div>
-                  <div v-if="accountLabels(row).length > 0" class="text-gray-500 dark:text-gray-400">
+                  <div v-if="row.primary_account" :data-testid="`codex-primary-${row.slug}`" class="text-gray-500 dark:text-gray-400">
+                    {{ t('admin.codexThirdPartyModels.target.primary', { account: routeAccountLabel(row.primary_account) }) }}
+                  </div>
+                  <div
+                    v-if="row.primary_account && (row.alternate_accounts ?? []).length > 0"
+                    :data-testid="`codex-alternates-${row.slug}`"
+                    class="text-gray-500 dark:text-gray-400"
+                  >
+                    {{ t('admin.codexThirdPartyModels.target.alternates', { accounts: alternateLabels(row).join('、') }) }}
+                  </div>
+                  <div v-if="!row.primary_account && accountLabels(row).length > 0" class="text-gray-500 dark:text-gray-400">
                     {{ t('admin.codexThirdPartyModels.target.accounts') }}{{ accountLabels(row).join('、') }}
                   </div>
                   <div v-if="!row.target_platform && !row.upstream_model" class="text-gray-400">{{ t('admin.codexThirdPartyModels.target.unknown') }}</div>
@@ -342,7 +352,8 @@ import type {
   CodexThirdPartyChange,
   CodexThirdPartyCatalogEvaluation,
   CodexThirdPartyGroupState,
-  CodexThirdPartyModelStatus
+  CodexThirdPartyModelStatus,
+  CodexThirdPartyRouteAccount
 } from '@/api/admin/codexThirdPartyModels'
 import { platformDisplayName, platformUsesGateway } from '@/constants/platformCatalog'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -548,6 +559,19 @@ function accountLabels(row: CodexThirdPartyCandidate): string[] {
   const names = new Map((state.value?.sources ?? []).map((source) => [source.account_id, source.account_name]))
   const labels = ids.slice(0, 3).map((id) => names.get(id) || `#${id}`)
   if (ids.length > 3) labels.push(t('admin.codexThirdPartyModels.target.more', { count: ids.length - 3 }))
+  return labels
+}
+
+/** 跨平台承接的账号显示为“账号名 · 平台名”，账号没有名称时退回账号 ID。 */
+function routeAccountLabel(account: CodexThirdPartyRouteAccount): string {
+  return `${account.name || `#${account.id}`} · ${platformDisplayName(account.platform)}`
+}
+
+/** 备选账号最多列出 3 个，其余折叠为“等 N 个”。 */
+function alternateLabels(row: CodexThirdPartyCandidate): string[] {
+  const alternates = row.alternate_accounts ?? []
+  const labels = alternates.slice(0, 3).map(routeAccountLabel)
+  if (alternates.length > 3) labels.push(t('admin.codexThirdPartyModels.target.more', { count: alternates.length - 3 }))
   return labels
 }
 
