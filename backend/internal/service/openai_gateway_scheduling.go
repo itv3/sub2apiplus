@@ -396,7 +396,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	// non-owner would forward the raw public alias and get model_not_found or
 	// hit an unrelated same-name upstream model.
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
-		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
+		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !CompositeAccountClaimAllowed(ctx, account, publicModel) {
 			return "account_model_not_owned"
 		}
 	}

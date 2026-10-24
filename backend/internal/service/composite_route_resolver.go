@@ -36,6 +36,8 @@ func (d CompositeRouteDecision) AmbiguousMessage() string {
 type CompositeRouteResolver struct {
 	repo                   CompositeModelRouteRepository
 	modelOwnershipResolver CompositeModelOwnershipResolver
+	// candidatePool 是账号级跨平台候选池；为空或请求没有入口标记时不参与解析。
+	candidatePool CompositeCandidatePoolResolver
 }
 
 func NewCompositeRouteResolver(repo CompositeModelRouteRepository) *CompositeRouteResolver {
@@ -45,6 +47,13 @@ func NewCompositeRouteResolver(repo CompositeModelRouteRepository) *CompositeRou
 func (r *CompositeRouteResolver) SetModelOwnershipResolver(resolver CompositeModelOwnershipResolver) {
 	if r != nil {
 		r.modelOwnershipResolver = resolver
+	}
+}
+
+// SetCandidatePool 接入账号级跨平台候选池（见 composite_candidate_pool.go）。
+func (r *CompositeRouteResolver) SetCandidatePool(pool CompositeCandidatePoolResolver) {
+	if r != nil {
+		r.candidatePool = pool
 	}
 }
 
@@ -127,6 +136,20 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 				Endpoint:       endpoint,
 				Route:          &route,
 			}, nil
+		}
+	}
+
+	// 账号级候选池：显式路由未命中之后、账号归属判定之前。只处理带入口标记的文本请求；
+	// 零声明或未进池时交回下面的原流程。账号目录读取失败时沿用归属判定的口径：
+	// 可被前缀识别的模型名退回原流程，识别不了的别名无法猜平台，报错。
+	if r != nil && r.candidatePool != nil && groupID > 0 {
+		poolDecision, handled, err := r.candidatePool.ResolveCandidatePool(ctx, groupID, model, endpoint)
+		if err != nil {
+			if _, detectable := DetectModelPlatform(model); !detectable {
+				return decision, fmt.Errorf("resolve composite candidate pool: %w", err)
+			}
+		} else if handled {
+			return poolDecision, nil
 		}
 	}
 

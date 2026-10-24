@@ -606,7 +606,9 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 		routePath := c.FullPath()
 		model := requestmodel.FromBodyForRoute(routePath, c.GetHeader("Content-Type"), body)
 		if model != "" {
-			decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, compositeRouteEndpointForPath(c.Request.URL.Path))
+			endpoint := compositeRouteEndpointForPath(c.Request.URL.Path)
+			// 账号级候选池入口标记：只对四种 POST 文本入口写入，其余入口原样走旧流程。
+			decision, err := resolver.Resolve(withCompositeCandidatePoolEntry(c, apiKey, body, endpoint), apiKey.Group.ID, model, endpoint)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "server_error", "message": "Failed to resolve composite model route"}})
 				c.Abort()

@@ -171,6 +171,16 @@ func NewCompositeCandidatePool(accounts CompositeCandidateAccountLister, openAI 
 	return &CompositeCandidatePool{accounts: accounts, openAI: openAI, gateway: gateway, billing: billing}
 }
 
+// AttachCompositeCandidatePool 用网关服务已持有的账号仓储与 Composite 路由解析器就地创建候选池，
+// 并接入解析器。接线放在装配处理器的 Provide 函数里调用，不改 wire 依赖图。
+// 网关服务没有账号仓储或解析器时不做任何事（候选池不启用，行为与原来一致）。
+func (s *GatewayService) AttachCompositeCandidatePool(openAI *OpenAIGatewayService, billing *BillingCacheService) {
+	if s == nil || s.compositeResolver == nil || s.accountRepo == nil {
+		return
+	}
+	s.compositeResolver.SetCandidatePool(NewCompositeCandidatePool(s.accountRepo, openAI, s, billing))
+}
+
 // 候选池选定候选集合所走的路径，供日志与单测断言使用。
 const (
 	// compositeCandidatePathNone 表示未处理，交回原流程。

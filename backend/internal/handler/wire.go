@@ -124,6 +124,8 @@ func ProvideGatewayHandler(
 	h.securityAuditCoordinator = coordinator
 	h.geminiCachedContentService = geminiCachedContentService
 	h.SetCodexThirdPartyCatalog(codexThirdParty) // Codex 三方模型启用
+	// 账号级跨平台候选池：就地创建并接入 Composite 路由解析器，不改 wire 依赖图。
+	gatewayService.AttachCompositeCandidatePool(openAIGatewayService, billingCacheService)
 	return h
 }
 
