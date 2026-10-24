@@ -1194,10 +1194,98 @@ describe('CodexModelVisibilityPanel 关联到已有档案', () => {
     expect(wrapper.get('[data-testid="codex-alias-empty"]').text()).toBe('admin.codexThirdPartyModels.profileAlias.empty')
   })
 
+  it('空提示的中英文都说明可在此或该条目下关联', () => {
+    expect((zhLocale as any).admin.codexThirdPartyModels.profileAlias.empty).toContain('暂无能力档案')
+    expect((zhLocale as any).admin.codexThirdPartyModels.profileAlias.empty).toContain('可在此或该条目下关联到已有档案')
+    expect((enLocale as any).admin.codexThirdPartyModels.profileAlias.empty).toContain('here or under that entry')
+  })
+
+  describe('档案别名窗口里的“新增关联”', () => {
+    // 当前分组没有“暂无能力档案”的条目时，也能从工具栏进入窗口手动新增。
+    async function openList(aliases: Array<Record<string, unknown>> = []) {
+      mocks.listProfileAliases.mockResolvedValue(aliasList(aliases))
+      const wrapper = await mountAliasPanel(groupState({ revision: 3 }))
+      await wrapper.get('[data-testid="codex-alias-list-button"]').trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    it('输入上游型号（自由文本）、选择档案并显示其已认得的型号、带确认提示；未填完整不能保存', async () => {
+      const wrapper = await openList()
+      expect(wrapper.find('[data-testid="codex-link-profile-deepseek-flash"]').exists()).toBe(false)
+      const confirm = () => wrapper.get('[data-testid="codex-alias-new-confirm"]')
+      expect(confirm().attributes('disabled')).toBeDefined()
+
+      const model = wrapper.get('[data-testid="codex-alias-new-model"]')
+      expect(model.attributes('readonly')).toBeUndefined()
+      await model.setValue('  my-company-ds:prod  ')
+      expect(confirm().attributes('disabled')).toBeDefined()
+      const options = wrapper.findAll('[data-testid="codex-alias-new-profile"] option').map((option) => option.text())
+      expect(options).toContain('deepseek-flash')
+      expect(options).toContain('kimi-k3')
+      await wrapper.get('[data-testid="codex-alias-new-profile"]').setValue('deepseek-flash')
+      expect(wrapper.get('[data-testid="codex-alias-new-profile-models"]').text()).toContain('deepseek-v4.1-flash')
+      expect(wrapper.get('[data-testid="codex-alias-new-hint"]').text()).toBe('admin.codexThirdPartyModels.profileAlias.confirmHint')
+      expect(confirm().attributes('disabled')).toBeUndefined()
+
+      // 型号只有空白时同样不能保存。
+      await model.setValue('   ')
+      expect(confirm().attributes('disabled')).toBeDefined()
+    })
+
+    it('保存走 PUT，成功后刷新别名列表与当前分组目录，窗口保持打开并清空表单', async () => {
+      const wrapper = await openList()
+      const saved = { upstream_model: 'my-company-ds:prod', key: 'my-company-ds', profile_id: 'deepseek-flash', valid: true, updated_by: 'user:1', updated_at: '2026-10-24T00:00:00Z' }
+      mocks.setProfileAlias.mockResolvedValue(aliasList([saved]))
+      const readsBefore = mocks.getGroupState.mock.calls.length
+
+      await wrapper.get('[data-testid="codex-alias-new-model"]').setValue('  my-company-ds:prod ')
+      await wrapper.get('[data-testid="codex-alias-new-profile"]').setValue('deepseek-flash')
+      await wrapper.get('[data-testid="codex-alias-new-confirm"]').trigger('click')
+      await flushPromises()
+
+      expect(mocks.setProfileAlias).toHaveBeenCalledWith('my-company-ds:prod', 'deepseek-flash')
+      expect(mocks.getGroupState.mock.calls.length).toBe(readsBefore + 1)
+      expect(wrapper.find('[data-testid="base-dialog-stub"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="codex-alias-row-my-company-ds"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="codex-alias-empty"]').exists()).toBe(false)
+      expect((wrapper.get('[data-testid="codex-alias-new-model"]').element as HTMLInputElement).value).toBe('')
+      expect((wrapper.get('[data-testid="codex-alias-new-profile"]').element as HTMLSelectElement).value).toBe('')
+      expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexThirdPartyModels.profileAlias.saveSuccess')
+    })
+
+    it.each([
+      ['型号已被内置档案认出', '该上游型号已被内置能力档案直接认出，无需关联'],
+      ['档案不存在', '要关联的能力档案不存在'],
+      ['格式非法', '型号别名请求不合法：上游型号含有不允许的字符']
+    ])('错误就地显示：%s', async (_name, message) => {
+      const wrapper = await openList()
+      mocks.setProfileAlias.mockRejectedValue({ message })
+      const readsBefore = mocks.getGroupState.mock.calls.length
+      await wrapper.get('[data-testid="codex-alias-new-model"]').setValue('deepseek-v4.1-flash')
+      await wrapper.get('[data-testid="codex-alias-new-profile"]').setValue('kimi-k3')
+      await wrapper.get('[data-testid="codex-alias-new-confirm"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="codex-alias-error"]').text()).toContain(message)
+      expect(wrapper.find('[data-testid="base-dialog-stub"]').exists()).toBe(true)
+      expect(mocks.getGroupState.mock.calls.length).toBe(readsBefore)
+      // 输入保留，便于修改后重试。
+      expect((wrapper.get('[data-testid="codex-alias-new-model"]').element as HTMLInputElement).value).toBe('deepseek-v4.1-flash')
+      expect(wrapper.get('[data-testid="codex-alias-new-confirm"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('窗口为空时仍显示新增表单和说明', async () => {
+      const wrapper = await openList()
+      expect(wrapper.find('[data-testid="codex-alias-add"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="codex-alias-empty"]').exists()).toBe(true)
+    })
+  })
+
   it('型号别名文案中英文都存在', () => {
     for (const locale of [zhLocale, enLocale]) {
       const alias = (locale as any).admin.codexThirdPartyModels.profileAlias
-      for (const key of ['toolbarButton', 'linkAction', 'linkTitle', 'listTitle', 'upstreamModel', 'profile', 'profilePlaceholder', 'profileKnows', 'confirmHint', 'confirm', 'unlink', 'invalid', 'empty', 'updatedBy', 'updatedAt', 'close', 'loadFailed', 'saveFailed', 'saveSuccess', 'deleteFailed', 'deleteSuccess']) {
+      for (const key of ['toolbarButton', 'linkAction', 'linkTitle', 'listTitle', 'upstreamModel', 'profile', 'profilePlaceholder', 'profileKnows', 'addTitle', 'addModelPlaceholder', 'confirmHint', 'confirm', 'unlink', 'invalid', 'empty', 'updatedBy', 'updatedAt', 'close', 'loadFailed', 'saveFailed', 'saveSuccess', 'deleteFailed', 'deleteSuccess']) {
         expect(typeof alias[key]).toBe('string')
       }
     }

@@ -37,8 +37,48 @@
         </p>
       </template>
 
-      <!-- 已关联别名列表：可解除关联 -->
+      <!-- 已关联别名列表：可新增关联，也可解除关联 -->
       <template v-else>
+        <!-- 新增关联：自由输入上游型号，从下拉选择档案 -->
+        <section class="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-dark-700" data-testid="codex-alias-add">
+          <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.codexThirdPartyModels.profileAlias.addTitle') }}</h4>
+          <div>
+            <label for="codex-alias-new-model" class="block text-xs font-medium text-gray-700 dark:text-gray-200">
+              {{ t('admin.codexThirdPartyModels.profileAlias.upstreamModel') }}
+            </label>
+            <input
+              id="codex-alias-new-model"
+              v-model="newModel"
+              type="text"
+              maxlength="200"
+              data-testid="codex-alias-new-model"
+              class="input mt-1 w-full font-mono"
+              :placeholder="t('admin.codexThirdPartyModels.profileAlias.addModelPlaceholder')"
+              :disabled="saving"
+            />
+          </div>
+          <div>
+            <label for="codex-alias-new-profile" class="block text-xs font-medium text-gray-700 dark:text-gray-200">
+              {{ t('admin.codexThirdPartyModels.profileAlias.profile') }}
+            </label>
+            <select id="codex-alias-new-profile" v-model="newProfile" data-testid="codex-alias-new-profile" class="input mt-1 w-full" :disabled="loading || saving">
+              <option value="" disabled>{{ t('admin.codexThirdPartyModels.profileAlias.profilePlaceholder') }}</option>
+              <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.id }}</option>
+            </select>
+            <p v-if="newSummary" data-testid="codex-alias-new-profile-models" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.codexThirdPartyModels.profileAlias.profileKnows', { models: newSummary.upstream_models.join('、') }) }}
+            </p>
+          </div>
+          <p data-testid="codex-alias-new-hint" class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+            {{ t('admin.codexThirdPartyModels.profileAlias.confirmHint') }}
+          </p>
+          <div class="flex justify-end">
+            <button type="button" class="btn btn-primary" data-testid="codex-alias-new-confirm" :disabled="!canAdd || loading || saving" @click="addAlias">
+              {{ t('admin.codexThirdPartyModels.profileAlias.confirm') }}
+            </button>
+          </div>
+        </section>
+
         <p v-if="!loading && aliases.length === 0" data-testid="codex-alias-empty" class="text-sm text-gray-500 dark:text-gray-400">
           {{ t('admin.codexThirdPartyModels.profileAlias.empty') }}
         </p>
@@ -139,6 +179,12 @@ const errorMessage = ref('')
 
 const selectedSummary = computed(() => profiles.value.find((profile) => profile.id === selectedProfile.value) ?? null)
 
+// 列表模式下“新增关联”表单：上游型号自由输入，档案从下拉选择。
+const newModel = ref('')
+const newProfile = ref('')
+const newSummary = computed(() => profiles.value.find((profile) => profile.id === newProfile.value) ?? null)
+const canAdd = computed(() => newModel.value.trim() !== '' && newProfile.value !== '')
+
 function formatTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
@@ -166,6 +212,8 @@ watch(
   (visible) => {
     if (visible) {
       selectedProfile.value = ''
+      newModel.value = ''
+      newProfile.value = ''
       void load()
     }
   },
@@ -181,6 +229,29 @@ async function link() {
     appStore.showSuccess(t('admin.codexThirdPartyModels.profileAlias.saveSuccess'))
     emit('changed')
     emit('close')
+  } catch (error) {
+    errorMessage.value = extractApiErrorMessage(error, t('admin.codexThirdPartyModels.profileAlias.saveFailed'))
+  } finally {
+    saving.value = false
+  }
+}
+
+/**
+ * 列表模式下新增关联：保存走 PUT；错误（型号已被内置档案认出、档案不存在、格式非法）就地显示。
+ * 成功后刷新别名列表并通知父组件重新读取当前分组目录，窗口保持打开。
+ */
+async function addAlias() {
+  if (!canAdd.value || saving.value) return
+  saving.value = true
+  errorMessage.value = ''
+  try {
+    const result = await setProfileAlias(newModel.value.trim(), newProfile.value)
+    aliases.value = result.aliases
+    profiles.value = result.profiles
+    newModel.value = ''
+    newProfile.value = ''
+    appStore.showSuccess(t('admin.codexThirdPartyModels.profileAlias.saveSuccess'))
+    emit('changed')
   } catch (error) {
     errorMessage.value = extractApiErrorMessage(error, t('admin.codexThirdPartyModels.profileAlias.saveFailed'))
   } finally {
