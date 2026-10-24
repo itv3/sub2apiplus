@@ -262,7 +262,10 @@
                   :auth-mode="getOpenAIAuthMode(row)"
                   :plan-type="getAccountPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
-                  :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
+                  :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at"
+                  :plan-text="getOllamaPlanText(row)"
+                  :note-text="getOllamaQuotaResetNote(row)?.text"
+                  :note-title="getOllamaQuotaResetNote(row)?.title" />
                 <span
                   v-if="getAntigravityTierLabel(row)"
                   :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
@@ -534,6 +537,7 @@ import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/ac
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { ollamaQuotaResetNote, ollamaUsageData } from '@/utils/ollamaCloudUsage'
 import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
@@ -1715,8 +1719,35 @@ function getAntigravityTierLabel(row: any): string | null {
 
 // 账号显示邮箱:优先账号自身(extra/credentials),影子账号回退母账号 parent_email。
 // 供名称单元格 v-if/标题/文本三处共用,避免同一回退链在模板里重复三次。
+// Ollama Cloud 账号没有 OAuth 邮箱，末位回退到用量快照里从设置页读到的登录邮箱
+// （仅 ollama_cloud_usage.eligible 的账号有值，其他账号显示不变）。
 function accountDisplayEmail(row: any): string {
-  return row.extra?.email_address || row.extra?.email || row.credentials?.email || row.parent_email || ''
+  return row.extra?.email_address || row.extra?.email || row.credentials?.email || row.parent_email || ollamaUsageData(row)?.email || ''
+}
+
+// Ollama Cloud 套餐徽章（Free / Pro / Max…）：取用量快照读到的套餐原文，
+// 经 PlatformTypeBadge 的 plan-text 原样显示，不走 ChatGPT 档位命名。非 Ollama 账号返回 undefined。
+function getOllamaPlanText(row: any): string | undefined {
+  const plan = ollamaUsageData(row)?.plan?.trim()
+  return plan || undefined
+}
+
+// 平台/类型列套餐徽章下方的「额度重置」一行：只对付费计划的月度额度显示；
+// 页面只给相对时间（约数）时日期前标注「约」，悬停提示页面原文与抓取时间。
+function getOllamaQuotaResetNote(row: any): { text: string; title: string } | null {
+  const note = ollamaQuotaResetNote(row)
+  if (!note) return null
+  const fetched = note.fetchedAt ? new Date(note.fetchedAt).toLocaleString() : '-'
+  const params = { text: note.text || '-', fetched }
+  return note.approx
+    ? {
+        text: `${t('admin.accounts.ollamaQuotaResetsApprox')} ${note.date.slice(5)}`,
+        title: t('admin.accounts.ollamaQuotaResetsApproxTitle', params)
+      }
+    : {
+        text: `${t('admin.accounts.ollamaQuotaResets')} ${note.date}`,
+        title: t('admin.accounts.ollamaQuotaResetsTitle', params)
+      }
 }
 
 function accountHomepageUrl(row: Account): string {

@@ -57,6 +57,15 @@
         <span>{{ privacyBadge.label }}</span>
       </span>
     </div>
+    <!-- Row 3a: 调用方给出的备注行（如 Ollama 月度额度重置日期），样式与到期行一致 -->
+    <div
+      v-if="noteText"
+      class="text-[10px] leading-tight text-gray-400 dark:text-gray-500 pl-0.5"
+      :title="noteTitle"
+      data-testid="platform-type-badge-note"
+    >
+      {{ noteText }}
+    </div>
     <!-- Row 3: Subscription expiration (non-free paid accounts only) -->
     <div v-if="expiresLabel" class="text-[10px] leading-tight text-gray-400 dark:text-gray-500 pl-0.5" :title="subscriptionExpiresAt">
       {{ expiresLabel }}
@@ -83,6 +92,14 @@ interface Props {
   planType?: string
   privacyMode?: string
   subscriptionExpiresAt?: string
+  /**
+   * 调用方直接给出的套餐文字（Ollama 等没有 planType 枚举的平台）。只在 planType 为空时生效，
+   * 原样显示，不走 ChatGPT 档位命名（否则 openai 平台的 pro 会被显示成 Pro 200）。
+   */
+  planText?: string
+  /** 套餐徽章下方的备注行与悬停提示（如「额度重置 2026-11-24」） */
+  noteText?: string
+  noteTitle?: string
 }
 
 const props = defineProps<Props>()
@@ -116,7 +133,11 @@ const typeLabel = computed(() => {
 
 const normalizedPlanType = computed(() => normalizePlanType(props.planType))
 
+// 调用方直接给出的套餐文字（planType 为空时才生效）
+const customPlanText = computed(() => (normalizedPlanType.value ? '' : (props.planText || '').trim()))
+
 const planLabel = computed(() => {
+  if (customPlanText.value) return customPlanText.value
   if (!normalizedPlanType.value) return ''
   // ChatGPT 档位命名（Pro 100 / Pro 200 / Pro 500、Business / Business Premium）只适用于
   // OpenAI：Antigravity 与 Grok 各自的 pro/team 沿用下面的通用标签。
@@ -232,6 +253,12 @@ const typeClass = computed(() => {
 })
 
 const planBadgeClass = computed(() => {
+  if (customPlanText.value) {
+    // 自定义套餐文字：Free 灰色，其余付费档统一紫色（与 Pro 的颜色一致）
+    return normalizePlanType(customPlanText.value) === 'free'
+      ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+      : 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+  }
   if (normalizedPlanType.value === 'abnormal') {
     return 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
   }

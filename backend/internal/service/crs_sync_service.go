@@ -1167,6 +1167,7 @@ func reconcileCRSUpstreamBillingProbeExtra(
 		OllamaCloudUsageSessionExtraKey,
 		OllamaCloudUsageAutoRefreshExtraKey,
 		OllamaCloudUsageSnapshotExtraKey,
+		OllamaCloudUsageSessionExpiresAtExtraKey,
 	} {
 		delete(extra, key)
 	}
@@ -1199,6 +1200,9 @@ func reconcileCRSUpstreamBillingProbeExtra(
 		}
 		if snapshot, ok := existing.Extra[OllamaCloudUsageSnapshotExtraKey]; ok {
 			extra[OllamaCloudUsageSnapshotExtraKey] = snapshot
+		}
+		if expiresAt, ok := existing.Extra[OllamaCloudUsageSessionExpiresAtExtraKey]; ok {
+			extra[OllamaCloudUsageSessionExpiresAtExtraKey] = expiresAt
 		}
 	}
 }

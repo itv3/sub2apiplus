@@ -46,7 +46,10 @@ func (r *ollamaCloudUsageHandlerTestRepo) ListOllamaCloudUsageGroupAccounts(_ co
 	return result, nil
 }
 
-func (r *ollamaCloudUsageHandlerTestRepo) SaveOllamaCloudUsageSession(context.Context, *service.Account, string, bool) error {
+func (r *ollamaCloudUsageHandlerTestRepo) SaveOllamaCloudUsageSession(context.Context, *service.Account, string, bool, *time.Time) error {
+	return nil
+}
+func (r *ollamaCloudUsageHandlerTestRepo) SetOllamaCloudUsageSessionExpiry(context.Context, *service.Account, *time.Time) error {
 	return nil
 }
 func (r *ollamaCloudUsageHandlerTestRepo) DeleteOllamaCloudUsageSession(context.Context, *service.Account) error {

@@ -252,7 +252,7 @@ func TestOllamaCloudUsageGroupWritesAreAtomicAcrossPlatformsAndURLVariants(t *te
 	second := create("ollama-group-anthropic", service.PlatformAnthropic, "shared-key", "HTTPS://WWW.OLLAMA.COM:443/v1")
 	different := create("ollama-group-different", service.PlatformOpenAI, "different-key", "https://ollama.com")
 
-	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, first, "cipher:shared", false))
+	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, first, "cipher:shared", false, nil))
 	for _, id := range []int64{first.ID, second.ID} {
 		account, err := repo.GetByID(ctx, id)
 		require.NoError(t, err)
@@ -336,7 +336,7 @@ func TestConcurrentOllamaCloudUsageSaveAndDeleteSerializeGroupState(t *testing.T
 	go func() {
 		defer wg.Done()
 		<-start
-		errs <- repo.SaveOllamaCloudUsageSession(ctx, anchor, "cipher:replacement", true)
+		errs <- repo.SaveOllamaCloudUsageSession(ctx, anchor, "cipher:replacement", true, nil)
 	}()
 	go func() {
 		defer wg.Done()
@@ -406,7 +406,7 @@ func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.
 	deepseek := create("ollama-cn-deepseek", service.PlatformDeepseek, "https://ollama.com/v1")
 	gemini := create("ollama-cn-gemini", service.PlatformGemini, "https://ollama.com")
 
-	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, kimi, "cipher:cn-shared", true))
+	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, kimi, "cipher:cn-shared", true, nil))
 	for _, id := range []int64{kimi.ID, zhipu.ID, deepseek.ID} {
 		account, err := repo.GetByID(ctx, id)
 		require.NoError(t, err)

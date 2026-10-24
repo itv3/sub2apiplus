@@ -93,11 +93,32 @@ func (r *accountRepository) ListOllamaCloudUsageGroupAccounts(ctx context.Contex
 	return result, nil
 }
 
-func (r *accountRepository) SaveOllamaCloudUsageSession(ctx context.Context, account *service.Account, ciphertext string, autoRefresh bool) error {
-	return r.updateOllamaCloudUsageGroup(ctx, account, map[string]any{
+// SaveOllamaCloudUsageSession 写入新会话。expiresAt 非空时同时写入管理员填写的到期时间；
+// 为空则不写该键（SQL 先清掉整组受管键再合并，旧到期时间随旧会话一并清除）。
+func (r *accountRepository) SaveOllamaCloudUsageSession(ctx context.Context, account *service.Account, ciphertext string, autoRefresh bool, expiresAt *time.Time) error {
+	payload := map[string]any{
 		service.OllamaCloudUsageSessionExtraKey:     ciphertext,
 		service.OllamaCloudUsageAutoRefreshExtraKey: autoRefresh,
-	}, false)
+	}
+	if expiresAt != nil {
+		payload[service.OllamaCloudUsageSessionExpiresAtExtraKey] = expiresAt.UTC().Format(time.RFC3339)
+	}
+	return r.updateOllamaCloudUsageGroup(ctx, account, payload, false)
+}
+
+// SetOllamaCloudUsageSessionExpiry 只更新（expiresAt 非空）或清除（为空）会话到期时间，
+// 其余受管状态原样带回；沿用期望状态比对，防止覆盖并发写入的快照或开关。
+func (r *accountRepository) SetOllamaCloudUsageSessionExpiry(ctx context.Context, account *service.Account, expiresAt *time.Time) error {
+	if !ollamaCloudUsageAccountHasSession(account) {
+		return service.ErrOllamaCloudUsageSessionRequired
+	}
+	payload := ollamaCloudUsageManagedPayload(account)
+	if expiresAt != nil {
+		payload[service.OllamaCloudUsageSessionExpiresAtExtraKey] = expiresAt.UTC().Format(time.RFC3339)
+	} else {
+		delete(payload, service.OllamaCloudUsageSessionExpiresAtExtraKey)
+	}
+	return r.updateOllamaCloudUsageGroup(ctx, account, payload, true)
 }
 
 func (r *accountRepository) DeleteOllamaCloudUsageSession(ctx context.Context, account *service.Account) error {
@@ -138,7 +159,7 @@ func (r *accountRepository) DisableOllamaCloudUsageAutoRefresh(ctx context.Conte
 }
 
 func ollamaCloudUsageManagedPayload(account *service.Account) map[string]any {
-	payload := make(map[string]any, 3)
+	payload := make(map[string]any, 4)
 	if account == nil || account.Extra == nil {
 		return payload
 	}
@@ -146,6 +167,7 @@ func ollamaCloudUsageManagedPayload(account *service.Account) map[string]any {
 		service.OllamaCloudUsageSessionExtraKey,
 		service.OllamaCloudUsageAutoRefreshExtraKey,
 		service.OllamaCloudUsageSnapshotExtraKey,
+		service.OllamaCloudUsageSessionExpiresAtExtraKey,
 	} {
 		if value, ok := account.Extra[key]; ok {
 			payload[key] = value
@@ -168,6 +190,7 @@ type lockedOllamaCloudUsageMember struct {
 	sessionJSON   string
 	autoJSON      string
 	snapshotJSON  string
+	expiresJSON   string
 }
 
 func (r *accountRepository) updateOllamaCloudUsageGroup(
@@ -218,11 +241,16 @@ func (r *accountRepository) updateOllamaCloudUsageGroup(
 			if err != nil {
 				return err
 			}
+			expectedExpiry, err := canonicalAccountExtraJSON(account, service.OllamaCloudUsageSessionExpiresAtExtraKey)
+			if err != nil {
+				return err
+			}
 			stateMatches := false
 			for _, member := range members {
 				if canonicalJSON(member.sessionJSON) == expectedSession &&
 					canonicalJSON(member.autoJSON) == expectedAuto &&
-					canonicalJSON(member.snapshotJSON) == expectedSnapshot {
+					canonicalJSON(member.snapshotJSON) == expectedSnapshot &&
+					canonicalJSON(member.expiresJSON) == expectedExpiry {
 					stateMatches = true
 					break
 				}
@@ -244,7 +272,8 @@ func (r *accountRepository) updateOllamaCloudUsageGroup(
 			SET extra = (COALESCE(extra, '{}'::jsonb)
 					- 'ollama_cloud_usage_session'
 					- 'ollama_cloud_usage_auto_refresh'
-					- 'ollama_cloud_usage_snapshot') || $1::jsonb,
+					- 'ollama_cloud_usage_snapshot'
+					- 'ollama_cloud_usage_session_expires_at') || $1::jsonb,
 				updated_at = NOW()
 			WHERE deleted_at IS NULL
 				AND `+ollamaCloudUsageEligibleSQL+`
@@ -305,7 +334,8 @@ func lockOllamaCloudUsageGroup(
 				AND proxy_id IS NOT DISTINCT FROM $6,
 			COALESCE((extra -> 'ollama_cloud_usage_session')::text, 'null'),
 			COALESCE((extra -> 'ollama_cloud_usage_auto_refresh')::text, 'null'),
-			COALESCE((extra -> 'ollama_cloud_usage_snapshot')::text, 'null')
+			COALESCE((extra -> 'ollama_cloud_usage_snapshot')::text, 'null'),
+			COALESCE((extra -> 'ollama_cloud_usage_session_expires_at')::text, 'null')
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND `+ollamaCloudUsageEligibleSQL+`
@@ -320,7 +350,7 @@ func lockOllamaCloudUsageGroup(
 	members := make([]lockedOllamaCloudUsageMember, 0, 1)
 	for rows.Next() {
 		var member lockedOllamaCloudUsageMember
-		if err := rows.Scan(&member.id, &member.anchorMatches, &member.sessionJSON, &member.autoJSON, &member.snapshotJSON); err != nil {
+		if err := rows.Scan(&member.id, &member.anchorMatches, &member.sessionJSON, &member.autoJSON, &member.snapshotJSON, &member.expiresJSON); err != nil {
 			return nil, err
 		}
 		members = append(members, member)

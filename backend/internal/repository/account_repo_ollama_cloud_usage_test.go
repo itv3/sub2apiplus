@@ -73,8 +73,8 @@ func expectOllamaCloudUsageGroupLock(
 	}
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(apiKey, account.ID, account.Platform, account.Type, string(credentials), proxyID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "anchor_matches", "session", "auto_refresh", "snapshot"}).
-			AddRow(account.ID, anchorMatches, sessionJSON, autoJSON, snapshotJSON))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "anchor_matches", "session", "auto_refresh", "snapshot", "expires"}).
+			AddRow(account.ID, anchorMatches, sessionJSON, autoJSON, snapshotJSON, "null"))
 }
 
 func TestOllamaCloudUsageManagedWriteRejectsChangedProxyIdentity(t *testing.T) {
@@ -95,7 +95,7 @@ func TestOllamaCloudUsageManagedWriteRejectsChangedProxyIdentity(t *testing.T) {
 	}
 	repo := newAccountRepositoryWithSQL(client, nil, nil)
 
-	err := repo.SaveOllamaCloudUsageSession(context.Background(), account, "cipher:wos-session=replacement", true)
+	err := repo.SaveOllamaCloudUsageSession(context.Background(), account, "cipher:wos-session=replacement", true, nil)
 
 	require.ErrorIs(t, err, service.ErrOllamaCloudUsageIdentityChanged)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -122,7 +122,7 @@ func TestSaveAndDeleteOllamaCloudUsageSessionKeepCiphertextOutOfSQL(t *testing.T
 		WithArgs(`{"ollama_cloud_usage_auto_refresh":true,"ollama_cloud_usage_session":"cipher:wos-session=browser-cookie-secret"}`, "key", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	require.NoError(t, repo.SaveOllamaCloudUsageSession(context.Background(), account, replacement, true))
+	require.NoError(t, repo.SaveOllamaCloudUsageSession(context.Background(), account, replacement, true, nil))
 
 	account.Extra[service.OllamaCloudUsageSessionExtraKey] = replacement
 	mock.ExpectBegin()

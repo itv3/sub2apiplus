@@ -442,6 +442,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
+	delete(accountExtra, OllamaCloudUsageSessionExpiresAtExtraKey)
 	delete(accountExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(accountExtra, OpenCodeGoUsageSnapshotExtraKey)
 	accountExtra = prepareCodexFingerprintExtraForCreate(input.Platform, input.Type, accountExtra)
@@ -842,6 +843,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSessionExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageSessionExpiresAtExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
@@ -858,6 +860,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OllamaCloudUsageSessionExtraKey,
 			OllamaCloudUsageAutoRefreshExtraKey,
 			OllamaCloudUsageSnapshotExtraKey,
+			OllamaCloudUsageSessionExpiresAtExtraKey,
 			OpenAIAutoResetCreditStateExtraKey,
 			OpenCodeGoUsageAutoRefreshExtraKey,
 			OpenCodeGoUsageSnapshotExtraKey,
@@ -953,10 +956,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
 			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+			delete(account.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
 		} else if !reflect.DeepEqual(previousOllamaUsageIdentity, ollamaCloudUsageIdentity(account)) {
 			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
 			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+			delete(account.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
 		}
 	}
 	// OpenCode Go 受管键：身份改变或不再 eligible 时随本次写入清除，防止跨组污染。
@@ -1108,6 +1113,7 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
+	delete(updates, OllamaCloudUsageSessionExpiresAtExtraKey)
 	delete(updates, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(updates, OpenCodeGoUsageSnapshotExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
@@ -1150,6 +1156,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
+	delete(input.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
 	delete(input.Extra, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(input.Extra, OpenCodeGoUsageSnapshotExtraKey)
 

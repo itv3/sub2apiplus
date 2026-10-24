@@ -670,7 +670,8 @@ func lockAndMergeAccountProbeExtra(
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'opencode_go_usage_snapshot',
+			extra -> 'ollama_cloud_usage_session_expires_at'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -699,6 +700,7 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSnapshot          []byte
 		currentOpenCodeAutoRefresh     []byte
 		currentOpenCodeSnapshot        []byte
+		currentOllamaSessionExpiry     []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -713,6 +715,7 @@ func lockAndMergeAccountProbeExtra(
 		&opencodeGroupIdentityUnchanged,
 		&currentOpenCodeAutoRefresh,
 		&currentOpenCodeSnapshot,
+		&currentOllamaSessionExpiry,
 	); err != nil {
 		return nil, err
 	}
@@ -728,6 +731,7 @@ func lockAndMergeAccountProbeExtra(
 		service.OllamaCloudUsageSessionExtraKey,
 		service.OllamaCloudUsageAutoRefreshExtraKey,
 		service.OllamaCloudUsageSnapshotExtraKey,
+		service.OllamaCloudUsageSessionExpiresAtExtraKey,
 		service.OpenCodeGoUsageAutoRefreshExtraKey,
 		service.OpenCodeGoUsageSnapshotExtraKey,
 	} {
@@ -790,8 +794,9 @@ func lockAndMergeAccountProbeExtra(
 
 	if service.IsOllamaCloudUsageAccount(account) && ollamaGroupIdentityUnchanged {
 		for key, raw := range map[string][]byte{
-			service.OllamaCloudUsageSessionExtraKey:     currentOllamaSession,
-			service.OllamaCloudUsageAutoRefreshExtraKey: currentOllamaAutoRefresh,
+			service.OllamaCloudUsageSessionExtraKey:          currentOllamaSession,
+			service.OllamaCloudUsageAutoRefreshExtraKey:      currentOllamaAutoRefresh,
+			service.OllamaCloudUsageSessionExpiresAtExtraKey: currentOllamaSessionExpiry,
 		} {
 			if value, ok, err := decodeAccountExtraJSON(raw); err != nil {
 				return nil, err
@@ -906,6 +911,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 					- 'ollama_cloud_usage_session'
 					- 'ollama_cloud_usage_auto_refresh'
 					- 'ollama_cloud_usage_snapshot'
+					- 'ollama_cloud_usage_session_expires_at'
 				-- 凭证整体未变化 ⇒ Ollama 组身份必然未变化；顶层 DISTINCT 守卫防止
 				-- 非 Ollama 账号的无变化持久化误清探测快照或重写 NULL extra。
 				WHEN platform IN (`+ollamaCloudUsagePlatformsSQL+`)
@@ -923,6 +929,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 					- 'ollama_cloud_usage_session'
 					- 'ollama_cloud_usage_auto_refresh'
 					- 'ollama_cloud_usage_snapshot'
+					- 'ollama_cloud_usage_session_expires_at'
 				-- 上游倍率探测已放宽到全部 API-key 平台：凭证变化即视为探测
 				-- 身份变化，丢弃 stale 快照。
 				WHEN type = 'apikey'
@@ -3199,7 +3206,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 		if groupIdentityChanged != "" {
 			caseBranches = append(caseBranches,
-				" WHEN "+groupIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot'")
+				" WHEN "+groupIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot' - 'ollama_cloud_usage_session_expires_at'")
 		}
 		if snapshotIdentityChanged != "" {
 			caseBranches = append(caseBranches,

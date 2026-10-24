@@ -44,6 +44,7 @@ func accountHasOllamaCloudUsageExtra(account *Account) bool {
 		OllamaCloudUsageSessionExtraKey,
 		OllamaCloudUsageAutoRefreshExtraKey,
 		OllamaCloudUsageSnapshotExtraKey,
+		OllamaCloudUsageSessionExpiresAtExtraKey,
 	} {
 		if _, ok := account.Extra[key]; ok {
 			return true

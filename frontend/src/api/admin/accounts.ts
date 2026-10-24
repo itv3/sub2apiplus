@@ -1127,9 +1127,28 @@ export async function getOllamaCloudUsage(id: number): Promise<OllamaCloudUsageS
   return data
 }
 
-export async function saveOllamaCloudUsageSession(id: number, session: string): Promise<OllamaCloudUsageState> {
+/**
+ * 保存 Ollama 浏览器会话。expiresAt 为可选的 Cookie 到期时间（RFC3339），
+ * 未提供时请求体只含 session，行为与旧版一致。
+ */
+export async function saveOllamaCloudUsageSession(
+  id: number,
+  session: string,
+  expiresAt?: string | null
+): Promise<OllamaCloudUsageState> {
+  const payload: { session: string; session_expires_at?: string | null } = { session }
+  if (expiresAt !== undefined) payload.session_expires_at = expiresAt
+  const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`, payload)
+  return data
+}
+
+/** 只更新（或用 null 清除）Cookie 到期时间，不重填 Cookie。 */
+export async function setOllamaCloudUsageSessionExpiry(
+  id: number,
+  expiresAt: string | null
+): Promise<OllamaCloudUsageState> {
   const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`, {
-    session
+    session_expires_at: expiresAt
   })
   return data
 }
@@ -1247,6 +1266,7 @@ export const accountsAPI = {
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,
   saveOllamaCloudUsageSession,
+  setOllamaCloudUsageSessionExpiry,
   deleteOllamaCloudUsageSession,
   setOllamaCloudUsageAutoRefresh,
   refreshOllamaCloudUsage,

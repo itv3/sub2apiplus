@@ -75,7 +75,7 @@ func cloneOllamaUsageTestAccount(account Account) Account {
 	return account
 }
 
-func (r *ollamaUsageTestRepo) SaveOllamaCloudUsageSession(_ context.Context, expected *Account, ciphertext string, autoRefresh bool) error {
+func (r *ollamaUsageTestRepo) SaveOllamaCloudUsageSession(_ context.Context, expected *Account, ciphertext string, autoRefresh bool, expiresAt *time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	members, err := r.ollamaGroupMembersLocked(expected)
@@ -86,6 +86,27 @@ func (r *ollamaUsageTestRepo) SaveOllamaCloudUsageSession(_ context.Context, exp
 		account.Extra[OllamaCloudUsageSessionExtraKey] = ciphertext
 		account.Extra[OllamaCloudUsageAutoRefreshExtraKey] = autoRefresh
 		delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+		delete(account.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
+		if expiresAt != nil {
+			account.Extra[OllamaCloudUsageSessionExpiresAtExtraKey] = expiresAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return nil
+}
+
+func (r *ollamaUsageTestRepo) SetOllamaCloudUsageSessionExpiry(_ context.Context, expected *Account, expiresAt *time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	members, err := r.ollamaGroupMembersLocked(expected)
+	if err != nil || !r.ollamaExpectedSessionExistsLocked(members, expected) {
+		return ErrOllamaCloudUsageIdentityChanged
+	}
+	for _, account := range members {
+		if expiresAt != nil {
+			account.Extra[OllamaCloudUsageSessionExpiresAtExtraKey] = expiresAt.UTC().Format(time.RFC3339)
+		} else {
+			delete(account.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
+		}
 	}
 	return nil
 }
@@ -101,6 +122,7 @@ func (r *ollamaUsageTestRepo) DeleteOllamaCloudUsageSession(_ context.Context, e
 		delete(account.Extra, OllamaCloudUsageSessionExtraKey)
 		delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+		delete(account.Extra, OllamaCloudUsageSessionExpiresAtExtraKey)
 	}
 	return nil
 }
@@ -185,7 +207,7 @@ func (r *ollamaUsageTestRepo) ollamaExpectedSessionExistsLocked(members []*Accou
 }
 
 func applyOllamaUsageTestManagedExtra(account, source *Account) {
-	for _, key := range []string{OllamaCloudUsageSessionExtraKey, OllamaCloudUsageAutoRefreshExtraKey, OllamaCloudUsageSnapshotExtraKey} {
+	for _, key := range []string{OllamaCloudUsageSessionExtraKey, OllamaCloudUsageAutoRefreshExtraKey, OllamaCloudUsageSnapshotExtraKey, OllamaCloudUsageSessionExpiresAtExtraKey} {
 		delete(account.Extra, key)
 		if value, ok := source.Extra[key]; ok {
 			account.Extra[key] = value
@@ -690,16 +712,16 @@ func TestOllamaCloudUsageSessionEncryptionFailClosedAndWriteOnlyState(t *testing
 	settings := &upstreamBillingProbeSettingRepo{}
 
 	ephemeral := newOllamaUsageTestService(t, repo, &ollamaUsageHTTPStub{}, settings, false)
-	_, err := ephemeral.SaveSession(context.Background(), 7, "wos-session=plaintext-secret")
+	_, err := ephemeral.SaveSession(context.Background(), 7, "wos-session=plaintext-secret", nil)
 	require.ErrorIs(t, err, ErrOllamaCloudUsageEncryptionKey)
 	require.NotContains(t, account.Extra, OllamaCloudUsageSessionExtraKey)
 
 	svc := newOllamaUsageTestService(t, repo, &ollamaUsageHTTPStub{}, settings, true)
-	_, err = svc.SaveSession(context.Background(), 7, "tracking=arbitrary-only")
+	_, err = svc.SaveSession(context.Background(), 7, "tracking=arbitrary-only", nil)
 	require.Error(t, err)
 	require.NotContains(t, account.Extra, OllamaCloudUsageSessionExtraKey)
 
-	state, err := svc.SaveSession(context.Background(), 7, "tracking=must-not-persist; wos-session=plaintext-secret")
+	state, err := svc.SaveSession(context.Background(), 7, "tracking=must-not-persist; wos-session=plaintext-secret", nil)
 	require.NoError(t, err)
 	require.True(t, state.Configured)
 	stored, ok := account.Extra[OllamaCloudUsageSessionExtraKey].(string)
@@ -778,7 +800,7 @@ func TestOllamaCloudUsageSaveAutoRefreshAndDeleteAreGroupScoped(t *testing.T) {
 	}}}
 	svc := newOllamaUsageTestService(t, repo, &ollamaUsageHTTPStub{}, &upstreamBillingProbeSettingRepo{}, true)
 
-	state, err := svc.SaveSession(context.Background(), second.ID, "wos-session=shared-browser")
+	state, err := svc.SaveSession(context.Background(), second.ID, "wos-session=shared-browser", nil)
 	require.NoError(t, err)
 	require.True(t, state.Configured)
 	require.Equal(t, "cipher:wos-session=shared-browser", first.Extra[OllamaCloudUsageSessionExtraKey])
@@ -906,7 +928,7 @@ func TestOllamaCloudUsageManualRefreshUsesShortIndependentInterval(t *testing.T)
 
 	// Saving a repaired session clears the prior snapshot, so the global 60-minute
 	// next_refresh_at does not block immediate administrator verification.
-	_, err = svc.SaveSession(context.Background(), 12, "wos-session=repaired")
+	_, err = svc.SaveSession(context.Background(), 12, "wos-session=repaired", nil)
 	require.NoError(t, err)
 	_, err = svc.Refresh(context.Background(), 12)
 	require.NoError(t, err)

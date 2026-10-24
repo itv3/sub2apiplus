@@ -1142,20 +1142,40 @@ export interface OllamaCloudUsageWindow {
   used_percent: number
   reset_at?: string
   reset_text?: string
+  /** 新版月度额度窗口的已用金额原文（如 $12） */
+  used_text?: string
+  /** reset_at 是按相对文案推算的约数（页面没有给精确时间） */
+  reset_approx?: boolean
+}
+
+/** 新版设置页「Recent requests」的一行：时间保留页面原文，费用保留原文（如 <$0.01） */
+export interface OllamaCloudUsageRecentRequest {
+  time_text: string
+  at?: string
+  model: string
+  cost?: string
 }
 
 export interface OllamaCloudUsageModel {
   model: string
-  window: 'five_hour' | 'seven_day'
+  window: 'five_hour' | 'seven_day' | 'monthly'
   requests: number
 }
 
 export interface OllamaCloudUsageData {
   plan?: string
+  /** 设置页页头账号菜单里的登录邮箱，仅管理端展示 */
+  email?: string
   five_hour?: OllamaCloudUsageWindow
   seven_day?: OllamaCloudUsageWindow
   balance?: string
   models?: OllamaCloudUsageModel[]
+  /** 免费计划的免费额度窗口 */
+  free_usage?: OllamaCloudUsageWindow
+  free_models?: string[]
+  /** 新版付费计划的月度额度窗口（新版页面已没有 5 小时 / 7 天窗口） */
+  monthly?: OllamaCloudUsageWindow
+  recent_requests?: OllamaCloudUsageRecentRequest[]
 }
 
 export interface OllamaCloudUsageSnapshot {
@@ -1175,6 +1195,8 @@ export interface OllamaCloudUsageState {
   configured: boolean
   auto_refresh_enabled: boolean
   encryption_key_configured: boolean
+  /** 管理员填写的 Cookie 到期时间（可选、非机密） */
+  session_expires_at?: string
   snapshot?: OllamaCloudUsageSnapshot
 }
 

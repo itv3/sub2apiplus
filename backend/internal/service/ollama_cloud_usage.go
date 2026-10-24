@@ -31,6 +31,10 @@ const (
 	OllamaCloudUsageSessionExtraKey     = "ollama_cloud_usage_session"
 	OllamaCloudUsageAutoRefreshExtraKey = "ollama_cloud_usage_auto_refresh"
 	OllamaCloudUsageSnapshotExtraKey    = "ollama_cloud_usage_snapshot"
+	// OllamaCloudUsageSessionExpiresAtExtraKey 保存管理员从浏览器 Cookie 列表抄来的会话到期时间
+	// （RFC3339 UTC 字符串）。它不是机密，不进加密的会话密文，随会话一起属于分组受管状态：
+	// 保存新会话时重置，删除会话、分组身份变化时一并清除。网关本身无法得知到期时间。
+	OllamaCloudUsageSessionExpiresAtExtraKey = "ollama_cloud_usage_session_expires_at"
 
 	// OllamaCloudUsageMinFetchInterval is the hard floor between two successful
 	// fetches of the same group, mirroring the floor nextOllamaCloudUsageDelay
@@ -102,6 +106,20 @@ type OllamaCloudUsageWindow struct {
 	UsedPercent float64    `json:"used_percent"`
 	ResetAt     *time.Time `json:"reset_at,omitempty"`
 	ResetText   string     `json:"reset_text,omitempty"`
+	// ResetApprox 为 true 表示 ResetAt 是按「in N weeks」这类相对文案推算的约数，
+	// 而不是页面给出的精确时间；前端据此在日期前标注「约」。
+	ResetApprox bool `json:"reset_approx,omitempty"`
+	// UsedText 是页面上的已用金额原文（新版月度额度窗口的「$0」），旧版窗口为空。
+	UsedText string `json:"used_text,omitempty"`
+}
+
+// OllamaCloudUsageRecentRequest 是新版设置页「Recent requests」列表的一行：
+// 时间保留页面原文（如 28 minutes ago）并尽量带上精确时间，费用保留原文（如 <$0.01）。
+type OllamaCloudUsageRecentRequest struct {
+	Time  string     `json:"time_text"`
+	At    *time.Time `json:"at,omitempty"`
+	Model string     `json:"model"`
+	Cost  string     `json:"cost,omitempty"`
 }
 
 // OllamaCloudUsageModelWindow identifies the official window for a model count.
@@ -110,6 +128,8 @@ type OllamaCloudUsageModelWindow string
 const (
 	OllamaCloudUsageModelWindowFiveHour OllamaCloudUsageModelWindow = "five_hour"
 	OllamaCloudUsageModelWindowSevenDay OllamaCloudUsageModelWindow = "seven_day"
+	// 新版页面的「Models used this month」按月统计。
+	OllamaCloudUsageModelWindowMonthly OllamaCloudUsageModelWindow = "monthly"
 )
 
 // OllamaCloudUsageModel is the window-scoped model/request pair exposed by Ollama's usage DOM.
@@ -121,11 +141,26 @@ type OllamaCloudUsageModel struct {
 
 // OllamaCloudUsageData intentionally excludes raw HTML and browser-session data.
 type OllamaCloudUsageData struct {
-	Plan     string                  `json:"plan,omitempty"`
+	Plan string `json:"plan,omitempty"`
+	// Email 是设置页顶部账号菜单里的登录邮箱，仅供管理端在账号列表名称下展示；
+	// 本次解析不到时沿用上一次快照读到的值（见 refreshLoadedAccount）。
+	Email    string                  `json:"email,omitempty"`
 	FiveHour *OllamaCloudUsageWindow `json:"five_hour,omitempty"`
 	SevenDay *OllamaCloudUsageWindow `json:"seven_day,omitempty"`
 	Balance  string                  `json:"balance,omitempty"`
 	Models   []OllamaCloudUsageModel `json:"models,omitempty"`
+
+	// FreeUsage 是免费计划页面的「Free usage」额度窗口（x% used，可能带重置时间）；
+	// 付费计划没有该窗口，保持为空。FreeModels 是免费额度可用的云端模型清单，
+	// 与按窗口统计的 Models 请求表互相独立，不混用。
+	FreeUsage  *OllamaCloudUsageWindow `json:"free_usage,omitempty"`
+	FreeModels []string                `json:"free_models,omitempty"`
+
+	// Monthly 是新版付费计划的「Monthly credits used」月度额度窗口（已用金额、进度条
+	// 百分比、重置时间）；新版页面已没有 5 小时 / 7 天窗口。RecentRequests 是新版
+	// 「Recent requests」列表。
+	Monthly        *OllamaCloudUsageWindow         `json:"monthly,omitempty"`
+	RecentRequests []OllamaCloudUsageRecentRequest `json:"recent_requests,omitempty"`
 }
 
 // OllamaCloudUsageSnapshot is the only usage observation persisted in account extra.
@@ -148,17 +183,20 @@ type OllamaCloudUsageSnapshot struct {
 
 // OllamaCloudUsageState is the dedicated DTO exposed to administrators.
 type OllamaCloudUsageState struct {
-	AccountID               int64                     `json:"account_id"`
-	Eligible                bool                      `json:"eligible"`
-	Configured              bool                      `json:"configured"`
-	AutoRefreshEnabled      bool                      `json:"auto_refresh_enabled"`
+	AccountID          int64 `json:"account_id"`
+	Eligible           bool  `json:"eligible"`
+	Configured         bool  `json:"configured"`
+	AutoRefreshEnabled bool  `json:"auto_refresh_enabled"`
+	// SessionExpiresAt 是管理员填写的 Cookie 到期时间（可选，非机密，可回显）。
+	SessionExpiresAt        *time.Time                `json:"session_expires_at,omitempty"`
 	EncryptionKeyConfigured bool                      `json:"encryption_key_configured"`
 	Snapshot                *OllamaCloudUsageSnapshot `json:"snapshot,omitempty"`
 }
 
 type ollamaCloudUsageRepository interface {
 	ListOllamaCloudUsageGroupAccounts(context.Context, []*Account) ([]Account, error)
-	SaveOllamaCloudUsageSession(context.Context, *Account, string, bool) error
+	SaveOllamaCloudUsageSession(context.Context, *Account, string, bool, *time.Time) error
+	SetOllamaCloudUsageSessionExpiry(context.Context, *Account, *time.Time) error
 	DeleteOllamaCloudUsageSession(context.Context, *Account) error
 	SetOllamaCloudUsageAutoRefresh(context.Context, *Account, bool) error
 	UpdateOllamaCloudUsageSnapshot(context.Context, *Account, *OllamaCloudUsageSnapshot) error
@@ -608,6 +646,7 @@ func applyOllamaCloudUsageManagedExtra(target, source *Account) {
 		OllamaCloudUsageSessionExtraKey,
 		OllamaCloudUsageAutoRefreshExtraKey,
 		OllamaCloudUsageSnapshotExtraKey,
+		OllamaCloudUsageSessionExpiresAtExtraKey,
 	} {
 		delete(target.Extra, key)
 		if source != nil && source.Extra != nil {
@@ -618,7 +657,9 @@ func applyOllamaCloudUsageManagedExtra(target, source *Account) {
 	}
 }
 
-func (s *OllamaCloudUsageService) SaveSession(ctx context.Context, accountID int64, session string) (*OllamaCloudUsageState, error) {
+// SaveSession 保存新的浏览器会话；expiresAt 为管理员可选填写的到期时间，nil 表示未填。
+// 保存新会话会清掉旧快照与旧到期时间（旧到期时间属于旧会话）。
+func (s *OllamaCloudUsageService) SaveSession(ctx context.Context, accountID int64, session string, expiresAt *time.Time) (*OllamaCloudUsageState, error) {
 	if s == nil || s.accountRepo == nil || s.encryptor == nil {
 		return nil, ErrOllamaCloudUsageUnavailable
 	}
@@ -628,6 +669,10 @@ func (s *OllamaCloudUsageService) SaveSession(ctx context.Context, accountID int
 	normalized, err := normalizeOllamaCloudUsageCookie(session)
 	if err != nil {
 		return nil, infraerrors.BadRequest("INVALID_OLLAMA_CLOUD_USAGE_SESSION", err.Error())
+	}
+	normalizedExpiry, err := normalizeOllamaCloudUsageSessionExpiry(expiresAt)
+	if err != nil {
+		return nil, err
 	}
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -648,10 +693,70 @@ func (s *OllamaCloudUsageService) SaveSession(ctx context.Context, accountID int
 		return nil, ErrOllamaCloudUsageUnavailable
 	}
 	preserveAutoRefresh := ollamaCloudUsageConfigured(account) && ollamaCloudUsageAutoRefreshEnabled(account)
-	if err := writer.SaveOllamaCloudUsageSession(ctx, account, ciphertext, preserveAutoRefresh); err != nil {
+	if err := writer.SaveOllamaCloudUsageSession(ctx, account, ciphertext, preserveAutoRefresh, normalizedExpiry); err != nil {
 		return nil, err
 	}
 	return s.GetState(ctx, accountID)
+}
+
+// SetSessionExpiry 只更新（或清除）会话到期时间，不要求重新填写 Cookie。
+// 必须已配置会话；expiresAt 为 nil 表示清除。
+func (s *OllamaCloudUsageService) SetSessionExpiry(ctx context.Context, accountID int64, expiresAt *time.Time) (*OllamaCloudUsageState, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, ErrOllamaCloudUsageUnavailable
+	}
+	normalized, err := normalizeOllamaCloudUsageSessionExpiry(expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !IsOllamaCloudUsageAccount(account) {
+		return nil, ErrOllamaCloudUsageAccountInvalid
+	}
+	if err := s.ResolveAccounts(ctx, []*Account{account}); err != nil {
+		return nil, err
+	}
+	if !ollamaCloudUsageConfigured(account) {
+		return nil, ErrOllamaCloudUsageSessionRequired
+	}
+	writer, ok := s.accountRepo.(ollamaCloudUsageRepository)
+	if !ok {
+		return nil, ErrOllamaCloudUsageUnavailable
+	}
+	if err := writer.SetOllamaCloudUsageSessionExpiry(ctx, account, normalized); err != nil {
+		return nil, err
+	}
+	return s.GetState(ctx, accountID)
+}
+
+// normalizeOllamaCloudUsageSessionExpiry 校验并规整到期时间：统一转 UTC、截到秒；
+// 零值与明显离谱的年份（早于 2020 或晚于 2100）一律拒绝。nil 原样返回。
+func normalizeOllamaCloudUsageSessionExpiry(expiresAt *time.Time) (*time.Time, error) {
+	if expiresAt == nil {
+		return nil, nil
+	}
+	value := expiresAt.UTC().Truncate(time.Second)
+	if value.IsZero() || value.Year() < 2020 || value.Year() > 2100 {
+		return nil, infraerrors.BadRequest("INVALID_OLLAMA_CLOUD_USAGE_SESSION_EXPIRY", "session_expires_at is out of the supported range")
+	}
+	return &value, nil
+}
+
+// decodeOllamaCloudUsageSessionExpiry 读取 extra 里保存的到期时间，缺失或格式不对返回 nil。
+func decodeOllamaCloudUsageSessionExpiry(extra map[string]any) *time.Time {
+	raw, ok := extra[OllamaCloudUsageSessionExpiresAtExtraKey].(string)
+	if !ok || raw == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	parsed = parsed.UTC()
+	return &parsed
 }
 
 func (s *OllamaCloudUsageService) DeleteSession(ctx context.Context, accountID int64) (*OllamaCloudUsageState, error) {
@@ -937,6 +1042,12 @@ func (s *OllamaCloudUsageService) refreshLoadedAccount(ctx context.Context, acco
 	if parseErr != nil {
 		return s.persistFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "invalid_html", 0, false)
 	}
+	// 邮箱只在页头账号菜单里出现，页面改版或解析不到时保留上一次读到的值，列表照常显示。
+	if data.Email == "" {
+		if previous := decodeOllamaCloudUsageSnapshot(account.Extra); previous != nil && previous.Data != nil {
+			data.Email = previous.Data.Email
+		}
+	}
 	snapshot := &OllamaCloudUsageSnapshot{
 		Status:        OllamaCloudUsageStatusOK,
 		Data:          data,
@@ -1016,6 +1127,9 @@ func OllamaCloudUsageStateFromAccount(account *Account) *OllamaCloudUsageState {
 	}
 	state.Configured = ollamaCloudUsageConfigured(account)
 	state.AutoRefreshEnabled = state.Configured && ollamaCloudUsageAutoRefreshEnabled(account)
+	if state.Configured {
+		state.SessionExpiresAt = decodeOllamaCloudUsageSessionExpiry(account.Extra)
+	}
 	state.Snapshot = decodeOllamaCloudUsageSnapshot(account.Extra)
 	return state
 }

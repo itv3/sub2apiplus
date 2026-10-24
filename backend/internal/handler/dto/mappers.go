@@ -424,6 +424,7 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
 			service.OllamaCloudUsageSnapshotExtraKey,
+			service.OllamaCloudUsageSessionExpiresAtExtraKey,
 			service.OpenCodeGoUsageAutoRefreshExtraKey,
 			service.OpenCodeGoUsageSnapshotExtraKey:
 			continue

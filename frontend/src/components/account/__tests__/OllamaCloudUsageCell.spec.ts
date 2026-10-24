@@ -103,8 +103,9 @@ describe('OllamaCloudUsageCell', () => {
     const query = wrapper.get('[data-testid="ollama-cloud-usage-query"]')
     expect(query.classes()).toEqual(expect.arrayContaining(['text-blue-600', 'hover:bg-blue-50']))
     expect(query.text()).toContain('admin.accounts.usageWindow.activeQuery')
-    expect(wrapper.text()).not.toContain('max')
-    expect(wrapper.text()).not.toContain('$0')
+    // 套餐小标签与余额现在显示在列表单元格里；模型明细仍只在编辑页显示。
+    expect(wrapper.get('[data-testid="ollama-cloud-plan"]').text()).toBe('max')
+    expect(wrapper.get('[data-testid="ollama-cloud-balance"]').text()).toBe('$0')
     expect(wrapper.text()).not.toContain('gpt-oss:120b-cloud')
   })
 

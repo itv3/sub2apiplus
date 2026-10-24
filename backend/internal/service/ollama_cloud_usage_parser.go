@@ -18,11 +18,46 @@ var (
 	ollamaResetPattern         = regexp.MustCompile(`(?i)\breset(?:s|ting)?\s*(?:at|in|on)?\s*[:\-]?\s*([^\n|]+)`)
 	ollamaModelFallbackPattern = regexp.MustCompile(`(?i)^(.+?)\s+([0-9][0-9,]*)\s+requests?$`)
 
-	ollamaFiveHourUsageAliases = []string{"session usage", "5 hour usage", "5-hour usage", "5h usage", "5 hour limit", "5-hour limit"}
-	ollamaSevenDayUsageAliases = []string{"weekly usage", "7 day usage", "7-day usage", "7d usage", "weekly limit", "7 day limit"}
+	// 新旧版设置页的 5 小时 / 7 天窗口标签并存：旧版为「Session usage」「Weekly usage」，
+	// 新版文案未必沿用，故多收几个常见变体（均要求标签文本整体等于别名或以别名加空格开头）。
+	ollamaFiveHourUsageAliases = []string{"session usage", "hourly usage", "session limit", "5 hour usage", "5-hour usage", "5h usage", "5 hour limit", "5-hour limit"}
+	ollamaSevenDayUsageAliases = []string{"weekly usage", "week usage", "7 day usage", "7-day usage", "7d usage", "weekly limit", "7 day limit"}
+
+	// 免费计划页面的「Free usage」窗口标签；同页还有一句以 “Free usage credits can be used …”
+	// 开头的说明文字，必须排除，否则会把说明句当成窗口标签。
+	ollamaFreeUsageAliases = []string{"free usage"}
+
+	// 套餐徽章后面可能紧跟的非套餐文字，截断到这些词之前。
+	ollamaPlanStopPattern = regexp.MustCompile(`(?i)(\$|[0-9]|\badd funds\b|\bauto-?reload\b|\bmanage\b|\bbilling\b|\bbalance\b|\bbuy\b|\bupgrade\b|\btop[ -]?up\b)`)
+	// 套餐文字里不应出现的虚词：出现即认为取到的是一句说明而不是徽章。
+	ollamaPlanSentenceWords = map[string]struct{}{
+		"can": {}, "will": {}, "are": {}, "is": {}, "be": {}, "for": {}, "to": {}, "the": {}, "and": {}, "you": {}, "your": {},
+		"with": {}, "of": {}, "a": {}, "an": {}, "in": {}, "on": {}, "or": {}, "used": {}, "use": {}, "remaining": {},
+	}
+	// 新版付费计划页面的「Monthly credits used」月度额度行。
+	ollamaMonthlyUsageAliases = []string{"monthly credits used", "monthly usage", "credits used"}
+	// 金额：必须带 $ 或 USD 标记（可有 <、≈、~ 前缀），避免把普通数字当金额。
+	ollamaMoneyPattern = regexp.MustCompile(`(?i)(?:\bUSD\s*)?[<≈~]?\s*\$\s*-?[0-9][0-9,]*(?:\.[0-9]{1,4})?|\bUSD\s*-?[0-9][0-9,]*(?:\.[0-9]{1,4})?`)
+	// 「Monthly credits refill in 4 weeks」「Refills in 2 weeks.」一类的相对重置文案。
+	ollamaRefillPattern   = regexp.MustCompile(`(?i)\brefills?\s+(in\s+(?:about\s+|around\s+|~)?(?:an?|one|[0-9]+)\s+(?:minute|hour|day|week|month|year)s?)`)
+	ollamaRelativePattern = regexp.MustCompile(`(?i)\bin\s+(?:about\s+|around\s+|~)?(an?|one|[0-9]+)\s+(minute|hour|day|week|month|year)s?\b`)
+	// 进度条宽度的 Tailwind 任意值写法，如 w-[12.5%]。
+	ollamaBarClassPattern = regexp.MustCompile(`(?:^|\s)w-\[([0-9]+(?:\.[0-9]+)?)%\]`)
+	// 最近请求行的时间列（「28 minutes ago」「just now」），整格匹配。
+	ollamaRecentTimePattern  = regexp.MustCompile(`(?i)^(?:just now|yesterday|(?:an?|[0-9]+)\s+[[:alpha:]]+\s+ago)$`)
+	ollamaEmailPattern       = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	ollamaFreeModelPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/\-]{0,127}$`)
+	ollamaFreeModelStopWords = map[string]struct{}{"and": {}, "or": {}, "more": {}, "others": {}, "usage": {}, "used": {}, "free": {}, "etc": {}}
 )
 
 func parseOllamaCloudUsageHTML(body []byte) (*OllamaCloudUsageData, error) {
+	return parseOllamaCloudUsageHTMLAt(body, time.Now())
+}
+
+// parseOllamaCloudUsageHTMLAt 与 parseOllamaCloudUsageHTML 相同，now 用于把页面上
+// 「in 4 weeks」这类相对重置时间换算成近似绝对时间（仅新版月度额度与免费额度窗口，
+// 且仅在页面没有给出精确 data-time 时使用）。
+func parseOllamaCloudUsageHTMLAt(body []byte, now time.Time) (*OllamaCloudUsageData, error) {
 	doc, err := html.Parse(strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("parse settings HTML: %w", err)
@@ -36,26 +71,58 @@ func parseOllamaCloudUsageHTML(body []byte) (*OllamaCloudUsageData, error) {
 	data := &OllamaCloudUsageData{}
 	data.Plan = valueBesideLabel(doc, []string{"cloud usage"}, 80)
 	if data.Plan == "" {
+		// 新版页面（含免费计划）：套餐以徽章形式跟在「Usage credits」标题旁。
+		data.Plan = capitalizeOllamaPlan(parseOllamaPlanFromUsageCredits(doc))
+	}
+	if data.Plan == "" {
 		data.Plan = valueBesideLabel(doc, []string{"plan", "subscription"}, 80)
 	}
+	data.Email = parseOllamaAccountEmail(doc)
 	data.FiveHour = parseOllamaUsageWindow(doc, ollamaFiveHourUsageAliases)
 	data.SevenDay = parseOllamaUsageWindow(doc, ollamaSevenDayUsageAliases)
 	data.Balance = valueBesideLabel(doc, []string{"balance remaining"}, 80)
+	if data.Balance == "" {
+		// 新版页面：余额是「Usage credits」标题行右侧的金额（如 $60、$0）。
+		data.Balance = parseOllamaBalanceFromUsageCredits(doc)
+	}
 	if data.Balance == "" {
 		if match := ollamaBalancePattern.FindStringSubmatch(pageText); len(match) == 2 {
 			data.Balance = strings.Join(strings.Fields(match[1]), "")
 		}
 	}
 	data.Models = parseOllamaModels(doc)
+	// 免费计划特有：免费额度窗口与可用免费模型清单。付费页面没有这些内容，结果为空。
+	data.FreeUsage = parseOllamaFreeUsageWindow(doc, now)
+	data.FreeModels = parseOllamaFreeModels(doc)
+	// 新版付费计划：月度额度窗口与最近请求列表（取代旧版 5 小时 / 7 天窗口）。
+	data.Monthly = parseOllamaMonthlyWindow(doc, data.Balance, now)
+	data.RecentRequests = parseOllamaRecentRequests(doc)
 
-	if data.Plan == "" && data.FiveHour == nil && data.SevenDay == nil && data.Balance == "" && len(data.Models) == 0 {
+	if data.Plan == "" && data.FiveHour == nil && data.SevenDay == nil && data.FreeUsage == nil && data.Monthly == nil &&
+		data.Balance == "" && len(data.Models) == 0 && len(data.FreeModels) == 0 && len(data.RecentRequests) == 0 {
 		return nil, fmt.Errorf("settings HTML does not contain recognizable usage fields")
 	}
 	return data, nil
 }
 
 func parseOllamaUsageWindow(root *html.Node, aliases []string) *OllamaCloudUsageWindow {
-	label := findLabelElement(root, aliases)
+	return parseOllamaUsageWindowWith(findLabelElement(root, aliases), nil, false)
+}
+
+// parseOllamaFreeUsageWindow 解析免费计划的「Free usage」窗口。标签排除以
+// “free usage credits” 开头的说明句；进度条没有 data-usage-track 标记时，
+// 允许退回到块内任意带 width 百分比样式的元素（免费页只有一条进度条）。
+func parseOllamaFreeUsageWindow(root *html.Node, now time.Time) *OllamaCloudUsageWindow {
+	label := findLabelElementFiltered(root, ollamaFreeUsageAliases, func(lowerText string) bool {
+		return strings.HasPrefix(lowerText, "free usage credits")
+	})
+	return parseOllamaUsageWindowWith(label, &now, true)
+}
+
+// parseOllamaUsageWindowWith 从标签元素向上最多 6 层寻找「x% used」文本或进度条宽度。
+// anyBar 为 true 时，文本与 data-usage-track 都取不到则再试任意进度条写法；
+// relativeNow 非空表示新版页面窗口：重置文案取「Refills in …」并在没有精确时间时按相对时间换算。
+func parseOllamaUsageWindowWith(label *html.Node, relativeNow *time.Time, anyBar bool) *OllamaCloudUsageWindow {
 	if label == nil {
 		return nil
 	}
@@ -70,6 +137,9 @@ func parseOllamaUsageWindow(root *html.Node, aliases []string) *OllamaCloudUsage
 		if !ok {
 			percent, ok = ollamaUsagePercentFromTrack(block)
 		}
+		if !ok && anyBar {
+			percent, ok = ollamaUsagePercentFromAnyBar(block)
+		}
 		if !ok {
 			continue
 		}
@@ -83,6 +153,9 @@ func parseOllamaUsageWindow(root *html.Node, aliases []string) *OllamaCloudUsage
 			if window.ResetAt == nil {
 				window.ResetAt = parseOllamaResetTime(window.ResetText)
 			}
+		}
+		if relativeNow != nil {
+			applyOllamaRefillReset(window, text, *relativeNow)
 		}
 		if candidate == nil {
 			candidate = window
@@ -126,6 +199,11 @@ func valueBesideLabel(root *html.Node, aliases []string, maxLen int) string {
 }
 
 func findLabelElement(root *html.Node, aliases []string) *html.Node {
+	return findLabelElementFiltered(root, aliases, nil)
+}
+
+// findLabelElementFiltered 与 findLabelElement 相同，但允许调用方按小写文本排除候选。
+func findLabelElementFiltered(root *html.Node, aliases []string, reject func(lowerText string) bool) *html.Node {
 	var best *html.Node
 	bestLen := int(^uint(0) >> 1)
 	walkHTML(root, func(node *html.Node) {
@@ -133,7 +211,7 @@ func findLabelElement(root *html.Node, aliases []string) *html.Node {
 			return
 		}
 		text := strings.ToLower(normalizedNodeText(node))
-		if text == "" {
+		if text == "" || (reject != nil && reject(text)) {
 			return
 		}
 		for _, alias := range aliases {
@@ -232,6 +310,9 @@ func ollamaModelWindow(node *html.Node) OllamaCloudUsageModelWindow {
 			if containsAny(normalized, "seven day", "7 day", "7d", "weekly") {
 				return OllamaCloudUsageModelWindowSevenDay
 			}
+			if containsAny(normalized, "monthly", "month") {
+				return OllamaCloudUsageModelWindowMonthly
+			}
 		}
 		text := strings.ToLower(normalizedNodeText(block))
 		fiveHour := containsAny(text, ollamaFiveHourUsageAliases...)
@@ -241,6 +322,10 @@ func ollamaModelWindow(node *html.Node) OllamaCloudUsageModelWindow {
 		}
 		if sevenDay && !fiveHour {
 			return OllamaCloudUsageModelWindowSevenDay
+		}
+		// 新版页面没有 5 小时 / 7 天窗口，进度条旁的模型清单标题是「Models used this month」。
+		if !fiveHour && !sevenDay && containsAny(text, "models used this month", "monthly credits used") {
+			return OllamaCloudUsageModelWindowMonthly
 		}
 	}
 	return ""
@@ -453,4 +538,470 @@ func containsAny(value string, candidates ...string) bool {
 		}
 	}
 	return false
+}
+
+// parseOllamaPlanFromUsageCredits 读取「Usage credits」标题旁的套餐徽章（Free、Pro、Max 等）。
+// 徽章可能是标题的兄弟元素、标题同一容器内的文字，或需要从父容器文本里扣掉标题得到，
+// 依次尝试，每个候选都要经过 cleanOllamaPlanCandidate 校验，取不到返回空串。
+func parseOllamaPlanFromUsageCredits(root *html.Node) string {
+	label := findLabelElement(root, []string{"usage credits"})
+	if label == nil {
+		return ""
+	}
+	const alias = "usage credits"
+	afterAlias := func(text string) string {
+		if index := strings.Index(strings.ToLower(text), alias); index >= 0 {
+			return text[index+len(alias):]
+		}
+		return text
+	}
+	if plan := cleanOllamaPlanCandidate(afterAlias(normalizedNodeText(label))); plan != "" {
+		return plan
+	}
+	if plan := cleanOllamaPlanCandidate(normalizedNodeText(nextElementSibling(label))); plan != "" {
+		return plan
+	}
+	for depth, block := 0, label.Parent; block != nil && depth < 3; depth, block = depth+1, block.Parent {
+		text := normalizedNodeText(block)
+		if len(text) > 200 {
+			break
+		}
+		if plan := cleanOllamaPlanCandidate(afterAlias(text)); plan != "" {
+			return plan
+		}
+	}
+	return ""
+}
+
+// cleanOllamaPlanCandidate 把候选文字截断到金额、按钮文案之前，并要求结果像一个
+// 简短的套餐名（至多两个词、不含虚词）；不像则返回空串，交给下一个候选。
+func cleanOllamaPlanCandidate(value string) string {
+	value = strings.TrimSpace(value)
+	if loc := ollamaPlanStopPattern.FindStringIndex(value); loc != nil {
+		value = value[:loc[0]]
+	}
+	value = strings.Trim(value, ":-|·• \t")
+	words := strings.Fields(value)
+	if len(words) == 0 || len(words) > 2 || len(value) > 24 || strings.Contains(value, ":") {
+		return ""
+	}
+	for _, word := range words {
+		if _, sentence := ollamaPlanSentenceWords[strings.ToLower(word)]; sentence {
+			return ""
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// parseOllamaFreeModels 解析免费计划页面「Free usage credits can be used with the
+// following cloud models: …」后面的模型清单。清单可能与说明句同属一个元素，也可能在
+// 紧随其后的兄弟元素里；遇到不像模型名的词即停止。结果去重并限制 100 个。
+func parseOllamaFreeModels(root *html.Node) []string {
+	var holder *html.Node
+	holderLen := int(^uint(0) >> 1)
+	walkHTML(root, func(node *html.Node) {
+		if node.Type != html.ElementNode || !isOllamaParserContainer(node.Data) {
+			return
+		}
+		text := strings.ToLower(normalizedNodeText(node))
+		if strings.Contains(text, "following cloud models") && len(text) < holderLen {
+			holder, holderLen = node, len(text)
+		}
+	})
+	if holder == nil {
+		return nil
+	}
+	text := normalizedNodeText(holder)
+	index := strings.Index(strings.ToLower(text), "following cloud models")
+	list := strings.TrimLeft(text[index+len("following cloud models"):], ": ")
+	if strings.TrimSpace(list) == "" {
+		list = normalizedNodeText(nextElementSibling(holder))
+	}
+	models := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, token := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+		token = strings.Trim(token, ".;…")
+		if token == "" {
+			break
+		}
+		if _, stop := ollamaFreeModelStopWords[strings.ToLower(token)]; stop {
+			if len(models) > 0 {
+				continue
+			}
+			break
+		}
+		if !ollamaFreeModelPattern.MatchString(token) {
+			break
+		}
+		if _, duplicate := seen[token]; duplicate {
+			continue
+		}
+		seen[token] = struct{}{}
+		models = append(models, token)
+		if len(models) >= 100 {
+			break
+		}
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	return models
+}
+
+// ollamaUsagePercentFromAnyBar 取块内第一个能读出百分比的进度条：支持 style 的 width
+// 百分比、Tailwind 的 w-[x%] 类、progress/meter 元素的 value/max，以及 aria-valuenow。
+// 先序遍历，外层条的宽度先于内层分段（分段宽度是相对已填充部分的比例，不能当总进度）。
+// 仅供免费额度、月度额度窗口在没有文本百分比、也没有 data-usage-track 标记时兜底。
+func ollamaUsagePercentFromAnyBar(root *html.Node) (float64, bool) {
+	var percent float64
+	var found bool
+	walkHTML(root, func(node *html.Node) {
+		if found || node.Type != html.ElementNode {
+			return
+		}
+		if value, ok := cssWidthPercent(node); ok {
+			percent, found = value, true
+			return
+		}
+		if class, ok := htmlAttribute(node, "class"); ok {
+			if match := ollamaBarClassPattern.FindStringSubmatch(class); len(match) == 2 {
+				if value, err := strconv.ParseFloat(match[1], 64); err == nil && value >= 0 && value <= 100 {
+					percent, found = value, true
+					return
+				}
+			}
+		}
+		current, hasNow := htmlAttribute(node, "aria-valuenow")
+		if !hasNow && (node.Data == "progress" || node.Data == "meter") {
+			current, hasNow = htmlAttribute(node, "value")
+		}
+		if !hasNow {
+			return
+		}
+		now, err := strconv.ParseFloat(strings.TrimSpace(current), 64)
+		if err != nil {
+			return
+		}
+		maximum := 100.0
+		maxAttr, hasMax := htmlAttribute(node, "aria-valuemax")
+		if !hasMax {
+			maxAttr, hasMax = htmlAttribute(node, "max")
+		}
+		if hasMax {
+			if parsed, parseErr := strconv.ParseFloat(strings.TrimSpace(maxAttr), 64); parseErr == nil && parsed > 0 {
+				maximum = parsed
+			}
+		}
+		if value := now / maximum * 100; value >= 0 && value <= 100 {
+			percent, found = value, true
+		}
+	})
+	return percent, found
+}
+
+// applyOllamaRefillReset 给新版窗口补重置信息：文案取块文本里的「Refills in 2 weeks」
+// （去掉前缀 Refills 只留 in 2 weeks）；窗口还没有精确时间时，按相对时间换算近似值。
+func applyOllamaRefillReset(window *OllamaCloudUsageWindow, text string, now time.Time) {
+	if match := ollamaRefillPattern.FindStringSubmatch(text); len(match) == 2 && window.ResetText == "" {
+		window.ResetText = strings.TrimSpace(match[1])
+	}
+	if window.ResetAt == nil && window.ResetText != "" {
+		if window.ResetAt = parseOllamaRelativeTime(window.ResetText, now); window.ResetAt != nil {
+			window.ResetApprox = true
+		}
+	}
+}
+
+// parseOllamaRelativeTime 把「in 4 weeks」「in about 2 hours」换算成相对 now 的近似时间。
+// 月按 30 天、年按 365 天，只用于展示重置倒计时，不参与任何计费判断；无法解析返回 nil。
+func parseOllamaRelativeTime(text string, now time.Time) *time.Time {
+	match := ollamaRelativePattern.FindStringSubmatch(text)
+	if len(match) != 3 {
+		return nil
+	}
+	count := 1
+	if quantity := strings.ToLower(match[1]); quantity != "a" && quantity != "an" && quantity != "one" {
+		parsed, err := strconv.Atoi(quantity)
+		if err != nil || parsed <= 0 || parsed > 1000 {
+			return nil
+		}
+		count = parsed
+	}
+	unit := map[string]time.Duration{
+		"minute": time.Minute, "hour": time.Hour, "day": 24 * time.Hour,
+		"week": 7 * 24 * time.Hour, "month": 30 * 24 * time.Hour, "year": 365 * 24 * time.Hour,
+	}[strings.ToLower(match[2])]
+	if unit == 0 {
+		return nil
+	}
+	result := now.UTC().Add(time.Duration(count) * unit)
+	return &result
+}
+
+// firstOllamaMoney 取文本里第一个带 $ 或 USD 标记的金额，去掉内部空白（USD $9.5 → USD$9.5）。
+func firstOllamaMoney(text string) string {
+	return strings.Join(strings.Fields(ollamaMoneyPattern.FindString(text)), "")
+}
+
+// parseOllamaMoneyAmount 把「$60」「<$0.01」「USD$9.50」转成数值；无法解析返回 false。
+func parseOllamaMoneyAmount(value string) (float64, bool) {
+	var digits strings.Builder
+	for _, char := range value {
+		if (char >= '0' && char <= '9') || char == '.' || char == '-' {
+			_, _ = digits.WriteRune(char)
+		}
+	}
+	amount, err := strconv.ParseFloat(digits.String(), 64)
+	return amount, err == nil
+}
+
+// parseOllamaBalanceFromUsageCredits 读取「Usage credits」标题行右侧的金额作为余额。
+// 真实页面里它是 id 为 extra-usage-balance 的元素，优先取它；否则从标题向上最多三层、
+// 文本不超过 300 字符的块里，取标题之后第一个带货币标记的金额。
+func parseOllamaBalanceFromUsageCredits(root *html.Node) string {
+	var byID string
+	walkHTML(root, func(node *html.Node) {
+		if byID != "" || node.Type != html.ElementNode {
+			return
+		}
+		if id, ok := htmlAttribute(node, "id"); ok && id == "extra-usage-balance" {
+			byID = firstOllamaMoney(normalizedNodeText(node))
+		}
+	})
+	if byID != "" {
+		return byID
+	}
+	label := findLabelElement(root, []string{"usage credits"})
+	if label == nil {
+		return ""
+	}
+	for depth, block := 0, label; block != nil && depth < 4; depth, block = depth+1, block.Parent {
+		text := normalizedNodeText(block)
+		if len(text) > 300 {
+			break
+		}
+		if index := strings.Index(strings.ToLower(text), "usage credits"); index >= 0 {
+			text = text[index+len("usage credits"):]
+		}
+		if money := firstOllamaMoney(text); money != "" {
+			return money
+		}
+	}
+	return ""
+}
+
+// parseOllamaMonthlyWindow 解析新版付费计划的「Monthly credits used」月度额度：
+// 已用金额文本（行右侧的 $x）、进度条百分比、「Monthly credits refill in 4 weeks」重置文案。
+// 进度条百分比读不到时：已用为 0 则记 0；否则按 已用/(已用+余额) 近似，仅用于画进度条。
+func parseOllamaMonthlyWindow(root *html.Node, balance string, now time.Time) *OllamaCloudUsageWindow {
+	label := findLabelElement(root, ollamaMonthlyUsageAliases)
+	if label == nil {
+		return nil
+	}
+	labelText := normalizedNodeText(label)
+	alias := ""
+	for _, candidate := range ollamaMonthlyUsageAliases {
+		if strings.HasPrefix(strings.ToLower(labelText), candidate) {
+			alias = candidate
+			break
+		}
+	}
+	// 已用金额：标题自身文字之后、紧邻的兄弟元素、再向上三层父块（扣掉标题）依次尝试。
+	candidates := []string{labelText[len(alias):], normalizedNodeText(nextElementSibling(label))}
+	for depth, block := 0, label.Parent; block != nil && depth < 3; depth, block = depth+1, block.Parent {
+		text := normalizedNodeText(block)
+		if len(text) > 200 {
+			break
+		}
+		if index := strings.Index(strings.ToLower(text), alias); index >= 0 {
+			text = text[index+len(alias):]
+		}
+		candidates = append(candidates, text)
+	}
+	usedText := ""
+	for _, candidate := range candidates {
+		if usedText = firstOllamaMoney(candidate); usedText != "" {
+			break
+		}
+	}
+
+	var percent float64
+	percentFound := false
+	for depth, block := 0, label; block != nil && depth < 6; depth, block = depth+1, block.Parent {
+		text := normalizedNodeText(block)
+		if len(text) > 600 {
+			break
+		}
+		if value, ok := ollamaUsagePercentFromText(text); ok {
+			percent, percentFound = value, true
+			break
+		}
+		if value, ok := ollamaUsagePercentFromAnyBar(block); ok {
+			percent, percentFound = value, true
+			break
+		}
+	}
+	if !percentFound && usedText != "" {
+		if used, ok := parseOllamaMoneyAmount(usedText); ok {
+			if used <= 0 {
+				percent, percentFound = 0, true
+			} else if remaining, ok := parseOllamaMoneyAmount(balance); ok && remaining >= 0 {
+				percent, percentFound = used/(used+remaining)*100, true
+			}
+		}
+	}
+	if !percentFound && usedText == "" {
+		return nil
+	}
+	window := &OllamaCloudUsageWindow{UsedPercent: percent, UsedText: usedText}
+	// 重置：优先取文案含 refill 的 local-time 元素的精确 data-time，其次文案相对换算。
+	walkHTML(root, func(node *html.Node) {
+		if node.Type != html.ElementNode || window.ResetAt != nil {
+			return
+		}
+		text := normalizedNodeText(node)
+		match := ollamaRefillPattern.FindStringSubmatch(text)
+		if len(match) != 2 || len(text) > 120 {
+			return
+		}
+		window.ResetText = strings.TrimSpace(match[1])
+		window.ResetAt = ollamaDataTimeNear(node)
+	})
+	if window.ResetAt == nil && window.ResetText != "" {
+		if window.ResetAt = parseOllamaRelativeTime(window.ResetText, now); window.ResetAt != nil {
+			window.ResetApprox = true
+		}
+	}
+	return window
+}
+
+// parseOllamaRecentRequests 解析新版页面「Recent requests」列表：每行三列，
+// 依次是相对时间（28 minutes ago，td 的 data-time 带精确时间）、模型名、费用（<$0.01）。
+// 既支持每行一个容器（tr 或三个子元素的 div），也支持单元格平铺在同一网格里按三个一组。
+// 「Load more」之类的单格行、不是三列的行都会被跳过。
+func parseOllamaRecentRequests(root *html.Node) []OllamaCloudUsageRecentRequest {
+	heading := findLabelElement(root, []string{"recent requests"})
+	if heading == nil {
+		return nil
+	}
+	requests := make([]OllamaCloudUsageRecentRequest, 0)
+	appendRow := func(cells []*html.Node) {
+		timeText := normalizedNodeText(cells[0])
+		model := normalizedNodeText(cells[1])
+		cost := normalizedNodeText(cells[2])
+		if !ollamaRecentTimePattern.MatchString(timeText) || model == "" || len(model) > 128 || len(cost) > 32 || len(requests) >= 50 {
+			return
+		}
+		row := OllamaCloudUsageRecentRequest{Time: timeText, Model: model, Cost: cost}
+		if value, ok := htmlAttribute(cells[0], "data-time"); ok {
+			row.At = parseOllamaResetTime(value)
+		}
+		requests = append(requests, row)
+	}
+	for depth, block := 0, parentNode(heading); block != nil && depth < 4; depth, block = depth+1, block.Parent {
+		walkHTML(block, func(node *html.Node) {
+			if node.Type != html.ElementNode || node == heading {
+				return
+			}
+			var cells []*html.Node
+			for child := node.FirstChild; child != nil; child = child.NextSibling {
+				if child.Type == html.ElementNode {
+					cells = append(cells, child)
+				}
+			}
+			switch {
+			case len(cells) == 3:
+				appendRow(cells)
+			case len(cells) > 3 && len(cells)%3 == 0 &&
+				ollamaRecentTimePattern.MatchString(normalizedNodeText(cells[0])) &&
+				ollamaRecentTimePattern.MatchString(normalizedNodeText(cells[3])):
+				for index := 0; index+2 < len(cells); index += 3 {
+					appendRow(cells[index : index+3])
+				}
+			}
+		})
+		if len(requests) > 0 {
+			break
+		}
+	}
+	if len(requests) == 0 {
+		return nil
+	}
+	return requests
+}
+
+// capitalizeOllamaPlan 把徽章文字首字母大写：真实页面里徽章源码是小写 free，
+// 靠 CSS capitalize 显示成 Free，网关看不到样式，需要自己还原显示形态。
+func capitalizeOllamaPlan(plan string) string {
+	if plan == "" {
+		return ""
+	}
+	words := strings.Fields(plan)
+	for index, word := range words {
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+// parseOllamaAccountEmail 读取设置页页头账号菜单（id=settings-account-menu）里的登录邮箱。
+// 只认该菜单，其次认带 email 语义的输入框，不扫描全页文本，避免取到页脚的客服邮箱。
+func parseOllamaAccountEmail(root *html.Node) string {
+	var email string
+	walkHTML(root, func(node *html.Node) {
+		if email != "" || node.Type != html.ElementNode {
+			return
+		}
+		if id, ok := htmlAttribute(node, "id"); ok && id == "settings-account-menu" {
+			email = ollamaEmailPattern.FindString(normalizedNodeText(node))
+		}
+	})
+	if email == "" {
+		walkHTML(root, func(node *html.Node) {
+			if email != "" || node.Type != html.ElementNode || node.Data != "input" {
+				return
+			}
+			kind, _ := htmlAttribute(node, "type")
+			name, _ := htmlAttribute(node, "name")
+			if !strings.EqualFold(kind, "email") && !strings.EqualFold(name, "email") {
+				return
+			}
+			if value, ok := htmlAttribute(node, "value"); ok {
+				email = ollamaEmailPattern.FindString(value)
+			}
+		})
+	}
+	if len(email) > 254 {
+		return ""
+	}
+	return email
+}
+
+// ollamaDataTimeNear 找「Refills in …」文案元素上的精确时间：先看元素自身的 data-time，
+// 再看子孙，最后看最多两层父元素。三处都没有返回 nil，调用方按文案相对换算兜底。
+func ollamaDataTimeNear(node *html.Node) *time.Time {
+	if value, ok := htmlAttribute(node, "data-time"); ok {
+		if parsed := parseOllamaResetTime(value); parsed != nil {
+			return parsed
+		}
+	}
+	var found *time.Time
+	walkHTML(node, func(child *html.Node) {
+		if found != nil || child.Type != html.ElementNode {
+			return
+		}
+		if value, ok := htmlAttribute(child, "data-time"); ok {
+			found = parseOllamaResetTime(value)
+		}
+	})
+	if found != nil {
+		return found
+	}
+	for depth, parent := 0, node.Parent; parent != nil && depth < 2; depth, parent = depth+1, parent.Parent {
+		if value, ok := htmlAttribute(parent, "data-time"); ok {
+			if parsed := parseOllamaResetTime(value); parsed != nil {
+				return parsed
+			}
+		}
+	}
+	return nil
 }

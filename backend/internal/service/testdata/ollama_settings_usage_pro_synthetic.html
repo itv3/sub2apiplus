@@ -1,0 +1,81 @@
+<!doctype html>
+<!--
+  合成样本：按老板提供的 Pro 计划页面截图（Usage credits 旁「Pro」徽章、右侧 $60、
+  Monthly credits used、Recent requests）并参照真实免费页的 DOM 结构手写，
+  不是真实页面的原始 HTML。拿到真实 Pro 页面后应替换或补充。
+  不含任何真实账号信息。
+-->
+<html>
+  <head><title>Usage · Settings</title></head>
+  <body>
+    <aside>
+      <details id="settings-account-menu">
+        <summary><span id="settings-account-name">example-user</span></summary>
+        <div><div>example-user</div><div>pro-user@example.com</div></div>
+      </details>
+    </aside>
+    <main>
+      <section id="settings-sections">
+        <div id="extra-usage">
+          <div class="space-y-1">
+            <div class="flex items-baseline justify-between gap-4">
+              <h2>Usage credits<span class="capitalize">pro</span></h2>
+              <span id="extra-usage-balance">$60</span>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-xs">Monthly credits refill in 4 weeks</p>
+              <button id="extra-usage-buy-more" type="button">Add funds</button>
+            </div>
+          </div>
+          <div id="extra-usage-auto-reload">
+            <h3>Auto-reload</h3>
+            <p>Off</p>
+          </div>
+        </div>
+
+        <div class="space-y-1 pt-4">
+          <h2>Usage breakdown</h2>
+          <p>This breakdown shows how cloud models and capabilities such as web search consumed your monthly included usage.</p>
+        </div>
+
+        <div>
+          <div class="flex justify-between mb-2">
+            <span>Monthly credits used</span>
+            <span>$12</span>
+          </div>
+          <div data-usage-meter>
+            <div data-usage-track aria-label="Monthly credits used: 20%">
+              <div class="flex h-full" style="width: 20%">
+                <button type="button" style="width: 75%" data-usage-segment data-model="gemma4:31b" data-requests="40"></button>
+                <button type="button" style="width: 25%" data-usage-segment data-model="gpt-oss:120b" data-requests="9"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <label><input type="checkbox" checked /> Notify me when I'm close to hitting my usage limits</label>
+
+        <section id="recent-requests-self">
+          <h2>Recent requests</h2>
+          <table>
+            <tbody>
+              <tr>
+                <td class="local-time" data-time="2026-10-24T12:47:05.413281Z">28 minutes ago</td>
+                <td><div title="gemma4:31b">gemma4:31b</div></td>
+                <td title="$0.00001">&lt;$0.01</td>
+              </tr>
+              <tr>
+                <td class="local-time" data-time="2026-10-24T10:48:42.259418Z">2 hours ago</td>
+                <td><div title="gpt-oss:120b">gpt-oss:120b</div></td>
+                <td title="$0.0123">$0.01</td>
+              </tr>
+              <tr id="recent-requests-more-self">
+                <td colspan="3"><button type="button">Load more</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
