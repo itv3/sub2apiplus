@@ -1,8 +1,8 @@
 {
   "schema_version": "official-egress-scanner-algorithm-successor/v1",
   "from_sha256": "cde48d629935dae1d3add70cdb76aeeac6a2a127b041476b8e279869bdf26767",
-  "to_sha256": "2e4ef0cf1027629ec4ecdaaca9e0263be1812b1af60ec5ebf70014e6d27089e8",
-  "source_transition": "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
-  "reviewed_by": "账号保活下线审核",
-  "reason": "账号保活完整下线后，新增范围排除调用退役收据校验，精确绑定现有 Catalog scope exclusion 和原始候选，拒绝无证据排除及替代发送路径；bootstrap inventory 和历史分类保持原文。"
+  "to_sha256": "1740f601390be4ce41a4d9c32310059a76dbdd8bda714fde285cd0d0a4802575",
+  "source_transition": "docs/egress/maintenance/upstream-v0218-scanner-pending-additions-20261024-freeze-successor.json",
+  "reviewed_by": "sub2api-v0.2.18-merge-scanner-pending-additions",
+  "reason": "上游 v0.2.18 合并前在主干预先登记纯新增发送点：1 个范围外发送点（upstream-v0218-round-trip）按 mergeGroup upstream-v0218-additions 登记“合并前整组缺失、合并后整组齐全”；不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要（sink-registration-draft 起草）。"
 }

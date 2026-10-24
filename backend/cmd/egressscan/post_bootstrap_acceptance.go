@@ -59,6 +59,9 @@ var upstreamV0213PendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0
 // upstreamV0217PendingAdditionsEvidence 是合并 v0217 批次前在主干预先登记新增发送点的承接收据。
 var upstreamV0217PendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0217-scanner-pending-additions-20261019-freeze-successor.json"
 
+// upstreamV0218PendingAdditionsEvidence 是合并 v0218 批次前在主干预先登记新增发送点的承接收据。
+var upstreamV0218PendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0218-scanner-pending-additions-20261024-freeze-successor.json"
+
 var reviewedPostBootstrapSinkTransitions = []postBootstrapSinkTransition{
 	{
 		name:        "upstream-chat-completions-facade-successor",
@@ -259,6 +262,22 @@ var reviewedPostBootstrapSinkAdditions = []postBootstrapSinkAddition{
 		rationale:         "Command Code 平台用量查询（api.commandcode.ai），第三方 API Key 平台，范围外，不承载官方 OAuth 出站。",
 		absentBeforeMerge: true,
 		mergeGroup:        "upstream-v0217-additions",
+	},
+	{
+		name:              "upstream-v0218-round-trip",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.*imageDownloadTransport.RoundTrip@backend/internal/service/image_storage.go#roundtripper_roundtrip#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "roundtripper_roundtrip",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamV0218PendingAdditionsEvidence,
+		rationale:         "上游新增发送点（*imageDownloadTransport.RoundTrip，service/image_storage.go），按范围外登记，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-v0218-additions",
 	},
 }
 
