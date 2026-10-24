@@ -58,6 +58,9 @@ type codexTPRoute struct {
 	// Primary 是首选账号（决定 TargetPlatform），Alternates 是同一承接分组里的其余账号。
 	Primary    *CodexThirdPartyRouteAccount
 	Alternates []CodexThirdPartyRouteAccount
+
+	// aliases 是分析时使用的型号别名索引，发布判定据此先查别名再走内置规则。
+	aliases codexProfileAliasIndex
 }
 
 // codexTPSession 缓存一次目录编排里的账号列表与路由分析结果。
@@ -66,6 +69,8 @@ type codexTPSession struct {
 	group    *Group
 	accounts []Account
 	memo     map[string]*codexTPRoute
+	// aliases 是本次编排使用的型号别名索引（只含档案仍存在的别名），在会话创建时读取一次。
+	aliases codexProfileAliasIndex
 
 	// 跨平台承接分组用的全平台账号缓存（见 allPlatformAccounts）：只在遇到跨平台歧义时才加载。
 	allLoaded   bool
@@ -84,7 +89,7 @@ func (s *CodexThirdPartyCatalogService) newSession(ctx context.Context, group *G
 	if err != nil {
 		return nil, err
 	}
-	return &codexTPSession{svc: s, group: group, accounts: accounts, memo: map[string]*codexTPRoute{}}, nil
+	return &codexTPSession{svc: s, group: group, accounts: accounts, memo: map[string]*codexTPRoute{}, aliases: s.profileAliasIndex(ctx)}, nil
 }
 
 // loadGroupAccounts 读取分组内持久启用的、经 OpenAI 网关转发的账号。
@@ -146,7 +151,7 @@ func (sess *codexTPSession) route(ctx context.Context, slug string) (*codexTPRou
 }
 
 func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPRoute, error) {
-	route := &codexTPRoute{Slug: slug, RouteModel: slug}
+	route := &codexTPRoute{Slug: slug, RouteModel: slug, aliases: sess.aliases}
 	group := sess.group
 
 	// 第一步：目标平台。Composite 走真实解析器，其它分组固定为分组平台。

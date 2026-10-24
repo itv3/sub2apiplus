@@ -110,6 +110,8 @@ type codexThirdPartyAdminSettings interface {
 	LoadCodexModelVisibility(ctx context.Context, groupID int64) (CodexModelVisibilityConfig, bool, error)
 	LoadCodexCatalogSource(ctx context.Context, accountID int64) (CodexCatalogSourceSnapshot, bool, error)
 	SaveCodexCatalogSource(ctx context.Context, snap CodexCatalogSourceSnapshot) error
+	LoadCodexProfileAliases(ctx context.Context) (CodexProfileAliasConfig, bool, error)
+	SaveCodexProfileAliases(ctx context.Context, cfg CodexProfileAliasConfig) error
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +227,9 @@ type CodexThirdPartyAdminService struct {
 	refreshSlots chan struct{}
 	// refreshGroup 合并同一账号的并发刷新。
 	refreshGroup singleflight.Group
+
+	// aliasMu 串行化型号别名表的读改写（多节点并发写入概率极低，管理操作也很少）。
+	aliasMu sync.Mutex
 
 	mu sync.Mutex
 	// refreshing 记录后台正在刷新的账号，既用于避免重复起协程，也用于在状态里标记 refreshing。

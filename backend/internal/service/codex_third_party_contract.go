@@ -457,8 +457,10 @@ type CodexThirdPartyCandidate struct {
 	Protocol  string `json:"protocol,omitempty"`
 	ProfileID string `json:"profile_id,omitempty"`
 	// Fingerprint 绑定客户端契约、路由、协议与能力档案；验收记录须与它一致才算已验证。
-	Fingerprint  string                           `json:"fingerprint,omitempty"`
-	Capabilities CodexThirdPartyCapabilitySummary `json:"capabilities"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// ProfileMissingModel 非空表示该候选因这个上游型号没有能力档案而无法发布（待补能力），页面可提供“关联到已有档案”。
+	ProfileMissingModel string                           `json:"profile_missing_model,omitempty"`
+	Capabilities        CodexThirdPartyCapabilitySummary `json:"capabilities"`
 	// EntryBytes 是该条目序列化后的字节数，用于预算展示。
 	EntryBytes int `json:"entry_bytes,omitempty"`
 }

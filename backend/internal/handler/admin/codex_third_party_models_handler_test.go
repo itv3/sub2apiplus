@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ type codexThirdPartyFakeService struct {
 	lastPreview service.CodexThirdPartyPreviewRequest
 	lastSave    service.CodexThirdPartySaveRequest
 	lastVerify  service.CodexThirdPartyVerifyRequest
+	lastAlias   [3]string
 	calls       []string
 
 	err error
@@ -110,6 +112,42 @@ func (f *codexThirdPartyFakeService) RefreshCatalogs(_ context.Context, groupID 
 	}, nil
 }
 
+func (f *codexThirdPartyFakeService) aliasList() *service.CodexProfileAliasList {
+	return &service.CodexProfileAliasList{
+		Revision: 2,
+		Aliases: []service.CodexProfileAliasView{
+			{UpstreamModel: "acme-ds:prod", Key: "acme-ds", ProfileID: "deepseek-flash", Valid: true, UpdatedBy: "user:9"},
+		},
+		Profiles: []service.CodexThirdPartyProfileSummary{{ID: "deepseek-flash", UpstreamModels: []string{"deepseek-v4.1-flash"}, Protocols: []string{"responses_native"}}},
+	}
+}
+
+func (f *codexThirdPartyFakeService) ListProfileAliases(_ context.Context) (*service.CodexProfileAliasList, error) {
+	f.record("alias-list", 0)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.aliasList(), nil
+}
+
+func (f *codexThirdPartyFakeService) SetProfileAlias(_ context.Context, upstreamModel, profileID, operator string) (*service.CodexProfileAliasList, error) {
+	f.record("alias-set", 0)
+	f.lastAlias = [3]string{upstreamModel, profileID, operator}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.aliasList(), nil
+}
+
+func (f *codexThirdPartyFakeService) DeleteProfileAlias(_ context.Context, upstreamModel string) (*service.CodexProfileAliasList, error) {
+	f.record("alias-delete", 0)
+	f.lastAlias = [3]string{upstreamModel, "", ""}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.aliasList(), nil
+}
+
 func newCodexThirdPartyTestRouter(h *CodexThirdPartyModelsHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -120,6 +158,10 @@ func newCodexThirdPartyTestRouter(h *CodexThirdPartyModelsHandler) *gin.Engine {
 	group.POST("/:group_id/verify", h.Verify)
 	group.POST("/:group_id/sync", h.Sync)
 	group.POST("/:group_id/refresh", h.Refresh)
+	aliases := router.Group("/api/v1/admin/codex-third-party-profile-aliases")
+	aliases.GET("", h.ListProfileAliases)
+	aliases.PUT("", h.SetProfileAlias)
+	aliases.DELETE("", h.DeleteProfileAlias)
 	return router
 }
 
@@ -321,6 +363,90 @@ func TestCodexThirdPartyModelsHandlerRefreshReturnsReportAndState(t *testing.T) 
 
 	rec = codexThirdPartyRequest(router, http.MethodPost, "/api/v1/admin/codex-third-party-models/abc/refresh", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestCodexThirdPartyModelsHandlerProfileAliases(t *testing.T) {
+	svc := &codexThirdPartyFakeService{}
+	h := &CodexThirdPartyModelsHandler{svc: svc}
+	router := newCodexThirdPartyTestRouter(h)
+	const path = "/api/v1/admin/codex-third-party-profile-aliases"
+
+	rec := codexThirdPartyRequest(router, http.MethodGet, path, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var data struct {
+		Revision int64 `json:"revision"`
+		Aliases  []struct {
+			UpstreamModel string `json:"upstream_model"`
+			Key           string `json:"key"`
+			ProfileID     string `json:"profile_id"`
+			Valid         bool   `json:"valid"`
+			UpdatedBy     string `json:"updated_by"`
+		} `json:"aliases"`
+		Profiles []struct {
+			ID             string   `json:"id"`
+			UpstreamModels []string `json:"upstream_models"`
+		} `json:"profiles"`
+	}
+	require.NoError(t, json.Unmarshal(decodeCodexThirdPartyEnvelope(t, rec).Data, &data))
+	require.Equal(t, int64(2), data.Revision)
+	require.Len(t, data.Aliases, 1)
+	require.Equal(t, "acme-ds:prod", data.Aliases[0].UpstreamModel)
+	require.True(t, data.Aliases[0].Valid)
+	require.Equal(t, "deepseek-flash", data.Profiles[0].ID)
+	require.Equal(t, []string{"deepseek-v4.1-flash"}, data.Profiles[0].UpstreamModels)
+
+	rec = codexThirdPartyRequest(router, http.MethodPut, path, `{"upstream_model":"acme-ds:prod","profile_id":"deepseek-flash"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, [3]string{"acme-ds:prod", "deepseek-flash", ""}, svc.lastAlias, "没有认证主体时操作人为空（路由组的认证中间件保证线上一定有）")
+	for _, body := range []string{`{}`, `{"upstream_model":"x"}`, `{"profile_id":"deepseek-flash"}`, `not json`} {
+		rec = codexThirdPartyRequest(router, http.MethodPut, path, body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, body)
+	}
+
+	rec = codexThirdPartyRequest(router, http.MethodDelete, path+"?upstream_model=acme-ds%3Aprod", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "acme-ds:prod", svc.lastAlias[0])
+	rec = codexThirdPartyRequest(router, http.MethodDelete, path, "")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestCodexThirdPartyModelsHandlerProfileAliasRecordsOperator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &codexThirdPartyFakeService{}
+	h := &CodexThirdPartyModelsHandler{svc: svc}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+		c.Next()
+	})
+	router.PUT("/aliases", h.SetProfileAlias)
+	rec := codexThirdPartyRequest(router, http.MethodPut, "/aliases", `{"upstream_model":"m","profile_id":"p"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, [3]string{"m", "p", "user:42"}, svc.lastAlias)
+}
+
+func TestCodexThirdPartyModelsHandlerProfileAliasErrors(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantReason string
+	}{
+		{"请求不合法", service.ErrCodexProfileAliasInvalid, http.StatusBadRequest, "CODEX_PROFILE_ALIAS_INVALID"},
+		{"档案不存在", service.ErrCodexProfileNotFound, http.StatusBadRequest, "CODEX_PROFILE_NOT_FOUND"},
+		{"内置档案已认出", service.ErrCodexProfileAliasBuiltin, http.StatusConflict, "CODEX_PROFILE_ALIAS_BUILTIN"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newCodexThirdPartyTestRouter(&CodexThirdPartyModelsHandler{svc: &codexThirdPartyFakeService{err: tc.err}})
+			rec := codexThirdPartyRequest(router, http.MethodPut, "/api/v1/admin/codex-third-party-profile-aliases", `{"upstream_model":"m","profile_id":"p"}`)
+			require.Equal(t, tc.wantStatus, rec.Code)
+			require.Equal(t, tc.wantReason, decodeCodexThirdPartyEnvelope(t, rec).Reason)
+		})
+	}
+	// 服务未装配：500。
+	router := newCodexThirdPartyTestRouter(NewCodexThirdPartyModelsHandler(nil))
+	require.Equal(t, http.StatusInternalServerError, codexThirdPartyRequest(router, http.MethodGet, "/api/v1/admin/codex-third-party-profile-aliases", "").Code)
 }
 
 func TestCodexThirdPartyModelsHandlerRejectsMalformedBodies(t *testing.T) {

@@ -239,7 +239,10 @@ func codexThirdPartyProfileKey(model string) string {
 	return strings.ToLower(codexProviderQualifiedModelID(model))
 }
 
-// match 按最终上游型号查找档案。比较前去掉厂商前缀并忽略大小写与首尾空白。
+// match 按最终上游型号查找档案。比较前去掉厂商前缀并忽略大小写与首尾空白，
+// 然后逐级放宽规范化（见 codexThirdPartyNormalizeKey），命中即止，只在前一级匹配不上时才进入下一级：
+// 精确 → 去 Ollama 标签 → 下划线视同连字符 → 去末尾日期后缀。
+// 每一级都同时作用于档案别名一侧，比较规范化后的结果，所以档案别名本身的精确写法永远优先。
 func (s *codexThirdPartyProfileSet) match(upstreamModel string) *codexThirdPartyProfile {
 	if s == nil {
 		return nil
@@ -248,24 +251,49 @@ func (s *codexThirdPartyProfileSet) match(upstreamModel string) *codexThirdParty
 	if key == "" {
 		return nil
 	}
-	if p := s.matchKey(key); p != nil {
-		return p
-	}
-	// 精确匹配不到：Ollama 风格的 `名称:标签` 写法（例如 deepseek-v4.1-flash:1017、:latest、:cloud）
-	// 去掉标签再匹配一次。参数规模标签（31b、120b 等）不剥离，见 codexThirdPartyStripOllamaTag。
-	if base, ok := codexThirdPartyStripOllamaTag(key); ok {
-		return s.matchKey(base)
+	for level := 0; level < codexThirdPartyMatchLevels; level++ {
+		target := codexThirdPartyNormalizeKey(key, level)
+		if target == "" {
+			continue
+		}
+		profile, ambiguous := s.matchNormalized(target, level)
+		if profile != nil {
+			return profile
+		}
+		if ambiguous {
+			// 放宽后同时落在多份档案上：宁可不匹配，也不随意挑一份。
+			return nil
+		}
 	}
 	return nil
 }
 
-// matchKey 按已规范化的匹配键精确查找档案。
-func (s *codexThirdPartyProfileSet) matchKey(key string) *codexThirdPartyProfile {
+// matchNormalized 在指定规范化级别上比较档案别名与目标键。返回唯一命中的档案；
+// 同一级别命中多份不同档案时 ambiguous 为 true。
+func (s *codexThirdPartyProfileSet) matchNormalized(target string, level int) (profile *codexThirdPartyProfile, ambiguous bool) {
 	for _, p := range s.profiles {
 		for _, model := range p.UpstreamModels {
-			if codexThirdPartyProfileKey(model) == key {
-				return p
+			if codexThirdPartyNormalizeKey(codexThirdPartyProfileKey(model), level) != target {
+				continue
 			}
+			if profile != nil && profile != p {
+				return nil, true
+			}
+			profile = p
+			break
+		}
+	}
+	return profile, false
+}
+
+// byID 按档案 ID 查找档案。
+func (s *codexThirdPartyProfileSet) byID(id string) *codexThirdPartyProfile {
+	if s == nil {
+		return nil
+	}
+	for _, p := range s.profiles {
+		if p.ID == id {
+			return p
 		}
 	}
 	return nil
@@ -289,25 +317,42 @@ func codexThirdPartyStripOllamaTag(key string) (string, bool) {
 	return key[:index], true
 }
 
-// matchAll 为一组最终上游型号（来自不同承接账号）找出同一份档案。
-// 每个型号规范化后都必须命中档案，且命中的是同一份；多个账号映射到不同的原始名、
-// 规范化后落在同一档案上不算冲突。找不到时返回 nil 与面向管理员的原因。
-func (s *codexThirdPartyProfileSet) matchAll(upstreamModels []string) (*codexThirdPartyProfile, string) {
+// matchAllWithAliases 为一组最终上游型号（来自不同承接账号）找出同一份档案。
+// 每个型号先查后台维护的型号别名（aliases，已过滤掉失效项），命中即用对应档案；否则走内置规则。
+// 每个型号都必须命中档案，且命中的是同一份；多个账号映射到不同的原始名、
+// 规范化后落在同一档案上不算冲突。找不到时返回 nil 与面向管理员的原因；
+// 因缺档案而失败时 unmatched 是第一个匹配不上的上游型号（供页面提供“关联到已有档案”）。
+func (s *codexThirdPartyProfileSet) matchAllWithAliases(upstreamModels []string, aliases codexProfileAliasIndex) (profile *codexThirdPartyProfile, reason, unmatched string) {
 	var found *codexThirdPartyProfile
 	for _, model := range upstreamModels {
-		profile := s.match(model)
-		if profile == nil {
-			return nil, fmt.Sprintf("上游型号 %s 暂无能力档案（待补能力）", model)
+		matched := s.matchWithAliases(model, aliases)
+		if matched == nil {
+			return nil, fmt.Sprintf("上游型号 %s 暂无能力档案（待补能力）", model), model
 		}
-		if found != nil && found != profile {
-			return nil, "多个账号把该模型映射到不同的上游型号（" + strings.Join(upstreamModels, "、") + "），无法套用单一能力档案"
+		if found != nil && found != matched {
+			return nil, "多个账号把该模型映射到不同的上游型号（" + strings.Join(upstreamModels, "、") + "），无法套用单一能力档案", ""
 		}
-		found = profile
+		found = matched
 	}
 	if found == nil {
-		return nil, "没有可用的上游型号"
+		return nil, "没有可用的上游型号", ""
 	}
-	return found, ""
+	return found, "", ""
+}
+
+// matchWithAliases 先查型号别名（按同一套规范化后的名字精确比较），再走内置规则。
+func (s *codexThirdPartyProfileSet) matchWithAliases(model string, aliases codexProfileAliasIndex) *codexThirdPartyProfile {
+	if s == nil {
+		return nil
+	}
+	if len(aliases) > 0 {
+		if id, ok := aliases[codexProfileAliasKey(model)]; ok {
+			if p := s.byID(id); p != nil {
+				return p
+			}
+		}
+	}
+	return s.match(model)
 }
 
 // supportsProtocols 判断档案是否覆盖全部给定协议。

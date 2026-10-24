@@ -17,12 +17,14 @@ type codexTPPublication struct {
 	Route   *codexTPRoute
 	Profile *codexThirdPartyProfile
 	// Status 是静态状态：needs_capability、configurable、conflict、unavailable。
-	Status      CodexThirdPartyModelStatus
-	Reasons     []string
-	CanPublish  bool
-	Entry       []byte
-	Fingerprint string
-	Summary     CodexThirdPartyCapabilitySummary
+	Status  CodexThirdPartyModelStatus
+	Reasons []string
+	// UnmatchedUpstreamModel 是因缺能力档案而无法发布时，第一个匹配不上的上游型号。
+	UnmatchedUpstreamModel string
+	CanPublish             bool
+	Entry                  []byte
+	Fingerprint            string
+	Summary                CodexThirdPartyCapabilitySummary
 }
 
 // publicationFor 计算第三方路由的静态发布结论。route 必须是非原生路由。
@@ -55,10 +57,11 @@ func (s *CodexThirdPartyCatalogService) publicationFor(group *Group, route *code
 		pub.Status = CodexModelStatusNeedsCapability
 		return pub
 	}
-	profile, reason := s.profiles.matchAll(route.UpstreamModels)
+	profile, reason, unmatched := s.profiles.matchAllWithAliases(route.UpstreamModels, route.aliases)
 	if profile == nil {
 		pub.Status = CodexModelStatusNeedsCapability
 		pub.Reasons = append(pub.Reasons, reason)
+		pub.UnmatchedUpstreamModel = unmatched
 		return pub
 	}
 	pub.Profile = profile

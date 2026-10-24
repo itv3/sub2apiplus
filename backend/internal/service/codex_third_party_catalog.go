@@ -186,6 +186,9 @@ type CodexThirdPartyCatalogService struct {
 	refreshMu     sync.Mutex
 	refreshMemo   map[int64]codexTPRefreshMemo
 	refreshFlight singleflight.Group
+
+	// aliasCache 缓存后台维护的型号别名索引（见 codex_third_party_profile_alias.go）。
+	aliasCache codexProfileAliasCache
 }
 
 type codexTPBaseMemoEntry struct {
@@ -520,6 +523,8 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 			Capabilities:   pub.Summary,
 			EntryBytes:     len(pub.Entry),
 			Fingerprint:    pub.Fingerprint,
+			// 因缺能力档案而无法发布时，页面据此提供“关联到已有档案”。
+			ProfileMissingModel: pub.UnmatchedUpstreamModel,
 			// 以下两项仅跨平台候选池承接时有值，其余情形为空，序列化时省略。
 			PrimaryAccount:    route.Primary,
 			AlternateAccounts: route.Alternates,

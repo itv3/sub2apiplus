@@ -8,9 +8,11 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +26,9 @@ type codexThirdPartyModelsService interface {
 	MarkVerified(ctx context.Context, groupID int64, req service.CodexThirdPartyVerifyRequest) (*service.CodexThirdPartyVerifyResult, error)
 	SyncSources(ctx context.Context, groupID int64) (*service.CodexThirdPartySyncResult, error)
 	RefreshCatalogs(ctx context.Context, groupID int64) (*service.CodexThirdPartyRefreshResult, error)
+	ListProfileAliases(ctx context.Context) (*service.CodexProfileAliasList, error)
+	SetProfileAlias(ctx context.Context, upstreamModel, profileID, operator string) (*service.CodexProfileAliasList, error)
+	DeleteProfileAlias(ctx context.Context, upstreamModel string) (*service.CodexProfileAliasList, error)
 }
 
 // CodexThirdPartyModelsHandler 处理 Codex 三方模型启用相关的管理接口。
@@ -231,6 +236,65 @@ func (h *CodexThirdPartyModelsHandler) Refresh(c *gin.Context) {
 		return
 	}
 	result, err := h.svc.RefreshCatalogs(c.Request.Context(), groupID)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
+}
+
+// codexProfileAliasBody 是新增或更新型号别名的请求体。
+type codexProfileAliasBody struct {
+	UpstreamModel string `json:"upstream_model" binding:"required"`
+	ProfileID     string `json:"profile_id" binding:"required"`
+}
+
+// ListProfileAliases 返回全部型号别名（含失效项）和可供关联的各内置能力档案。
+// GET /api/v1/admin/codex-third-party-profile-aliases
+func (h *CodexThirdPartyModelsHandler) ListProfileAliases(c *gin.Context) {
+	if !h.serviceReady(c) {
+		return
+	}
+	result, err := h.svc.ListProfileAliases(c.Request.Context())
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
+}
+
+// SetProfileAlias 新增或更新一条关联：把上游型号关联到已有能力档案（幂等）。
+// PUT /api/v1/admin/codex-third-party-profile-aliases
+func (h *CodexThirdPartyModelsHandler) SetProfileAlias(c *gin.Context) {
+	if !h.serviceReady(c) {
+		return
+	}
+	var body codexProfileAliasBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	operator := ""
+	if subject, ok := middleware2.GetAuthSubjectFromContext(c); ok {
+		operator = fmt.Sprintf("user:%d", subject.UserID)
+	}
+	result, err := h.svc.SetProfileAlias(c.Request.Context(), body.UpstreamModel, body.ProfileID, operator)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
+}
+
+// DeleteProfileAlias 解除上游型号与能力档案的关联（幂等，本来没有关联也成功）。
+// DELETE /api/v1/admin/codex-third-party-profile-aliases?upstream_model=...
+func (h *CodexThirdPartyModelsHandler) DeleteProfileAlias(c *gin.Context) {
+	if !h.serviceReady(c) {
+		return
+	}
+	model := c.Query("upstream_model")
+	if model == "" {
+		response.BadRequest(c, "Invalid request: upstream_model is required")
+		return
+	}
+	result, err := h.svc.DeleteProfileAlias(c.Request.Context(), model)
 	if response.ErrorFrom(c, err) {
 		return
 	}

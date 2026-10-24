@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// matchAllBuiltin 只用内置规则（不带型号别名）为一组上游型号找档案。
+func matchAllBuiltin(set *codexThirdPartyProfileSet, models []string) (*codexThirdPartyProfile, string) {
+	profile, reason, _ := set.matchAllWithAliases(models, nil)
+	return profile, reason
+}
+
 func loadTestProfileSet(t *testing.T) *codexThirdPartyProfileSet {
 	t.Helper()
 	set, err := loadCodexThirdPartyProfiles(codexThirdPartyProfilesJSON)
@@ -40,7 +46,7 @@ func TestCodexThirdPartyProfileMatchStripsOllamaVersionTags(t *testing.T) {
 	}
 
 	// matchAll：不同账号的原始名（带标签、带前缀、不带标签）落在同一档案上不算冲突。
-	profile, reason := set.matchAll([]string{"deepseek-flash", "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash:1017"})
+	profile, reason := matchAllBuiltin(set, []string{"deepseek-flash", "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash:1017"})
 	require.NotNil(t, profile, reason)
 	require.Equal(t, "deepseek-flash", profile.ID)
 }
@@ -60,10 +66,10 @@ func TestCodexThirdPartyProfileMatchKeepsParameterSizeTags(t *testing.T) {
 	}
 
 	// 仍匹配不上时，原因文案保持不变，且回显原始型号（含标签）。
-	profile, reason := set.matchAll([]string{"unknown-model:1017"})
+	profile, reason := matchAllBuiltin(set, []string{"unknown-model:1017"})
 	require.Nil(t, profile)
 	require.Equal(t, "上游型号 unknown-model:1017 暂无能力档案（待补能力）", reason)
-	profile, reason = set.matchAll([]string{"gemma4:31b"})
+	profile, reason = matchAllBuiltin(set, []string{"gemma4:31b"})
 	require.Nil(t, profile)
 	require.Equal(t, "上游型号 gemma4:31b 暂无能力档案（待补能力）", reason)
 }
@@ -103,8 +109,11 @@ func TestCodexThirdPartyProfileExactAliasWithTagWinsOverStripping(t *testing.T) 
 	set := &codexThirdPartyProfileSet{profiles: []*codexThirdPartyProfile{base, tagged}}
 	require.Equal(t, tagged, set.match("foo:bar"))
 	require.Equal(t, tagged, set.match("vendor/FOO:BAR"))
-	require.Equal(t, base, set.match("foo:other"), "没有精确别名时才剥离")
 	require.Equal(t, base, set.match("foo"))
+	// 放宽到去标签后，两份档案的别名规范化结果相同（都是 foo）：有歧义，宁可不匹配。
+	require.Nil(t, set.match("foo:other"))
+	// 没有歧义时才剥离：只有 base 一份档案时 foo:other 命中它。
+	require.Equal(t, base, (&codexThirdPartyProfileSet{profiles: []*codexThirdPartyProfile{base}}).match("foo:other"))
 }
 
 // DMIT 形态：Composite 分组里 CommandCode（按模型分流，目录声明支持 Responses）、DeepSeek 官方、
