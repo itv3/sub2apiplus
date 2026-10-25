@@ -13,7 +13,12 @@
 #                        冻结目录）；
 #   plan-audit           plan --audit-only：参数、官方包、源码、规则与场景清单、作业 covers、覆盖计划、基线证据、执行副本（Claude：
 #                        参数、官方包、规则／场景清单／证据标签与 Job 展开、工具身份）；
-#   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）。
+#   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）；
+#   model-availability   模型可用性探测（优化第 14 项）：向中转拉一次模型列表，本轮的 MAIN_MODEL／LITE_MODEL 必须都在（模型被下线当场拦下）。探测地址与密钥文件取调用环境的
+#                        MODEL_PROBE_URL（含 /v1）与 MODEL_PROBE_KEY_FILE（0600 文件）；MODEL_PROBE_MINIMAL 非空时另发最小请求；没配置也算未通过，
+#                        确需跳过必须显式设 OPENING_CHECKS_SKIP=model-availability（写明理由）；
+#   main-security-scan   main 上的 Security Scan 先核绿（优化第 14 项）：main 当前头对应的运行必须已完成、success、不超过 36 小时；仓库取调用环境的
+#                        SECURITY_SCAN_REPO（owner/name，本仓库的 gh 默认会查到上游，必须显式给），要有登录好的 gh；没配置同样算未通过，跳过同上。
 # 按客户端（Claude 升级 B5a-06、B5a-09）：必填参数、部署收据与五摘要、目标客户端的参数键与另核的容器、官方包的复核模块、
 #   plan-audit 的参数模板、环境收据模块与探针版本参数取客户端表（lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。
 # 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh、stage1.sh 与入口编排器 entry.sh 开头调用，也可单独运行）
@@ -174,6 +179,25 @@ environment_probe() {
   return "$rc"
 }
 
+# 开工检查补的两项外部事实检查（优化第 14 项，helper 是同目录的 opening_checks.py）：退出码 1＝检查没过，3＝没配置；两种都算未通过，要跳过必须显式写明。
+opening_skipped() { case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）"; return 0 ;; esac; return 1; }
+
+model_availability() {
+  local rc=0
+  opening_skipped model-availability && return 0
+  python3 -B "$DRV/opening_checks.py" models --models "${MAIN_MODEL},${LITE_MODEL}" ${MODEL_PROBE_MINIMAL:+--minimal} || rc=$?
+  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并写明理由"; fi
+  return "$rc"
+}
+
+main_security_scan() {
+  local rc=0
+  opening_skipped main-security-scan && return 0
+  python3 -B "$DRV/opening_checks.py" security-scan ${SECURITY_SCAN_REPO:+--repo "$SECURITY_SCAN_REPO"} || rc=$?
+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并写明理由"; fi
+  return "$rc"
+}
+
 echo "ENTRY_PREFLIGHT_START $(utc_now) round=${ROUND} stamp=${STAMP} out=${OUT}"
 check required-parameters required_parameters
 check guard-pre-plan guard_pre_plan
@@ -182,6 +206,8 @@ check target-client target_client
 check official-package official_package
 check plan-audit plan_audit
 check environment-probe environment_probe
+check model-availability model_availability
+check main-security-scan main_security_scan
 python3 -B - "$OUT/results.txt" "$OUT/summary.json" <<'PY'
 import json, sys
 checks = dict(line.split() for line in open(sys.argv[1], encoding="utf-8") if line.strip())

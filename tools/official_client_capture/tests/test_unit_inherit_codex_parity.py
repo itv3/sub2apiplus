@@ -917,7 +917,7 @@ CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步�
         '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:',
         '                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)']}
 CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58'}
+CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '33d47a41b10527ce5911cf794906cd2bc8f6148cfc9a6f100c064a537ad4a44d'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
 CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'fbeb5554173c3a847b4f8d757dd556f3d4e9ee6f547c344ce48b81a9492f5fc5'}

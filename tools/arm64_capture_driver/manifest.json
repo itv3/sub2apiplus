@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 117,
+  "file_count": 118,
   "files": [
     {
       "path": "README.md",
@@ -178,9 +178,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "762a64e1ca33bf25e84e44711497717ce0a8a3b530730306946d506a225c8cc4",
+      "sha256": "162cff5e680f856245d968858964d41b70855e1913cfd2a84a04f8ddc6f081f0",
       "mode": "0700",
-      "bytes": 12955
+      "bytes": 15203
     },
     {
       "path": "driver/entry.sh",
@@ -214,9 +214,9 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58",
+      "sha256": "33d47a41b10527ce5911cf794906cd2bc8f6148cfc9a6f100c064a537ad4a44d",
       "mode": "0700",
-      "bytes": 93016
+      "bytes": 95818
     },
     {
       "path": "driver/env.example.sh",
@@ -355,6 +355,12 @@
       "sha256": "83e1c59530a45c5ffec799786e1e0b299de48cbbf047517b8a13a84b1cfef0a4",
       "mode": "0700",
       "bytes": 3920
+    },
+    {
+      "path": "driver/opening_checks.py",
+      "sha256": "8da63dfc9f689fc00df7562443eda171428ce30bcb5bee6037119e7926ac526c",
+      "mode": "0700",
+      "bytes": 11996
     },
     {
       "path": "driver/parse_env.py",
@@ -705,5 +711,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "5354f9ca894ecdefed044481c202f561c7e4c24a8411dc91763216381fa5be6c"
+  "manifest_sha256": "16da1a7dbe6451954cd61aca713ec31e739b3c4aadea35fd2450b3ba48a5d71f"
 }

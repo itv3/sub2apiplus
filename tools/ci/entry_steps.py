@@ -1337,6 +1337,44 @@ def _product_occupied(step: Step, ctx: Context) -> list[str]:
     return occupied
 
 
+# ---------------------------------------------------------------- 沿用的时效窗口（优化第 14 项）
+
+# atomic-double 账本阶段的预算：Codex 升级的原子演练账本阶段预算取 VC-1 的默认值（75 分钟，Claude 120 分钟）。发布认证重放用当前墙钟核对账本终态，
+# 记录超出窗口就报“原子演练失败时间账本终态漂移”（一次 Codex 升级的第二轮入口因此白跑一次约 2 小时门禁）。数值与 codex_upgrade_timing_ledger.DEFAULT_STAGE_BUDGETS_BY_CLIENT
+# 的 VC-1 一致（测试核对，不一致即红）；这里另存一份是因为入口编排器不导入受管工具。
+ATOMIC_STAGE_BUDGET_MINUTES = {"codex": 75, "claude": 120}
+# 沿用之后还要做发布认证的沿用登记（约 13 分钟）与签发（约 7 分钟）：窗口留够这段余量，再多留一点。
+ATOMIC_ISSUE_MARGIN_MINUTES = 30
+
+
+def reuse_window_minutes(step_id: str, client: str) -> int | None:
+    """步骤“沿用”的时效窗口（分钟）；没有窗口的步骤返回 None。目前只有 atomic-double 有：阶段预算减去后面发布认证要用的余量。"""
+
+    if step_id == "atomic-double":
+        return ATOMIC_STAGE_BUDGET_MINUTES[client] - ATOMIC_ISSUE_MARGIN_MINUTES
+    return None
+
+
+def reuse_window_problems(step_id: str, client: str, *, completed_at_utc: Any, now: float) -> list[str]:
+    """记录完成时间超过时效窗口（或读不出、在未来）时返回原因；窗口内、或该步骤没有窗口返回空。"""
+
+    window = reuse_window_minutes(step_id, client)
+    if window is None:
+        return []
+    try:
+        completed = datetime.strptime(str(completed_at_utc), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return [f"沿用的 {step_id} 记录完成时间读不出（{completed_at_utc!r}），无法核对时效窗口，不沿用"]
+    age = (now - completed) / 60
+    if age < -5:
+        return [f"沿用的 {step_id} 记录完成时间在未来（{completed_at_utc}），不沿用"]
+    if age > window:
+        return [f"沿用的 {step_id} 记录已是 {age:.0f} 分钟前完成的，超过时效窗口 {window} 分钟"
+                f"（账本阶段预算 {ATOMIC_STAGE_BUDGET_MINUTES[client]} 分钟减签发余量 {ATOMIC_ISSUE_MARGIN_MINUTES} 分钟）：窗口一过发布认证重放会报"
+                "账本终态漂移，要重新采集"]
+    return []
+
+
 def evaluate_step(step: Step, ctx: Context, decisions: Mapping[str, Mapping[str, Any]], *, is_formal_built: bool,
                   accept_snapshot: bool, force: Mapping[str, str] | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {"step_id": step.step_id, "title": step.title, "segment": step.segment,
@@ -1391,6 +1429,9 @@ def evaluate_step(step: Step, ctx: Context, decisions: Mapping[str, Mapping[str,
     if upstream_rerun:
         result["upstream_rerun"] = upstream_rerun
         reasons.append(f"上游要重做：{', '.join(upstream_rerun)}")
+    # 沿用的时效窗口（优化第 14 项）：输入没变也要核对记录够不够新；记录读不出完成时间一律不沿用。
+    reasons.extend(reuse_window_problems(step.step_id, ctx.client, completed_at_utc=record.get("completed_at_utc"),
+                                         now=datetime.now(timezone.utc).timestamp()))
     if not reasons:
         return done("reuse")
     if step.ledger:

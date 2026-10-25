@@ -1143,6 +1143,25 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+  echo "ENTRY_GATES_BIND_ONLY ${OUT}/executor/binding.json"',
         '+  exit 0',
         '+fi']}
+CLOSEOUT_SH_2_BASELINE = '6d8e73b95d06bc66cd7fcf74e9d03297bb25b5df'
+CLOSEOUT_SH_2_DIGESTS = {'entry-preflight.sh': '162cff5e680f856245d968858964d41b70855e1913cfd2a84a04f8ddc6f081f0'}
+CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+opening_skipped() { case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）"; return 0 ;; esac; return 1; }',
+        '+model_availability() {',
+        '+  local rc=0',
+        '+  opening_skipped model-availability && return 0',
+        '+  python3 -B "$DRV/opening_checks.py" models --models "${MAIN_MODEL},${LITE_MODEL}" ${MODEL_PROBE_MINIMAL:+--minimal} || rc=$?',
+        '+  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并写明理由"; fi',
+        '+  return "$rc"',
+        '+}',
+        '+main_security_scan() {',
+        '+  local rc=0',
+        '+  opening_skipped main-security-scan && return 0',
+        '+  python3 -B "$DRV/opening_checks.py" security-scan ${SECURITY_SCAN_REPO:+--repo "$SECURITY_SCAN_REPO"} || rc=$?',
+        '+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并写明理由"; fi',
+        '+  return "$rc"',
+        '+}',
+        '+check model-availability model_availability',
+        '+check main-security-scan main_security_scan']}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),
@@ -1161,6 +1180,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5a-09固定79接线", RECORDED_BRIDGE_BASELINE_COMMIT, RECORDED_BRIDGE_SHELL_DIGESTS, RECORDED_BRIDGE_SHELL_RESIDUALS),
     # >>> 收尾登记行（自动生成，勿手改）
     ('收尾登记 entry-gates.sh', CLOSEOUT_SH_1_BASELINE, CLOSEOUT_SH_1_DIGESTS, CLOSEOUT_SH_1_RESIDUALS),
+    ('收尾登记 entry-preflight.sh', CLOSEOUT_SH_2_BASELINE, CLOSEOUT_SH_2_DIGESTS, CLOSEOUT_SH_2_RESIDUALS),
     # <<< 收尾登记行
 )
 
