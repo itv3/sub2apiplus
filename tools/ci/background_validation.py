@@ -76,7 +76,9 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 驱动入口缺省带）在新部署之后用 ``entry-gates.sh --bind-only`` 在来源的同一个工作目录里现算同样的绑定——它走和真实运行一样的树准备、部署绑定核对（整树摘要与部署一致性各部分）、
 清单与输入计算，但不执行任何测试——逐项比对，全部相同才把来源的通过结论沿用到新部署上，写一份绑定新部署收据的结论（``reuse`` 键登记来源结论、冻结副本、逐项比对结果）；
 任一项变了或过了有效期就拒绝并逐项写明原因，要求重验。``check``（批次边界、VC-5 前核对与统一准入）对沿用的结论重放：来源冻结副本的摘要与自摘要、来源仍是通过、绑定未过期、
-新部署的工具身份与来源一致，不能只信 passed 标签。
+新部署的工具身份与来源一致，不能只信 passed 标签。沿用成功之后仍接部署后空跑（验收修正必修 6）：沿用只省掉测试，不省掉新部署上的入口空跑——``--then-dryrun``
+与非沿用路径同一个语义（``start`` 由驱动入口缺省带、``--no-dryrun`` 才关；``reuse`` 子命令同样缺省带），沿用结论写好后立刻按原逻辑接着起入口空跑（两客户端都纳管时
+另一客户端的空跑一并接上），空跑状态记进结论的 ``dryrun``、``peer_dryruns``，``start``／``reuse`` 的输出里也带出。
 
 核数偏差报告（Codex 升级工具优化第 6 项）：执行器每轮结束写 ``core-deviation.json``（声明核数与实测核数偏差超过 30% 的单元，整轮实测／声明总比值）；后台验证结束时
 （不论通过与否）把它复制进结论目录——``<提交前 12 位>-<部署摘要前 12 位>.core-deviation.json``，与结论文件并排——并在结论里登记 ``core_deviation``
@@ -1074,16 +1076,42 @@ def _attempt_reuse(args: argparse.Namespace, *, client: str, deployment: Mapping
             _write(frozen, source)
         reused = {key: value for key, value in source.items() if key not in ("pid", "pid_start", "deployments", "predecessor")}
         reused.update(
-            deployment=dict(deployment), status="passed", started_at_utc=now, completed_at_utc=now, reason=None, returncode=0, then_dryrun=False,
-            dryrun=None, input_contract=dict(inputs), work=str(work),
+            deployment=dict(deployment), status="passed", started_at_utc=now, completed_at_utc=now, reason=None, returncode=0,
+            then_dryrun=bool(args.then_dryrun), dryrun=None, input_contract=dict(inputs), work=str(work),
+            # 接部署后空跑要用本次调用的坐标（参数文件、运行根、数据根、bundle、分支），不是来源结论里记的那一份。
+            vc_env=str(args.vc_env) if args.vc_env else None, runroot=str(args.runroot), data_root=str(args.data_root),
+            bundle=str(args.bundle), branch=args.branch, entry_gates=str(args.entry_gates),
             **({"deployments": dict(deployments)} if deployments is not None else {}),
             reuse={"schema_version": REUSE_SCHEMA, "source_result": str(source_path), "source_deployment": (source.get("deployment") or {}).get("receipt"),
                    "source_frozen": {"path": str(frozen), "sha256": _sha256_file(frozen)}, "source_binding_sha256": binding["binding_sha256"],
                    "current_components": current_components, "verified_at_utc": now,
                    "deployment_check": "entry-gates.sh --bind-only 在来源工作目录里完成部署绑定核对（整树摘要与部署一致性各部分逐项相同）"})
         _write(path, reused)
-        return {"action": "reused", "result": str(path), "source": str(source_path), "components": [label for _key, label in REUSE_COMPONENTS]}, []
+        started = {"action": "reused", "result": str(path), "source": str(source_path), "components": [label for _key, label in REUSE_COMPONENTS]}
+        started.update(_dryrun_after_reuse(path, reused))
+        return started, []
     return None, refusals
+
+
+def _dryrun_after_reuse(path: Path, reused: Mapping[str, Any]) -> dict[str, Any]:
+    """沿用成功之后接部署后空跑（验收修正必修 6），与 ``run`` 末尾“通过之后接空跑”同一逻辑：``then_dryrun`` 打开就接着起入口空跑到 pre-A3；
+    两客户端都纳管时，搭这次验证的其它客户端的入口空跑一并接上。空跑状态记进结论（``dryrun``、``peer_dryruns``）并随起跑结果返回。
+    沿用只省掉测试，不能顺带省掉新部署上的入口空跑。"""
+
+    outcome: dict[str, Any] = {}
+    if reused.get("then_dryrun"):
+        outcome["dryrun"] = _chain_dryrun(reused)
+        _write(path, {**(_read(path) or reused), "dryrun": outcome["dryrun"]})
+    if reused.get("deployments"):
+        chained = {}
+        for peer in peers(registry_path(Path(reused["data_root"]), reused["commit"], reused["deployments"])):
+            if peer.get("client") != (reused.get("client") or "codex"):
+                chained[str(peer.get("client"))] = _chain_dryrun({**reused, "vc_env": peer.get("vc_env"), "runroot": peer.get("runroot"),
+                                                                  "data_root": peer.get("data_root")})
+        if chained:
+            outcome["peer_dryruns"] = chained
+            _write(path, {**(_read(path) or reused), "peer_dryruns": chained})
+    return outcome
 
 
 def _shared_contract(inputs: Any) -> dict[str, Any]:
@@ -2523,6 +2551,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_reuse.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
     p_reuse.add_argument("--vc-env", type=Path, default=None)
     p_reuse.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
+    p_reuse.add_argument("--then-dryrun", action="store_true", help="沿用成功之后接着空跑入口到 pre-A3（与 start --then-dryrun 同一语义；驱动入口缺省带）")
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")
     p_stop.add_argument("--runroot", type=Path, required=True)
     p_stop.add_argument("--reason", default="修复轮跑定向回归前停下（上一轮提交的验证已作废）")
@@ -2569,7 +2598,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValidationError("--commit 要完整的 40 位小写提交号")
             started = start(_parse(["start", "--runroot", str(args.runroot), "--data-root", str(args.data_root), "--bundle", str(args.bundle),
                                     "--branch", args.branch, "--commit", args.commit, "--client", args.client, "--reuse", "only",
-                                    "--entry-gates", str(args.entry_gates), *(["--vc-env", str(args.vc_env)] if args.vc_env else [])]))
+                                    "--entry-gates", str(args.entry_gates), *(["--vc-env", str(args.vc_env)] if args.vc_env else []),
+                                    *(["--then-dryrun"] if args.then_dryrun else [])]))
             print(json.dumps(started, ensure_ascii=False))
             return 3 if started.get("action") == "refused" else 0
         if args.command == "run":

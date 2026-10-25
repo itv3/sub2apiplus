@@ -867,7 +867,7 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': 'b85501b2f72f65afeac168302a64c9af5003b1e65dba5893844cfbaaf3976616'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': 'd4964ef1955e68adb542c365f3a7c1f455868d9bd13fbe6d241539d786833594'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',

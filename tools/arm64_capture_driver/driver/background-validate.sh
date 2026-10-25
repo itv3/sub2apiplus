@@ -14,10 +14,11 @@
 #       旧结论须 passed／failed、进程组已退出且留有已发布的逐单元清单（被 stop 的运行不发布清单，其成果不能承接）；--work 须是旧结论的 WORK；旧提交须能
 #       验证是新提交的祖先（确定不是则永远拒绝，只有「无法验证」才可加 --allow-unverified-ancestry，结论标 unverified）；没有任何单元被承接时结论
 #       outcome=full_rerun。这两个选项只有本命令 start 支持，入口空跑 entry-dryrun.sh 没有。
-#   reuse <bundle 绝对路径> <分支> <40 位提交>
+#   reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]
 #       同树重部署后沿用已通过的测试结论（优化第 5 项）：来源是同一提交的通过结论（带沿用绑定）；在来源的工作目录里用 entry-gates.sh --bind-only
 #       现算新部署上的绑定（含部署后核对，不跑测试），工具身份五摘要、提交、门禁集合、执行器、调度策略、输入清单、平台环境逐项相同且未过有效期（24 小时）
 #       才沿用，写一份绑定新部署的通过结论；任一项变了就拒绝（退出码 3）并写明哪项，要求重验。start 缺省先试沿用（--reuse auto），--no-reuse 跳过。
+#       沿用成功之后仍接部署后空跑（与 start 同一语义，缺省带 --then-dryrun，--no-dryrun 才关）：沿用只省掉测试，新部署上的入口空跑不省。
 #   preflight <bundle 绝对路径> <分支> <40 位提交> [--only <检查项,…>]
 #       只做起跑前置检查（优化第 4 项）：冻结收据、基线重封、重部署、准入绑定四项逐项核对，退出码 0 通过、3 不通过（打印哪一项为什么）；不起后台验证。
 #       start 缺省先做同一套检查（--preflight on），不通过拒绝起跑；--no-preflight 显式跳过。
@@ -49,9 +50,15 @@ case "$command" in
       --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${rest[@]+"${rest[@]}"} \
       ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   reuse)
-    if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh reuse <bundle 绝对路径> <分支> <40 位提交>" >&2; exit 2; fi
+    if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]" >&2; exit 2; fi
     bundle=$1; branch=$2; commit=$3; shift 3
-    exec "${BV[@]}" reuse --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" --bundle "$bundle" --branch "$branch" --commit "$commit" "$@" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
+    # 沿用成功之后仍接部署后空跑（验收修正必修 6）：与 start 同一语义，缺省带 --then-dryrun，--no-dryrun 才关。
+    extra=(--then-dryrun)
+    rest=()
+    for arg in "$@"; do
+      if [ "$arg" = --no-dryrun ]; then extra=(); else rest+=("$arg"); fi
+    done
+    exec "${BV[@]}" reuse --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${rest[@]+"${rest[@]}"} ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   preflight)
     if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh preflight <bundle 绝对路径> <分支> <40 位提交> [--only …]" >&2; exit 2; fi
     bundle=$1; branch=$2; commit=$3; shift 3

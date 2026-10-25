@@ -196,9 +196,14 @@ class ReuseTests(unittest.TestCase):
     def redeploy_same_tree(self, stamp: str = "20261025t120000z") -> Path:
         return deploy_receipt(self.data, stamp)
 
-    def args(self, mode: str = "only", **extra: object):
+    def args(self, mode: str = "only", *flags: str, **extra: object):
         return bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "main",
-                          "--commit", COMMIT, "--reuse", mode, "--entry-gates", str(self.gates)])
+                          "--commit", COMMIT, "--reuse", mode, "--entry-gates", str(self.gates), *flags])
+
+    def vc_env(self) -> Path:
+        path = self.root / "env.sh"
+        path.write_text("# 隔离参数\n", encoding="utf-8")
+        return path
 
     def test_a_passed_conclusion_carries_the_reuse_binding(self) -> None:
         path = self.source_conclusion()
@@ -306,6 +311,92 @@ class ReuseTests(unittest.TestCase):
         outcome = bv.start(self.args(mode="auto"))
         self.assertEqual((outcome["action"], outcome["status"], outcome["reused"]), ("exists", "passed", True), outcome)
         self.assertEqual(bv.check(self.runroot, self.data, require_passed=True)[0], 0)
+
+    def test_a_successful_reuse_still_chains_the_post_deploy_dryrun_like_a_fresh_run(self) -> None:
+        """验收修正必修 6：沿用只省掉测试，新部署上的入口空跑（then_dryrun）按原逻辑照接，不能因沿用而跳过。"""
+
+        self.source_conclusion()
+        self.redeploy_same_tree()
+        env = self.vc_env()
+        with unittest.mock.patch.object(bv, "_chain_dryrun", return_value={"action": "started", "result": "dryrun.json"}) as chain:
+            outcome = bv.start(self.args("only", "--then-dryrun", "--vc-env", str(env)))
+        self.assertEqual(outcome["action"], "reused", outcome)
+        self.assertEqual(chain.call_count, 1, "沿用成功之后接了一次空跑")
+        payload = chain.call_args.args[0]
+        self.assertEqual((payload["commit"], payload["vc_env"], payload["runroot"], payload["data_root"]),
+                         (COMMIT, str(env), str(self.runroot), str(self.data)), "空跑用本次调用的坐标，不是来源结论里记的")
+        self.assertEqual(outcome["dryrun"], {"action": "started", "result": "dryrun.json"})
+        reused = next(payload for _path, payload in bv.results(self.runroot) if payload.get("reuse"))
+        self.assertTrue(reused["then_dryrun"])
+        self.assertEqual(reused["dryrun"], {"action": "started", "result": "dryrun.json"}, "空跑状态记进结论")
+
+    def test_reuse_without_then_dryrun_chains_nothing_exactly_like_a_fresh_run_without_it(self) -> None:
+        self.source_conclusion()
+        self.redeploy_same_tree()
+        with unittest.mock.patch.object(bv, "_chain_dryrun") as chain:
+            outcome = bv.start(self.args("only"))
+        self.assertEqual(outcome["action"], "reused")
+        chain.assert_not_called()
+        self.assertNotIn("dryrun", outcome)
+        reused = next(payload for _path, payload in bv.results(self.runroot) if payload.get("reuse"))
+        self.assertEqual((reused["then_dryrun"], reused["dryrun"]), (False, None))
+
+    def test_auto_mode_reuse_also_chains_the_dryrun_and_reports_it(self) -> None:
+        self.source_conclusion()
+        self.redeploy_same_tree()
+        with unittest.mock.patch.object(bv, "_chain_dryrun", return_value={"action": "started"}) as chain:
+            outcome = bv.start(self.args("auto", "--then-dryrun", "--vc-env", str(self.vc_env())))
+        self.assertEqual((outcome["action"], outcome["status"], outcome["reused"], outcome["dryrun"]), ("exists", "passed", True, {"action": "started"}))
+        self.assertEqual(chain.call_count, 1)
+
+    def test_the_reuse_subcommand_passes_then_dryrun_through(self) -> None:
+        self.source_conclusion()
+        self.redeploy_same_tree()
+        base = ["reuse", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "main",
+                "--commit", COMMIT, "--entry-gates", str(self.gates), "--vc-env", str(self.vc_env())]
+        with unittest.mock.patch.object(bv, "_chain_dryrun", return_value={"action": "started"}) as chain, unittest.mock.patch("builtins.print"):
+            self.assertEqual(bv.main([*base, "--then-dryrun"]), 0)
+        self.assertEqual(chain.call_count, 1)
+
+    def test_two_client_deployments_chain_the_other_clients_dryrun_after_reuse_too(self) -> None:
+        """两客户端都纳管时，沿用成功后也和真实运行一样把另一客户端登记的空跑一并接上（只接别人的，不重复接自己的）。"""
+
+        path = self.root / "result.json"
+        reused = {"schema_version": bv.SCHEMA, "commit": COMMIT, "client": "codex", "then_dryrun": True, "data_root": str(self.data), "runroot": str(self.runroot), "vc_env": "/e",
+                  "deployments": {"codex": {"receipt": "a"}, "claude": {"receipt": "b"}}}
+        bv._write(path, reused)
+        peers = [{"client": "codex", "vc_env": "/own", "runroot": "/own-run", "data_root": "/own-data"},
+                 {"client": "claude", "vc_env": "/peer-env", "runroot": "/peer-run", "data_root": "/peer-data"}]
+        with unittest.mock.patch.object(bv, "peers", return_value=peers), unittest.mock.patch.object(bv, "registry_path", return_value=self.root / "reg"), \
+                unittest.mock.patch.object(bv, "_chain_dryrun", return_value={"action": "started"}) as chain:
+            outcome = bv._dryrun_after_reuse(path, reused)
+        self.assertEqual(chain.call_count, 2)   # 自己的空跑一次，claude 那份一次
+        peer_payload = chain.call_args_list[1].args[0]
+        self.assertEqual((peer_payload["vc_env"], peer_payload["runroot"], peer_payload["data_root"]), ("/peer-env", "/peer-run", "/peer-data"))
+        self.assertEqual(list(outcome["peer_dryruns"]), ["claude"])
+        self.assertEqual(bv._read(path)["peer_dryruns"], outcome["peer_dryruns"])
+
+    def test_the_driver_wrapper_asks_for_the_dryrun_by_default_on_reuse(self) -> None:
+        """驱动入口 ``background-validate.sh reuse`` 与 ``start`` 同一语义：缺省带 --then-dryrun，--no-dryrun 才关；真实执行脚本里 reuse 那一段看实际传给 Python 的词。"""
+
+        text = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "background-validate.sh").read_text(encoding="utf-8")
+        start = text.index("  reuse)\n")
+        block = text[start + len("  reuse)\n"):text.index(";;", start)]
+
+        def words(*extra: str) -> list[str]:
+            script = ("RUNROOT=/r; D=/d; ARM64_VC_ENV=/e; BV=(printf '%s\\n'); CT_CLIENT_ARGV=(); "
+                      f"set -- /b main {COMMIT} " + " ".join(extra) + "\nshift 0\n" + "bundle=$1; branch=$2; commit=$3; shift 3\n"
+                      + block.split("bundle=$1; branch=$2; commit=$3; shift 3\n", 1)[1])
+            completed = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed.stdout.split()
+
+        default = words()
+        self.assertIn("--then-dryrun", default)
+        self.assertEqual(default[0], "reuse")
+        off = words("--no-dryrun")
+        self.assertNotIn("--then-dryrun", off)
+        self.assertNotIn("--no-dryrun", off, "--no-dryrun 是驱动入口的开关，不传给 Python")
 
     def test_the_default_is_off_so_existing_callers_are_unchanged(self) -> None:
         parsed = bv._parse(["start", "--runroot", "/r", "--data-root", "/d", "--bundle", "/b", "--branch", "x", "--commit", COMMIT])
