@@ -969,7 +969,7 @@ CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(
         '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
 CLOSEOUT_PY_7_BASELINE = 'df90c329e3ba2b659ac7667b897e38a7a35d6269'
-CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '031af5420256c586f22daf7f868fdb0d1ca16f532a4ba404ecb88be53f8bfff2'}
+CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '53bf0adc72cefce9ba7b94b562f9cfc0c026909d2f98ed3f7f9a784bc1a0c031'}
 CLOSEOUT_PY_7_REMOVED = {'tools/ci/unit_records.py': ['    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}',
         '        entries.append(_audit_module().host_snapshot(path))',
         '    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""',
