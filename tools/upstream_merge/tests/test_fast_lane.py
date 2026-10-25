@@ -741,7 +741,7 @@ class CommandLineTest(FastFixture):
                 "make", "-n", "upstream-gate-fast",
                 "UPSTREAM_GATE_TARGETED=/x/t.json", "UPSTREAM_GATE_REQUEST=/x/r.json",
                 "UPSTREAM_GATE_STATUS_FILE=/x/s.json", "UPSTREAM_GATE_LOG_DIR=/x/logs", "UPSTREAM_GATE_COMPARE_WITH=/x/f.json",
-                "CODEX_0_149_1_SOURCE_ROOT=/x/codex",
+                "CODEX_SPEC_SOURCE_ROOT=/x/codex",
             ],
             cwd=SOURCE_ROOT,
             capture_output=True,

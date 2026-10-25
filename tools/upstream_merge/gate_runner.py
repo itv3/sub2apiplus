@@ -74,7 +74,8 @@ from .fast_attribution import classify_egress_spec_summary, classify_go_test_out
 from .toolchain import LINT_BINARY_ENV
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "codex-cli-0.149.1"
+# 与 Makefile 的 CODEX_SPEC_SOURCE_VERSION 保持一致；换版时两处一起改。
+DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "codex-cli-0.163.0"
 # go test 与 golangci-lint 共用的三组构建标签；空字符串表示默认标签。
 BUILD_TAGS = ("", "unit", "integration")
 MODES = ("backend", "full", "fast")
@@ -210,7 +211,7 @@ def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
             (
                 Step(
                     "check-egress-spec",
-                    ("make", "-k", f"CODEX_0_149_1_SOURCE_ROOT={codex_source_root}", "check-egress-spec"),
+                    ("make", "-k", f"CODEX_SPEC_SOURCE_ROOT={codex_source_root}", "check-egress-spec"),
                 ),
             ),
         ),

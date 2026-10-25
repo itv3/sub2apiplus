@@ -31,7 +31,11 @@ UPSTREAM_MERGE_AFTER ?=
 UPSTREAM_MERGE_TRANSITION_OUTPUT ?=
 UPSTREAM_MERGE_TRANSITION_PREDECESSOR ?=
 UPSTREAM_MERGE_TRANSITION_REASON ?=
-CODEX_0_149_1_SOURCE_ROOT ?= $(CURDIR)/local-analysis/sources/codex-cli-0.149.1
+# 本地只读 Codex 源码树（被 .gitignore 排除，只在主工作区有）：版本号与源码根都不再写进变量名，换版时只改下一行。
+# 隔离工作树请传 CODEX_SPEC_SOURCE_ROOT=<主工作区>/local-analysis/sources/codex-cli-<版本>；
+# 旧变量名 CODEX_0_149_1_SOURCE_ROOT 过渡期仍认（驱动与入口门禁改名之后删除这一层兼容）。
+CODEX_SPEC_SOURCE_VERSION ?= 0.163.0
+CODEX_SPEC_SOURCE_ROOT ?= $(if $(CODEX_0_149_1_SOURCE_ROOT),$(CODEX_0_149_1_SOURCE_ROOT),$(CURDIR)/local-analysis/sources/codex-cli-$(CODEX_SPEC_SOURCE_VERSION))
 CAPTURE_TYPESCRIPT_MODULE ?= $(CURDIR)/frontend/node_modules/typescript/lib/typescript.js
 CAPTURE_TYPESCRIPT_SHA256 := f316520790d4db220a10d890c5f85310e26a1bd3c104b8d3b5eb62ba0491651b
 
@@ -98,9 +102,9 @@ check-egress-seal:
 # 不包含 local-analysis，因此只执行下面的可复现提交态闭集。
 check-egress-spec-local-source:
 	@python3 tools/check_spec_refs.py \
-		--source-root "$(CODEX_0_149_1_SOURCE_ROOT)" \
-		--source-version 0.149.1 \
-		--cargo-lock "$(CODEX_0_149_1_SOURCE_ROOT)/codex-rs/Cargo.lock" \
+		--source-root "$(CODEX_SPEC_SOURCE_ROOT)" \
+		--source-version "$(CODEX_SPEC_SOURCE_VERSION)" \
+		--cargo-lock "$(CODEX_SPEC_SOURCE_ROOT)/codex-rs/Cargo.lock" \
 		--anchor-manifest tools/spec_ref_anchors.json \
 		--dependency-manifest tools/spec_source_deps/manifest.json \
 		--symbol --cfg-test
@@ -122,7 +126,7 @@ egress-scanner-check:
 # 数据依赖。两个目标交给统一调度执行器（tools/ci/entry_gates.py make-checks → tools/ci/unit_executor.py run-commands）
 # 在整机额度内并行执行：一项失败其余照跑，全部跑完再汇总，失败项逐个列出并附日志尾部。入口门禁（驱动
 # entry-gates.sh）按 print-egress-spec-checks 读同一份清单展开这些子检查，所以 P0 收据里的字面命令
-# make check-egress-spec 与实际执行的子检查集合相同。CI checkout 不含 local-analysis（没有 0.149.1 源码树），只跑 _CI 那一份。
+# make check-egress-spec 与实际执行的子检查集合相同。CI checkout 不含 local-analysis（没有 Codex 源码树），只跑 _CI 那一份。
 EGRESS_SPEC_CI_CHECKS := \
 	check-egress-bootstrap-replay \
 	check-egress-seal \
@@ -501,7 +505,7 @@ test-upstream-merge-tools:
 # UPSTREAM_GATE_JOBS 可让检查线之间并行，默认 1：满载并行时计时敏感用例会误判。
 upstream-gate-full:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner full \
-		--codex-source-root "$(CODEX_0_149_1_SOURCE_ROOT)"
+		--codex-source-root "$(CODEX_SPEC_SOURCE_ROOT)"
 
 # 试验 worktree 定型后、建正式 Plan 之前的快线：toolchain、secret-scan、出站规格、lint、前端与定向回归，跳过采集工具线和整套
 # go test（见 tools/upstream_merge/fast_lane.py）。先用 targeted-regression-plan 生成定向回归清单，再传入：
@@ -514,7 +518,7 @@ upstream-gate-full:
 upstream-gate-fast:
 	@test -n "$(UPSTREAM_GATE_TARGETED)" || { echo "请设置 UPSTREAM_GATE_TARGETED（targeted-regression-plan 生成的定向回归清单）"; exit 2; }
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner fast \
-		--codex-source-root "$(CODEX_0_149_1_SOURCE_ROOT)" \
+		--codex-source-root "$(CODEX_SPEC_SOURCE_ROOT)" \
 		--targeted "$(UPSTREAM_GATE_TARGETED)" \
 		$(if $(UPSTREAM_GATE_REQUEST),--request "$(UPSTREAM_GATE_REQUEST)",) \
 		$(if $(UPSTREAM_GATE_STATUS_FILE),--status-file "$(UPSTREAM_GATE_STATUS_FILE)",) \

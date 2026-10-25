@@ -23,7 +23,7 @@ from tools.upstream_merge.preflight_report import (
 from tools.upstream_merge.request_render import INVENTORY_FILES, FINALIZE_RECEIPT, render_request
 
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
-SOURCE_TREE = "local-analysis/sources/codex-cli-0.149.1"
+SOURCE_TREE = "local-analysis/sources/codex-cli-0.163.0"
 
 
 def git(root: Path, *argv: str) -> str:
@@ -153,7 +153,7 @@ class RequestRenderTest(unittest.TestCase):
         self.assertEqual(request["workspace"]["worktree"], str(self.plan_root / "worktree"))
         # 只读源码根在生成时渲染成主仓库；扫描候选的 {repository} 留给 gates-run。
         argv = [item for gate in request["gates"] for item in gate["argv"]]
-        self.assertIn(f"CODEX_0_149_1_SOURCE_ROOT={self.root}/{SOURCE_TREE}", argv)
+        self.assertIn(f"CODEX_SPEC_SOURCE_ROOT={self.root}/{SOURCE_TREE}", argv)
         self.assertIn("{repository}", argv)
         self.assertNotIn("{source_repository}", json.dumps(request))
         runtime = json.loads((self.plan_root / "inputs" / "runtime-state.json").read_text(encoding="utf-8"))

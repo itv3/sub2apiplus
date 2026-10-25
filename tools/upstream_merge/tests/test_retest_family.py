@@ -43,9 +43,9 @@ class ParseMakeTest(unittest.TestCase):
             ("make", "check-egress-spec"): ((".", ("check-egress-spec",), (), True)),
             ("make", "-k", "check-egress-spec"): (".", ("check-egress-spec",), (), True),
             ("/usr/bin/make", "--keep-going", "check-egress-spec"): (".", ("check-egress-spec",), (), True),
-            ("make", "CODEX_0_149_1_SOURCE_ROOT=/x/y", "check-egress-spec"): (".", ("check-egress-spec",), ("CODEX_0_149_1_SOURCE_ROOT=/x/y",), True),
-            ("make", "-k", "CODEX_0_149_1_SOURCE_ROOT=/x", "check-egress-spec", "test-capture-tools"): (
-                ".", ("check-egress-spec", "test-capture-tools"), ("CODEX_0_149_1_SOURCE_ROOT=/x",), True),
+            ("make", "CODEX_SPEC_SOURCE_ROOT=/x/y", "check-egress-spec"): (".", ("check-egress-spec",), ("CODEX_SPEC_SOURCE_ROOT=/x/y",), True),
+            ("make", "-k", "CODEX_SPEC_SOURCE_ROOT=/x", "check-egress-spec", "test-capture-tools"): (
+                ".", ("check-egress-spec", "test-capture-tools"), ("CODEX_SPEC_SOURCE_ROOT=/x",), True),
             ("make", "-j", "4", "check-egress-spec"): (".", ("check-egress-spec",), (), True),
             ("make", "-j4", "check-egress-spec"): (".", ("check-egress-spec",), (), True),
             ("make", "-j", "check-egress-spec"): (".", ("check-egress-spec",), (), True),
@@ -159,7 +159,7 @@ class FamilyAcceptanceTest(unittest.TestCase):
         for argv in (
             ["make", "check-egress-spec"],
             ["make", "-k", "check-egress-spec-ci"],
-            ["make", "CODEX_0_149_1_SOURCE_ROOT=/x", "check-egress-spec"],
+            ["make", "CODEX_SPEC_SOURCE_ROOT=/x", "check-egress-spec"],
             ["make", "-C", ".", "check-egress-spec"],
             ["make", "egress-spec-version-leak"],
             ["make", "egress-spec-go-test"],

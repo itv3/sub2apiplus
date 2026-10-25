@@ -101,7 +101,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -113,7 +113,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -125,7 +125,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -137,7 +137,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -149,7 +149,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -161,7 +161,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -173,7 +173,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -198,7 +198,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -223,7 +223,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       },
@@ -235,7 +235,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0",
           "upstream-gate-full"
         ]
       }

@@ -75,7 +75,7 @@ class BuildLanesTest(unittest.TestCase):
         self.assertEqual([step.unit_executor for step in capture_steps], [False, True])
         self.assertEqual(
             by_name["egress-spec"].steps[0].argv,
-            ("make", "-k", "CODEX_0_149_1_SOURCE_ROOT=/src/codex", "check-egress-spec"),
+            ("make", "-k", "CODEX_SPEC_SOURCE_ROOT=/src/codex", "check-egress-spec"),
         )
 
     def test_backend_mode_runs_only_go_tests_and_lint(self) -> None:

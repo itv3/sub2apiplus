@@ -389,7 +389,7 @@ def build_fast_lanes(context: FastContext) -> list[Lane]:
             (
                 Step(
                     "check-egress-spec",
-                    ("make", "-k", f"CODEX_0_149_1_SOURCE_ROOT={context.codex_source_root}", "check-egress-spec"),
+                    ("make", "-k", f"CODEX_SPEC_SOURCE_ROOT={context.codex_source_root}", "check-egress-spec"),
                     unit_executor=True,
                     unit_summary_subdir="check-egress-spec",
                     attribution=ATTRIBUTION_EGRESS_SPEC,

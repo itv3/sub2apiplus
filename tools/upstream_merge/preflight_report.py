@@ -35,7 +35,7 @@ OFFICIAL_EGRESS_ROOT = "backend/internal/officialegress"
 CLAUDE_RELEASE_CATALOG = f"{OFFICIAL_EGRESS_ROOT}/catalogdata/claude/release-catalog.json"
 RUNTIME_RELEASE_CATALOG = f"{OFFICIAL_EGRESS_ROOT}/catalogdata/runtime/release-catalog.json"
 SINK_DETAIL_FIELDS = ("scan_candidate_id", "file", "func", "package", "sink_kind", "protocol", "sink_type")
-# 门禁 argv 里的只读源码根（如 CODEX_0_149_1_SOURCE_ROOT=...）。它指向被 git 忽略、只在主仓库存在的
+# 门禁 argv 里的只读源码根（如 CODEX_SPEC_SOURCE_ROOT=...）。它指向被 git 忽略、只在主仓库存在的
 # 本地资源，必须由 request-render 用 {source_repository} 渲染成主仓库路径（UM-18）。
 SOURCE_ROOT_ARGUMENT = re.compile(r"([A-Z][A-Z0-9_]*_SOURCE_ROOT)=(.+)")
 SOURCE_REPOSITORY_PLACEHOLDER = "{source_repository}"
