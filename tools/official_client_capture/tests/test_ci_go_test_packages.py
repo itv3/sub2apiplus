@@ -151,7 +151,7 @@ class WrapperCommandTests(unittest.TestCase):
         self.assertEqual(driver.read_bytes(), WRAPPER.read_bytes())
 
 
-GO_MOD = "module example.com/demo\n\ngo 1.21\n"
+GO_MOD = "module example.com/demo\n\ngo 1.18\n"
 # 偶发用例：环境变量 FLAKY_DIR 下的标记文件不存在时失败并留下标记，之后都通过。
 FLAKY_TEST = textwrap.dedent("""\
     package {name}
