@@ -270,6 +270,19 @@ class CloseoutTests(unittest.TestCase):
             closeout.run_gates(self.plan_path)
         self.assertEqual((self.work / "gates.log").read_bytes(), log)
 
+    def test_gate_run_hands_the_driver_a_persistent_retry_ledger_outside_the_work_root(self):
+        """补跑累计账本跨收尾（优化第 2 项）：驱动拿到的账本目录在工作根之外、各收尾方案共用，并记进“门禁开始”占位。"""
+        seen = self.root / "ledger-seen.txt"
+        (self.root / "driver/entry-gates.sh").write_text(
+            "#!/bin/bash\nprintf '%s' \"${UNIT_EXECUTOR_RETRY_LEDGER:-<未传>}\" > " + str(seen) + "\nexit 1\n")
+        self.prepare()
+        with self.assertRaisesRegex(closeout.CloseoutError, "全量门禁失败"):
+            closeout.run_gates(self.plan_path)
+        ledger = Path(seen.read_text())
+        self.assertEqual(ledger, self.work.parent / "gate-retry-ledger")
+        self.assertFalse(ledger.is_relative_to(self.work), "账本不能放在随工作根清理的位置")
+        self.assertEqual(closeout.journal_read(self.plan, "gates", "started")["retry_ledger"], str(ledger))
+
     def test_complete_local_publication_is_idempotent(self):
         self.prepare()
         self.gate_result()

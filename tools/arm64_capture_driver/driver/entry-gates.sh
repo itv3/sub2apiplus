@@ -461,6 +461,10 @@ done
 for name in $(compgen -e); do
   case "$name" in GO*|CGO_*|DOCKER_*|NODE_*|PNPM_*|npm_config_*|COREPACK_*) EXEC_ENV+=("$name=${!name}") ;; esac
 done
+# 补跑累计账本（优化第 2 项）：收尾门禁的记录库按方案独立，“最近 5 轮同一单元只许补跑通过 1 次”要跨收尾生效，调用方（codex_closeout）
+# 经 UNIT_EXECUTOR_RETRY_LEDGER 指定持久账本目录；白名单环境默认不放行自定义变量，这里显式转发这一个。UNIT_EXECUTOR_ 前缀不进环境指纹，
+# 换账本路径不影响单元记录的承接。
+if [ -n "${UNIT_EXECUTOR_RETRY_LEDGER:-}" ]; then EXEC_ENV+=("UNIT_EXECUTOR_RETRY_LEDGER=$UNIT_EXECUTOR_RETRY_LEDGER"); fi
 EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
 # C-02：三组后端测试共用一次生产包预编译；每个工作根独立缓存，承接入口不改动来源缓存。
 GO_WARMUP_ACTIVE=false

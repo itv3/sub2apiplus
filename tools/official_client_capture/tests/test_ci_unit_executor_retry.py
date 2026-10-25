@@ -75,7 +75,8 @@ class RetryRunBase(unittest.TestCase):
         return unit
 
     def run_gates(self, units: list[dict], *, retry: object = {"enabled": True}, out: str = "out", store: bool = True,
-                  test_group: dict | None = None, config_extra: dict | None = None) -> tuple[subprocess.CompletedProcess, dict, dict]:
+                  test_group: dict | None = None, config_extra: dict | None = None,
+                  env_extra: dict | None = None) -> tuple[subprocess.CompletedProcess, dict, dict]:
         gates = [{"gate_id": f"gate-{unit['unit_id']}", "units": [unit["unit_id"]]} for unit in units]
         payload: dict = {"schema_version": ue.GATES_SCHEMA, "units": units, "gates": gates}
         if test_group is not None:
@@ -92,7 +93,7 @@ class RetryRunBase(unittest.TestCase):
         if store:
             command += ["--record-store", str(self.store)]
         completed = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=300,
-                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT)})
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT), **(env_extra or {})})
         summary = json.loads((self.root / out / "summary.json").read_text(encoding="utf-8"))
         manifest_path = self.root / out / "unit-manifest.json"
         unit_manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}

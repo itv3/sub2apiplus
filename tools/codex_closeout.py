@@ -835,6 +835,15 @@ def gate_retry_summary(plan):
             for unit_id in block.get("retry_passed", [])]
 
 
+def gate_retry_ledger(config):
+    """收尾门禁的补跑累计账本目录（优化第 2 项）。
+
+    收尾门禁的记录库按方案独立（``<工作根>/gate-records``），账本若放在记录库里，每次收尾都是一本新账，“最近 5 轮同一单元只许补跑通过 1 次”
+    就跨不了收尾。所以账本放在工作根的**上一级**（每份收尾方案各有自己的工作根，上一级是它们共有的持久位置），经环境变量
+    ``UNIT_EXECUTOR_RETRY_LEDGER`` 交给驱动，驱动再转发给执行器；账本按单元 ID 分文件、只追加，工作根被清理也不会带走它。"""
+    return Path(config["work_root"]).parent / "gate-retry-ledger"
+
+
 def run_gates(plan_path):
     """在独立进程会话中跑完整门禁；中断后只对账，绝不自动启动第二份全量作业。"""
     plan = load_plan(plan_path)
@@ -858,8 +867,12 @@ def run_gates(plan_path):
                     "--record-store", str(work / "gate-records"), plan["bundle"]["path"],
                     client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
                     config["gate"]["node_modules"]]
-            journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat()})
-            env = {**os.environ, "ARM64_VC_ENV": config["gate"]["vc_env"], "PYTHONDONTWRITEBYTECODE": "1"}
+            ledger = gate_retry_ledger(config)
+            journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat(),
+                                                 "retry_ledger": str(ledger)})
+            env = {**os.environ, "ARM64_VC_ENV": config["gate"]["vc_env"], "PYTHONDONTWRITEBYTECODE": "1",
+                   # 补跑累计账本跨收尾共用（见 gate_retry_ledger）；驱动的白名单环境显式转发这一个变量。
+                   "UNIT_EXECUTOR_RETRY_LEDGER": str(ledger)}
             started = time.monotonic()
             with (work / "gates.log").open("xb") as log:
                 os.chmod(log.name, 0o600)
