@@ -190,7 +190,7 @@ class PlanPreviewTests(_WorldCase):
         self.assertEqual(objects["keep"], ["a", "b"])
         self.assertEqual({row["job"]: row["reason"] for row in objects["recollect"]}, {"c": "已失败", "d": "结果不确定", "e": "尚未执行"})
         states = {row["object"]: row["state"] for row in objects["reverify"]}
-        self.assertEqual(states["恢复预览 #1"], "unknown")  # 没有演进信息，由受管对账确认
+        self.assertEqual(states["恢复预览 #1"], "valid")  # 已部署工具身份与预览冻结的逐项一致
         self.assertEqual(states["恢复批准"], "missing")
         self.assertEqual(states["工具演进登记"], "valid")
 
@@ -617,7 +617,7 @@ class InterruptionTests(_WorldCase):
         for crash in ("resume", "evolution", "reconcile", "approve", "authorize"):
             with self.subTest(crash_after=crash):
                 world = self._chain()
-                killed = world.run("--apply", RECOVERY_PLAN_CRASH_AFTER=crash)
+                killed = world.run("--apply", **world.crash(crash))
                 self.assertEqual(killed.returncode, 137, (crash, killed.stderr))
                 self.assertNotIn("RECOVERY_PLAN_DONE", killed.stderr)
                 # 被打断时现场处在"动作做完、记录没写"的状态：预览能看出已推进。
@@ -634,7 +634,7 @@ class InterruptionTests(_WorldCase):
         reference_writes, reference_state, reference_plan = self._reference()
         world = self._chain()
         for crash in ("resume", "reconcile", "approve"):
-            self.assertEqual(world.run("--apply", RECOVERY_PLAN_CRASH_AFTER=crash).returncode, 137)
+            self.assertEqual(world.run("--apply", **world.crash(crash)).returncode, 137)
         self.assertEqual(world.run("--apply").returncode, EXIT_OK)
         plan = world.wait_continue_finished()
         self.assertEqual(world.write_calls(), reference_writes)
@@ -644,7 +644,7 @@ class InterruptionTests(_WorldCase):
     def test_interrupt_inside_dispatch_window_never_redispatches(self) -> None:
         world = self._chain()
         # 占位已写、进程还没起：执行结果不确定，保守停下，不自动重派。
-        self.assertEqual(world.run("--apply", RECOVERY_PLAN_CRASH_AFTER="continue-inflight").returncode, 137)
+        self.assertEqual(world.run("--apply", **world.crash("continue-inflight")).returncode, 137)
         self.assertEqual(world.dispatches(), [])
         plan = world.plan()
         self.assertEqual(self.step(plan, "continue")["status"], "blocked")
@@ -655,7 +655,7 @@ class InterruptionTests(_WorldCase):
 
     def test_interrupt_after_spawn_before_started_record_does_not_double_dispatch(self) -> None:
         world = self._chain()
-        self.assertEqual(world.run("--apply", RECOVERY_PLAN_CRASH_AFTER="continue-spawned").returncode, 137)
+        self.assertEqual(world.run("--apply", **world.crash("continue-spawned")).returncode, 137)
         import time
 
         for _ in range(50):  # 等被派生出的续跑替身自己跑完
@@ -669,9 +669,358 @@ class InterruptionTests(_WorldCase):
 
     def test_interrupt_leaves_no_partial_state_files(self) -> None:
         world = self._chain()
-        self.assertEqual(world.run("--apply", RECOVERY_PLAN_CRASH_AFTER="approve").returncode, 137)
+        self.assertEqual(world.run("--apply", **world.crash("approve")).returncode, 137)
         for path in world.out_dir().rglob("*"):
             self.assertFalse(path.name.startswith(".") and ".tmp-" in path.name, path)
+
+
+class HalfDoneResumeTests(_WorldCase):
+    """campaign-resume 四段写入（收据→总账根因修复→计时账本恢复→总账 campaign_resumed）在第三段之后失败：停线已清、总账未撤终态。"""
+
+    def _world(self, **kwargs) -> rw.World:
+        world = self.make_world(ledger_status="stop_required", scenario={"resume_fail_before_project": True}, **kwargs)
+        world.pre_approve("campaign-resume", rw.RESUME_SHA, extra_files=("REGRESSION_RECEIPT",))
+        world.pre_sign_recovery(seq=11, effective=7)
+        return world
+
+    def test_half_done_resume_is_pending_not_done_and_completed_with_the_same_approval(self) -> None:
+        world = self._world()
+        first = world.run("--apply")
+        self.assertEqual(first.returncode, EXIT_FAILED, first.stderr)
+        self.assertIn("campaign-resume 写入失败", first.stderr)
+        # 现场：计时账本已离开停线，收据在，总账没有 campaign_resumed。
+        state = world.state()
+        self.assertEqual((state["ledger_status"], state.get("project_resumed", [])), ("recovery_required", []))
+        receipts = list((world.campaign_dir / "control/resume").glob("resume-*.json"))
+        self.assertEqual(len(receipts), 1)
+        plan = world.plan()
+        resume = self.step(plan, "resume")
+        self.assertEqual(resume["status"], "pending", "只看计时账本会把它误判成已恢复")
+        self.assertIn("只做了一半", resume["detail"])
+        self.assertEqual(len(resume["evidence"]["unresolved_receipts"]), 1)
+        self.assertEqual(plan["overall"], "pending")
+        # 续接用收据里的批准，不再要新的批准文件：把人提交的批准删掉也照样补完。
+        for approval in (world.runroot / "recovery-plan-approvals").rglob("*.json"):
+            data = json.loads(approval.read_text(encoding="utf-8"))
+            if data["binding"]["operation"] == "campaign-resume":
+                approval.unlink()
+        second = world.run("--apply")
+        self.assertEqual(second.returncode, EXIT_OK, second.stderr)
+        self.assertEqual(world.write_calls(), ["campaign-resume:apply", "campaign-resume:apply", "reconcile-attempt:approve",
+                                               "reconcile-attempt:authorize"])
+        resume_calls = [call for call in world.calls() if call[0] == "campaign-resume"]
+        applies = [call for call in resume_calls if "--approve-sha256" in call]
+        self.assertEqual(len(applies), 2)
+        self.assertEqual(applies[1][applies[1].index("--approve-sha256") + 1], rw.RESUME_SHA, "续接用的是收据里的批准摘要")
+        self.assertEqual(len(resume_calls) - len(applies), 1, "续接不重新预览：只有第一次执行预览过一次")
+        self.assertEqual(len(list((world.campaign_dir / "control/resume").glob("resume-*.json"))), 1, "没有第二份收据")
+        self.assertEqual(len(world.state()["project_resumed"]), 1)
+        self.assertEqual(len(world.dispatches()), 1)
+        done = world.wait_continue_finished()
+        resume = self.step(done, "resume")
+        self.assertEqual(resume["status"], "done")
+        self.assertIn("都已在项目总账落账", resume["detail"])
+
+    def test_interrupt_during_completion_still_converges(self) -> None:
+        world = self._world()
+        self.assertEqual(world.run("--apply").returncode, EXIT_FAILED)
+        self.assertEqual(world.run("--apply", **world.crash("resume")).returncode, 137)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        self.assertEqual(len(world.state()["project_resumed"]), 1)
+        self.assertEqual(len(world.dispatches()), 1)
+
+    def test_unreadable_project_ledger_blocks_instead_of_guessing(self) -> None:
+        world = self._world()
+        self.assertEqual(world.run("--apply").returncode, EXIT_FAILED)
+        world.set_state(project_ledger_error="总账事件目录不可信")
+        plan = world.plan()
+        resume = self.step(plan, "resume")
+        self.assertEqual(resume["status"], "blocked")
+        self.assertIn("总账事件目录不可信", resume["detail"])
+        self.assertEqual(world.run("--apply").returncode, EXIT_OPERATOR)
+        self.assertEqual(world.dispatches(), [])
+
+    def test_fully_resumed_receipts_do_not_trigger_completion(self) -> None:
+        world = self.make_world(ledger_status="stop_required")
+        world.pre_approve("campaign-resume", rw.RESUME_SHA, extra_files=("REGRESSION_RECEIPT",))
+        world.pre_sign_recovery(seq=11, effective=7)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        world.wait_continue_finished()
+        self.assertEqual(world.write_calls().count("campaign-resume:apply"), 1)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        self.assertEqual(world.write_calls().count("campaign-resume:apply"), 1)
+
+
+class StalePreviewTests(_WorldCase):
+    """磁盘上的旧预览不能因为进程在记录写入前被打断就被拿去派发。"""
+
+    def test_pure_staleness_reasons(self) -> None:
+        helper = self.make_world().helper()
+        preview = {"tool_files_sha256": "f1" * 32, "tool_wire_sha256": "a" * 64, "tool_policy_sha256": "b" * 64,
+                   "evolution_indexes": [3, 4], "created_at_utc": "2026-10-21T10:00:00Z"}
+        same = {"current_files_sha256": "f1" * 32, "current_wire_sha256": "a" * 64, "current_policy_sha256": "b" * 64, "effective_index": 4}
+        self.assertEqual(helper.preview_stale_reasons(preview, same, []), ([], 4))
+        reasons, _ = helper.preview_stale_reasons(preview, {**same, "current_files_sha256": "0" * 64}, [])
+        self.assertTrue(any("工具文件摘要" in item for item in reasons), reasons)
+        reasons, _ = helper.preview_stale_reasons(preview, {**same, "effective_index": 5}, [])
+        self.assertTrue(any("预览基于演进 #4，当前有效演进 #5" in item for item in reasons), reasons)
+        reasons, _ = helper.preview_stale_reasons(preview, same, [{"approved_sha256": "c" * 64, "approved_at_utc": "2026-10-21T10:00:01Z"}])
+        self.assertTrue(any("早于 campaign-resume 批准" in item for item in reasons), reasons)
+        self.assertEqual(helper.preview_stale_reasons(preview, same, [{"approved_sha256": "c" * 64, "approved_at_utc": "2026-10-21T09:59:59Z"}])[0], [])
+        self.assertEqual(helper.preview_stale_reasons({"evolution_indexes": [], "created_at_utc": None}, {"error": "x"}, []), ([], 0))
+
+    def test_p1_authorized_then_new_drift_registered_then_interrupted_must_not_dispatch(self) -> None:
+        """验收者描述的场景：P1 已批准授权；新漂移（新部署）登记完、记录写入前被打断；重入后必须停下要求新预览，不能派发。"""
+
+        world = self.make_world()
+        world.pre_sign_recovery(seq=10, effective=7, index=1)
+        self.assertEqual(world.run("--apply", **world.crash("authorize")).returncode, 137)
+        self.assertEqual(world.state()["ledger_status"], "active", "P1 已批准并授权，只差派发")
+        self.assertEqual(world.dispatches(), [])
+        world.new_drift()  # 部署了新的受管工具，演进未登记
+        world.pre_approve("tool-evolution", rw.EVOLUTION_SHA)
+        self.assertEqual(world.run("--apply", **world.crash("evolution")).returncode, 137)
+        self.assertEqual(world.state()["effective_index"], 8, "演进登记已落账，只是步骤记录没写")
+        # 重入前的只读预览就应当看出 P1 已过期（不靠任何内存状态）。
+        plan = world.plan()
+        reconcile = self.step(plan, "reconcile")
+        self.assertEqual(reconcile["status"], "pending", plan)
+        self.assertIn("已过期", reconcile["detail"])
+        self.assertIn("工具文件摘要", reconcile["detail"])
+        states = {row["object"]: row["state"] for row in plan["objects"]["reverify"]}
+        self.assertEqual(states["恢复预览 #1"], "stale")
+        again = world.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OPERATOR, again.stderr)
+        self.assertIn("缺少 recovery-approve 专项人工批准", again.stderr, "必须停下要求新预览的批准")
+        self.assertEqual(world.dispatches(), [], "旧预览绝不派发")
+        directory = world.campaign_dir / "control/reconciliation" / f"attempt-{world.attempt}"
+        self.assertEqual(len(list(directory.glob("recovery-preview-*.json"))), 2, "重新对账出了新预览")
+        # 人审阅新预览后批准，才继续并派发。
+        world.pre_sign_recovery(seq=10, effective=8, index=2)
+        final = world.run("--apply")
+        self.assertEqual(final.returncode, EXIT_OK, final.stderr)
+        self.assertEqual(len(world.dispatches()), 1)
+        self.assertIn(directory.joinpath("recovery-preview-02.json").as_posix(), world.dispatches()[0])
+
+    def test_acceptance_check_catches_ledger_head_advance_the_disk_cannot_show(self) -> None:
+        """派发前的接受检查是最后一道：账本 head 在授权之后又前进（磁盘上看不出来），旧预览同样不能派发。"""
+
+        world = self.make_world()
+        world.pre_sign_recovery(seq=10, effective=7, index=1)
+        self.assertEqual(world.run("--apply", **world.crash("authorize")).returncode, 137)
+        self.assertEqual(self.step(world.plan(), "continue")["status"], "pending", "磁盘判定看不出过期")
+        world.set_state(ledger_seq=11)
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertIn("缺少 recovery-approve 专项人工批准", result.stderr)
+        self.assertEqual(world.dispatches(), [])
+        directory = world.campaign_dir / "control/reconciliation" / f"attempt-{world.attempt}"
+        self.assertEqual(len(list(directory.glob("recovery-preview-*.json"))), 2)
+        history = (world.out_dir() / "history.ndjson").read_text(encoding="utf-8")
+        self.assertIn("派发前复核发现预览不再有效", history)
+
+    def test_official_phase_readback_catches_a_changed_preview_before_dispatch(self) -> None:
+        world = self.make_world(phase="official", ledger_status="stage_review_required", reuse_complete=True)
+        world.pre_sign_recovery(seq=10, effective=7, index=1)
+        self.assertEqual(world.run("--apply", **world.crash("reconcile")).returncode, 137)
+        world.set_state(ledger_seq=11)  # 对账之后账本前进：回读对账会得到新预览
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertIn("缺少 recovery-continue 专项人工批准", result.stderr)
+        self.assertEqual(world.dispatches(), [])
+
+    def test_dispatch_is_not_blocked_by_a_consumed_preview_once_dispatched(self) -> None:
+        world = self.make_world()
+        world.pre_sign_recovery(seq=10, effective=7)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        world.wait_continue_finished()
+        world.new_drift()  # 派发之后受管工具又换了：预览已被消费，不再按过期处理
+        plan = world.plan()
+        self.assertEqual(self.step(plan, "reconcile")["status"], "done")
+        self.assertEqual(self.step(plan, "continue")["status"], "done")
+
+
+class SuccessorTests(_WorldCase):
+    def _dispatched(self) -> rw.World:
+        world = self.make_world()
+        world.pre_sign_recovery(seq=10, effective=7)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        world.wait_continue_finished()
+        return world
+
+    def _set_successor_status(self, world: rw.World, status: str | None) -> str:
+        name = world.successor_name
+        path = world.attempts_dir() / name / "attempt.json"
+        if status is None:
+            path.unlink()
+        else:
+            rw.write_json(path, {"attempt_id": name, "phase": world.phase, "status": status, "results": []})
+        return name
+
+    def test_successful_successor_keeps_overall_complete_and_shows_its_status(self) -> None:
+        world = self._dispatched()
+        plan = world.plan()
+        self.assertEqual(plan["overall"], "complete")
+        rows = self.step(plan, "continue")["evidence"]["successors"]
+        self.assertEqual([(row["id"], row["status"], row["class"]) for row in rows], [(world.successor_name, "awaiting_receipts", "ok")])
+        self.assertEqual(plan["warnings"], [])
+        self.assertNotIn("followed_from", json.loads(world.run("--plan", "--json", "--follow-latest").stdout))
+
+    def test_failed_successor_is_not_reported_complete_and_points_to_the_newest_failure(self) -> None:
+        world = self._dispatched()
+        name = self._set_successor_status(world, "environment_contaminated")
+        plan = world.plan()
+        self.assertEqual(plan["overall"], "superseded-failed")
+        self.assertEqual(self.step(plan, "continue")["status"], "done")
+        self.assertTrue(any(name in item and "--follow-latest" in item and "已失败" in item for item in plan["warnings"]), plan["warnings"])
+        self.assertIn("environment_contaminated", self.step(plan, "continue")["detail"])
+        text = world.run("--plan").stdout
+        self.assertIn("总体 superseded-failed", text)
+        self.assertIn("警告：", text)
+        applied = world.run("--apply")
+        self.assertEqual(applied.returncode, EXIT_OPERATOR, applied.stderr)
+        self.assertIn("改指最新失败的 attempt", applied.stderr)
+        self.assertEqual(len(world.dispatches()), 1, "对已被取代的目标不再派发")
+
+    def test_follow_latest_retargets_plan_and_apply_to_the_failed_successor(self) -> None:
+        world = self._dispatched()
+        name = self._set_successor_status(world, "failed")
+        followed = json.loads(world.run("--plan", "--json", "--follow-latest").stdout)
+        self.assertEqual((followed["attempt"], followed["followed_from"], followed["attempt_status"]), (name, world.attempt, "failed"))
+        self.assertEqual(self.step(followed, "reconcile")["status"], "pending")
+        self.assertEqual(followed["warnings"], [])
+        applied = world.run("--apply", "--follow-latest")
+        self.assertEqual(applied.returncode, EXIT_OPERATOR, applied.stderr)
+        self.assertIn("--follow-latest：目标 attempt 由", applied.stderr)
+        self.assertIn("缺少 recovery-approve 专项人工批准", applied.stderr, "新目标要重新批准，批准按新 ATTEMPT 绑定")
+        self.assertEqual(len(world.dispatches()), 1)
+        # 参数文件没有被改写。
+        self.assertIn(world.attempt, world.params_path.read_text(encoding="utf-8"))
+
+    def test_unknown_successor_warns_but_is_not_followed(self) -> None:
+        world = self._dispatched()
+        self._set_successor_status(world, None)  # 只剩目录，没有 attempt.json
+        plan = world.plan()
+        self.assertEqual(plan["overall"], "complete")
+        self.assertTrue(any("状态未知" in item for item in plan["warnings"]), plan["warnings"])
+        self.assertNotIn("followed_from", json.loads(world.run("--plan", "--json", "--follow-latest").stdout))
+
+    def test_unreadable_successor_attempt_json_does_not_fail_the_plan(self) -> None:
+        world = self._dispatched()
+        path = world.attempts_dir() / world.successor_name / "attempt.json"
+        path.write_text("", encoding="utf-8")  # 正在被写的半截文件
+        plan = world.plan()
+        self.assertTrue(any("状态未知" in item for item in plan["warnings"]), plan["warnings"])
+
+
+class AcceptanceGateAndLogTests(_WorldCase):
+    def test_crash_variable_alone_does_nothing(self) -> None:
+        world = self.make_world()
+        result = world.run("--apply", RECOVERY_PLAN_CRASH_AFTER="reconcile")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)  # 正常走到缺批准，没有被打断
+        self.assertIn("忽略 RECOVERY_PLAN_CRASH_AFTER", result.stderr)
+        wrong = world.run("--apply", RECOVERY_PLAN_CRASH_AFTER="reconcile", RECOVERY_PLAN_ACCEPTANCE="yes")
+        self.assertEqual(wrong.returncode, EXIT_OPERATOR, wrong.stderr)
+        fresh = self.make_world()  # 前两次已经对账过，这里换一个干净现场，让"对账之后"这个打断点真的会到达
+        both = fresh.run("--apply", **fresh.crash("reconcile"))
+        self.assertEqual(both.returncode, 137)
+
+    def _fake_python_script(self, world: rw.World) -> tuple[dict[str, str], Path]:
+        """PATH 垫片：python3 只打印验收两个变量就退出；id 报 root。用来验证 recovery-plan.sh 自己对环境变量的处理。"""
+
+        shims = world.root / "shims"
+        shims.mkdir()
+        rw.write(shims / "python3", '#!/bin/bash\necho "CRASH=[${RECOVERY_PLAN_CRASH_AFTER:-}] ACCEPT=[${RECOVERY_PLAN_ACCEPTANCE:-}] ARGS=$*"\n', 0o700)
+        rw.write(shims / "id", '#!/bin/bash\nif [ "${1:-}" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n', 0o700)
+        env = {**world.env(), "PATH": f"{shims}:{os.environ['PATH']}", "RECOVERY_PLAN_CRASH_AFTER": "approve", "RECOVERY_PLAN_ACCEPTANCE": "1"}
+        return env, shims
+
+    def test_wrapper_script_clears_the_injection_variables_by_default(self) -> None:
+        world = self.make_world()
+        env, _ = self._fake_python_script(world)
+        for arguments in ([], ["--apply"], ["--plan"]):
+            done = subprocess.run(["bash", str(rw.SCRIPT), str(world.params_path), *arguments], capture_output=True, text=True, env=env,
+                                  stdin=subprocess.DEVNULL)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("CRASH=[] ACCEPT=[]", done.stdout, arguments)
+
+    def test_wrapper_script_inject_option_sets_both_only_for_apply(self) -> None:
+        world = self.make_world()
+        env, _ = self._fake_python_script(world)
+        done = subprocess.run(["bash", str(rw.SCRIPT), str(world.params_path), "--apply", "--inject-crash-after", "resume"],
+                              capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("CRASH=[resume] ACCEPT=[1]", done.stdout)
+        self.assertIn("验收打断注入已开启", done.stderr)
+        refused = subprocess.run(["bash", str(rw.SCRIPT), str(world.params_path), "--inject-crash-after", "resume"],
+                                 capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+        self.assertEqual(refused.returncode, EXIT_USAGE)
+        self.assertIn("只对 --apply 有效", refused.stderr)
+
+    def test_official_entry_log_is_per_round_and_old_log_is_kept(self) -> None:
+        world = self.make_world(phase="official", ledger_status="stage_review_required")
+        world.pre_sign_recovery(seq=10, effective=7)
+        old = world.runroot / "recovery-plan-entry-r1.out"
+        old.write_text("上一次同轮次的旧日志\n", encoding="utf-8")
+        self.assertIn(world.run("--apply").returncode, (EXIT_OK, EXIT_OPERATOR))
+        world.wait_continue_finished()
+        kept = sorted(world.runroot.glob("recovery-plan-entry-r1.out.pre-r1-*"))
+        self.assertEqual(len(kept), 1, kept)
+        self.assertEqual(kept[0].read_text(encoding="utf-8"), "上一次同轮次的旧日志\n")
+        self.assertIn("entry.sh done", old.read_text(encoding="utf-8"))
+        started = json.loads(next((world.out_dir() / "continue").glob("*.started.json")).read_text(encoding="utf-8"))
+        self.assertTrue(started["log"].endswith("recovery-plan-entry-r1.out"), started)
+
+
+class PauseWarningTests(_WorldCase):
+    def test_paused_scopes_are_listed_as_a_warning(self) -> None:
+        world = self.make_world()
+        self.assertEqual(world.plan()["warnings"], [])
+        world.set_state(paused_scopes=["stage"])
+        plan = world.plan()
+        self.assertEqual(len(plan["warnings"]), 1)
+        self.assertIn("预算暂停范围 ['stage']", plan["warnings"][0])
+        self.assertIn("deadline-extend", plan["warnings"][0])
+        self.assertIn("警告：", world.run("--plan").stdout)
+
+    def test_deadline_pause_stops_with_deadline_extend_hint_then_continues(self) -> None:
+        world = self.make_world(scenario={"pauses": {"20261021T135838Z-70aa3c8b45478aec": ["deadline"]}})
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertIn("deadline-extend", result.stderr)
+        self.assertNotIn("--from", result.stderr)
+        self.assertNotIn("EXTEND_DEADLINE", result.stderr, "本计划不代办延期，也没有 pre-extend 步骤")
+        self.assertIn("重新执行同一条命令", result.stderr)
+        self.assertEqual(world.write_calls(), [])
+        world.set_state(deadline_resolved=True)
+        world.pre_sign_recovery(seq=10, effective=7)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        self.assertEqual(len(world.dispatches()), 1)
+
+    def test_request_budget_pause_stops_with_request_budget_extend_hint_then_continues(self) -> None:
+        world = self.make_world(scenario={"pauses": {"20261021T135838Z-70aa3c8b45478aec": ["request_budget"]}})
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertIn("request-budget-extend", result.stderr)
+        self.assertIn("重新执行同一条命令", result.stderr)
+        self.assertEqual(world.write_calls(), [])
+        self.assertEqual(world.dispatches(), [])
+        world.set_state(request_budget_resolved=True)
+        world.pre_sign_recovery(seq=10, effective=7)
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        self.assertEqual(len(world.dispatches()), 1)
+
+    def test_reconcile_writes_without_a_human_approval(self) -> None:
+        """对账（reconcile-runs、reconcile）会写项目总账、不要人工批准——与 fix-and-continue 一致；第一次执行没有任何批准文件时它们照样执行。"""
+
+        world = self.make_world()
+        world.add_tail_run("run-b", "failed", 200.0)
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR)
+        names = [call[0] for call in world.calls()]
+        self.assertIn("reconcile-supervisor-run", names)
+        self.assertIn("reconcile-attempt", names)
+        self.assertFalse((world.runroot / "recovery-plan-approvals").exists())
 
 
 if __name__ == "__main__":

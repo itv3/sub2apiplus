@@ -21,14 +21,26 @@
   （候选采集 ``vc5-recover.sh``；官方首批 ``entry.sh --approve-sha256``）。
 * 写账本的动作（campaign-resume 批准、工具演进登记、批准恢复预览、授权、官方首批续跑）各自消费一份**人工提交的专项批准**
   （``fix_safety.require_approval``，批准文件绑定操作、对象摘要、参数与文件摘要，有效期内才认）；缺失时只写批准意向并停下，
-  **从不代签**。批准预览与授权共用同一个预览摘要，停下之前把两份意向一次写全。
+  **从不代签**。批准预览与授权共用同一个预览摘要，停下之前把两份意向一次写全。唯一的例外是续接"campaign-resume 只做了一半"：
+  受管 ``_apply_campaign_resume`` 分四段写入，第三段（计时账本恢复）之后、第四段（总账 ``campaign_resumed``）之前失败时，
+  批准收据已在 ``control/resume/``，本计划核对收据与总账事件，发现缺第四段就用收据冻结的批准摘要与绑定重跑续接——收据本身
+  就是那次已批准的记录，续接不产生新的决定，所以不再要新的批准文件。
+* 预览过期不靠进程内存：用预览冻结的已部署工具身份、演进序号和更晚的 campaign-resume 批准对照现场判定，派发前再做一道受管接受检查
+  （候选采集）或回读对账（官方首批）兜底。目标 attempt 之后已有后继时，证据带上后继状态；最新后继失败则总体不报"完成"，提示改指
+  最新失败的 attempt（``--follow-latest`` 可自动跟）。
 * 从不做：accounting-resolve、environment-isolate、request-budget-extend、deadline-extend、record-root-cause-repair、任何 ``--force``、
   重装守护。对账判这些暂停时停下，打印要执行的受管命令与续跑的同一条命令。
-* 只读模式不写任何文件、不改任何账本；执行模式只写 ``$RUNROOT/recovery-plan/<轮次>/``（步骤记录、原始输出、批准意向、
-  续跑占位）和受管命令自己的产物。
+* 只读模式不写 Campaign、两本账与运行根（``$RUNROOT``）。它调用的受管只读接口按既有约定可能刷新数据根**之外**的身份记忆化缓存
+  （``$(dirname $D)/identity-memo``）并触碰 ``*.lock`` 的访问时间；本计划选择保留这个缓存（不让预览绕过它：每次重算工具身份很慢），
+  所以"只读"的准确含义是上面这一句，而不是"不产生任何文件系统副作用"。执行模式只写 ``$RUNROOT/recovery-plan/<轮次>/``（步骤记录、
+  原始输出、批准意向、续跑占位）和受管命令自己的产物。
+* 对账（``reconcile-runs``、``reconcile``）会写项目总账（入账、可能判永久停线），**不需要**人工批准——与 ``fix-and-continue`` 一致：
+  对账是把已发生的失败如实记账，不是新的决定；决定性的写入（campaign-resume、工具演进、批准、授权、官方首批续跑）才要批准。
+* 处理完暂停（账务、环境、预算、截止）或补好批准之后，必须用**同一参数文件、同一轮次**重跑：批准文件、续跑占位、对账暂停对象（revisit）
+  都按轮次存放，换轮次会让它们全部失效。
 
 退出码：0 计划完成（续跑已派发／在跑／已结束）或预览成功；1 失败；2 参数或用法错误；3 本轮已有实例在跑；4 需要人工处理
-（缺批准、对账暂停、阻塞）。
+（缺批准、对账暂停、阻塞、目标 attempt 已被失败的后继取代）。
 """
 
 from __future__ import annotations
@@ -115,6 +127,11 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_LOCKED, EXIT_OPERATOR = 0, 1, 2, 3, 4
 
 # 续跑进程结束时由派发包装写进日志末行的标记（足够独特，续跑脚本自己的输出不会碰巧产生）。
 EXIT_MARKER = "RECOVERY_PLAN_EXIT="
+# 验收打断注入的两道闸：只设 CRASH 不生效，必须同时设 ACCEPTANCE=1；recovery-plan.sh 默认把两者都清掉，只有显式的
+# --inject-crash-after 才会为本次执行设上（生产路径不可能被环境变量误触发）。
+CRASH_ENV, ACCEPTANCE_ENV = "RECOVERY_PLAN_CRASH_AFTER", "RECOVERY_PLAN_ACCEPTANCE"
+OK_ATTEMPT_STATUSES = frozenset({"complete", "awaiting_receipts"})
+RUNNING_ATTEMPT_STATUSES = frozenset({"running", "active", "in_progress", "reserved", "prepared"})
 PREVIEW_RE = re.compile(r"^recovery-preview-(\d{2,})\.json$")
 APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2,})\.json$")
 
@@ -220,11 +237,15 @@ def locate_attempt(params: Mapping[str, str]) -> tuple[str | None, Path | None]:
     return found[0] if found else (None, None)
 
 
+def attempts_base(params: Mapping[str, str], phase: str) -> Path:
+    campaign = Path(params["C"])
+    return campaign / "official" / "attempts" if phase == "official" else campaign / "candidates" / params["CANDIDATE"] / "attempts"
+
+
 def sibling_attempts(params: Mapping[str, str], phase: str) -> list[str]:
     """同阶段（官方或同一候选）下全部 attempt 目录名，按名字（时间戳前缀）升序。"""
 
-    campaign = Path(params["C"])
-    base = campaign / "official" / "attempts" if phase == "official" else campaign / "candidates" / params["CANDIDATE"] / "attempts"
+    base = attempts_base(params, phase)
     if not base.is_dir():
         return []
     return sorted(item.name for item in base.iterdir() if item.is_dir() and not item.is_symlink() and FC.ID_RE.fullmatch(item.name))
@@ -275,6 +296,8 @@ def _preview_summary(path: Path, data: Mapping[str, Any], index: int) -> dict[st
         "ledger_head_sequence": head.get("sequence"),
         "ledger_head_status": head.get("status"),
         "tool_files_sha256": identity.get("files_sha256"),
+        "tool_wire_sha256": identity.get("wire_producer_sha256"),
+        "tool_policy_sha256": identity.get("policy_sha256"),
         "recovery_revision": data.get("recovery_revision"),
     }
 
@@ -329,8 +352,12 @@ def read_resume_receipts(params: Mapping[str, str]) -> list[dict[str, Any]]:
     for item in sorted(directory.glob("resume-*.json")):
         data = _load_json(item, "campaign-resume 批准收据")
         if isinstance(data, dict):
+            bindings = data.get("bindings") if isinstance(data.get("bindings"), dict) else {}
+            regression = bindings.get("regression_receipt") if isinstance(bindings.get("regression_receipt"), dict) else {}
             rows.append({"approved_sha256": data.get("approved_sha256"), "approved_by": data.get("approved_by"),
-                         "approved_at_utc": data.get("approved_at_utc"), "root_cause_id": data.get("root_cause_id")})
+                         "approved_at_utc": data.get("approved_at_utc"), "root_cause_id": data.get("root_cause_id"),
+                         "receipt_sha256": data.get("receipt_sha256"), "reason": data.get("reason"),
+                         "fix_commit": bindings.get("fix_commit"), "regression_receipt_path": regression.get("path")})
     return rows
 
 
@@ -443,12 +470,47 @@ class ManagedBackend:
         if result.rc != 0 or not isinstance(payload, dict):
             return {"error": f"tool-evolution-status 失败（rc={result.rc}）：{FC._tail(result.stderr)}"}
         drift = payload.get("unregistered_drift") or []
+        # 恢复预览里的 tool_identity 取的是对账当时**已部署**工具的身份（reconciler._current_identity），所以和 current_summary 对照。
+        current = payload.get("current_summary") if isinstance(payload.get("current_summary"), dict) else {}
         return {
             "status": payload.get("status"),
             "registered": payload.get("status") == "registered" and not drift,
             "effective_index": payload.get("effective_index"),
             "unregistered_drift": drift,
+            "current_files_sha256": current.get("files_sha256"),
+            "current_wire_sha256": current.get("wire_producer_sha256"),
+            "current_policy_sha256": current.get("policy_sha256"),
         }
+
+    def project_resumed(self) -> dict[str, Any]:
+        """项目总账里本 Campaign 的 campaign_resumed 事件所绑定的恢复批准收据摘要（只读，不取项目锁：同
+        ``campaign_resume_epoch_snapshot`` 的读法）。"""
+
+        try:
+            ledger = FC._managed_from_table(self.params, "project_ledger_module")
+            root = ledger.find_project_ledger(Path(self.params["C"]))
+            if root is None:
+                return {"error": "找不到项目总账"}
+            events = ledger._load_events(root)
+        except Exception as error:
+            return {"error": f"{type(error).__name__}: {error}"}
+        found = sorted(
+            str(event["payload"].get("resume_receipt_sha256")) for event in events
+            if event.get("event_type") == "campaign_resumed" and event["payload"].get("campaign_id") == self.params["CAMPAIGN"])
+        return {"receipts": found}
+
+    def accepted(self, preview_path: str) -> dict[str, Any]:
+        """候选采集续跑前的接受检查：已批准、已授权、工具身份与账本 head 都仍与预览一致（同 fix_and_continue 的 accepted 步骤；
+        ``consume_authorization=False``：只复核，绝不在这里追加授权事件）。"""
+
+        try:
+            reconciler = FC._managed_from_table(self.params, "reconciler_module")
+            consumed = reconciler.load_approved_recovery_preview(
+                Path(self.params["C"]), Path(preview_path), phase="candidate", candidate_id=self.params["CANDIDATE"],
+                consume_authorization=False)
+        except Exception as error:
+            return {"error": f"{type(error).__name__}: {error}"}
+        return {"ok": True, "execute_job_ids": consumed.get("execute_job_ids")}
 
     def tail(self, *, exclude: tuple[str, ...] = (), revisit: tuple[Mapping[str, str], ...] = ()) -> dict[str, Any]:
         try:
@@ -534,7 +596,36 @@ def launch_records(params: Mapping[str, str]) -> list[dict[str, Any]]:
     return rows
 
 
-def continuation_state(params: Mapping[str, str], siblings: list[str]) -> dict[str, Any]:
+def attempt_class(status: Any, exists: bool) -> str:
+    """后继 attempt 的粗分类：ok（已完整）、running（在跑）、failed（失败或被污染）、unknown（无 attempt.json 等）。"""
+
+    if not exists or not status:
+        return "unknown"
+    if status in OK_ATTEMPT_STATUSES:
+        return "ok"
+    if status in RUNNING_ATTEMPT_STATUSES:
+        return "running"
+    return "failed"
+
+
+def successor_rows(params: Mapping[str, str], phase: str | None, siblings: list[str]) -> list[dict[str, Any]]:
+    if phase is None:
+        return []
+    base = attempts_base(params, phase)
+    rows = []
+    for name in siblings:
+        if name > params["ATTEMPT"]:
+            try:
+                summary = read_attempt(base / name)
+            except RecoveryPlanError:
+                # 后继可能正在被写（续跑刚派发）：读不出来按"状态未知"处理，不让对后继的好奇心把整个计划打成失败；
+                # 目标 attempt 自己的 attempt.json 读不出来仍然失败关闭（read_attempt 在 gather_facts 里直接调用）。
+                summary = {"exists": False, "status": None}
+            rows.append({"id": name, "status": summary.get("status"), "class": attempt_class(summary.get("status"), summary["exists"])})
+    return rows
+
+
+def continuation_state(params: Mapping[str, str], siblings: list[str], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """续跑派发的现场状态（不依赖任何内存状态）。
 
     判定顺序：本计划自己的派发占位／启动记录（取最近一次）→ 后继 attempt 是否已存在（别的途径或上一轮已派发过）。
@@ -546,6 +637,7 @@ def continuation_state(params: Mapping[str, str], siblings: list[str]) -> dict[s
     successors = [name for name in siblings if name > params["ATTEMPT"]]
     if successors:
         state["successors"] = successors
+        state["successor_rows"] = list(rows or [])
     records = launch_records(params)
     if records:
         last = records[-1]
@@ -602,8 +694,10 @@ def gather_facts(params: Mapping[str, str], backend: ManagedBackend, *, force_re
         "force_reconcile": force_reconcile,
     }
     siblings = sibling_attempts(params, phase) if phase else []
-    facts["continuation"] = continuation_state(params, siblings)
+    facts["continuation"] = continuation_state(params, siblings, successor_rows(params, phase, siblings))
     facts["siblings"] = siblings
+    # 只有存在恢复批准收据时才需要读项目总账：核对每份收据是否已有对应的 campaign_resumed 事件（四段写入的最后一段）。
+    facts["project_resumed"] = backend.project_resumed() if facts["resume_receipts"] else {"receipts": []}
     return facts
 
 
@@ -617,6 +711,60 @@ def approval_for(facts: Mapping[str, Any], preview: Mapping[str, Any] | None) ->
         return None
     matches = [row for row in facts["records"]["approvals"] if row.get("approved_sha256") == preview["review_sha256"]]
     return matches[-1] if matches else None
+
+
+def unresolved_resumes(facts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """已有 campaign-resume 批准收据、项目总账却没有绑定它的 campaign_resumed 事件：受管 ``_apply_campaign_resume`` 四段写入
+    （收据→总账根因修复→计时账本 recovery_verified→总账 campaign_resumed）在第三段之后失败，只看计时账本会把它误判成已恢复。"""
+
+    resumed = facts["project_resumed"]
+    if "error" in resumed:
+        return []
+    done = set(resumed["receipts"])
+    return [row for row in facts["resume_receipts"] if row.get("receipt_sha256") and row["receipt_sha256"] not in done]
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def preview_stale_reasons(preview: Mapping[str, Any], evolution: Mapping[str, Any],
+                          receipts: list[Mapping[str, Any]]) -> tuple[list[str], int]:
+    """恢复预览相对当前现场的过期原因（磁盘与受管只读状态可判定的部分）与参与比对的项数。
+
+    预览生成之后：已部署工具的文件／wire／策略摘要变了，或有效演进序号前进了，或又做过 campaign-resume。这些都不能靠进程内存里的
+    "刚做过什么"判断——动作做完、记录没写就被打断，重入时只剩磁盘。判不出来的（账本 head 等）由派发前的接受检查兜底。
+    """
+
+    reasons: list[str] = []
+    compared = 0
+    if "error" not in evolution:
+        for key, current_key, label in (("tool_files_sha256", "current_files_sha256", "工具文件摘要"),
+                                        ("tool_wire_sha256", "current_wire_sha256", "wire 生产者摘要"),
+                                        ("tool_policy_sha256", "current_policy_sha256", "策略摘要")):
+            before, now = preview.get(key), evolution.get(current_key)
+            if before and now:
+                compared += 1
+                if before != now:
+                    reasons.append(f"{label}在预览之后变了（预览 {str(before)[:12]}…，当前 {str(now)[:12]}…）")
+        indexes, effective = preview.get("evolution_indexes") or [], evolution.get("effective_index")
+        if indexes and isinstance(effective, int):
+            compared += 1
+            if max(indexes) != effective:
+                reasons.append(f"预览基于演进 #{max(indexes)}，当前有效演进 #{effective}")
+    created = _parse_time(preview.get("created_at_utc"))
+    if created is not None:
+        for receipt in receipts:
+            approved = _parse_time(receipt.get("approved_at_utc"))
+            if approved is not None:
+                compared += 1
+                if approved > created:
+                    reasons.append(f"预览早于 campaign-resume 批准 {str(receipt.get('approved_sha256'))[:12]}…（{receipt.get('approved_at_utc')}）")
+    return reasons, compared
 
 
 def _missing_inputs(params: Mapping[str, str], keys: tuple[str, ...]) -> list[str]:
@@ -635,8 +783,20 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
     steps: dict[str, Step] = {}
 
     # --- resume ------------------------------------------------------------
+    unresolved = unresolved_resumes(facts)
     if "error" in ledger:
         steps["resume"] = Step("resume", BLOCKED, f"无法读取计时账本：{ledger['error']}")
+    elif facts["resume_receipts"] and "error" in facts["project_resumed"]:
+        steps["resume"] = Step("resume", BLOCKED, f"无法读取项目总账，确认不了 campaign-resume 是否四段都已落账：{facts['project_resumed']['error']}",
+                               {"resume_receipts": len(facts["resume_receipts"])})
+    elif unresolved:
+        steps["resume"] = Step(
+            "resume", PENDING,
+            f"campaign-resume 只做了一半（批准收据 {unresolved[0]['approved_sha256'][:12]}… 已落盘，项目总账还没有绑定它的 campaign_resumed 事件；"
+            f"账本现为 {ledger['status']}）：以同一批准重跑续接",
+            {"ledger_status": ledger["status"], "resume_receipts": len(facts["resume_receipts"]),
+             "unresolved_receipts": [row["approved_sha256"] for row in unresolved]},
+            "campaign-resume --approve-sha256 <收据里的批准摘要>（受管工具保证同一批准重跑即续接）")
     elif ledger["status"] in STOPPED_LEDGER_STATES:
         missing = _missing_inputs(params, ("FIX_COMMIT", "REGRESSION_RECEIPT", "RESUME_REASON"))
         if missing:
@@ -647,8 +807,10 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
                                    {"ledger_status": ledger["status"], "resume_receipts": len(facts["resume_receipts"])},
                                    "campaign-resume 预览 → 专项批准 → --approve-sha256")
     else:
-        steps["resume"] = Step("resume", DONE, f"账本状态 {ledger['status']}，不是停线",
-                               {"ledger_status": ledger["status"], "resume_receipts": len(facts["resume_receipts"])})
+        steps["resume"] = Step("resume", DONE, f"账本状态 {ledger['status']}，不是停线" + (
+            f"；{len(facts['resume_receipts'])} 份 campaign-resume 收据都已在项目总账落账" if facts["resume_receipts"] else ""),
+                               {"ledger_status": ledger["status"], "resume_receipts": len(facts["resume_receipts"]),
+                                "unresolved_receipts": 0})
 
     # --- evolution ---------------------------------------------------------
     if "error" in evolution:
@@ -695,8 +857,15 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
                                   {"attempt_status": attempt.get("status"), "receipt": facts["records"]["receipt"]},
                                   "reconcile-attempt（零请求，幂等）")
     else:
-        steps["reconcile"] = Step("reconcile", DONE, f"已有恢复预览 #{preview['index']}（摘要 {preview['review_sha256'][:16]}…）",
-                                  {"preview_index": preview["index"], "review_sha256": preview["review_sha256"]})
+        # 续跑已派发（或已有后继）之后预览已被消费，不再按"现场有没有前进"判过期。
+        stale, _compared = ([], 0) if cont["state"] != "none" else preview_stale_reasons(preview, evolution, facts["resume_receipts"])
+        if stale:
+            steps["reconcile"] = Step("reconcile", PENDING, f"恢复预览 #{preview['index']} 已过期（{'；'.join(stale)}）：重新对账生成新预览",
+                                      {"attempt_status": attempt.get("status"), "stale_preview_index": preview["index"], "stale_reasons": stale},
+                                      "reconcile-attempt（零请求，幂等）")
+        else:
+            steps["reconcile"] = Step("reconcile", DONE, f"已有恢复预览 #{preview['index']}（摘要 {preview['review_sha256'][:16]}…）",
+                                      {"preview_index": preview["index"], "review_sha256": preview["review_sha256"]})
 
     # --- approve / authorize / continue ----------------------------------------
     separate = bool(profile["separate_approve_authorize"])
@@ -725,12 +894,15 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
             else:
                 steps["authorize"] = Step("authorize", DONE, f"账本 {ledger_status}，授权已生效", {"ledger_status": ledger_status})
         state = cont["state"]
+        rows = cont.get("successor_rows") or []
+        described = "、".join(f"{row['id']}（{row['status'] or '无 attempt.json'}）" for row in rows) or str(cont.get("successors"))
         if state in {"running", "finished-ok"}:
-            steps["continue"] = Step("continue", DONE, "续跑已派发" + ("（仍在运行）" if state == "running" else "并正常结束"),
-                                     {"state": state, "_pid": cont.get("pid")})
+            steps["continue"] = Step("continue", DONE, "续跑已派发" + ("（仍在运行）" if state == "running" else "并正常结束")
+                                     + (f"；后继 attempt {described}" if rows else ""),
+                                     {"state": state, "_pid": cont.get("pid"), "successors": rows})
         elif state == "successor-exists":
-            steps["continue"] = Step("continue", DONE, f"目标 attempt 之后已有后继 attempt {cont['successors']}：续跑已由别处派发，不再派发",
-                                     {"state": state, "successors": cont["successors"]})
+            steps["continue"] = Step("continue", DONE, f"目标 attempt 之后已有后继 attempt {described}：续跑已由别处派发，不再派发",
+                                     {"state": state, "successors": rows})
         elif state in {"inflight", "lost", "finished-failed"}:
             reasons = {"inflight": "派发占位存在但没有启动记录（执行结果不确定）",
                        "lost": "续跑进程已消失且没有结束标记（被杀？）",
@@ -763,13 +935,16 @@ def objects_view(params: Mapping[str, str], facts: Mapping[str, Any]) -> dict[st
     if preview is None:
         reverify.append({"object": "恢复预览", "state": "missing", "why": "尚无预览，执行 reconcile 步骤后产出"})
     else:
-        indexes = preview["evolution_indexes"]
-        effective = evolution.get("effective_index")
-        if indexes and isinstance(effective, int):
-            state, why = (("valid", f"预览基于演进 #{max(indexes)}，当前有效演进 #{effective}") if max(indexes) == effective
-                          else ("stale", f"预览基于演进 #{max(indexes)}，当前有效演进 #{effective}：需重新对账"))
+        if facts["continuation"]["state"] != "none":
+            state, why = "valid", "续跑已派发，预览已被消费"
         else:
-            state, why = "unknown", "预览不含演进信息或当前演进序号不可读；执行时由受管对账确认"
+            reasons, compared = preview_stale_reasons(preview, evolution, facts["resume_receipts"])
+            if reasons:
+                state, why = "stale", "；".join(reasons) + "：需重新对账"
+            elif compared:
+                state, why = "valid", f"已部署工具身份、有效演进序号与 campaign-resume 时间逐项比对一致（{compared} 项）；账本 head 由派发前接受检查复核"
+            else:
+                state, why = "unknown", "预览不含可比对的身份信息或当前身份不可读；执行时由受管对账确认"
         reverify.append({"object": f"恢复预览 #{preview['index']}", "state": state, "why": why})
         if bool(PHASE_PROFILES.get(facts["phase"] or "", PHASE_PROFILES["candidate"])["separate_approve_authorize"]):
             reverify.append({"object": f"恢复批准 #{approval['index']}" if approval else "恢复批准",
@@ -823,7 +998,7 @@ def _launch_description(params: Mapping[str, str], phase: str | None, preview: M
     return f"{params['DRIVER_TARGET']}/driver/{FC._client_row(params)['vc5_recover_script']} {preview['path']}"
 
 
-def build_plan(params: Mapping[str, str], facts: Mapping[str, Any]) -> dict[str, Any]:
+def build_plan(params: Mapping[str, str], facts: Mapping[str, Any], *, followed_from: str | None = None) -> dict[str, Any]:
     """计划对象。``plan_sha256`` 只覆盖同一现场必然相同的字段（不含时间戳、pid、原始输出路径）。"""
 
     steps = derive_steps(params, facts)
@@ -838,6 +1013,20 @@ def build_plan(params: Mapping[str, str], facts: Mapping[str, Any]) -> dict[str,
     nxt = next((step for step in steps if step.status in {PENDING, BLOCKED}), None)
     warnings = []
     by_id = {step.id: step for step in steps}
+    if facts["ledger"].get("paused_scopes"):
+        warnings.append(f"计时账本有预算暂停范围 {facts['ledger']['paused_scopes']}：对账会判暂停，先由人批准 deadline-extend preview/apply"
+                        "（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n），再重新执行本计划")
+    rows = facts["continuation"].get("successor_rows") or []
+    if rows:
+        latest = rows[-1]
+        if latest["class"] == "failed":
+            warnings.append(f"目标之后的最新后继 attempt {latest['id']} 已失败（{latest['status']}）：目标 attempt 已过期，本计划不再对它派发；"
+                            f"把参数文件的 ATTEMPT 改成 {latest['id']} 重新规划，或加 --follow-latest 自动跟到最新失败的 attempt")
+            if overall == "complete":
+                overall = "superseded-failed"
+        elif latest["class"] == "unknown":
+            warnings.append(f"目标之后的最新后继 attempt {latest['id']} 没有 attempt.json（可能在跑或被截停），状态未知："
+                            "核对后再决定是否改指它（--follow-latest 只跟到状态明确失败的 attempt）")
     if facts["records"]["receipt"] is None and by_id["evolution"].status != DONE and facts["attempt"].get("exists"):
         warnings.append("目标 attempt 还没有对账收据，而受管工具已有未登记漂移（修复已部署）：同根因若已达上限，限额事件的时间以第一次对账为准，"
                         "晚于部署会让 campaign-resume 因“部署收据早于停线”被拒；以后失败后先执行本计划（先对账入账）再部署修复")
@@ -851,6 +1040,7 @@ def build_plan(params: Mapping[str, str], facts: Mapping[str, Any]) -> dict[str,
         "attempt_status": facts["attempt"].get("status"),
         "ledger_status": facts["ledger"].get("status"),
         "overall": overall,
+        **({"followed_from": followed_from} if followed_from else {}),
         "steps": [step.public() for step in steps],
         "objects": objects,
         "warnings": warnings,
@@ -864,6 +1054,7 @@ def render_plan(plan: Mapping[str, Any], *, mode: str) -> str:
     lines = [
         f"==== 恢复计划（{mode}）：轮次 {plan['round']}  Campaign {plan['campaign']}",
         f"目标 attempt {plan['attempt']}（{phase}，状态 {plan['attempt_status']}）  账本 {plan['ledger_status']}  总体 {plan['overall']}",
+        *([f"（--follow-latest：目标由 {plan['followed_from']} 改指最新失败的 attempt）"] if plan.get("followed_from") else []),
         "步骤：",
     ]
     marks = {DONE: "已完成", PENDING: "待执行", WAITING: "等前序", BLOCKED: "阻塞", SKIPPED: "不适用"}
@@ -931,15 +1122,20 @@ class Stop(Exception):
 class Runner:
     """执行模式：持有参数、后端、运行状态；每一步动作返回 summary 或抛 Stop。"""
 
-    def __init__(self, params: dict[str, str], backend: ManagedBackend) -> None:
+    def __init__(self, params: dict[str, str], backend: ManagedBackend, *, followed_from: str | None = None) -> None:
         self.params = params
         self.backend = backend
+        self.followed_from = followed_from
         self.out = Path(params["OUT"])
         self.force_reconcile = False
         self.rewinds = 0
         self.revisit: list[dict[str, str]] = prior_revisit(params)
         self.exclude_runs: list[str] = []
-        self.crash_after = os.environ.get("RECOVERY_PLAN_CRASH_AFTER")  # 只供验收注入打断，默认空
+        # 验收打断注入：两个环境变量必须同时设（ACCEPTANCE=1 且 CRASH_AFTER 非空）才生效；recovery-plan.sh 默认把两者清掉。
+        armed = os.environ.get(ACCEPTANCE_ENV) == "1"
+        self.crash_after = os.environ.get(CRASH_ENV) if armed else None
+        if os.environ.get(CRASH_ENV) and not armed:
+            print(f"忽略 {CRASH_ENV}：打断注入只供验收，必须同时设 {ACCEPTANCE_ENV}=1", file=sys.stderr)
 
     # --- 步骤记录 ---------------------------------------------------------------
     def record(self, step: str, status: str, *, reason: str | None = None, next_hint: str | None = None,
@@ -992,7 +1188,32 @@ class Runner:
         return result
 
     # --- 动作 ----------------------------------------------------------------------
+    def _complete_half_done_resume(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """批准收据已落盘、项目总账还没绑定它的 campaign_resumed：以同一批准重跑续接未做完的段。
+
+        不再要新的专项批准文件——收据本身就是那次已批准的记录（受管工具写它时已核对批准摘要与批准人），续接只补
+        同一份预览冻结的剩余写入，不产生任何新的决定。命令行参数取收据里冻结的绑定（修复提交、回归收据路径、理由），
+        参数文件里的值只在收据缺这些字段时兜底。"""
+
+        fix_commit = row.get("fix_commit") or self.params.get("FIX_COMMIT")
+        regression = row.get("regression_receipt_path") or self.params.get("REGRESSION_RECEIPT")
+        reason = row.get("reason") or self.params.get("RESUME_REASON")
+        if not (fix_commit and regression and reason and row.get("approved_by") and row.get("approved_sha256")):
+            raise Stop("needs-operator", "campaign-resume 只做了一半，但收据和参数文件都缺修复提交／回归收据／理由／批准人，续接不了",
+                       "补参数 FIX_COMMIT、REGRESSION_RECEIPT、RESUME_REASON 后重新执行同一条命令")
+        applied = self.cli("resume", "complete", [
+            "campaign-resume", "--campaign-dir", self.params["C"], "--fix-commit", fix_commit, "--regression-receipt", regression,
+            "--reason", reason, "--approve-sha256", row["approved_sha256"], "--approved-by", row["approved_by"]])
+        if applied.rc != 0 or not isinstance(applied.payload, dict) or applied.payload.get("status") != "resumed":
+            raise Stop("failed", f"续接 campaign-resume 失败（rc={applied.rc}）：{FC._tail(applied.stderr)}",
+                       "以同一批准重跑即续接（受管工具保证幂等）：排除报错后重新执行同一条命令")
+        return {"completed_receipt": row["approved_sha256"], "receipt_path": applied.payload.get("receipt_path"),
+                "timing_status": applied.payload.get("timing_status"), "reused_stored_approval": True}
+
     def act_resume(self, facts: Mapping[str, Any]) -> dict[str, Any]:
+        unresolved = unresolved_resumes(facts)
+        if unresolved:
+            return self._complete_half_done_resume(unresolved[0])
         base = ["campaign-resume", "--campaign-dir", self.params["C"], "--fix-commit", self.params["FIX_COMMIT"],
                 "--regression-receipt", self.params["REGRESSION_RECEIPT"], "--reason", self.params["RESUME_REASON"]]
         preview = self.cli("resume", "preview", base)
@@ -1162,13 +1383,40 @@ class Runner:
             self.require("recovery-continue", review)
         if facts["active_runs"] or FC.driver_processes(self.params):
             raise Stop("needs-operator", f"已有运行中的父 run {facts['active_runs']} 或驱动进程", "等其结束后再执行同一条命令")
+        # 派发前的最后一道复核（派发是唯一产生真实采集的动作，磁盘判定看不到的过期——账本 head 推进、批准后工具身份变化——在这里拦住）：
+        #   候选采集：受管 load_approved_recovery_preview 接受检查（已批准、已授权、身份与 head 都仍与预览一致，只复核不追加授权事件）；
+        #   官方首批：批准和授权发生在 entry.sh 里，批准前没有可接受检查的对象，改为回读对账，预览摘要必须仍是将要批准的这份
+        #   （entry.sh 的收口模块自己也会重新对账并比对摘要，这里先拦一道，不靠它在派发后才发现）。
+        if phase == "official":
+            check = self._reconcile_target("continue", "freshness", [])
+            category, reason, hint = judge(check, "continue")
+            fresh_review = ""
+            if category == "recoverable":
+                fresh_review, _path, problems = FC._preview_facts(self.params, check.payload)
+                if problems:
+                    raise Stop("failed", "；".join(problems), "人工核对对账输出")
+            elif category != "recoverable":
+                raise Stop("failed" if category == "failed" else "needs-operator", f"派发前回读对账：{reason}", hint)
+            stale = fresh_review != review
+            detail = f"回读对账得到的预览摘要 {fresh_review[:12]}… 不是将要批准的 {review[:12]}…"
+        else:
+            accepted = self.backend.accepted(preview["path"])
+            stale = "error" in accepted
+            detail = accepted.get("error", "")
+        if stale:
+            if self.rewinds < 1:
+                self.rewinds += 1
+                self.force_reconcile = True
+                return {"rewind": "派发前复核发现预览不再有效，回到 reconcile 重新生成预览（新预览要重新批准）", "detail": detail}
+            raise Stop("needs-operator", f"派发前复核：预览不再有效（{detail}）",
+                       "重新执行同一条命令会重新对账、批准；仍反复出现说明现场在持续变化，先查是谁在动账本或工具")
         driver = Path(self.params["DRIVER_TARGET"]) / "driver"
         runroot = Path(self.params["RUNROOT"])
         env = {**self.backend.environment(with_path=False), "ARM64_VC_ENV": self.params["VC_ENV"]}
         if phase == "official":
             script = driver / "entry.sh"
             command = ["bash", str(script), "--approve-sha256", review, "--approved-by", self.params["APPROVER"]]
-            log = runroot / "recovery-plan-entry.out"
+            log = runroot / f"recovery-plan-entry-{self.params['ROUND']}.out"
         else:
             script = driver / str(FC._client_row(self.params)["vc5_recover_script"])
             command = ["bash", str(script), preview["path"]]
@@ -1183,10 +1431,9 @@ class Runner:
             "campaign": self.params["CAMPAIGN"], "attempt": self.params["ATTEMPT"], "phase": phase,
             "preview": fix_safety.file_binding(preview["path"]), "command": command, "log": str(log)})
         self.maybe_crash("continue-inflight")
-        for name in ("vc5-recover.out", "vc5-run-batch.out"):
-            old = runroot / name
-            if phase != "official" and old.exists():
-                old.rename(runroot / f"{name}.pre-{self.params['ROUND']}-{self.backend.stamp}")
+        for old in ((runroot / "vc5-recover.out", runroot / "vc5-run-batch.out") if phase != "official" else (log,)):
+            if old.exists():  # 旧日志改名留档，不截断（官方首批的日志按轮次命名，同一轮次重来时也先留档）
+                old.rename(old.with_name(f"{old.name}.pre-{self.params['ROUND']}-{self.backend.stamp}"))
         wrapper = 'cd "$1" && shift && "$@"; code=$?; echo "RECOVERY_PLAN_EXIT=$code"; exit "$code"'
         with open(log, "w", encoding="utf-8") as handle:
             os.chmod(log, 0o600)
@@ -1209,7 +1456,7 @@ class Runner:
                             revisit=tuple(self.revisit), exclude_runs=tuple(self.exclude_runs))
 
     def run(self) -> int:
-        plan = build_plan(self.params, self.facts())
+        plan = build_plan(self.params, self.facts(), followed_from=self.followed_from)
         self.out.mkdir(parents=True, exist_ok=True, mode=0o700)
         fix_safety.write_once(self.out / "plans" / f"{plan['plan_sha256']}.json", plan)
         print(render_plan(plan, mode="执行前计划"), file=sys.stderr)
@@ -1245,12 +1492,17 @@ class Runner:
         label = "需要人工处理（本计划不越权代办）" if stop.status == "needs-operator" else "失败"
         print("\n".join([
             f"==== 恢复计划停在「{step}」：{label}", f"原因：{stop.reason}", f"下一步：{stop.next_hint}",
-            f"续跑：bash {DRV / 'recovery-plan.sh'} {self.params['PARAMS_PATH']} --apply（重复执行安全，已完成的步骤会被跳过）",
+            f"续跑：bash {DRV / 'recovery-plan.sh'} {self.params['PARAMS_PATH']} --apply"
+            f"（同一参数文件、同一轮次 {self.params['ROUND']}；重复执行安全，已完成的步骤会被跳过）",
             f"RECOVERY_PLAN_STOPPED step={step} status={stop.status}"]), file=sys.stderr)
         return EXIT_OPERATOR if stop.status == "needs-operator" else EXIT_FAILED
 
     def finish(self, facts: Mapping[str, Any], steps: list[Step]) -> int:
-        plan = build_plan(self.params, facts)
+        plan = build_plan(self.params, facts, followed_from=self.followed_from)
+        if plan["overall"] == "superseded-failed":
+            warning = next((item for item in plan["warnings"] if "最新后继 attempt" in item), "目标之后的最新后继 attempt 已失败")
+            print(render_plan(plan, mode="执行后现场"), file=sys.stderr)
+            return self.stop("done", Stop("needs-operator", warning, "改指最新失败的 attempt 重新规划（参数文件 ATTEMPT，或加 --follow-latest）"))
         self.record("done", "passed", summary={"plan_sha256": plan["plan_sha256"], "overall": plan["overall"]})
         print(render_plan(plan, mode="执行后现场"), file=sys.stderr)
         print(f"RECOVERY_PLAN_DONE round={self.params['ROUND']} out={self.out}", file=sys.stderr)
@@ -1260,6 +1512,22 @@ class Runner:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+def follow_latest(params: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    """目标 attempt 之后已有后继且最新一个状态明确失败时，把目标改指它（只改本次执行的 ATTEMPT，不动参数文件）。
+
+    只跟到"状态明确失败"的 attempt：后继是完整的、在跑的、或没有 attempt.json（可能在跑或被截停）都不跟，保持原目标，
+    计划里照样给出后继状态的警告。返回 (参数, 原目标或 None)。
+    """
+
+    phase, _root = locate_attempt(params)
+    if phase is None:
+        return params, None
+    rows = successor_rows(params, phase, sibling_attempts(params, phase))
+    if rows and rows[-1]["class"] == "failed":
+        return {**params, "ATTEMPT": rows[-1]["id"]}, params["ATTEMPT"]
+    return params, None
 
 
 def _load_or_exit(path: str) -> dict[str, str]:
@@ -1292,12 +1560,19 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--plan", action="store_true", help="只读计划预览（缺省）")
     mode.add_argument("--apply", action="store_true", help="按序执行；每步前重新判定，已完成的跳过")
     parser.add_argument("--json", action="store_true", help="计划预览输出 JSON")
+    parser.add_argument("--follow-latest", action="store_true",
+                        help="目标之后已有后继且最新后继状态明确失败时，改指它（只对本次生效，不改参数文件）")
     args = parser.parse_args(argv)
     params = _load_or_exit(args.params)
+    followed_from: str | None = None
     try:
+        if args.follow_latest:
+            params, followed_from = follow_latest(params)
+            if followed_from:
+                print(f"--follow-latest：目标 attempt 由 {followed_from} 改指最新失败的 {params['ATTEMPT']}", file=sys.stderr)
         if not args.apply:
             backend = ManagedBackend(params, raw_dir=None)
-            plan = build_plan(params, gather_facts(params, backend, revisit=tuple(prior_revisit(params))))
+            plan = build_plan(params, gather_facts(params, backend, revisit=tuple(prior_revisit(params))), followed_from=followed_from)
             print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True) if args.json else render_plan(plan, mode="只读预览"))
             return EXIT_OK
         # nohup 启动会让子进程继承 SIG_IGN 的 SIGHUP，入口门禁里的挂断检测用例会必红（与 fix-and-continue run-tests 同一处理）：
@@ -1306,7 +1581,7 @@ def main(argv: list[str] | None = None) -> int:
         lock = acquire_lock(params)
         try:
             backend = ManagedBackend(params, raw_dir=Path(params["OUT"]) / "raw")
-            return Runner(params, backend).run()
+            return Runner(params, backend, followed_from=followed_from).run()
         finally:
             os.close(lock)
     except (RecoveryPlanError, FC.FixAndContinueError, fix_safety.SafetyError, OSError) as error:

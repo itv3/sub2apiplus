@@ -6,7 +6,12 @@
   ``reconcile-supervisor-run``、``reconcile-attempt``（对账／批准／授权）。账本状态、演进登记、预览序号都存在 ``state.json``，
   每次调用追加 ``calls.jsonl``。对账预览按"账本序号＋有效演进序号"取键：键不变返回同一份预览（幂等），键变了才出新序号，
   批准／授权遇到旧键报"必须重新对账"，与受管对账器同一口径。
-* ``codex_upgrade_vc_artifacts.effective_deadlines`` 与 ``codex_upgrade_supervisor``：恢复计划进程内调用的只读接口。
+* ``codex_upgrade_vc_artifacts.effective_deadlines``、``codex_upgrade_supervisor``、``codex_upgrade_project_ledger``（只读事件）与
+  ``codex_upgrade_reconciler.load_approved_recovery_preview``：恢复计划进程内调用的接口。
+* campaign-resume 按真实 ``_apply_campaign_resume`` 的四段写入模拟（收据→总账根因修复→计时账本恢复→总账 campaign_resumed），
+  场景 ``resume_fail_before_project`` 让第四段第一次失败，留下"停线已清、总账未撤终态"的半完成现场；同一批准重跑续接。
+* 已部署工具身份用 ``deployed_generation`` 表示：新的漂移＝代数加一且演进未登记；预览冻结对账时的身份，``tool-evolution-status``
+  的 ``current_summary`` 给当前身份。
 
 现场文件（预览、批准收据、对账收据、campaign-resume 收据、attempt.json）字段名与取值形状取自
 ``sub2apiplus-evidence/codex-cli/0.163.0`` 的真实 Campaign 归档；替身只负责在对应命令执行时写出它们。
@@ -176,6 +181,15 @@ def preview_key(st):
     return [st.get("ledger_seq", 10), st.get("effective_index", 7)]
 
 
+def current_identity(st):
+    """对账当时已部署工具的身份（真实 reconciler._current_identity）：回放模式取真实预览冻结的那份，保证"没变"。"""
+    if recorded():
+        ident = json.loads(rec_file(recorded()["preview_name"]).read_text(encoding="utf-8"))["tool_identity"]
+        return {"files_sha256": ident.get("files_sha256"), "wire_producer_sha256": ident.get("wire_producer_sha256"),
+                "policy_sha256": ident.get("policy_sha256")}
+    return {"files_sha256": sha(["files", st.get("deployed_generation", 0)]), "wire_producer_sha256": "w" * 64, "policy_sha256": "p" * 64}
+
+
 def attempt_dir(attempt_id):
     return campaign_dir() / "control" / "reconciliation" / f"attempt-{attempt_id}"
 
@@ -207,7 +221,7 @@ def build_preview(st, attempt_id, index):
         "live_request_count": 0, "phase": sc["phase"], "recovery_revision": None, "reservation_exists": False,
         "reuse_basis": "source attempt 环境已恢复，complete Job 只读复用；工具演进受影响的已完成 Job 移入执行集合",
         "reuse_job_ids": sorted(reuse), "schema_version": "recovery-preview/v1", "source_attempt_id": attempt_id,
-        "tool_identity": {"files_sha256": sha(["files", key]), "policy_sha256": "p" * 64, "wire_producer_sha256": "w" * 64},
+        "tool_identity": current_identity(st),
     }
     if st.get("effective_index", 7) > scenario().get("base_index", 7):
         body["tool_evolution"] = {"evolution_indexes": list(range(scenario().get("base_index", 7) + 1, st["effective_index"] + 1)),
@@ -260,6 +274,7 @@ def cli(argv):
         registered = bool(st.get("evolution_registered"))
         return emit({"status": "registered" if registered else "evolution_required", "effective_index": st.get("effective_index", 7),
                      "unregistered_drift": [] if registered else ["control:tools/official_client_capture/codex_upgrade_supervisor.py"],
+                     "current_summary": current_identity(st), "effective_summary": current_identity(st) if registered else {},
                      "live_request_count": 0})
     if command == "tool-evolution":
         if "--approve-sha256" not in argv:
@@ -274,24 +289,43 @@ def cli(argv):
         save_state(st)
         return emit({"status": "evolution_applied", "path": "evolution.json", "receipt_sha256": "f" * 64, "index": st["effective_index"]})
     if command == "campaign-resume":
-        if st["ledger_status"] not in ("stopped", "stop_required"):
-            return emit(None, 1, f"升级审计失败：Campaign 计时账本状态为 {st['ledger_status']}，不是停线，无需 campaign-resume。")
         approve = option(argv, "--approve-sha256")
+        receipt = campaign_dir() / "control" / "resume" / f"resume-{resume_sha()}.json"
+        stored = approve is not None and receipt.exists()  # 同一批准重跑：按收据冻结的预览续接，不再重算预览
+        if not stored and st["ledger_status"] not in ("stopped", "stop_required"):
+            return emit(None, 1, f"升级审计失败：Campaign 计时账本状态为 {st['ledger_status']}，不是停线，无需 campaign-resume。")
         if approve is None:
             return emit({"status": "approval_required", "review_sha256": resume_sha(), "root_cause_id": "rc1-fixture",
                          "next_command": "campaign-resume --approve-sha256 <review_sha256> --approved-by <批准人>"})
         if approve != resume_sha() or not option(argv, "--approved-by"):
             return emit(None, 1, "升级审计失败：批准摘要与重算的 campaign-resume 预览不一致；重新预览后再批准。")
-        receipt = campaign_dir() / "control" / "resume" / f"resume-{resume_sha()}.json"
-        if recorded():
-            copy_recorded(recorded()["resume_name"], receipt)
-        else:
-            write_json(receipt, {"approved_sha256": RESUME_SHA, "approved_by": option(argv, "--approved-by"), "approved_at_utc": now(),
-                                 "root_cause_id": "rc1-fixture", "preview": {"review_sha256": RESUME_SHA}})
-        st["ledger_status"] = "recovery_required"
-        st["ledger_seq"] = st.get("ledger_seq", 10) + 1
-        save_state(st)
-        return emit({"status": "resumed", "receipt_path": str(receipt), "receipt_sha256": "r" * 64, "timing_status": "recovery_required"})
+        # 第一段：批准收据（写一次）。
+        if not receipt.exists():
+            if recorded():
+                copy_recorded(recorded()["resume_name"], receipt)
+            else:
+                write_json(receipt, {"approved_sha256": RESUME_SHA, "approved_by": option(argv, "--approved-by"), "approved_at_utc": now(),
+                                     "root_cause_id": "rc1-fixture", "preview": {"review_sha256": RESUME_SHA},
+                                     "receipt_sha256": sha(["receipt", RESUME_SHA]), "reason": option(argv, "--reason"),
+                                     "bindings": {"fix_commit": option(argv, "--fix-commit"),
+                                                  "regression_receipt": {"path": option(argv, "--regression-receipt")}}})
+        receipt_sha = json.loads(receipt.read_text(encoding="utf-8"))["receipt_sha256"]
+        # 第三段：计时账本恢复事件（账本离开停线）。
+        if st["ledger_status"] in ("stopped", "stop_required"):
+            st["ledger_status"] = "recovery_required"
+            st["ledger_seq"] = st.get("ledger_seq", 10) + 1
+            save_state(st)
+        # 场景：第三段之后、第四段（总账 campaign_resumed）之前失败一次——停线已清、总账未撤终态。
+        if sc.get("resume_fail_before_project") and not st.get("resume_failed_once"):
+            st["resume_failed_once"] = True
+            save_state(st)
+            return emit(None, 1, "升级审计失败：campaign-resume 写入失败（以同一批准重跑即续接）：项目总账追加 campaign_resumed 失败")
+        # 第四段：总账 campaign_resumed（绑定收据摘要，幂等）。
+        resumed = st.setdefault("project_resumed", [])
+        if receipt_sha not in resumed:
+            resumed.append(receipt_sha)
+            save_state(st)
+        return emit({"status": "resumed", "receipt_path": str(receipt), "receipt_sha256": receipt_sha, "timing_status": "recovery_required"})
     if command == "reconcile-supervisor-run":
         run_dir = Path(option(argv, "--run-dir"))
         write_json(campaign_dir() / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json",
@@ -317,7 +351,6 @@ def cli(argv):
                 return emit(None, 1, "升级审计失败：恢复预览尚未批准")
             if st["ledger_status"] in AUTHORIZABLE:
                 st["ledger_status"] = "active"
-                st["ledger_seq"] = st.get("ledger_seq", 10) + 1
                 save_state(st)
             return emit({"status": "authorized", "attempt_id": attempt_id, "preview_path": authorize, "review_sha256": data["review_sha256"],
                          "timing_recovery_event": {"event_id": "recovery-authorized-01"}, "live_request_count": 0,
@@ -366,8 +399,50 @@ _STUB_MODULES = {
             st = _stub.state()
             if st.get("ledger_error"):
                 raise RuntimeError(st["ledger_error"])
-            return {"status_before_pause": st["ledger_status"], "paused_scopes": [], "phase": "VC-5",
+            return {"status_before_pause": st["ledger_status"], "paused_scopes": list(st.get("paused_scopes", [])), "phase": "VC-5",
                     "stage_deadline_at_utc": "2099-01-01T00:00:00Z", "paused_hours": 0.0}
+    '''),
+    "codex_upgrade_project_ledger.py": textwrap.dedent('''
+        """恢复计划测试替身：项目总账的只读事件（campaign_resumed 绑定的恢复批准收据摘要）。"""
+        from pathlib import Path
+        from tools.official_client_capture import _stub
+
+
+        def find_project_ledger(start, client=None):
+            return _stub.STUB
+
+
+        def _load_events(root):
+            st = _stub.state()
+            if st.get("project_ledger_error"):
+                raise RuntimeError(st["project_ledger_error"])
+            campaign = _stub.scenario()["campaign"]
+            return [{"event_type": "campaign_resumed", "payload": {"campaign_id": campaign, "resume_receipt_sha256": item}}
+                    for item in st.get("project_resumed", [])]
+    '''),
+    "codex_upgrade_reconciler.py": textwrap.dedent('''
+        """恢复计划测试替身：派发前的接受检查 load_approved_recovery_preview（只复核，不追加授权事件）。"""
+        import json
+        from pathlib import Path
+        from tools.official_client_capture import _stub
+
+
+        class ReconcilerError(Exception):
+            pass
+
+
+        def load_approved_recovery_preview(campaign_dir, preview_path, *, phase, candidate_id, recovery_revision=None,
+                                           consume_authorization=True):
+            st = _stub.state()
+            data = json.loads(Path(preview_path).read_text(encoding="utf-8"))
+            attempt = data["source_attempt_id"]
+            if not _stub.recorded() and data["review_sha256"] != _stub.sha([attempt, data["index"], _stub.preview_key(st)]):
+                raise ReconcilerError("恢复批准消费前账本 head 已推进或工具身份已变化，必须重新对账")
+            if not (Path(preview_path).parent / f"recovery-approval-{data['index']:02d}.json").exists():
+                raise ReconcilerError("恢复预览尚未批准")
+            if st["ledger_status"] in _stub.AUTHORIZABLE:
+                raise ReconcilerError("账本尚未授权消费这份预览")
+            return {"execute_job_ids": data["execute_job_ids"], "timing_recovery_event": {"appended": False}}
     '''),
     "codex_upgrade_supervisor.py": textwrap.dedent('''
         """恢复计划测试替身：监督器状态目录读取与对账收据核验。"""
@@ -480,6 +555,11 @@ class World:
     def state(self) -> dict[str, Any]:
         return json.loads((self.stub / "state.json").read_text(encoding="utf-8"))
 
+    def new_drift(self) -> None:
+        """部署了新的受管工具：已部署身份代数加一，演进未登记。"""
+
+        self.set_state(deployed_generation=self.state().get("deployed_generation", 0) + 1, evolution_registered=False)
+
     def set_scenario(self, **values: Any) -> None:
         data = json.loads((self.stub / "scenario.json").read_text(encoding="utf-8"))
         data.update(values)
@@ -517,6 +597,12 @@ class World:
         finally:
             sys.path.remove(str(SCRIPTS))
         return module
+
+    @staticmethod
+    def crash(step: str) -> dict[str, str]:
+        """验收打断注入需要两个环境变量同时设（单设 RECOVERY_PLAN_CRASH_AFTER 不生效）。"""
+
+        return {"RECOVERY_PLAN_ACCEPTANCE": "1", "RECOVERY_PLAN_CRASH_AFTER": step}
 
     def env(self, **extra: str) -> dict[str, str]:
         return {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "RP_STUB_DIR": str(self.stub), **extra}

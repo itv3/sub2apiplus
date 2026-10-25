@@ -13,6 +13,7 @@ VC_ENV=$RUNROOT/env.sh
 # 监督器状态目录：候选采集（VC-5）是驱动参数文件里的那个目录；官方首批（VC-1）是 $ENTRY_ROOT/control/$NEW-supervisor。
 VC_STATE_DIR=$D/control/REPLACE_SUPERVISOR_STATE_DIR
 CAMPAIGN=REPLACE_CAMPAIGN_ID
+# 处理完暂停（账务、环境、预算、截止）或补好批准后，必须用同一参数文件、同一 ROUND 重跑（批准、续跑占位、对账暂停对象都按 ROUND 存放）。
 # 目标 attempt：最近一次失败（或被截停）的 attempt。官方首批（VC-1）放 official/attempts 下的，候选采集（VC-5）放
 # candidates/<CANDIDATE>/attempts 下的；阶段由它所在的目录判定，不必另写。目标之后已有后继 attempt 时，计划判定
 # “续跑已由别处派发”，不再派发——换成最新失败的 attempt 重新规划。

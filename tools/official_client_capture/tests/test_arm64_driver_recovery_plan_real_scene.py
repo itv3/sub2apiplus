@@ -35,7 +35,7 @@ import unittest
 from pathlib import Path
 
 from tools.official_client_capture.tests import recovery_plan_world as rw
-from tools.official_client_capture.tests.test_arm64_driver_recovery_plan import EXIT_OK, _WorldCase
+from tools.official_client_capture.tests.test_arm64_driver_recovery_plan import EXIT_OK, EXIT_OPERATOR, _WorldCase
 
 EVIDENCE_GLOB = "/Users/czs/Developer/sub2apiplus-evidence/codex-cli/0.163.0/final/codex-0.163.0-c01630-formal-vc1-r2-*.tar.gz"
 WANTED = re.compile(
@@ -224,6 +224,15 @@ class RealRecordShapeTests(_RealCase):
         self.assertEqual(statuses["20261021T003916Z-24ff3483a4288709"], "awaiting_receipts")
         receipts = helper.read_resume_receipts({"C": str(evidence)})
         self.assertEqual({row["approved_sha256"] for row in receipts}, {VC1_RESUME, VC5_RESUME})
+        # 真实收据都带 receipt_sha256 与冻结的绑定（半完成续接靠它们重建命令行）；缺一份总账事件的那份被判成未落账。
+        for row in receipts:
+            self.assertRegex(row["receipt_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(row["fix_commit"], r"^[0-9a-f]{40}$")
+            self.assertTrue(row["regression_receipt_path"].startswith("/") and row["reason"] and row["approved_by"])
+        only_first = {"resume_receipts": receipts, "project_resumed": {"receipts": [receipts[0]["receipt_sha256"]]}}
+        self.assertEqual([row["approved_sha256"] for row in helper.unresolved_resumes(only_first)], [receipts[1]["approved_sha256"]])
+        everything = {"resume_receipts": receipts, "project_resumed": {"receipts": [row["receipt_sha256"] for row in receipts]}}
+        self.assertEqual(helper.unresolved_resumes(everything), [])
         isolations = helper.read_isolations({"C": str(evidence), "ATTEMPT": "20261020T212831Z-3939d80823307ee4"})
         self.assertEqual([row["path"] for row in isolations], ["isolation-01.json"])
 
@@ -243,12 +252,25 @@ class RealVc1Tests(_RealCase):
         scene = self.vc1()
         scene.sign_everything()
         result = scene.run("--apply")
-        self.assertEqual(result.returncode, EXIT_OK, result.stderr)
+        # 真实历史里这次恢复派发出的后继 attempt（20261021T001412Z）又被环境污染了——所以才有下一轮恢复。后继一旦已经存在且失败，
+        # 计划不报"总体完成"，而是要求改指最新失败的 attempt（退出码 4）；后继还没出现时派发刚结束，退出码是 0。两种都对。
+        self.assertIn(result.returncode, (EXIT_OK, EXIT_OPERATOR), result.stderr)
         self.assertEqual(scene.write_calls(), ["campaign-resume:apply"], "官方首批：账本恢复之后批准／授权由 entry.sh 一次完成")
         review = scene.real_preview["review_sha256"]
         self.assertEqual(scene.dispatches(), [f"entry.sh --approve-sha256 {review} --approved-by {rw.APPROVER}"])
         plan = scene.wait_continue_finished()
-        self.assertEqual(plan["overall"], "complete")
+        self.assertEqual(plan["overall"], "superseded-failed")
+        self.assertTrue(any(VC1_SUCCESSOR in warning and "已失败" in warning for warning in plan["warnings"]), plan["warnings"])
+        again = scene.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OPERATOR, again.stderr)
+        self.assertIn("改指最新失败的 attempt", again.stderr)
+        self.assertEqual(len(scene.dispatches()), 1)
+        # --follow-latest：目标改指真实历史里的后继，这一轮要恢复的是它。
+        followed = json.loads(scene.run("--plan", "--json", "--follow-latest").stdout)
+        self.assertEqual((followed["attempt"], followed["followed_from"], followed["attempt_status"]),
+                         (VC1_SUCCESSOR, VC1_ATTEMPT, "environment_contaminated"))
+        self.assertEqual(self.step(followed, "reconcile")["status"], "pending")
+        self.assertEqual(followed["warnings"], [])
         # 写出的现场文件与归档原字节逐字相同（计划读到的就是真实记录）。
         directory = scene.campaign_dir / "control/reconciliation" / f"attempt-{scene.attempt}"
         evidence = evidence_root() / "control/reconciliation" / f"attempt-{scene.attempt}"
@@ -273,15 +295,15 @@ class RealVc1Tests(_RealCase):
     def test_interrupt_at_every_step_then_rerun_matches_clean_run(self) -> None:
         clean = self.vc1()
         clean.sign_everything()
-        self.assertEqual(clean.run("--apply").returncode, EXIT_OK)
+        self.assertIn(clean.run("--apply").returncode, (EXIT_OK, EXIT_OPERATOR))
         reference = clean.wait_continue_finished()["plan_sha256"]
         reference_writes = clean.write_calls()
         for crash in ("resume", "reconcile"):
             with self.subTest(crash_after=crash):
                 scene = self.vc1()
                 scene.sign_everything()
-                self.assertEqual(scene.run("--apply", RECOVERY_PLAN_CRASH_AFTER=crash).returncode, 137)
-                self.assertEqual(scene.run("--apply").returncode, EXIT_OK)
+                self.assertEqual(scene.run("--apply", **scene.crash(crash)).returncode, 137)
+                self.assertIn(scene.run("--apply").returncode, (EXIT_OK, EXIT_OPERATOR))
                 self.assertEqual(scene.wait_continue_finished()["plan_sha256"], reference)
                 self.assertEqual(scene.write_calls(), reference_writes)
                 self.assertEqual(len(scene.dispatches()), 1)
@@ -333,7 +355,7 @@ class RealVc5Tests(_RealCase):
             with self.subTest(crash_after=crash):
                 scene = self.vc5()
                 scene.sign_everything()
-                self.assertEqual(scene.run("--apply", RECOVERY_PLAN_CRASH_AFTER=crash).returncode, 137)
+                self.assertEqual(scene.run("--apply", **scene.crash(crash)).returncode, 137)
                 self.assertEqual(scene.run("--apply").returncode, EXIT_OK)
                 self.assertEqual(scene.wait_continue_finished()["plan_sha256"], reference)
                 self.assertEqual(scene.write_calls(), reference_writes)
