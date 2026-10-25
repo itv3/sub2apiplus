@@ -198,7 +198,7 @@ class ReuseTests(unittest.TestCase):
 
     def args(self, mode: str = "only", *flags: str, **extra: object):
         return bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "main",
-                          "--commit", COMMIT, "--reuse", mode, "--entry-gates", str(self.gates), *flags])
+                          "--commit", COMMIT, "--reuse", mode, "--entry-gates", str(self.gates), "--preflight", "off", *flags])
 
     def vc_env(self) -> Path:
         path = self.root / "env.sh"
@@ -398,12 +398,24 @@ class ReuseTests(unittest.TestCase):
         self.assertNotIn("--then-dryrun", off)
         self.assertNotIn("--no-dryrun", off, "--no-dryrun 是驱动入口的开关，不传给 Python")
 
-    def test_the_default_is_off_so_existing_callers_are_unchanged(self) -> None:
+    def test_the_python_command_line_defaults_to_auto_and_off_is_explicit(self) -> None:
+        """验收修正建议 12：沿用开关在 Python 命令行也缺省打开（auto），与驱动入口一致；--reuse off 显式不沿用。"""
+
         parsed = bv._parse(["start", "--runroot", "/r", "--data-root", "/d", "--bundle", "/b", "--branch", "x", "--commit", COMMIT])
-        self.assertEqual(parsed.reuse, "off")
+        self.assertEqual(parsed.reuse, "auto")
+        self.assertEqual(bv._parse(["start", "--runroot", "/r", "--data-root", "/d", "--bundle", "/b", "--branch", "x", "--commit", COMMIT,
+                                    "--reuse", "off"]).reuse, "off")
         wrapper = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "background-validate.sh").read_text(encoding="utf-8")
         self.assertIn("--reuse auto", wrapper)
         self.assertIn("--no-reuse", wrapper)
+
+    def test_a_default_start_tries_to_reuse_without_being_asked(self) -> None:
+        self.source_conclusion()
+        self.redeploy_same_tree()
+        args = bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "main",
+                          "--commit", COMMIT, "--entry-gates", str(self.gates), "--preflight", "off"])
+        outcome = bv.start(args)
+        self.assertEqual((outcome["action"], outcome["status"], outcome["reused"]), ("exists", "passed", True), outcome)
 
     def test_component_differences_cover_every_client_and_digest(self) -> None:
         source = {"tool_identity": {"codex": {"tool_files_sha256": "a", "policy_sha256": "b"}, "claude": {"tool_files_sha256": "c"}}}

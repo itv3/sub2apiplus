@@ -21,7 +21,7 @@
 #       沿用成功之后仍接部署后空跑（与 start 同一语义，缺省带 --then-dryrun，--no-dryrun 才关）：沿用只省掉测试，新部署上的入口空跑不省。
 #   preflight <bundle 绝对路径> <分支> <40 位提交> [--only <检查项,…>]
 #       只做起跑前置检查（优化第 4 项）：冻结收据、基线重封、重部署、准入绑定四项逐项核对，退出码 0 通过、3 不通过（打印哪一项为什么）；不起后台验证。
-#       start 缺省先做同一套检查（--preflight on），不通过拒绝起跑；--no-preflight 显式跳过。
+#       start 缺省先做同一套检查（--preflight on；Python 命令行缺省也是 on），不通过拒绝起跑；--no-preflight（即 --preflight off）显式跳过。
 #   stop [--reason <原因>]   停下在跑的后台验证（修复轮跑定向回归之前）
 #   check-boundary            批次边界：当前部署的结论 failed／aborted 退出 3（拒绝派发下一批），其余退出 0
 #   require-passed            VC-5 验收前：当前部署的结论是 passed 才退出 0，否则退出 3
@@ -44,7 +44,7 @@ case "$command" in
     reuse_args=(--reuse auto)
     rest=()
     for arg in "$@"; do
-      if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(); elif [ "$arg" = --no-reuse ]; then reuse_args=(); else rest+=("$arg"); fi
+      if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(--preflight off); elif [ "$arg" = --no-reuse ]; then reuse_args=(--reuse off); else rest+=("$arg"); fi
     done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
       --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${rest[@]+"${rest[@]}"} \

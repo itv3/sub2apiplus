@@ -113,6 +113,23 @@ class BaselineResealTests(unittest.TestCase):
         self.assertEqual([call[-1] for call in calls], [pre.BASELINE_TESTS["codex"], pre.BASELINE_TESTS["claude"]])
         self.assertFalse(pre.check_baseline_reseal(Path("."), "未知客户端", runner=runner)["passed"])
 
+    def test_a_sequence_of_clients_checks_every_one_and_names_the_failing_client(self) -> None:
+        """验收修正建议 12：两客户端都纳管时逐个核对，不只本轮的 ``client``——另一客户端被改而没重封基线也要拦下。"""
+
+        calls: list[str] = []
+
+        def runner(argv, **_):
+            calls.append(argv[-1])
+            failing = argv[-1] == pre.BASELINE_TESTS["claude"]
+            return SimpleNamespace(returncode=1 if failing else 0, stdout="", stderr="AssertionError: Claude 工具身份变化" if failing else "")
+
+        result = pre.check_baseline_reseal(Path("."), ["claude", "codex"], runner=runner)
+        self.assertEqual(sorted(calls), sorted(pre.BASELINE_TESTS.values()), "两个客户端的守恒测试都跑了")
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["problems"][0].startswith("claude："), result["problems"])
+        self.assertEqual(result["detail"]["returncodes"], {"claude": 1, "codex": 0})
+        self.assertFalse(pre.check_baseline_reseal(Path("."), ["codex", "未知客户端"], runner=runner)["passed"], "任一客户端没登记就 fail-closed")
+
     def test_the_named_tests_exist_in_the_repository(self) -> None:
         for module in pre.BASELINE_TESTS.values():
             self.assertTrue((REPO_ROOT / Path(*module.split(".")).with_suffix(".py")).is_file(), module)
@@ -251,6 +268,23 @@ class RunChecksTests(unittest.TestCase):
         self.assertIn("[freeze-receipts]", text)
         self.assertIn("[redeploy]", text)
 
+    def test_with_two_managed_clients_the_baseline_reseal_covers_both(self) -> None:
+        make_frozen_repo(self.root / "tree", receipted=True)
+        seen: list[str] = []
+
+        def runner(argv, **kw):
+            if "-c" in argv:
+                return pre._run(argv, **kw)
+            seen.append(argv[-1])
+            bad = argv[-1] == pre.BASELINE_TESTS["claude"]
+            return SimpleNamespace(returncode=1 if bad else 0, stdout="", stderr="Claude 基线没重封" if bad else "")
+
+        deployments = {"codex": self.deployment, "claude": {**self.deployment, "receipt": "claude-x.json"}}
+        report = pre.run_checks(tree=self.root / "tree", commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
+                                deployment=self.deployment, deployments=deployments, only=["baseline-reseal"], runner=runner)
+        self.assertEqual(sorted(seen), sorted(pre.BASELINE_TESTS.values()))
+        self.assertEqual(report["failed_checks"], ["baseline-reseal"], "本轮是 codex，也被 claude 的基线没重封拦下")
+
     def test_only_runs_the_named_checks_and_rejects_unknown_names(self) -> None:
         make_frozen_repo(self.root / "tree", receipted=True)
         report = pre.run_checks(tree=self.root / "tree", commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
@@ -305,9 +339,11 @@ class StartIntegrationTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def args(self, commit: str, preflight: str = "off") -> SimpleNamespace:
+    def args(self, commit: str, preflight: str | None = "off") -> SimpleNamespace:
+        """``preflight=None`` 表示命令行里不写 --preflight，吃 Python 的缺省（on）。沿用一律显式关掉：这里测的是前置检查。"""
+
         return bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "main",
-                          "--commit", commit, "--entry-gates", str(self.gates), "--preflight", preflight])
+                          "--commit", commit, "--entry-gates", str(self.gates), "--reuse", "off", *(["--preflight", preflight] if preflight else [])])
 
     def failing_report(self) -> dict:
         return {"schema_version": pre.SCHEMA, "passed": False, "failed_checks": ["redeploy"], "commit": "x", "client": "codex",
@@ -339,18 +375,46 @@ class StartIntegrationTests(unittest.TestCase):
         self.assertEqual(started["action"], "started")
         self.assertEqual(preflight.call_args.kwargs["commit"], "a" * 40)
 
-    def test_default_is_off_so_existing_callers_are_unchanged(self) -> None:
+    def test_explicit_off_skips_the_preflight(self) -> None:
         with mock.patch.object(pre, "preflight_with_bundle") as preflight:
-            started = bv.start(self.args("a" * 40))
+            started = bv.start(self.args("a" * 40, "off"))
         self.assertEqual(started["action"], "started")
         preflight.assert_not_called()
 
-    def test_cli_default_is_off_and_the_wrapper_turns_it_on(self) -> None:
-        parsed = bv._parse(["start", "--runroot", "/r", "--data-root", "/d", "--bundle", "/b", "--branch", "x", "--commit", "a" * 40])
-        self.assertEqual(parsed.preflight, "off")
-        wrapper = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "background-validate.sh").read_text(encoding="utf-8")
-        self.assertIn("--preflight on", wrapper)
-        self.assertIn("--no-preflight", wrapper)
+    def test_the_python_command_line_defaults_to_on_so_a_direct_call_cannot_silently_skip_it(self) -> None:
+        """验收修正建议 12：Python 命令行的 start 与驱动入口同一缺省——前置检查缺省 on，不写 --preflight 也被拦。"""
+
+        self.assertEqual(self.args("a" * 40, None).preflight, "on")
+        with mock.patch.object(pre, "preflight_with_bundle", return_value=self.failing_report()) as preflight:
+            with self.assertRaises(bv.ValidationError) as caught:
+                bv.start(self.args("a" * 40, None))
+        self.assertIn("拒绝起跑", str(caught.exception))
+        preflight.assert_called_once()
+        self.assertEqual(bv.results(self.runroot), [])
+
+    def test_the_wrapper_maps_the_no_flags_to_explicit_off_and_defaults_stay_on(self) -> None:
+        text = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "background-validate.sh").read_text(encoding="utf-8")
+        start = text.index("  start)\n")
+        block = text[start + len("  start)\n"):text.index(";;", start)]
+
+        # 真实执行 start 那一段 shell：取出 shift 3 之后的参数处理与 exec，看实际传给 Python 的词。
+        tail = block[block.index("bundle=$1; branch=$2; commit=$3; shift 3"):]
+
+        def run(*extra: str) -> list[str]:
+            script = ("RUNROOT=/r; D=/d; ARM64_VC_ENV=/e; BV=(printf '%s\\n'); CT_CLIENT_ARGV=()\n"
+                      f"set -- /b main {'a' * 40} " + " ".join(extra) + "\n" + tail)
+            completed = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed.stdout.split()
+
+        default = run()
+        self.assertEqual(default[default.index("--preflight") + 1], "on")
+        self.assertEqual(default[default.index("--reuse") + 1], "auto")
+        skipped = run("--no-preflight", "--no-reuse")
+        self.assertEqual(skipped[skipped.index("--preflight") + 1], "off", "--no-preflight 要显式传 off：Python 缺省已经是 on")
+        self.assertEqual(skipped[skipped.index("--reuse") + 1], "off")
+        self.assertNotIn("--no-preflight", skipped)
+        self.assertNotIn("--no-reuse", skipped)
 
 
 class DriverCopyTests(unittest.TestCase):

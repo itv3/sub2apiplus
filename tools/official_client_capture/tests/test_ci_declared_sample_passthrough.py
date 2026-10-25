@@ -523,7 +523,7 @@ PY
     def start(self, commit: str, *extra: str) -> subprocess.CompletedProcess[str]:
         h = self.helper
         return h.cli("start", "--runroot", str(h.runroot), "--data-root", str(h.data), "--bundle", str(h.root / "x.bundle"), "--branch", "codex/test",
-                     "--commit", commit, "--entry-gates", str(h.gates), *extra)
+                     "--commit", commit, "--entry-gates", str(h.gates), *extra)   # cli 对 start 补 --preflight off --reuse off
 
     def finished(self, completed: subprocess.CompletedProcess[str]) -> dict:
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -577,7 +577,7 @@ PY
 
         h = self.helper
         arguments = ["start", "--runroot", str(h.runroot), "--data-root", str(h.data), "--bundle", str(h.root / "x.bundle"),
-                     "--branch", "codex/test", "--commit", COMMIT_A, "--entry-gates", str(h.gates)]
+                     "--branch", "codex/test", "--commit", COMMIT_A, "--entry-gates", str(h.gates), "--preflight", "off", "--reuse", "off"]
         for raw in ("", " always", "always\n", "every:03"):
             args = bv._parse(arguments)
             args.declared_sample = raw
@@ -595,7 +595,8 @@ PY
         h = self.helper
         with mock.patch.object(bv.subprocess, "Popen", return_value=mock.Mock(pid=-1)):
             started = bv.start(bv._parse(["start", "--runroot", str(h.runroot), "--data-root", str(h.data), "--bundle", str(h.root / "x.bundle"),
-                                          "--branch", "codex/test", "--commit", COMMIT_A, "--entry-gates", str(h.gates), "--declared-sample", "always"]))
+                                          "--branch", "codex/test", "--commit", COMMIT_A, "--entry-gates", str(h.gates), "--declared-sample", "always",
+                                          "--preflight", "off", "--reuse", "off"]))
         path = Path(started["result"])
         original = bv._read(path)
         self.assertEqual(original["declared_sample"], "always")

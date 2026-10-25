@@ -119,16 +119,29 @@ def check_freeze_receipts(tree: Path, *, runner: Callable[..., Any] = _run) -> d
     return _result("freeze-receipts", problems, registered=report.get("registered"), uncovered=uncovered)
 
 
-def check_baseline_reseal(tree: Path, client: str, *, runner: Callable[..., Any] = _run) -> dict[str, Any]:
-    module = BASELINE_TESTS.get(client)
-    if module is None:
-        return _result("baseline-reseal", [f"客户端 {client!r} 没有登记基线重封检查（fail-closed）"])
-    completed = runner([sys.executable, "-B", "-m", "unittest", module], cwd=tree, timeout=BASELINE_TEST_TIMEOUT_SECONDS)
-    problems = []
-    if completed.returncode != 0:
-        tail = "\n".join((completed.stderr or completed.stdout).strip().splitlines()[-6:])
-        problems.append(f"受管工具身份与固化的守恒基线不一致（{module} 退出码 {completed.returncode}）。改了受管工具文件要【单独提交】重封基线后再起后台验证：{tail[-500:]}")
-    return _result("baseline-reseal", problems, test=module, returncode=completed.returncode)
+def check_baseline_reseal(tree: Path, client: str | Sequence[str], *, runner: Callable[..., Any] = _run) -> dict[str, Any]:
+    """基线重封检查：``client`` 可以是一个客户端名，也可以是客户端名的序列——两客户端都纳管时要逐个核对（验收修正建议 12：只核本轮客户端的话，
+    另一客户端的受管工具被改而没重封基线也会放行起跑）。任一客户端没有登记检查（fail-closed）或测试不通过，整项不通过，问题里写明是哪个客户端。"""
+
+    clients = [client] if isinstance(client, str) else list(client)
+    problems: list[str] = []
+    tests: dict[str, str] = {}
+    codes: dict[str, int] = {}
+    for name in clients:
+        module = BASELINE_TESTS.get(name)
+        if module is None:
+            problems.append(f"客户端 {name!r} 没有登记基线重封检查（fail-closed）")
+            continue
+        completed = runner([sys.executable, "-B", "-m", "unittest", module], cwd=tree, timeout=BASELINE_TEST_TIMEOUT_SECONDS)
+        tests[name], codes[name] = module, completed.returncode
+        if completed.returncode != 0:
+            tail = "\n".join((completed.stderr or completed.stdout).strip().splitlines()[-6:])
+            prefix = f"{name}：" if len(clients) > 1 else ""
+            problems.append(f"{prefix}受管工具身份与固化的守恒基线不一致（{module} 退出码 {completed.returncode}）。改了受管工具文件要【单独提交】重封基线后再起后台验证：{tail[-500:]}")
+    if len(clients) == 1 and tests:
+        # 单个客户端：detail 的形状与改造前相同。
+        return _result("baseline-reseal", problems, test=tests[clients[0]], returncode=codes[clients[0]])
+    return _result("baseline-reseal", problems, tests=tests, returncodes=codes)
 
 
 def check_redeploy(tree: Path, data_root: Path, clients: Sequence[str], *, steps: Any = None, pycache: Path | None = None) -> dict[str, Any]:
@@ -230,7 +243,7 @@ def run_checks(*, tree: Path, commit: str, data_root: Path, runroot: Path, clien
         if name == "freeze-receipts":
             result = check_freeze_receipts(tree, runner=runner)
         elif name == "baseline-reseal":
-            result = check_baseline_reseal(tree, client, runner=runner)
+            result = check_baseline_reseal(tree, clients, runner=runner)
         elif name == "redeploy":
             result = check_redeploy(tree, data_root, clients, steps=steps)
         else:

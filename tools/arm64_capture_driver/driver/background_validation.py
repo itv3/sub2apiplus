@@ -67,8 +67,8 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 
 起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署）。
 ``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定，任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
-报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 off（保持既有调用方
-不变），驱动入口 ``background-validate.sh start`` 缺省带 ``--preflight on``（``--no-preflight`` 显式跳过）。
+报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 on（验收修正建议 12：Python 命令行与
+驱动入口 ``background-validate.sh start`` 同一缺省，直接调 Python 也不会悄悄绕过前置检查），``--preflight off``（驱动入口 ``--no-preflight``）显式跳过。
 
 同树重部署沿用测试结论（Codex 升级工具优化第 5 项）：同一棵受管树重新部署（部署收据只换时间戳）也要重跑约 145 分钟验证——测试结论与部署时间戳无关，只与“测什么、怎么测、
 在什么环境测”有关。通过的结论因此带一份沿用绑定 ``reuse_binding``：工具身份五摘要（每个已纳管客户端）、提交、门禁集合摘要、执行器摘要、调度策略摘要、输入清单摘要、
@@ -981,7 +981,8 @@ def _preflight_module() -> Any:
 
 def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any],
                     deployments: Mapping[str, Mapping[str, Any]] | None) -> None:
-    """``--preflight on`` 时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定；不通过抛 ``ValidationError``（拒绝起跑）。缺省 off，没给就什么都不做。"""
+    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定；不通过抛 ``ValidationError``（拒绝起跑）。
+    不是命令行解析出来的参数对象（没有 ``preflight`` 属性）什么都不做。"""
 
     if getattr(args, "preflight", "off") != "on":
         return
@@ -2528,10 +2529,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="旧提交是新提交祖先的验证因材料不足做不了时，退化为在结论里标明 unverified（确定不是祖先永远拒绝）；"
                               "只与 --unit-inherit-source-result 同用")
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
-    p_start.add_argument("--preflight", choices=("on", "off"), default="off",
-                         help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 off，驱动入口 background-validate.sh 缺省带 on")
-    p_start.add_argument("--reuse", choices=("auto", "only", "off"), default="off",
-                         help="同树重部署沿用测试结论：auto 先试沿用、拒绝就照常起完整验证；only 只试沿用（reuse 子命令）；缺省 off，驱动入口 background-validate.sh 缺省带 auto")
+    p_start.add_argument("--preflight", choices=("on", "off"), default="on",
+                         help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 on（与驱动入口 background-validate.sh 一致），off 显式跳过")
+    p_start.add_argument("--reuse", choices=("auto", "only", "off"), default="auto",
+                         help="同树重部署沿用测试结论：auto 先试沿用、拒绝就照常起完整验证；only 只试沿用（reuse 子命令）；缺省 auto（与驱动入口 background-validate.sh 一致），off 显式不沿用")
     p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
     p_pre.add_argument("--runroot", type=Path, required=True)
     p_pre.add_argument("--data-root", type=Path, required=True)

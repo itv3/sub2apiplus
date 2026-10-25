@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -24,6 +26,7 @@ from pathlib import Path
 
 from tools.ci import entry_steps as es
 from tools.ci import opening_checks as oc
+from tools.official_client_capture.tests.test_ci_entry_steps import Fixture, _step
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HEAD = "a" * 40
@@ -196,6 +199,57 @@ class AtomicReuseWindowTests(unittest.TestCase):
 
     def test_other_steps_have_no_window(self) -> None:
         self.assertEqual(es.reuse_window_problems("ledger", "codex", completed_at_utc="2020-01-01T00:00:00Z", now=1_800_000_000.0), [])
+
+
+class AtomicReuseWindowEndToEndTests(unittest.TestCase):
+    """验收修正建议 13：``evaluate_step`` 到“重做”的端到端——步骤记录通过、输入没变，窗口内判“沿用”，记录超窗口判“重做”并写明原因，下游随之重做。
+    用入口步骤的真实夹具（真实写入、真实封存的步骤记录），只把 atomic-double 记录的完成时间改老并重新封存。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.fx = Fixture(Path(directory.name).resolve())
+        self.fx.record_all()
+
+    def age_atomic_record(self, minutes: float) -> None:
+        path = es.record_path(self.fx.steps_dir, "atomic-double")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record = {key: value for key, value in record.items() if key != "record_sha256"}
+        record["completed_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+        es._write_json_atomic(path, es.seal(record))
+
+    def test_inside_the_window_the_step_is_reused(self) -> None:
+        self.age_atomic_record(10)
+        result = self.fx.evaluate()
+        self.assertEqual(_step(result, "atomic-double")["decision"], "reuse", _step(result, "atomic-double")["reasons"])
+
+    def test_outside_the_window_the_step_is_redone_with_the_reason_and_the_downstream_follows(self) -> None:
+        window = es.reuse_window_minutes("atomic-double", "codex")
+        self.age_atomic_record(window + 15)
+        result = self.fx.evaluate()
+        atomic = _step(result, "atomic-double")
+        self.assertEqual(atomic["decision"], "run", "超窗口：重做")
+        self.assertTrue(any("超过" in reason and "分钟" in reason for reason in atomic["reasons"]), atomic["reasons"])
+        self.assertEqual(atomic["changed_inputs"], [], "输入没变——重做完全是因为记录太老")
+        self.assertIn("atomic-double", _step(result, "release-certification")["upstream_rerun"], "依赖它的发布认证随之重做")
+        self.assertEqual(es.exit_code(result), 1)
+
+    def test_the_boundary_minute_decides_and_the_other_steps_have_no_window(self) -> None:
+        window = es.reuse_window_minutes("atomic-double", "codex")
+        self.age_atomic_record(window - 5)
+        self.assertEqual(_step(self.fx.evaluate(), "atomic-double")["decision"], "reuse")
+        self.age_atomic_record(window + 5)
+        self.assertEqual(_step(self.fx.evaluate(), "atomic-double")["decision"], "run")
+        # 其它步骤的记录再老也不因时效重做（它们没有窗口）。
+        self.assertEqual(_step(self.fx.evaluate(), "preflight-plan")["decision"], "reuse")
+
+    def test_the_printed_evaluation_names_the_redo_and_its_reason(self) -> None:
+        self.age_atomic_record(es.reuse_window_minutes("atomic-double", "codex") + 30)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            es.print_evaluation(self.fx.evaluate())
+        line = next(line for line in buffer.getvalue().splitlines() if "atomic-double" in line and "（atomic-double 收据）" in line)
+        self.assertIn("重做", line)
 
 
 class PreflightScriptTests(unittest.TestCase):

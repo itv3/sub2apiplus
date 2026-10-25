@@ -96,6 +96,9 @@ class BackgroundValidationTests(unittest.TestCase):
         return path
 
     def cli(self, *argv: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        if argv[:1] == ("start",) and "--preflight" not in argv:
+            # Python 命令行的 start 缺省打开起跑前置检查与沿用（验收修正建议 12）；这些用例测的是别的，显式关掉，缺省行为另有用例。
+            argv = (*argv, "--preflight", "off", "--reuse", "off")
         return subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **self.environ, **(env or {})})
 
@@ -503,6 +506,8 @@ class TwoClientBackgroundValidationTests(unittest.TestCase):
                 "FAKE_GATES_OTHERS": f"{'claude' if client == 'codex' else 'codex'}={other.name}"}
 
     def cli(self, *argv: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        if argv[:1] == ("start",) and "--preflight" not in argv:
+            argv = (*argv, "--preflight", "off", "--reuse", "off")   # 同上：这些用例不测前置检查与沿用
         return subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
 
@@ -583,7 +588,7 @@ class TwoClientBackgroundValidationTests(unittest.TestCase):
                     environment["FAKE_GATES_OTHERS"] = others
                 commit = COMMIT_A if others is None else COMMIT_B
                 argv = ["start", "--runroot", str(self.codex_run), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
-                        "--branch", "claude/test", "--commit", commit, "--entry-gates", str(self.gates)]
+                        "--branch", "claude/test", "--commit", commit, "--entry-gates", str(self.gates), "--preflight", "off", "--reuse", "off"]
                 completed = subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
                                            env={**{k: v for k, v in os.environ.items() if k != "FAKE_GATES_OTHERS"},
                                                 "PYTHONDONTWRITEBYTECODE": "1", **environment})
@@ -684,7 +689,7 @@ class BackgroundUnitInheritTests(unittest.TestCase):
         return bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data),
                           "--bundle", str(self.bundle), "--branch", "codex/claude-upgrade-finish", "--commit", inherit_fixture.COMMIT,
                           "--work", str(self.work), "--record-store", str(self.world.store.root), "--audit-policy", str(self.policy),
-                          "--entry-gates", str(self.gates), "--parallel", "2",
+                          "--entry-gates", str(self.gates), "--parallel", "2", "--preflight", "off", "--reuse", "off",
                           *(["--unit-inherit-request", str(request)] if request else []), *extra])
 
     def failed_background(self) -> Path:

@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from tools.ci import entry_housekeeping as hk
+from tools.ci import retry_policy as rp
 from tools.ci import unit_records as ur
 from tools.official_client_capture.tests.test_ci_entry_housekeeping import NOW, OLD, RECENT, _Store, _age
 
@@ -67,6 +68,55 @@ class RetryRecordsHousekeepingTests(unittest.TestCase):
         for record in (first, retry):
             self.assertTrue(self.store.record_file(record).exists(), "被引用的运行连补跑前的首次失败记录一起留")
             self.assertTrue(self.store.api.log_path(record["log"]["sha256"]).exists())
+
+
+class RetryLedgerSurvivesCleanupTests(unittest.TestCase):
+    """验收修正建议 13：记录库清理（保留期 30 天）不会动补跑账本——账本的累计规则是“最近 5 轮”，跨度远超保留期，被清理掉等于规则作废。
+
+    账本在记录库的 ``retry-ledger/`` 下（或 ``UNIT_EXECUTOR_RETRY_LEDGER`` 指向的共享目录），清理只处理运行清单、记录、日志与逐单元承接目录。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.store_root = self.base / "unit-records"
+        self.store = _Store(self.store_root)
+        self.refs = self.base / "data" / "control"
+        self.refs.mkdir(parents=True)
+
+    def write_old_ledger(self, root: Path) -> rp.RetryLedger:
+        ledger = rp.RetryLedger(root)
+        ledger.append({"unit_id": "flaky:acc", "run_id": f"r{number}", "outcome": "retry-passed" if number == 0 else "passed"} for number in range(5))
+        for path in root.iterdir():
+            _age(path, OLD)       # 比保留期还老：清理若按文件年龄删，它会被删
+        return ledger
+
+    def test_an_old_ledger_in_the_record_store_survives_a_cleanup_and_still_blocks_a_second_retry(self) -> None:
+        ledger = self.write_old_ledger(self.store_root / rp.LEDGER_DIRECTORY)
+        before = ledger.allowance("flaky:acc")
+        self.assertEqual((before["prior_retry_passed"], before["allowed"]), (1, False), "窗口里有一次补跑通过：不再放行")
+        # 旧的、没人引用的运行与记录会被清走，账本不会。
+        first = self.store.record("capture:old", "r-old", self.store.log("旧运行", OLD), OLD)
+        self.store.manifest("r-old", OLD, executed=[first])
+        report = hk.gc_record_store(self.store_root, reference_roots=[self.refs.parent], now=NOW)
+        self.assertEqual(report["status"], "done", report)
+        self.assertFalse(self.store.record_file(first).exists(), "没人引用的旧记录照常清走")
+        self.assertEqual(ledger.allowance("flaky:acc"), before, "账本一字未变，累计规则照样生效")
+        self.assertEqual(len(list((self.store_root / rp.LEDGER_DIRECTORY).glob("*.jsonl"))), 1)
+
+    def test_the_shared_ledger_directory_outside_the_store_is_never_touched(self) -> None:
+        shared = self.base / "gate-retry-ledger"
+        ledger = self.write_old_ledger(shared)
+        before = ledger.allowance("flaky:acc")
+        hk.gc_record_store(self.store_root, reference_roots=[self.refs.parent], now=NOW)
+        self.assertEqual(ledger.allowance("flaky:acc"), before)
+
+    def test_a_dry_run_and_repeated_cleanups_also_leave_the_ledger_alone(self) -> None:
+        ledger = self.write_old_ledger(self.store_root / rp.LEDGER_DIRECTORY)
+        before = ledger.allowance("flaky:acc")
+        for dry_run in (True, False, False):
+            hk.gc_record_store(self.store_root, reference_roots=[self.refs.parent], now=NOW, dry_run=dry_run)
+            self.assertEqual(ledger.allowance("flaky:acc"), before)
 
 
 class DriverCopyTests(unittest.TestCase):

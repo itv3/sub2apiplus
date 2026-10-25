@@ -323,7 +323,8 @@ class EntryDryRunTests(unittest.TestCase):
         environ = {**self.environ, "DATA_ROOT": str(self.data)}
         started = subprocess.run([sys.executable, "-B", str(BV_MODULE), "start", "--runroot", str(self.runroot), "--data-root", str(self.data),
                                   "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test", "--commit", COMMIT,
-                                  "--vc-env", str(self.fixture.env_file), "--entry-gates", str(gates), "--then-dryrun"],
+                                  "--vc-env", str(self.fixture.env_file), "--entry-gates", str(gates), "--then-dryrun",
+                                  "--preflight", "off", "--reuse", "off"],
                                  capture_output=True, text=True, timeout=120, env=environ)
         self.assertEqual(started.returncode, 0, started.stderr)
         result = Path(json.loads(started.stdout.strip().splitlines()[-1])["result"])
@@ -958,7 +959,8 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         def start_validation(runroot: Path, env_file: Path, *client: str) -> dict:
             completed = subprocess.run([sys.executable, "-B", str(BV_MODULE), "start", "--runroot", str(runroot), "--data-root", str(self.data),
                                         "--bundle", str(self.root / "x.bundle"), "--branch", "claude/test", "--commit", COMMIT,
-                                        "--vc-env", str(env_file), "--entry-gates", str(gates), "--then-dryrun", *client],
+                                        "--vc-env", str(env_file), "--entry-gates", str(gates), "--then-dryrun",
+                                        "--preflight", "off", "--reuse", "off", *client],
                                        capture_output=True, text=True, timeout=120, env=environ)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             return json.loads(completed.stdout.strip().splitlines()[-1])

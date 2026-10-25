@@ -199,7 +199,7 @@ class Scenario:
              client: str | None = None) -> list[str]:
         return ["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(bundle), "--branch", branch,
                 "--commit", commit, "--work", str(work or self.work), "--record-store", str(record_store or self.world.store.root),
-                "--audit-policy", str(self.policy), "--entry-gates", str(self.gates),
+                "--audit-policy", str(self.policy), "--entry-gates", str(self.gates), "--preflight", "off", "--reuse", "off",
                 *(["--parallel", parallel] if parallel is not None else []),
                 *(["--client", client or self.client] if (client or self.client) != "codex" else []),
                 *(["--unit-inherit-request", str(request)] if request else []),
