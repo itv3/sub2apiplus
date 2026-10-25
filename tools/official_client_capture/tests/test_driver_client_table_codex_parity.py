@@ -1107,12 +1107,14 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_SH_1_BASELINE = '5fcdf0b6b6ba847e86f42452c975cd841832e606'
-CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '8b1b735a05ef56015bc668060c35619dec4bfc2b6d602594330c83f967305065'}
+CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '0c7bc73f157396331de09cf02900cfd5a33ea722fb1db5caf82d5af65c6a2964'}
 CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
-        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; PRE_A3_STAGING_PARENT=""; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
+        '+BIND_ONLY=false; BIND_ARGS=()',
         '+DECLARED_SAMPLE=off',
+        '+    --bind-only) BIND_ONLY=true; BIND_ARGS=(--decide-only); shift ;;',
         '+    --declared-sample) DECLARED_SAMPLE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+    --pre-a3-staging-parent) PRE_A3_STAGING_PARENT="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+if ! [[ "$DECLARED_SAMPLE" =~ ^(off|always|every:[1-9][0-9]*)$ ]]; then echo "--declared-sample 只接受 off、always 或 every:N（N 为正整数）：$DECLARED_SAMPLE" >&2; exit 2; fi',
@@ -1130,7 +1132,17 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '-    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" \\',
         '+    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$PRE_A3_PARENT" --output "$UNITS" \\',
         '+if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS+=(--identity-memo off); fi',
-        '+if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi']}
+        '+if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi',
+        '-    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
+        '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
+        '+if [ "$BIND_ONLY" = true ]; then',
+        '+  if [ "$EXEC_RC" -ne 0 ] || [ ! -f "$OUT/executor/binding.json" ]; then',
+        '+    echo "ENTRY_GATES_ABORTED：运行绑定没算出来（rc=${EXEC_RC}）；日志 ${OUT}/executor.log"; exit 3',
+        '+  fi',
+        '+  rm -rf "$TREE" "$PYC"',
+        '+  echo "ENTRY_GATES_BIND_ONLY ${OUT}/executor/binding.json"',
+        '+  exit 0',
+        '+fi']}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),

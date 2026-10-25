@@ -70,6 +70,14 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 off（保持既有调用方
 不变），驱动入口 ``background-validate.sh start`` 缺省带 ``--preflight on``（``--no-preflight`` 显式跳过）。
 
+同树重部署沿用测试结论（Codex 升级工具优化第 5 项）：同一棵受管树重新部署（部署收据只换时间戳）也要重跑约 145 分钟验证——测试结论与部署时间戳无关，只与“测什么、怎么测、
+在什么环境测”有关。通过的结论因此带一份沿用绑定 ``reuse_binding``：工具身份五摘要（每个已纳管客户端）、提交、门禁集合摘要、执行器摘要、调度策略摘要、输入清单摘要、
+平台环境摘要（后四项和门禁集合来自执行器写的 ``executor/binding.json``），并带有效期（缺省 24 小时，自来源完成时起算，沿用不延长）。``reuse`` 子命令（或 ``start --reuse auto``，
+驱动入口缺省带）在新部署之后用 ``entry-gates.sh --bind-only`` 在来源的同一个工作目录里现算同样的绑定——它走和真实运行一样的树准备、部署绑定核对（整树摘要与部署一致性各部分）、
+清单与输入计算，但不执行任何测试——逐项比对，全部相同才把来源的通过结论沿用到新部署上，写一份绑定新部署收据的结论（``reuse`` 键登记来源结论、冻结副本、逐项比对结果）；
+任一项变了或过了有效期就拒绝并逐项写明原因，要求重验。``check``（批次边界、VC-5 前核对与统一准入）对沿用的结论重放：来源冻结副本的摘要与自摘要、来源仍是通过、绑定未过期、
+新部署的工具身份与来源一致，不能只信 passed 标签。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
@@ -819,6 +827,118 @@ def start(args: argparse.Namespace) -> dict[str, Any]:
         os.close(fd)
 
 
+REUSE_BINDING_SCHEMA = "background-reuse-binding/v1"
+REUSE_SCHEMA = "background-reuse/v1"
+REUSE_VALIDITY_HOURS = 24.0
+REUSE_BIND_TIMEOUT_SECONDS = 3600
+# 绑定的各项（键 → 说明文字）：逐项比对，哪项变了就报哪项。
+REUSE_COMPONENTS = (("tool_identity", "工具身份五摘要"), ("commit", "提交"), ("gate_set_sha256", "门禁集合摘要"), ("executor_sha256", "执行器摘要"),
+                    ("policy_sha256", "调度策略摘要"), ("inputs_manifest_sha256", "输入清单摘要"), ("environment_sha256", "平台环境摘要"))
+
+
+def _identities(payload: Mapping[str, Any], deployments: Mapping[str, Mapping[str, Any]] | None = None,
+                deployment: Mapping[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """结论（或给定的部署）绑定的工具身份五摘要：每个已纳管客户端一份。"""
+
+    bound = deployments if deployments is not None else payload.get("deployments")
+    if bound:
+        return {client: dict(item["identity"]) for client, item in sorted(bound.items())}
+    one = deployment if deployment is not None else payload.get("deployment")
+    return {str(payload.get("client") or "codex"): dict((one or {})["identity"])}
+
+
+def executor_binding(out: Path | str) -> dict[str, Any] | None:
+    """执行器在结束时写的 ``binding.json``（入口门禁总摘要指向的执行器汇总所在目录）；没有就返回 None。"""
+
+    entry = _entry_summary(Path(out))
+    if entry is None or not entry.get("executor_summary"):
+        return None
+    try:
+        document = json.loads((Path(str(entry["executor_summary"])).parent / "binding.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    required = {"schema_version", "policy_sha256", "environment_sha256", "executor_sha256", "gate_set_sha256", "inputs_manifest_sha256"}
+    return document if isinstance(document, dict) and required <= set(document) else None
+
+
+def build_reuse_binding(payload: Mapping[str, Any], binding: Mapping[str, Any], *, completed_at_utc: str,
+                        validity_hours: float = REUSE_VALIDITY_HOURS) -> dict[str, Any]:
+    """通过的结论的沿用绑定：各项绑定值加有效期，自带摘要。"""
+
+    components = {"tool_identity": _identities(payload), "commit": payload["commit"],
+                  **{key: binding[key] for key, _label in REUSE_COMPONENTS if key not in ("tool_identity", "commit")}}
+    completed = datetime.fromisoformat(completed_at_utc.replace("Z", "+00:00")).timestamp()
+    body = {"schema_version": REUSE_BINDING_SCHEMA, "components": components, "completed_at_utc": completed_at_utc,
+            "validity_hours": validity_hours,
+            "valid_until_utc": datetime.fromtimestamp(completed + validity_hours * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    return {**body, "binding_sha256": hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()}
+
+
+def reuse_binding_problems(binding: Any, *, now: float | None = None) -> list[str]:
+    """沿用绑定的自检（格式、自摘要、各项齐全）与有效期；空列表＝可用。"""
+
+    if not isinstance(binding, Mapping) or binding.get("schema_version") != REUSE_BINDING_SCHEMA:
+        return ["结论没有沿用绑定（reuse_binding）或格式版本不对"]
+    body = {key: value for key, value in binding.items() if key != "binding_sha256"}
+    if binding.get("binding_sha256") != hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest():
+        return ["沿用绑定的自摘要不符（被改过）"]
+    components = binding.get("components")
+    if not isinstance(components, Mapping) or any(key not in components for key, _label in REUSE_COMPONENTS):
+        return ["沿用绑定缺少绑定项"]
+    try:
+        until = datetime.fromisoformat(str(binding["valid_until_utc"]).replace("Z", "+00:00")).timestamp()
+    except (KeyError, ValueError):
+        return ["沿用绑定的有效期读不出"]
+    if (time.time() if now is None else now) > until:
+        return [f"沿用的绑定已过有效期（{binding['valid_until_utc']}）：要求重验"]
+    return []
+
+
+def component_differences(source: Mapping[str, Any], current: Mapping[str, Any]) -> list[str]:
+    """逐项比对两份绑定值，返回变了的项（中文说明，工具身份写明哪个客户端的哪个摘要变了）。"""
+
+    problems: list[str] = []
+    for key, label in REUSE_COMPONENTS:
+        if key == "tool_identity":
+            before, after = source.get(key) or {}, current.get(key) or {}
+            for client in sorted(set(before) | set(after)):
+                for field in sorted(set(before.get(client) or {}) | set(after.get(client) or {})):
+                    if (before.get(client) or {}).get(field) != (after.get(client) or {}).get(field):
+                        problems.append(f"{label}变了：{client} 的 {field}")
+                if client not in before or client not in after:
+                    problems.append(f"{label}变了：已纳管客户端集合不同（{client}）")
+        elif source.get(key) != current.get(key):
+            problems.append(f"{label}变了：{str(source.get(key))[:16]} → {str(current.get(key))[:16]}")
+    return problems
+
+
+def _reuse_problems(payload: Mapping[str, Any]) -> list[str]:
+    """``check`` 对沿用结论的重放：来源冻结副本的摘要、来源仍是通过、绑定未过期、本次比对记录与来源绑定一致、新部署的工具身份与来源一致。"""
+
+    reuse = payload.get("reuse")
+    if not isinstance(reuse, Mapping) or reuse.get("schema_version") != REUSE_SCHEMA:
+        return ["沿用登记缺失或格式版本不对"]
+    frozen = reuse.get("source_frozen") if isinstance(reuse.get("source_frozen"), Mapping) else {}
+    try:
+        if _sha256_file(Path(str(frozen.get("path")))) != frozen.get("sha256"):
+            return ["沿用的来源结论冻结副本摘要不符（被改过或不在了）"]
+    except OSError:
+        return ["沿用的来源结论冻结副本读不到"]
+    source = _read(Path(str(frozen["path"])))
+    if source is None or source.get("status") != "passed" or source.get("commit") != payload.get("commit"):
+        return ["沿用的来源结论不是同一提交的通过结论"]
+    problems = reuse_binding_problems(source.get("reuse_binding"))
+    if problems:
+        return problems
+    binding = source["reuse_binding"]
+    if payload.get("reuse_binding") != binding or reuse.get("source_binding_sha256") != binding["binding_sha256"]:
+        return ["沿用结论登记的绑定与来源不一致"]
+    differences = component_differences(binding["components"], reuse.get("current_components") or {})
+    differences += component_differences({"tool_identity": binding["components"]["tool_identity"]},
+                                         {"tool_identity": _identities(payload)})
+    return [f"沿用时的比对记录与来源绑定不符：{'；'.join(differences)}"] if differences else []
+
+
 def _preflight_module() -> Any:
     """同目录的 background_preflight.py（起跑前置检查，优化第 4 项）：按路径加载。"""
 
@@ -850,6 +970,96 @@ def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mappin
     _write(scratch / f"{args.commit[:12]}-{time.strftime('%Y%m%dt%H%M%Sz', time.gmtime())}.json", report)
     if not report["passed"]:
         raise ValidationError(module.format_failures(report))
+
+
+def _reuse_candidates(args: argparse.Namespace, client: str) -> list[tuple[Path, dict[str, Any]]]:
+    """同一提交、同一客户端、同一组合下可作沿用来源的通过结论（全集重新执行、有沿用绑定），完成时间新的在前。"""
+
+    found = [(path, payload) for path, payload in results(args.runroot)
+             if payload.get("commit") == args.commit and (payload.get("client") or "codex") == client and effective_status(payload) == "passed"
+             and payload.get("mode") == "re-execute" and not payload.get("unit_inherit_request") and not payload.get("audit_policy")
+             and payload.get("profile") == args.profile and isinstance(payload.get("reuse_binding"), dict)]
+    return sorted(found, key=lambda item: str(item[1].get("completed_at_utc")), reverse=True)
+
+
+def _current_binding(args: argparse.Namespace, source: Mapping[str, Any], *, deployments: Mapping[str, Mapping[str, Any]] | None) -> dict[str, Any]:
+    """现算新部署上的绑定：``entry-gates.sh --bind-only`` 在来源的同一个工作目录里走真实运行的树准备、部署绑定核对与清单／输入计算，不执行任何测试，
+    只让执行器写 ``binding.json``。部署绑定核对不过（整树摘要或部署一致性不符）时入口门禁自己就报错退出，沿用随之拒绝。"""
+
+    out = Path(args.runroot) / DIRECTORY / "reuse" / f"{args.commit[:12]}-{time.time_ns()}"
+    require = "--require-deployed-all" if deployments else "--require-deployed"
+    argv = ["bash", str(args.entry_gates), "--profile", str(source["profile"]), "--mode", "re-execute", require, "--wait-lock", str(WAIT_LOCK_SECONDS),
+            "--out", str(out), "--bind-only"]
+    for flag, key in (("--record-store", "record_store"), ("--work", "work")):
+        if source.get(key):
+            argv += [flag, str(source[key])]
+    if "parallel" in source:
+        argv += ["--parallel", str(source["parallel"])]
+    if "declared_sample" in source:
+        argv += ["--declared-sample", str(source["declared_sample"])]
+    argv += [str(args.bundle), args.branch, args.commit]
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **dict(source.get("cache_roots") or {}),
+                   **({"ARM64_VC_ENV": str(args.vc_env)} if args.vc_env else {})}
+    try:
+        completed = subprocess.run(argv, env=environment, capture_output=True, text=True, timeout=REUSE_BIND_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValidationError(f"沿用核对的入口门禁没跑起来：{error}") from error
+    binding_path = out / "executor" / "binding.json"
+    try:
+        document = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        tail = "\n".join((completed.stdout + completed.stderr).strip().splitlines()[-4:])
+        raise ValidationError(f"沿用核对的入口门禁没有产出绑定（退出码 {completed.returncode}；多半是部署与测试树不一致）：{tail[-400:]}") from None
+    if completed.returncode != 0 or not isinstance(document, dict):
+        raise ValidationError(f"沿用核对的入口门禁退出码 {completed.returncode}")
+    return document
+
+
+def _attempt_reuse(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any], deployments: Mapping[str, Mapping[str, Any]] | None,
+                   path: Path, inputs: Mapping[str, Any], work: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    """同树重部署沿用（优化第 5 项）。成功返回（起跑结果, []）；拒绝返回（None, 原因列表）。拒绝时不写任何结论，调用方照常起完整验证（auto）或报告（only）。"""
+
+    candidates = _reuse_candidates(args, client)
+    if not candidates:
+        return None, ["同一提交没有带沿用绑定的通过结论可沿用"]
+    refusals: list[str] = []
+    for source_path, source in candidates:
+        binding = source["reuse_binding"]
+        problems = reuse_binding_problems(binding)
+        current_identities = _identities(source, deployments, deployment)
+        problems += component_differences({"tool_identity": binding["components"]["tool_identity"]}, {"tool_identity": current_identities}) \
+            if not problems else []
+        if problems:
+            refusals.append(f"{source_path.name}：{'；'.join(problems)}")
+            continue
+        try:
+            document = _current_binding(args, source, deployments=deployments)
+        except ValidationError as error:
+            refusals.append(f"{source_path.name}：{error}")
+            continue
+        current_components = {"tool_identity": current_identities, "commit": args.commit,
+                              **{key: document.get(key) for key, _label in REUSE_COMPONENTS if key not in ("tool_identity", "commit")}}
+        differences = component_differences(binding["components"], current_components)
+        if differences:
+            refusals.append(f"{source_path.name}：{'；'.join(differences)}")
+            continue
+        now = _utc_now()
+        frozen_text = json.dumps(source, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        frozen = path.parent / "history" / (hashlib.sha256(frozen_text.encode()).hexdigest() + ".json")
+        if not frozen.exists():
+            _write(frozen, source)
+        reused = {key: value for key, value in source.items() if key not in ("pid", "pid_start", "deployments", "predecessor")}
+        reused.update(
+            deployment=dict(deployment), status="passed", started_at_utc=now, completed_at_utc=now, reason=None, returncode=0, then_dryrun=False,
+            dryrun=None, input_contract=dict(inputs), work=str(work),
+            **({"deployments": dict(deployments)} if deployments is not None else {}),
+            reuse={"schema_version": REUSE_SCHEMA, "source_result": str(source_path), "source_deployment": (source.get("deployment") or {}).get("receipt"),
+                   "source_frozen": {"path": str(frozen), "sha256": _sha256_file(frozen)}, "source_binding_sha256": binding["binding_sha256"],
+                   "current_components": current_components, "verified_at_utc": now,
+                   "deployment_check": "entry-gates.sh --bind-only 在来源工作目录里完成部署绑定核对（整树摘要与部署一致性各部分逐项相同）"})
+        _write(path, reused)
+        return {"action": "reused", "result": str(path), "source": str(source_path), "components": [label for _key, label in REUSE_COMPONENTS]}, []
+    return None, refusals
 
 
 def _shared_contract(inputs: Any) -> dict[str, Any]:
@@ -1772,6 +1982,18 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         # 登记里同一次验证在另一运行根、但没法搭（要重跑全集）：本运行根新起一次，登记改指向新的这一份。
         path = result_path(args.runroot, args.commit, deployment, deployments)
         existing = _read(path)
+    # 同树重部署沿用（优化第 5 项）：auto 先试沿用，拒绝（任一绑定项变了、过有效期、核对失败）就照常起完整验证；only 只试沿用。
+    reuse_mode, reuse_refused = getattr(args, "reuse", "off"), []
+    if reuse_mode in ("auto", "only"):
+        reused_result, reuse_refused = _attempt_reuse(args, client=client, deployment=deployment, deployments=deployments, path=path,
+                                                      inputs=inputs, work=work)
+        if reused_result is not None:
+            if reuse_mode == "auto":
+                # 驱动的修复轮（fix_and_continue 的 background-verdict）只认 started／exists：自动沿用成功就是“当前部署已有通过的结论”，按 exists 报告并带 reused 标记。
+                return {**reused_result, "action": "exists", "status": "passed", "reused": True}
+            return reused_result
+        if reuse_mode == "only":
+            return {"action": "refused", "reasons": reuse_refused}
     # 起跑前置检查（优化第 4 项）：放在停掉其它验证之前——拒绝起跑不能连累已在跑的那一轮。
     _preflight_gate(args, client=client, deployment=deployment, deployments=deployments)
     stop_notes: list[str] = []
@@ -1838,6 +2060,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         identity = process_identity(process.pid)
         _write(path, {**current, "pid": process.pid, **({"pid_start": identity} if identity else {})})
     started = {"action": "started", "result": str(path), "pid": process.pid, "out": str(out), "superseded": superseded}
+    if reuse_refused:
+        started["reuse_refused"] = reuse_refused   # auto：沿用被拒绝的原因（已照常起了完整验证）
     if stop_notes:
         started["stop_notes"] = stop_notes
     if source_info is not None:
@@ -2018,6 +2242,11 @@ def run(result: Path) -> int:
             status, reason = "failed", "补跑标注自检不通过：" + "；".join(retried["problems"][:5])
         elif retried["passed_units"]:
             current = {**current, "retry_passed_units": retried["passed_units"]}
+    if status == "passed" and not current.get("unit_inherit_request") and not current.get("audit_policy"):
+        # 同树重部署沿用（优化第 5 项）：通过的全集重新执行结论带上沿用绑定（取执行器写的 binding.json）；拿不到绑定就不带，之后只能重跑，不会误沿用。
+        binding_doc = executor_binding(payload["out"])
+        if binding_doc is not None:
+            current = {**current, "reuse_binding": build_reuse_binding(current, binding_doc, completed_at_utc=_utc_now())}
     if status == "passed" and current.get("unit_inherit_request"):
         try:
             current = {**current, "unit_inherit_consumption": _inherit_completion(current)}
@@ -2161,6 +2390,13 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
                 return 0, (f"后台验证通过（{where}）；跨提交后继：承接 {summary.get('inherited')} 个、重跑 {summary.get('executed')} 个"
                            + ("（没有任何单元被承接，实际是整套重新执行）" if summary.get("outcome") == "full_rerun" else "")
                            + _ancestry_note(payload.get("unit_inherit_source")))
+        reused_note = ""
+        if payload.get("reuse") is not None:
+            # 沿用的结论（优化第 5 项）：不能只信 passed 标签，重放来源冻结副本、绑定有效期与工具身份。
+            reasons = _reuse_problems(payload)
+            if reasons:
+                return 3, f"后台验证的沿用不能重放（{where}）：{'；'.join(reasons[:5])}"
+            reused_note = f"；沿用自提交 {str(payload.get('commit'))[:12]} 在部署 {payload['reuse'].get('source_deployment')} 上的通过结论（同树重部署，测试结论不重跑）"
         retried = payload.get("retry_passed_units")
         if retried:
             # 结论带补跑通过的单元（优化第 2 项）：不能只信 passed 标签，按执行器汇总重放标注（含两次日志的摘要）；对不上就不放行。
@@ -2169,8 +2405,9 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
             if replay["problems"] or sorted(item["unit_id"] for item in replay["passed_units"]) != registered:
                 reasons = replay["problems"] or ["结论登记的补跑通过名单与执行器汇总不一致"]
                 return 3, f"后台验证的补跑标注不能重放（{where}）：{'；'.join(reasons[:5])}"
-            return 0, f"后台验证通过（{where}）；其中补跑通过的单元 {len(registered)} 个（首次失败后单独补跑一次通过，已单列）：{'、'.join(registered[:8])}"
-        return 0, f"后台验证通过（{where}）"
+            return 0, (f"后台验证通过（{where}）；其中补跑通过的单元 {len(registered)} 个（首次失败后单独补跑一次通过，已单列）：{'、'.join(registered[:8])}"
+                       + reused_note)
+        return 0, f"后台验证通过（{where}）{reused_note}"
     if status == "failed":
         return 3, f"后台验证失败（没通过的门禁项 {payload.get('failed_gates')}；{where}）：拒绝派发下一批，修好、定向回归、部署后重新 start"
     if status == "aborted":
@@ -2235,6 +2472,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
     p_start.add_argument("--preflight", choices=("on", "off"), default="off",
                          help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 off，驱动入口 background-validate.sh 缺省带 on")
+    p_start.add_argument("--reuse", choices=("auto", "only", "off"), default="off",
+                         help="同树重部署沿用测试结论：auto 先试沿用、拒绝就照常起完整验证；only 只试沿用（reuse 子命令）；缺省 off，驱动入口 background-validate.sh 缺省带 auto")
     p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
     p_pre.add_argument("--runroot", type=Path, required=True)
     p_pre.add_argument("--data-root", type=Path, required=True)
@@ -2245,6 +2484,15 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
+    p_reuse = sub.add_parser("reuse", help="同树重部署后沿用已通过的测试结论（退出码 0 沿用成功、3 被拒绝要求重验）")
+    p_reuse.add_argument("--runroot", type=Path, required=True)
+    p_reuse.add_argument("--data-root", type=Path, required=True)
+    p_reuse.add_argument("--bundle", type=Path, required=True)
+    p_reuse.add_argument("--branch", required=True)
+    p_reuse.add_argument("--commit", required=True)
+    p_reuse.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
+    p_reuse.add_argument("--vc-env", type=Path, default=None)
+    p_reuse.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")
     p_stop.add_argument("--runroot", type=Path, required=True)
     p_stop.add_argument("--reason", default="修复轮跑定向回归前停下（上一轮提交的验证已作废）")
@@ -2286,6 +2534,14 @@ def main(argv: list[str] | None = None) -> int:
             if not report["passed"]:
                 print(module.format_failures(report), file=sys.stderr)
             return 0 if report["passed"] else 3
+        if args.command == "reuse":
+            if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+                raise ValidationError("--commit 要完整的 40 位小写提交号")
+            started = start(_parse(["start", "--runroot", str(args.runroot), "--data-root", str(args.data_root), "--bundle", str(args.bundle),
+                                    "--branch", args.branch, "--commit", args.commit, "--client", args.client, "--reuse", "only",
+                                    "--entry-gates", str(args.entry_gates), *(["--vc-env", str(args.vc_env)] if args.vc_env else [])]))
+            print(json.dumps(started, ensure_ascii=False))
+            return 3 if started.get("action") == "refused" else 0
         if args.command == "run":
             return run(args.result)
         if args.command == "stop":

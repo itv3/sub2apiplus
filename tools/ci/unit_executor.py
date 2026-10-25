@@ -51,6 +51,9 @@
   通过 1 次，第 2 次再红直接判红、不再补跑，按单元 ID 写进记录库的 ``retry-ledger/``。补跑尝试的记录记为“正式执行”（运行清单自检不用改）但永不作
   承接来源。后端三组 go test 由 ``go_test_packages.py`` 按包运行：补跑只补跑失败的包（失败用例能独立运行时才缩到 ``-run``），命令经环境变量
   ``UNIT_EXECUTOR_SIDECAR``／``UNIT_EXECUTOR_FIRST_SIDECAR`` 读写自己的结构化旁路结果（路径不进环境指纹与单元规格）。
+* **运行绑定**（Codex 升级工具优化第 5 项）：``run-gates`` 每次运行结束（以及 ``--decide-only`` 判定时）在输出目录另写 ``binding.json``——调度策略摘要、
+  平台环境摘要、执行器摘要、门禁集合摘要和输入清单摘要（逐单元的规格摘要、输入摘要与可否承接按单元 ID 排序后的摘要）。后台验证用它给通过的结论做“沿用绑定”，
+  同树重部署后用 ``entry-gates.sh --bind-only`` 现算一份比对，不跑任何测试。它是独立文件，不进汇总、清单与判定文件。
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
 若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
@@ -3290,6 +3293,26 @@ def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: An
     return final, retried, diagnostic_units, markers
 
 
+BINDING_SCHEMA = "unit-executor-binding/v1"
+
+
+def binding_document(*, mode: str, policy: str, environment_sha256: str, executor: dict[str, Any], units: list[Unit], currents: dict[str, Any],
+                     gates: list[Gate]) -> dict[str, Any]:
+    """运行绑定（优化第 5 项）：这次运行“测什么、怎么测、在什么环境测”的摘要。门禁集合按门禁项（单元与测试组成员、不在本平台执行项）算；输入清单按单元
+    逐个取规格摘要、输入摘要（不可承接的单元没有输入摘要，记 ``-``）与可否承接，按单元 ID 排序后算。同一棵测试树、同一份环境上两次算出来必须相同。"""
+
+    rows = sorted([unit.unit_id, currents[unit.unit_id].spec_sha256, currents[unit.unit_id].inputs_sha256 or "-",
+                   bool(currents[unit.unit_id].inheritable)] for unit in units)
+    gate_rows = sorted(({"gate_id": gate.gate_id, "units": sorted(gate.units), "test_groups": sorted(gate.test_groups),
+                         "not_executed": [dict(item) for item in gate.not_executed]} for gate in gates), key=lambda row: row["gate_id"])
+    return {"schema_version": BINDING_SCHEMA, "mode": mode, "policy_sha256": policy, "environment_sha256": environment_sha256,
+            "executor_sha256": executor["sha256"], "gate_set_sha256": _sha256(gate_rows), "inputs_manifest_sha256": _sha256(rows), "units": len(rows)}
+
+
+def _write_binding(out_dir: Path, **fields: Any) -> None:
+    _write_json(out_dir / "binding.json", binding_document(**fields))
+
+
 def _attach_retry_summary(summary: dict[str, Any], outcomes: list[Outcome], gates: list[Gate], config: Any) -> None:
     """打开补跑的运行：门禁项行带 ``retry_passed_units``（门禁项通过，但其中这几个单元是补跑才通过的，单列不静默放行），汇总带 ``retry`` 段。
     作为汇总之后的后处理而不是改汇总函数：补跑关闭时汇总与改造前逐字相同。"""
@@ -4260,6 +4283,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         if inherit_verdict is not None:
             payload["unit_inherit_decision"] = inherit_verdict
         _write_json(out_dir / "decisions.json", payload)
+        _write_binding(out_dir, mode=args.mode, policy=policy, environment_sha256=facts.environment_sha256, executor=executor, units=units,
+                       currents=currents, gates=gates)
         print(f"只判定（{records.MODE_LABELS[args.mode]}）：承接 {payload['inherit']} 个、执行 {payload['execute']} 个；明细 {out_dir / 'decisions.json'}",
               file=sys.stderr)
         return 0
@@ -4494,6 +4519,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             summary["read_audit"].update(auditor.declared_extra())  # 只有存在声明级结果时才多一个 declared 键
             if summary["read_audit"]["status"] != "passed":
                 summary["status"] = "failed"
+        _write_binding(out_dir, mode=args.mode, policy=policy, environment_sha256=recorder.environment_sha256, executor=executor, units=units,
+                       currents=currents, gates=gates)
         _write_json(out_dir / "summary.json", summary)
         _print_gates_summary(summary)
         return 0 if summary["status"] == "passed" else 1
