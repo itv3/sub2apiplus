@@ -196,9 +196,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "28af68821b1593248ecd42817c30330a90a42000895dcb5e7c52a6a976aac1cb",
+      "sha256": "d54e3d4e99967b6100ecc7bafb671879717cd43734f44501eaa733d2967995b5",
       "mode": "0700",
-      "bytes": 184395
+      "bytes": 186394
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -298,9 +298,9 @@
     },
     {
       "path": "driver/go_test_packages.py",
-      "sha256": "fa7746e39f110ab562329394af4303425570e424b8da0c0ebccd45d1f77c71ff",
+      "sha256": "a6ee2996d213efe9b440dbd52e7b5e3481de61af30a8c290e76707696100bc02",
       "mode": "0700",
-      "bytes": 28190
+      "bytes": 29180
     },
     {
       "path": "driver/guard.sh",
@@ -711,5 +711,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "9af78067bd71ae7f219fdd9450f339dca9fa02302c20ea005a9df7a276fcd643"
+  "manifest_sha256": "d2da7d95bf60bdfd39b608fa757e6b689279c47ce1aa3a529ad4e1ccd3c269ab"
 }

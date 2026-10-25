@@ -201,6 +201,21 @@ class EnvironmentFailureExitCodeTests(FakeGoBase):
                 self.assertIn("环境失败", completed.stdout)
                 self.assertFalse(self.sidecar("formal")["expected_ok"], "旁路文件不留“首轮正常”的假象")
 
+    def test_a_count_argument_that_contradicts_the_cache_contract_is_refused_before_running_go(self) -> None:
+        """验收修正必修 4：附加参数排在包装器固定的 -count=1 之后，Go 以最后一次为准——矛盾的 -count 在跑 go 之前就拒绝（环境类退出码 125）。"""
+
+        self.write_script(runs=[{"events": FIRST_PASS_FLAKY, "exit": 1}])
+        for clash in (["-count=0"], ["--count=2"], ["-count", "3"]):
+            with self.subTest(clash=clash):
+                completed = subprocess.run([sys.executable, "-B", str(WRAPPER), "--pattern", "./...", "--", *clash], capture_output=True, text=True,
+                                           timeout=60, env=self.environment())
+                self.assertEqual(completed.returncode, 125, completed.stdout)
+                self.assertIn("矛盾", completed.stdout)
+                self.assertEqual(self.calls(), [], "一条 go 命令都没起")
+        ok = subprocess.run([sys.executable, "-B", str(WRAPPER), "--pattern", "./...", "--", "-count=1"], capture_output=True, text=True,
+                            timeout=60, env=self.environment())
+        self.assertEqual(ok.returncode, 1, ok.stdout)   # -count=1 不矛盾：照常运行（假 go 里首轮有失败包）
+
     def test_a_real_test_failure_still_exits_1(self) -> None:
         self.write_script(runs=[{"events": FIRST_PASS_FLAKY, "exit": 1}])
         self.assertEqual(self.wrapper("formal").returncode, 1)

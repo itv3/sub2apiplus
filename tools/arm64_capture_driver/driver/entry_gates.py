@@ -2202,18 +2202,38 @@ def declared_contract_entries(declaration: Mapping[str, Any], *, runner: Any = N
     return declared_probe(runner=runner, environ=environ, tree=tree, work=work, require_offline=require_offline).entries(declaration)
 
 
+# go test 的 -count 取值（-count=N、--count=N、-count N 三种写法）：缓存合同要求 -count=1，任何别的取值都与它矛盾（Go 以最后一次出现为准）。
+_GO_COUNT_FLAG = re.compile(r"--?count(?:=(.*))?")
+# 按包运行的包装器自己固定带 -count=1，门禁命令里就不必再写。
+WRAPPER_GUARANTEED_FLAGS = ("-count=1",)
+
+
+def go_count_values(words: Sequence[str]) -> list[str]:
+    """命令词里出现的全部 -count 取值（按出现顺序）。"""
+
+    values: list[str] = []
+    for index, word in enumerate(words):
+        match = _GO_COUNT_FLAG.fullmatch(str(word))
+        if match is not None:
+            values.append(match.group(1) if match.group(1) is not None else (str(words[index + 1]) if index + 1 < len(words) else ""))
+    return values
+
+
 def declared_contract_problems(entries: Sequence[Mapping[str, Any]], *, argv: Sequence[str] | None = None) -> list[str]:
     """合同条目里「不能承接」的情形（空列表＝没有问题），给执行器的前置核验用：
 
     * 任何事实值是 ``unavailable(…)``（探测失败：docker 不在、go 不在、提交缺失、镜像引用解析不了、配置了 Hub 前缀等）；
     * 可执行文件缺失；
     * 离线要求打开时 ``requirements.met`` 不是 True（门禁环境没有真的注入 GOFLAGS／GOPROXY／GOTOOLCHAIN）；
+    * 命令是按包运行的包装器（``go_test_packages.py``，优化第 3 项）时同样核缓存合同：包装器内部强制 ``-count=1``，视为满足；包装器参数里再出现
+      取值不是 1 的 ``-count`` 与此矛盾，判问题。裸 ``go test`` 命令里出现取值不是 1 的 ``-count`` 也按同一条判问题，两种命令形式结论一致；
     * 给了 ``argv`` 时，命令是 ``go test`` 而缺缓存合同要求的参数（如 ``-count=1``，防测试结果缓存成为隐藏输入）。``argv`` 可以带
       启动前缀也可以不带：在其中找相邻的 ``go``、``test`` 两个词，找到才算 go test 命令。"""
 
     problems: list[str] = []
     words = list(argv) if argv is not None else []
     go_test = next((index for index in range(len(words) - 1) if words[index:index + 2] == ["go", "test"]), None)
+    wrapper = next((index for index, word in enumerate(words) if go_test is None and os.path.basename(str(word)) == GO_PACKAGE_WRAPPER), None)
     for entry in entries:
         name, detail = str(entry.get("name")), entry.get("detail") or {}
         for path, value in _declared_walk(detail):
@@ -2230,6 +2250,15 @@ def declared_contract_problems(entries: Sequence[Mapping[str, Any]], *, argv: Se
             lacking = [flag for flag in flags if flag not in words[go_test:]]
             if lacking:
                 problems.append(f"{name}：go test 命令缺少参数 {lacking}")
+        elif flags and wrapper is not None:
+            lacking = [flag for flag in flags if flag not in WRAPPER_GUARANTEED_FLAGS and flag not in words[wrapper + 1:]]
+            if lacking:
+                problems.append(f"{name}：go test 包装器命令缺少参数 {lacking}")
+        start = go_test if go_test is not None else (wrapper + 1 if wrapper is not None else None)
+        if flags and "-count=1" in flags and start is not None:
+            clash = [value for value in go_count_values(words[start:]) if value != "1"]
+            if clash:
+                problems.append(f"{name}：命令里的 -count 取值 {clash} 与缓存合同要求的 -count=1 矛盾")
     return problems
 
 

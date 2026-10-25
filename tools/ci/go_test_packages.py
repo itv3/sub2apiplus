@@ -52,6 +52,20 @@ EXIT_WRAPPER_ERROR = 125
 EXIT_GO_NOT_FOUND = 127
 
 
+_COUNT_FLAG = re.compile(r"--?count(?:=(.*))?")
+
+
+def count_conflicts(words: Sequence[str]) -> list[str]:
+    """附加参数里取值不是 1 的 ``-count``（Go 以最后一次出现为准，附加参数排在包装器固定的 ``-count=1`` 之后，会把缓存合同悄悄改掉）。"""
+
+    values: list[str] = []
+    for index, word in enumerate(words):
+        match = _COUNT_FLAG.fullmatch(word)
+        if match is not None:
+            values.append(match.group(1) if match.group(1) is not None else (words[index + 1] if index + 1 < len(words) else ""))
+    return [value for value in values if value != "1"]
+
+
 def signal_exit_code(returncode: int) -> int:
     """``Popen.wait()`` 返回负数＝被该信号杀；按 shell 约定折成 128＋信号。"""
 
@@ -478,6 +492,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(text)
         sys.stdout.flush()
 
+    conflicts = count_conflicts(args.extra)
+    if conflicts:
+        # 缓存合同（-count=1，防测试结果缓存成为隐藏输入）由包装器固定；附加参数不许把它改掉。
+        echo(f"go_test_packages：附加参数里的 -count 取值 {conflicts} 与缓存合同要求的 -count=1 矛盾，拒绝运行\n")
+        return EXIT_WRAPPER_ERROR
     try:
         if kind == "retry":
             return run_retry(args.tags, args.pattern, args.extra, sidecar=sidecar, first_sidecar=first_sidecar, narrow_enabled=narrow_enabled, echo=echo)

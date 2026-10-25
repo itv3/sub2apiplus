@@ -1310,6 +1310,43 @@ class ContractProbeTests(unittest.TestCase):
         self.assertEqual(len(eg.declared_contract_problems(entries, argv=[*LAUNCHER, "go", "test", "./..."])), 1)
         self.assertEqual(eg.declared_contract_problems(entries, argv=[*LAUNCHER, "go", "run", "./cmd/x", "test"]), [], "go run … test 不是 go test")
 
+    def test_the_package_wrapper_is_recognised_and_agrees_with_bare_go_test(self) -> None:
+        """验收修正必修 4：后端 go test 单元现在由 go_test_packages.py 包装器执行。包装器内部强制 -count=1，视为满足缓存合同；
+        参数里与此矛盾的 -count 判问题；满足合同的裸 go test 与包装器两种命令形式结论一致，矛盾的 -count 两种形式都判问题。"""
+
+        entries = self.entries(default_scope(contracts=("cache:go-build-cache", "cache:go-mod-cache")))
+        wrapper = ["python3", "-B", "/driver/go_test_packages.py", "--tags", "unit", "--pattern", "./..."]
+        bare = ["go", "test", "-tags=unit", "./...", "-count=1"]
+
+        def problems(argv: list[str]) -> list[str]:
+            return eg.declared_contract_problems(entries, argv=argv)
+
+        # 满足合同：两种形式（带不带启动前缀）都没问题。
+        for label, argv in {"裸 go test": bare, "包装器": wrapper, "裸 go test 带启动前缀": [*LAUNCHER, *bare],
+                            "包装器带启动前缀": [*LAUNCHER, *wrapper], "包装器附加 -count=1": [*wrapper, "--", "-count=1"]}.items():
+            with self.subTest(label):
+                self.assertEqual(problems(argv), [], label)
+        # 矛盾的 -count（-count=N、--count=N、-count N 三种写法）：两种形式一致判问题。
+        for clash in (["-count=0"], ["-count=2"], ["--count=3"], ["-count", "5"]):
+            with self.subTest(clash=clash):
+                self.assertTrue(any("矛盾" in problem for problem in problems([*bare, *clash])), "裸 go test")
+                self.assertTrue(any("矛盾" in problem for problem in problems([*wrapper, "--", *clash])), "包装器")
+                self.assertTrue(any("矛盾" in problem for problem in problems([*LAUNCHER, *wrapper, "--", *clash])), "包装器带启动前缀")
+        # 缺 -count=1：裸 go test 判问题（它不保证），包装器内部强制所以不判；既不是 go test 也不是包装器的命令不适用。
+        self.assertEqual(len(problems(["go", "test", "-tags=unit", "./..."])), 1)
+        self.assertEqual(problems(wrapper), [])
+        self.assertEqual(problems(["python3", "-B", "/driver/other_script.py", "--", "-count=0"]), [], "不是 go test 命令也不是包装器：不适用")
+        # 只认包装器脚本本身（按文件名），名字相近的别的脚本不算。
+        self.assertEqual(problems(["python3", "-B", "/driver/not_go_test_packages.py.sh", "--", "-count=0"]), [])
+
+    def test_the_real_backend_gate_units_pass_the_contract_check_with_the_wrapper_argv(self) -> None:
+        entries = self.entries(default_scope(contracts=("cache:go-build-cache", "cache:go-mod-cache")))
+        for gate_id in ("backend-go-test", "backend-unit", "backend-integration"):
+            with self.subTest(gate_id):
+                wrapped = eg.go_package_argv(eg.GATE_COMMANDS[gate_id][0])
+                self.assertEqual(eg.declared_contract_problems(entries, argv=[*LAUNCHER, *wrapped]), [])
+                self.assertEqual(eg.declared_contract_problems(entries, argv=[*LAUNCHER, *eg.GATE_COMMANDS[gate_id][0]]), [])
+
     def test_an_empty_go_env_answer_is_treated_as_unavailable(self) -> None:
         """go env 退出 0 却没给 GOROOT／GOTOOLDIR（输出残缺）：不能拿空路径去算摘要，失败关闭。"""
 
