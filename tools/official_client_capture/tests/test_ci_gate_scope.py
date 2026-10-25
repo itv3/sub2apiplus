@@ -260,6 +260,60 @@ class GateScopeExportTests(unittest.TestCase):
                 self.assertNotIn("client_selection", json.loads((out / name).read_text(encoding="utf-8")))
 
 
+class EntryGatesScopeScriptTests(unittest.TestCase):
+    """``entry-gates.sh`` 的筛选参数解析与互斥校验：把脚本里的参数解析段原样截出来在 bash 里跑（不跑门禁本身），与声明级采样透传测试同一做法。"""
+
+    SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh"
+    BASE = "b" * 40
+
+    def parse(self, *args: str) -> tuple[int, list[str], str]:
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        begin = text.index('PROFILE=entry; OUT="";')
+        segment = text[begin:text.index('for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do', begin)]
+        snippet = ('set -Eeuo pipefail\nusage() { echo "用法" >&2; }\nD=/data; HISTORY_TEST_TREE=/hist; CT_CLIENT=codex\n' + segment +
+                   'for item in ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}; do printf "[%s]" "$item"; done; printf "\\n"\n')
+        completed = subprocess.run(["bash", "-c", snippet, "entry-gates", *args, "/bundle", "codex/x", "c" * 40], capture_output=True, text=True,
+                                   timeout=30, env={**os.environ, "CLAUDE_ENTRY_FULL79_SPEC": "", "CLAUDE_ENTRY_FULL79_SPEC_SHA256": ""})
+        scope = [] if not completed.stdout.strip() else __import__("re").findall(r"\[([^]]*)\]", completed.stdout.splitlines()[-1])
+        return completed.returncode, scope, completed.stderr
+
+    def test_the_default_passes_nothing_to_the_plan(self) -> None:
+        self.assertEqual(self.parse()[:2], (0, []))
+        self.assertEqual(self.parse("--gate-scope", "full")[:2], (0, []))
+        self.assertEqual(self.parse("--mode", "full-set-pass")[:2], (0, []), "没有全集请求的 full-set-pass 本来就回退成 re-execute")
+
+    def test_client_plan_hands_the_base_and_the_client_to_the_plan(self) -> None:
+        for profile in ("entry", "full-gates", "preflight"):
+            with self.subTest(profile=profile):
+                code, scope, stderr = self.parse("--profile", profile, "--gate-scope", "client-plan", "--select-base", self.BASE)
+                self.assertEqual((code, scope), (0, ["--gate-scope", "client-plan", "--select-base", self.BASE, "--client", "codex"]), stderr)
+        code, scope, _stderr = self.parse("--gate-scope", "client-plan", "--select-base", self.BASE, "--include-claude")
+        self.assertEqual((code, scope[-1]), (0, "--include-claude"))
+        self.assertEqual(self.parse("--gate-scope", "client-plan", "--select-base", self.BASE, "--bind-only")[0], 0, "沿用绑定的现算也认筛选")
+
+    def test_invalid_or_conflicting_options_exit_2_before_anything_runs(self) -> None:
+        cases = {
+            "缺基点": (("--gate-scope", "client-plan"), "必须同时给 --select-base"),
+            "基点不是 40 位": (("--gate-scope", "client-plan", "--select-base", "HEAD~1"), "必须同时给 --select-base"),
+            "没有筛选却给基点": (("--select-base", self.BASE), "只在 --gate-scope client-plan 下有意义"),
+            "没有筛选却给手动开关": (("--include-claude",), "只在 --gate-scope client-plan 下有意义"),
+            "未知范围": (("--gate-scope", "everything"), "未知的门禁范围"),
+            "pre-a3 组合": (("--profile", "pre-a3", "--gate-scope", "client-plan", "--select-base", self.BASE), "只用于含采集工具测试组的全量组合"),
+            "定向回归组合": (("--profile", "regression", "--gate-scope", "client-plan", "--select-base", self.BASE), "只用于含采集工具测试组的全量组合"),
+            "全集请求": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--full-set-request", "/r.json"), "只许 --mode re-execute"),
+            "逐单元承接": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--unit-inherit-request", "/r.json"), "只许 --mode re-execute"),
+            "逐单元承接提案": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--unit-inherit-propose", "/not/exist/proposal"), "只许 --mode re-execute"),
+            "读集审计": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--audit-reads"), "不能与读集审计"),
+            "读集合同": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--audit-reads", "--audit-strict", "--audit-policy", "/p.json"), "不能与读集审计"),
+            "收窄提案": (("--gate-scope", "client-plan", "--select-base", self.BASE, "--audit-reads", "--audit-strict", "--input-scope", "/s.json"), "不能与读集审计"),
+        }
+        for name, (options, message) in cases.items():
+            with self.subTest(name):
+                code, scope, stderr = self.parse(*options)
+                self.assertEqual((code, scope), (2, []), stderr)
+                self.assertIn(message, stderr)
+
+
 class RealTreeDiscoveryTests(unittest.TestCase):
     def test_the_executors_discovered_modules_are_exactly_the_ownership_table(self) -> None:
         """选择的模块表必须恰好等于执行器在真实测试树里 discover 出的模块（去掉 +pkg）：否则执行器失败关闭，整轮 ARM64 门禁起不来。"""

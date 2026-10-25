@@ -71,7 +71,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan --select-base <40 位提交> [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -83,6 +83,7 @@ PARALLEL_ARGS=()
 BIND_ONLY=false; BIND_ARGS=()
 DECLARED_SAMPLE=off
 UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
+GATE_SCOPE=full; SELECT_BASE=""; INCLUDE_CLAUDE=false; SCOPE_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -102,6 +103,9 @@ while [ "$#" -gt 0 ]; do
     --audit-policy) AUDIT_POLICY_ARGS=(--audit-policy "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --audit-host-inputs) AUDIT_HOST_INPUTS="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --declared-sample) DECLARED_SAMPLE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --gate-scope) GATE_SCOPE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --select-base) SELECT_BASE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --include-claude) INCLUDE_CLAUDE=true; shift ;;
     --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
@@ -166,6 +170,25 @@ fi
 if [ "$MODE" = unit-inherit ]; then
   if [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ]; then echo "逐单元承接不接受宿主输入清单与收窄提案（只许 --mode re-execute）" >&2; exit 2; fi
   if [ "$AUDIT_STRICT" = true ] && [ "$AUDIT_READS" != true ]; then echo "严格读集审计必须同时启用 --audit-reads" >&2; exit 2; fi
+fi
+# 按客户端筛选测试单元（优化第 9 项）：--gate-scope client-plan --select-base <最近一次发版的 40 位提交>。只作用于采集工具测试组（命令单元与 pre-A3
+# 场景单元不受影响），清单里的 selection 块由归属表选择器按「基点..本次提交」的改动算出（谁跑、谁跳过、为什么并入）；缺省 full 不筛选，行为与改造前相同。
+# 子集不能承接也不能被承接：只许 --mode re-execute，与全集请求、逐单元承接、读集审计／合同、收窄提案、固定79接线互斥；基点必须显式给出，不自动猜。
+case "$GATE_SCOPE" in full|client-plan) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan）" >&2; exit 2 ;; esac
+if [ "$GATE_SCOPE" = full ]; then
+  if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan 下有意义" >&2; exit 2; fi
+else
+  if ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--gate-scope client-plan 必须同时给 --select-base（40 位小写提交）：$SELECT_BASE" >&2; exit 2; fi
+  case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; exit 2 ;; esac
+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then
+    echo "按客户端筛选只许 --mode re-execute，不能与全集请求、逐单元承接同用（子集不能承接，也不能冒充全集）" >&2; exit 2
+  fi
+  if [ "$AUDIT_READS" = true ] || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \
+      || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then
+    echo "按客户端筛选不能与读集审计、读集合同、收窄提案、固定79接线同用（这些走全集）" >&2; exit 2
+  fi
+  SCOPE_ARGS=(--gate-scope client-plan --select-base "$SELECT_BASE" --client "$CT_CLIENT")
+  if [ "$INCLUDE_CLAUDE" = true ]; then SCOPE_ARGS+=(--include-claude); fi
 fi
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
   if [[ "$file" != /* ]]; then echo "认证坐标必须是绝对路径：$file" >&2; exit 2; fi
@@ -478,6 +501,7 @@ private_directory "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \
     --with-gates "$WITH_GATES" ${INPUT_SCOPE_ARGS[@]+"${INPUT_SCOPE_ARGS[@]}"} ${AUDIT_POLICY_ARGS[@]+"${AUDIT_POLICY_ARGS[@]}"} --output "$OUT/gates-manifest.json" ) | cut -c1-400
 if [ "$GO_WARMUP_ACTIVE" = true ]; then
   ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/go_compile_warmup.py" --tree "$TREE" --work "$WORK" \

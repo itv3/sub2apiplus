@@ -138,6 +138,9 @@ from typing import Any, Mapping
 SCHEMA = "background-validation/v1"
 DIRECTORY = "background-validation"
 DEFAULT_PROFILE = "full-gates"
+# 按客户端筛选（Codex 升级工具优化第 9 项）：full 是全集；client-plan 是某个客户端计划的子集（归属表选择器按基点..提交的改动算出）。
+GATE_SCOPE_FULL = "full"
+GATE_SCOPE_CLIENT_PLAN = "client-plan"
 HERE = Path(__file__).resolve().parent
 
 
@@ -1956,6 +1959,27 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     if bool(full_set_paths["full_set_context"]) != bool(full_set_paths["full_set_clock"]):
         raise ValidationError("B-09 签发须同时提供当前上下文和校时凭证")
     inputs["full_set_files"] = {key: _sha256_file(Path(value)) if value else None for key, value in full_set_paths.items()}
+    # 按客户端筛选（优化第 9 项）：只有显式给 client-plan 才登记进输入合同与结论；缺省的合同、结论与命令行与改造前逐字相同。
+    gate_scope = getattr(args, "gate_scope", None) or GATE_SCOPE_FULL
+    select_base = getattr(args, "select_base", None)
+    include_claude = bool(getattr(args, "include_claude", False))
+    if gate_scope not in (GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN):
+        raise ValidationError(f"未知的门禁范围：{gate_scope}")
+    if gate_scope == GATE_SCOPE_FULL:
+        if select_base or include_claude:
+            raise ValidationError("--select-base、--include-claude 只在 --gate-scope client-plan 下有意义")
+    else:
+        if client != "codex":
+            raise ValidationError("按客户端筛选本版只启用 codex 计划")
+        if not (isinstance(select_base, str) and _COMMIT_PATTERN.fullmatch(select_base)):
+            raise ValidationError("--gate-scope client-plan 必须同时给 --select-base（最近一次发版的 40 位小写提交；工具不自动猜）")
+        if (args.then_dryrun or getattr(args, "unit_inherit_request", None) is not None or getattr(args, "rerun_full_set", False)
+                or any(full_set_paths.values())):
+            raise ValidationError("按客户端筛选的验证是子集，不能接入口空跑（空跑要全集结论，加 --no-dryrun），"
+                                  "也不能与 B-09 全集收据、读集合同、逐单元承接同用")
+        inputs.update(gate_scope=gate_scope, select_base=select_base, select_client=client)
+        if include_claude:
+            inputs["include_claude"] = True
     inherit_request = getattr(args, "unit_inherit_request", None)
     inherit_reference = None
     if inherit_request is not None:
@@ -2037,6 +2061,11 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         existing = _read(path)
     # 同树重部署沿用（优化第 5 项）：auto 先试沿用，拒绝（任一绑定项变了、过有效期、核对失败）就照常起完整验证；only 只试沿用。
     reuse_mode, reuse_refused = getattr(args, "reuse", "off"), []
+    if gate_scope == GATE_SCOPE_CLIENT_PLAN:
+        # 子集结论不沿用，也不拿全集来源冒充本次的筛选验证：auto 直接跳过沿用，only 没有意义。
+        if reuse_mode == "only":
+            raise ValidationError("按客户端筛选的验证不沿用来源结论（--reuse only 不适用）")
+        reuse_mode = "off"
     if reuse_mode in ("auto", "only"):
         reused_result, reuse_refused = _attempt_reuse(args, client=client, deployment=deployment, deployments=deployments, path=path,
                                                       inputs=inputs, work=work)
@@ -2074,6 +2103,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         # B5a-10：两客户端都纳管时绑定部署收据集合（只有一个客户端纳管时不写，结论与改造前同形）。
         **({"deployments": dict(deployments)} if deployments is not None else {}),
     }
+    if gate_scope == GATE_SCOPE_CLIENT_PLAN:
+        payload.update(gate_scope=gate_scope, select_base=select_base, select_client=client, **({"include_claude": True} if include_claude else {}))
     if inherit_reference is not None:
         payload.update(mode="unit-inherit", unit_inherit_request=inherit_reference)
     if existing is not None:
@@ -2200,6 +2231,11 @@ def run(result: Path) -> int:
         argv += ["--declared-sample", str(payload["declared_sample"])]
     if payload.get("audit_policy"):
         argv += ["--audit-reads", "--audit-strict", "--audit-policy", payload["audit_policy"]]
+    if payload.get("gate_scope") == GATE_SCOPE_CLIENT_PLAN:
+        # 按客户端筛选（优化第 9 项）：原样交给入口门禁；运行期下面还会核对它与输入合同一致。
+        argv += ["--gate-scope", GATE_SCOPE_CLIENT_PLAN, "--select-base", str(payload.get("select_base"))]
+        if payload.get("include_claude"):
+            argv += ["--include-claude"]
     argv += [payload["bundle"], payload["branch"], payload["commit"]]
     received: list[int] = []
 
@@ -2238,6 +2274,13 @@ def run(result: Path) -> int:
                 canonical = None
             if canonical is None or canonical == "off" or canonical != sample or contract.get("declared_sample") != sample:
                 raise ValidationError("后台采样方式参数缺失或发生漂移")
+        if "gate_scope" in payload or "gate_scope" in contract:
+            # 筛选参数同并发参数：结论里的取值必须与输入合同逐字一致，改结论不能悄悄换成别的基点或范围。
+            if (payload.get("gate_scope") != GATE_SCOPE_CLIENT_PLAN or contract.get("gate_scope") != GATE_SCOPE_CLIENT_PLAN
+                    or not _COMMIT_PATTERN.fullmatch(str(payload.get("select_base"))) or contract.get("select_base") != payload.get("select_base")
+                    or contract.get("select_client") != payload.get("select_client")
+                    or bool(contract.get("include_claude")) != bool(payload.get("include_claude"))):
+                raise ValidationError("后台筛选参数缺失或发生漂移")
         bound_roots = _bound_work_roots(Path(payload["runroot"]), Path(payload["data_root"]), payload["commit"],
                                        payload["deployment"], payload.get("deployments"))
         # 跨提交后继沿用来源的物理 WORK：它绑定的是来源自己的提交与部署（来源登记在启动时已校验、上面刚复核过）。
@@ -2287,6 +2330,12 @@ def run(result: Path) -> int:
         status, reason = "passed", None
     else:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
+    echoed = (summary or {}).get("client_selection")
+    if isinstance(echoed, Mapping):
+        # 按客户端筛选（优化第 9 项）：入口门禁总摘要回显的筛选摘要登记进结论——这份结论是哪个客户端计划的子集，防串用据此判定。
+        current = {**current, "selection": dict(echoed)}
+    if status == "passed" and payload.get("gate_scope") == GATE_SCOPE_CLIENT_PLAN and not isinstance(echoed, Mapping):
+        status, reason = "failed", "登记了按客户端筛选，入口门禁总摘要却没有筛选回显：筛选没有生效，这不是可信的子集结论"
     if status == "passed":
         # 失败单元补跑（优化第 2 项）：补跑通过的单元算入结论，但必须单列在结论里；标注自检不通过（被改写、被藏起来、日志缺失）
         # 就不是通过——结论不静默放行。补跑关闭或没有补跑时结论与改造前逐字相同。
@@ -2300,6 +2349,8 @@ def run(result: Path) -> int:
         binding_doc = executor_binding(payload["out"])
         if binding_doc is not None:
             current = {**current, "reuse_binding": build_reuse_binding(current, binding_doc, completed_at_utc=_utc_now())}
+    if (current.get("selection") or {}).get("gate_scope") == GATE_SCOPE_CLIENT_PLAN and "reuse_binding" in current:
+        current = {key: value for key, value in current.items() if key != "reuse_binding"}   # 子集结论不沿用
     deviation = core_deviation_info(payload["out"], path.with_name(f"{path.stem}.core-deviation.json"))
     if deviation is not None:
         current = {**current, "core_deviation": deviation}   # 核数偏差报告（优化第 6 项）：放进结论目录并登记，不论通过与否
@@ -2345,6 +2396,9 @@ def _others_checked(payload: Mapping[str, Any], summary: Mapping[str, Any]) -> s
 
 
 def _issue_full_set(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if GATE_SCOPE_CLIENT_PLAN in (payload.get("gate_scope"), (payload.get("selection") or {}).get("gate_scope")):
+        # B-09 的全集收据不能由子集签出（按客户端筛选的运行只是某个客户端计划的子集）。
+        return {"status": "refused", "reason": "按客户端筛选的运行是子集，不能签发全集收据", "reuse_enabled": False}
     spec = importlib.util.spec_from_file_location("background_full_set", HERE / "full_set_receipt.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -2414,6 +2468,36 @@ def _ancestry_note(source: Any) -> str:
     return "；【警告：结论里没有可识别的祖先验证状态（应为 verified 或 unverified）】"
 
 
+def scope_problem(payload: Mapping[str, Any], client: str) -> str | None:
+    """防串用（优化第 9 项）：这份结论的筛选范围能不能当 ``client`` 的准入依据；空＝可以。
+
+    Codex 计划的子集结论没跑 Claude 的重单元，Claude 的 VC-5 准入不能把它当成全集通过（两个客户端共用同一份后台结论）。判定取
+    三处互相印证：结论里登记的请求（``gate_scope``）、结论里登记的筛选摘要（``selection``）、入口门禁总摘要的筛选回显（``client_selection``，
+    在结论的输出目录里）——任何两处对不上，结论就不可信。没有筛选的结论（三处都空）按全集，与改造前相同。"""
+
+    def scope_of(item: Any) -> Any:
+        return item.get("gate_scope") if isinstance(item, Mapping) else None
+
+    requested, recorded = payload.get("gate_scope"), payload.get("selection")
+    entry = _entry_summary(Path(str(payload["out"]))) if payload.get("out") else None
+    echoed = (entry or {}).get("client_selection")
+    if requested is None and recorded is None and echoed is None:
+        return None
+    if scope_of(recorded) != scope_of(echoed):
+        return "结论登记的筛选范围与入口门禁总摘要的回显不一致（结论被改过，或入口门禁没有按登记的范围运行）"
+    if requested == GATE_SCOPE_CLIENT_PLAN and echoed is None:
+        return "结论登记了按客户端筛选，入口门禁总摘要却没有筛选回显（筛选没有生效）"
+    if scope_of(echoed) != GATE_SCOPE_CLIENT_PLAN:
+        return None   # 全集（含筛选时归属表自己在改动里、整轮回退成全集的情形）
+    if requested != GATE_SCOPE_CLIENT_PLAN:
+        return "入口门禁总摘要是按客户端筛选的子集，结论里却没有登记筛选"
+    if recorded.get("selection_sha256") != echoed.get("selection_sha256") or recorded.get("client") != echoed.get("client"):
+        return "结论登记的筛选摘要与入口门禁总摘要的回显不是同一份"
+    if echoed.get("client") != client:
+        return f"这是 {echoed.get('client')} 计划的子集结论（没跑另一客户端的重单元），不能当作 {client} 的全集通过——防串用，须另跑 {client} 自己的验证"
+    return None
+
+
 def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str = "codex") -> tuple[int, str]:
     """批次边界（``require_passed`` 为假）或 VC-5 验收前（为真）的判定：（退出码，说明）。"""
 
@@ -2425,6 +2509,13 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
     path, payload = found
     status = effective_status(payload)
     where = f"提交 {str(payload.get('commit'))[:12]}，结论 {path}，日志 {payload.get('log')}"
+    if status == "passed":
+        # 防串用（优化第 9 项）：子集结论只能给它自己的客户端准入用，其余客户端要自己的全集或自己的计划。
+        problem = scope_problem(payload, client)
+        if problem is not None:
+            return 3, f"后台验证结论的筛选范围不满足本客户端准入（{where}）：{problem}"
+        if (payload.get("selection") or {}).get("gate_scope") == GATE_SCOPE_CLIENT_PLAN:
+            where += f"；按客户端筛选（{client} 计划的子集，不是全集）"
     if status == "passed":
         # 补跑标注无条件重放（优化第 2 项，验收修正建议 8）：不论结论文件里有没有 retry_passed_units 这个键、也不论是哪种执行模式，都按执行器
         # 汇总现算一遍——结论文件被抹掉登记、或汇总里藏了没有标注的补跑尝试，都不能靠“结论里没写”绕过去。执行记录目录（out）不在时无从核对，
@@ -2533,6 +2624,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 on（与驱动入口 background-validate.sh 一致），off 显式跳过")
     p_start.add_argument("--reuse", choices=("auto", "only", "off"), default="auto",
                          help="同树重部署沿用测试结论：auto 先试沿用、拒绝就照常起完整验证；only 只试沿用（reuse 子命令）；缺省 auto（与驱动入口 background-validate.sh 一致），off 显式不沿用")
+    p_start.add_argument("--gate-scope", choices=(GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN), default=GATE_SCOPE_FULL,
+                         help="采集工具测试组怎么选：full（缺省，全集）或 client-plan（按客户端归属筛选，改动涉及的重模块自动并入；结论是子集，"
+                              "只给本客户端准入用，不接入口空跑，需配 --no-dryrun；优化第 9 项）")
+    p_start.add_argument("--select-base", default=None, help="client-plan 的基点：最近一次发版的 40 位提交（候选提交取测试树 HEAD）")
+    p_start.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
     p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
     p_pre.add_argument("--runroot", type=Path, required=True)
     p_pre.add_argument("--data-root", type=Path, required=True)

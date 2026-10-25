@@ -139,6 +139,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_arm64_driver_chain_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_arm64_driver_fix_and_continue": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -150,6 +157,20 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 61.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_recovery_plan": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_recovery_plan_real_scene": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "shared",
    "rule": "infra-prefix"
   },
@@ -398,6 +419,34 @@
    "owner": "shared",
    "rule": "default-shared"
   },
+  "test_chain_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_chain_rehearsal_catalog": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_chain_rehearsal_inject": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_chain_rehearsal_phenomena": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
   "test_check_ledger_completeness": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -412,6 +461,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_backend_dependencies": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_background_preflight": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -420,6 +476,13 @@
    "rule": "infra-prefix"
   },
   "test_ci_background_reuse": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_scope": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": null,
@@ -615,6 +678,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_entry_preflight_skip": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_entry_steps": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -644,6 +714,13 @@
    "rule": "infra-prefix"
   },
   "test_ci_go_test_packages": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_go_test_packages_followup": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": null,
@@ -783,10 +860,31 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_retry_ledger_across_closeouts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_target_platform_gate": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 2.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_time_jitter_stress": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_time_threshold_lint": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "shared",
    "rule": "infra-prefix"
   },
@@ -1476,10 +1574,24 @@
    "owner": "claude",
    "rule": "name:claude"
   },
+  "test_claude_stage_result_read_once": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
   "test_claude_tool_identity_policy": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 27.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_tool_snapshot_memo": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "claude",
    "rule": "name:claude"
   },
@@ -2784,6 +2896,13 @@
    "core_seconds": 1.5,
    "owner": "codex",
    "rule": "evidence:codex-only"
+  },
+  "test_scaling_guard": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
   },
   "test_scenario_receipt": {
    "claude_plan": "run",
