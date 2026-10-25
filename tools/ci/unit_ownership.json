@@ -651,6 +651,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_entry_dryrun_opening_env": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_entry_gates": {
    "claude_plan": "run",
    "codex_plan": "run",
