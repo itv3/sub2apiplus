@@ -831,6 +831,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				account.Platform,
 				truncateOpenAIWSLogValue(currentBridgePayload.originalModel, openAIWSLogValueMaxLen),
 			)
+			RecordOpenAIWSHTTPFallbackPin(c, account.ID) // 记下该会话要走 HTTPS，下次握手直接回 426
 			return NewOpenAIWSClientCloseError(
 				coderws.StatusPolicyViolation,
 				openAIWSStatelessBridgeUnsupportedUpstreamMessage,

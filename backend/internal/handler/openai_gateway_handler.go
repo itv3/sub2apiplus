@@ -2579,6 +2579,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+	if h.rejectOpenAIWSPinnedHTTPFallback(c) { // 该会话此前因协议转换被拒，握手直接回 426 让客户端改走 HTTPS
+		return
+	}
 	reqLog.Info("openai.websocket_ingress_started")
 	clientIP := ip.GetClientIP(c)
 	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
