@@ -1510,6 +1510,55 @@ _SOURCE_STATUS_REASONS = {
 }
 
 
+# 第 16 项：被中断的来源（aborted／superseded／vanished）只有在后继为它封存了部分完成清单时才能当来源（只限逐单元承接这一条通道）。
+_PARTIAL_SOURCE_STATUSES = ("aborted", "superseded", "vanished")
+
+
+def _partial_source_manifest(source: Mapping[str, Any], status: str, out: Path) -> dict[str, Any]:
+    """中断来源的部分完成清单：运行目录里有后继写的封存收据、记录库里的清单与收据登记的相符且是自摘要合法的部分清单。收据缺失时由本后继现在封存
+    （进程必须已死才封存，见 ``run_seal``）；封存不成就按原来的说法拒绝并附上不能封存的原因。"""
+
+    seal_module = _sibling_module("run_seal.py", "background_run_seal_sibling")
+    records = _unit_inherit().records()
+    run_dir = Path(out) / "executor"
+    receipt_path = run_dir / seal_module.RECEIPT_NAME
+    if not receipt_path.is_file():
+        try:
+            seal_module.seal_interrupted_run(store_root=str(source["record_store"]), run_dir=run_dir, origin_state=status)
+        except seal_module.SealError as error:
+            raise ValidationError(_SOURCE_STATUS_REASONS[status] + f"（后继尝试封存部分完成清单没有成功：{error}）") from error
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValidationError(f"来源后台的封存收据读不出来：{error}") from error
+    store = records.RecordStore(Path(str(source["record_store"])))
+    manifest = store.manifest(str(receipt.get("run_id") or ""))
+    if (receipt.get("schema_version") != seal_module.RECEIPT_SCHEMA or manifest is None or manifest.get("partial") is not True
+            or not records.seal_ok(manifest, "manifest_sha256") or manifest.get("manifest_sha256") != receipt.get("manifest_sha256")
+            or manifest.get("origin_state") != receipt.get("origin_state") or manifest.get("origin_run_dir") != str(run_dir)
+            or receipt.get("origin_state") != status or manifest.get("record_store") != str(store.root)):
+        raise ValidationError("来源后台的部分完成清单与封存收据不符，或不是后继为这个来源封存的")
+    problems = records.verify_manifest(manifest, store=store)
+    if problems:
+        raise ValidationError("来源后台的部分完成清单自检不通过：" + "；".join(problems[:3]))
+    return manifest
+
+
+def _sibling_module(filename: str, key: str) -> Any:
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / filename)
+        if spec is None or spec.loader is None:
+            raise ValidationError(f"后台验证缺少同目录的 {filename}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(key, None)
+            raise
+    return sys.modules[key]
+
+
 def _inherit_source_check(args: argparse.Namespace, source_path: Path, loaded: tuple[dict[str, Any], str], *, client: str,
                           work: Path, inputs: Mapping[str, Any], result_path: Path) -> dict[str, Any]:
     """校验来源后台结论并返回登记用的来源信息；任一项不成立抛 ``ValidationError``（中文原因）。
@@ -1520,8 +1569,9 @@ def _inherit_source_check(args: argparse.Namespace, source_path: Path, loaded: t
     if Path(source_path) == Path(result_path):
         raise ValidationError("来源后台结论就是本提交与部署的当前结论：同提交、同部署的续作不要带 --unit-inherit-source-result")
     status = effective_status(source)
-    if status not in ("passed", "failed"):
-        raise ValidationError(_SOURCE_STATUS_REASONS.get(status, f"来源后台状态 {status} 不能作为承接来源（只接受 passed、failed）"))
+    partial = status in _PARTIAL_SOURCE_STATUSES
+    if status not in ("passed", "failed") and not partial:
+        raise ValidationError(_SOURCE_STATUS_REASONS.get(status, f"来源后台状态 {status} 不能作为承接来源（只接受 passed、failed，或后继已封存部分完成清单的 aborted、superseded、vanished）"))
     if _group_alive(source.get("pid")):
         raise ValidationError("来源后台进程组尚未退出，拒绝在同 WORK 启动后继")
     if is_subset(source):
@@ -1550,15 +1600,19 @@ def _inherit_source_check(args: argparse.Namespace, source_path: Path, loaded: t
     module = _unit_inherit()
     records = module.records()
     out = Path(str(source.get("out") or ""))
-    try:
-        summary = module.fs.read(out / "entry-gates.json")
-        manifest = module.fs.read(out / "executor" / "unit-manifest.json")
-    except (OSError, ValueError) as error:
-        raise ValidationError(f"来源后台没有留下入口门禁摘要或逐单元清单（执行器中途终止的运行不发布清单），其成果不能承接：{error}") from error
+    if partial:
+        # 被中断的来源没有入口门禁摘要，也没有执行器自己发布的清单：用后继封存的部分完成清单（进程已死才封存；逐单元仍走原三个复核点）。
+        summary, manifest = {}, _partial_source_manifest(source, status, out)
+    else:
+        try:
+            summary = module.fs.read(out / "entry-gates.json")
+            manifest = module.fs.read(out / "executor" / "unit-manifest.json")
+        except (OSError, ValueError) as error:
+            raise ValidationError(f"来源后台没有留下入口门禁摘要或逐单元清单（执行器中途终止的运行不发布清单），其成果不能承接：{error}") from error
     reference = summary.get("unit_manifest") or {}
-    if (manifest.get("schema_version") != records.MANIFEST_SCHEMA or not records.seal_ok(manifest, "manifest_sha256")
-            or reference.get("path") != str(out / "executor" / "unit-manifest.json") or reference.get("self_check") != "passed"
-            or reference.get("manifest_sha256") != manifest.get("manifest_sha256")):
+    if not partial and (manifest.get("schema_version") != records.MANIFEST_SCHEMA or not records.seal_ok(manifest, "manifest_sha256")
+                        or reference.get("path") != str(out / "executor" / "unit-manifest.json") or reference.get("self_check") != "passed"
+                        or reference.get("manifest_sha256") != manifest.get("manifest_sha256")):
         raise ValidationError("来源后台的逐单元清单自摘要不符，或与入口门禁摘要登记的不是同一份（自检不通过的清单不会发布）")
     summary_commit = (summary.get("source") or {}).get("commit")
     if summary_commit is not None and summary_commit != source.get("commit"):

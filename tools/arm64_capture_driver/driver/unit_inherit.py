@@ -596,7 +596,7 @@ def _assess_current(fixed: Fixed, currents: Mapping[str, Any], facts: Any, store
     R = records()
     store = R.RecordStore(Path(store_root))
     facts = replace(facts, require_read_audit=True, max_age_hours=min(float(facts.max_age_hours), fixed.max_age_hours), now=now,
-                    historical_read_audit=False)
+                    historical_read_audit=False, allow_partial_origin=True)   # 第 16 项：逐单元承接接受后继封存的部分完成清单
     decisions: dict[str, Any] = {}
     for unit_id, current in currents.items():
         source = fixed.sources["units"].get(unit_id)
@@ -644,7 +644,7 @@ def _propose_current(store_root: Path | str, currents: Mapping[str, Any], facts:
     R = records()
     store = R.RecordStore(Path(store_root))
     limit = min(float(facts.max_age_hours), float(max_age_hours or R.MAX_AGE_HOURS))
-    facts = replace(facts, require_read_audit=True, max_age_hours=limit, historical_read_audit=False)
+    facts = replace(facts, require_read_audit=True, max_age_hours=limit, historical_read_audit=False, allow_partial_origin=True)
     units: dict[str, dict[str, str]] = {}
     runs: dict[str, str] = {}
 
@@ -1013,7 +1013,7 @@ def _verify_published_current(manifest: Mapping[str, Any], store_root: Path | st
     facts = R.RunFacts(policy_sha256=fixed.context["policy_sha256"], environment=list(manifest.get("environment") or []),
                        environment_sha256=fixed.context["environment_sha256"], executor=dict(manifest.get("executor") or {}),
                        max_age_hours=float(decision["max_age_hours"]), now=publish_at, require_read_audit=True,
-                       historical_read_audit=True)
+                       historical_read_audit=True, allow_partial_origin=True)
     for entry in inherited:
         unit_id = str(entry["unit_id"])
         source = fixed.sources["units"].get(unit_id)

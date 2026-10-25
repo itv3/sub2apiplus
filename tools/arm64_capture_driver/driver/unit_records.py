@@ -914,6 +914,9 @@ class RunFacts:
     historical_read_audit: bool = False
     # 声明级承接的内部标记：头部包装递归调用 check_record 取通用问题时置位，防止无限递归；外部调用方不应设置。
     declared_route: bool = False
+    # 第 16 项：允许来源运行的清单是后继封存的“部分完成清单”（中断的运行没有自己发布的清单）。只有逐单元承接路径置 True；
+    # B-09、B-10、收尾的全集通道不置，部分清单不会被全集通道误用。
+    allow_partial_origin: bool = False
 
 
 @dataclass
@@ -925,6 +928,40 @@ class Decision:
     @property
     def inherit(self) -> bool:
         return self.record is not None
+
+
+PARTIAL_ORIGIN_STATES = ("aborted", "superseded", "vanished")
+
+
+def partial_shape_problems(manifest: Mapping[str, Any]) -> list[str]:
+    """后继封存的“部分完成清单”（第 16 项）的形状自检：只列出已落库、自摘要合法、日志匹配、属于该运行的正式执行（所以没有承接项）；``planned_units``
+    保持全集，``units`` 是它的子集；写明封存者、原运行的终态、封存时间与原运行目录。"""
+
+    problems: list[str] = []
+    if manifest.get("sealed_by") != "successor":
+        problems.append("部分完成清单必须由后继封存（sealed_by=successor）")
+    if manifest.get("origin_state") not in PARTIAL_ORIGIN_STATES:
+        problems.append(f"部分完成清单登记的原运行终态只能是 {'／'.join(PARTIAL_ORIGIN_STATES)}")
+    if parse_utc(manifest.get("sealed_at_utc")) is None:
+        problems.append("部分完成清单缺少封存时间")
+    if not isinstance(manifest.get("origin_run_dir"), str) or not manifest["origin_run_dir"]:
+        problems.append("部分完成清单缺少原运行目录")
+    if manifest.get("mode") != RE_EXECUTE:
+        problems.append("部分完成清单只列本次真正执行过的单元，模式只能是重新执行全集")
+    if any(isinstance(entry, Mapping) and entry.get("disposition") != "executed" for entry in manifest.get("units") or []):
+        problems.append("部分完成清单里不能有承接项")
+    return problems
+
+
+def partial_problem(origin: Mapping[str, Any], facts: "RunFacts") -> str | None:
+    """来源运行的清单是部分完成清单时，这条承接路径能不能用它：不是部分清单返回 None（不相干）；是但路径不允许、或形状不对，返回原因。"""
+
+    if origin.get("partial") is not True:
+        return None
+    if not getattr(facts, "allow_partial_origin", False):
+        return "原运行的清单是后继封存的部分完成清单，这条承接通道不接受（只有逐单元承接接受）"
+    shape = partial_shape_problems(origin)
+    return "原运行的部分完成清单自检不通过：" + "；".join(shape) if shape else None
 
 
 def _listed_as_formal(manifest: Mapping[str, Any], unit_id: str, record_sha256: str) -> bool:
@@ -1093,6 +1130,8 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
     origin = store.manifest(str(run.get("run_id")))
     if origin is None or not seal_ok(origin, "manifest_sha256") or origin.get("schema_version") != MANIFEST_SCHEMA:
         problems.append("原运行的清单缺失或自摘要不符（那次运行没有正常结束或清单被改过）")
+    elif partial_problem(origin, facts) is not None:
+        problems.append(str(partial_problem(origin, facts)))
     elif not _listed_as_formal(origin, current.unit_id, str(record.get("record_sha256"))):
         problems.append("原运行的清单没有把这条记录列为该单元的正式执行")
     log = record.get("log") if isinstance(record.get("log"), Mapping) else {}
@@ -1156,13 +1195,16 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
         problems.append(f"单元重复出现：{duplicated[:5]}")
     missing = sorted(set(planned) - set(ids))
     extra = sorted(str(unit_id) for unit_id in set(ids) - set(planned))
-    if missing or extra:
+    partial = manifest.get("partial") is True
+    if partial:
+        problems.extend(partial_shape_problems(manifest))   # 部分完成清单：列出的单元 ⊆ 全集（缺的单元本来就没有落库的正式记录）
+    if (missing and not partial) or extra:
         problems.append(f"执行＋承接≠全集：缺 {missing[:5]}，多 {extra[:5]}")
     facts = RunFacts(policy_sha256=str(manifest.get("policy_sha256")), environment=list(manifest.get("environment") or []),
                      environment_sha256=str(manifest.get("environment_sha256")), executor=dict(manifest.get("executor") or {}),
                      max_age_hours=float(manifest.get("inheritance_max_age_hours") or 0),
                      now=parse_utc(manifest.get("decided_at_utc")) or 0.0, historical_read_audit=historical,
-                     require_read_audit=mode == UNIT_INHERIT)
+                     require_read_audit=mode == UNIT_INHERIT, allow_partial_origin=mode == UNIT_INHERIT)
     if facts.environment_sha256 != entries_sha256(facts.environment):
         problems.append("清单的环境指纹与明细不符")
     if facts.max_age_hours > MAX_AGE_HOURS:
@@ -1220,7 +1262,7 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
         if group:
             tests = record.get("tests") if isinstance(record.get("tests"), Mapping) else {}
             group_tests.setdefault(str(group), []).extend(str(test_id) for test_id in tests)
-    for group, expected in (manifest.get("test_groups") or {}).items():
+    for group, expected in ({} if partial else (manifest.get("test_groups") or {})).items():   # 部分清单没有全部测试组的记录
         reported = group_tests.get(str(group), [])
         if sorted(reported) != sorted(expected) or len(reported) != len(set(reported)):
             missing_tests = sorted(set(expected) - set(reported))
