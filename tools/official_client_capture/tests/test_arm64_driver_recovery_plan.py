@@ -113,6 +113,15 @@ class ParamsTests(_WorldCase):
             self.assertEqual(result.returncode, EXIT_USAGE, result.stdout + result.stderr)
             self.assertIn(expect, result.stderr)
 
+    def test_claude_client_is_not_supported_yet(self) -> None:
+        from tools.official_client_capture.tests.test_driver_client_table import claude_env_text
+
+        world = self.make_world()
+        world.fixture.env_file.write_text(claude_env_text(world.fixture), encoding="utf-8")
+        result = world.run("--plan")
+        self.assertEqual(result.returncode, EXIT_USAGE, result.stdout + result.stderr)
+        self.assertIn("只支持 Codex", result.stderr)
+
     def test_bad_fix_commit_is_rejected(self) -> None:
         world = self.make_world()
         world.write_params(FIX_COMMIT="abc")
