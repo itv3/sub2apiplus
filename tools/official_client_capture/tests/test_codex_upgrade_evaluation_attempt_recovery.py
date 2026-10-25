@@ -51,6 +51,15 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
 
     def setUp(self) -> None:
         super().setUp()
+        # 同一 attempt 内 Job 失败后的补跑退避（生产值 30 秒、最多补跑 2 次）在这里没有意义：本类大量用例用
+        # 恒失败的 run_job 桩（``failed_result``）造“段失败”现场，而每个失败 Job 要在 ``_run_job_with_retry`` 里
+        # 睡 2×30 = 60 秒才会落到失败收口（实测 sample／faulthandler 抓栈：codex_upgrade._run_job_with_retry →
+        # WallClockDeadline.sleep → time.sleep）。13 个这类用例各固定多出约 60 秒，导致整类独占时单元墙钟
+        # 约 800 秒而 CPU 不到 120 秒。把退避改成 0：补跑次数（JOB_RETRY_LIMIT）与全部断言不变，只去掉空等；
+        # 仅对本测试进程里的 codex_upgrade 模块属性生效，生产常量与受管工具源码都不改。
+        retry_delay_patch = mock.patch.object(codex_upgrade, "JOB_RETRY_DELAY_SECONDS", 0)
+        retry_delay_patch.start()
+        self.addCleanup(retry_delay_patch.stop)
         self.helper = test_codex_upgrade.CodexUpgradeTest("test_bound_evidence_path_accepts_legacy_attempt_relative_binding")
         self.helper.setUp()
         self.addCleanup(self.helper.doCleanups)
