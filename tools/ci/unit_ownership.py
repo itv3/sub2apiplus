@@ -30,6 +30,13 @@ Claude 单元约占一半核·秒），Codex 升级时这些测试几乎不会�
 
 选择结果写进门禁清单的 ``selection`` 块，执行器据此只保留标 ``run`` 的模块；清单里单元 ID、单元规格、额度都不变，
 所以和全集运行的记录逐字相通。
+
+使用与限制：
+
+* 入口：``entry-gates.sh --gate-scope client-plan --select-base <最近一次发版的 40 位提交>``、``background-validate.sh start`` 同名选项；
+  本版只启用 Codex 计划（数据文件 ``enabled_clients``）。收尾 full-gates、VC-4／VC-5 的 ``make test`` 保持全集，不用本选项；
+* 新增或改名测试模块后要重新物化（``python3 -B tools/ci/unit_ownership.py materialize``），``check``（CI 里由测试调用）会提醒；
+* 1 跳口径（测试及其一层夹具直接导入）是设计取舍：更远的间接依赖由收尾全集与 GitHub CI 全集兜底；符号级收窄、读集叠加留作阶段二。
 """
 
 from __future__ import annotations

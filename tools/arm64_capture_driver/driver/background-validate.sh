@@ -14,6 +14,9 @@
 #       旧结论须 passed／failed、进程组已退出且留有已发布的逐单元清单（被 stop 的运行不发布清单，其成果不能承接）；--work 须是旧结论的 WORK；旧提交须能
 #       验证是新提交的祖先（确定不是则永远拒绝，只有「无法验证」才可加 --allow-unverified-ancestry，结论标 unverified）；没有任何单元被承接时结论
 #       outcome=full_rerun。这两个选项只有本命令 start 支持，入口空跑 entry-dryrun.sh 没有。
+#       --gate-scope client-plan --select-base <最近一次发版的 40 位提交> [--include-claude]（Codex 升级工具优化第 9 项）：只跑本客户端计划的采集工具测试（Codex 计划不跑
+#       不受改动影响的 Claude 重模块），原样交给入口门禁。结论是子集：要配 --no-dryrun，不沿用来源结论、不签 B-09 全集收据；Codex 计划的结论给 Codex 自己的
+#       准入用，Claude 一侧的 check-boundary／require-passed 与统一准入一律拒绝（防串用）。要全集结论先 stop 再不带本选项重新 start。
 #   reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]
 #       同树重部署后沿用已通过的测试结论（优化第 5 项）：来源是同一提交的通过结论（带沿用绑定）；在来源的工作目录里用 entry-gates.sh --bind-only
 #       现算新部署上的绑定（含部署后核对，不跑测试），工具身份五摘要、提交、门禁集合、执行器、调度策略、输入清单、平台环境逐项相同且未过有效期（24 小时）

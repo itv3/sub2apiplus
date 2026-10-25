@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "194d7f6ea02d49cf0c12d186d4fa491a6ed3c21de50ab974ac2cadb7f82e27b4",
+      "sha256": "7568b0e55899cdbeae0e8e75909ef86e6aaba89b337ee9e15e4614a8957718b0",
       "mode": "0700",
-      "bytes": 7298
+      "bytes": 7891
     },
     {
       "path": "driver/background_preflight.py",
@@ -40,9 +40,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "16c25a490c94aedcf6db93831e6aa952d2fbdd5f0c0e54e76f655f0d18823e83",
+      "sha256": "117321b64acf72e71a0ef16def15e8ab9f828e0e7f415618d4bf862c8bc103b9",
       "mode": "0700",
-      "bytes": 197662
+      "bytes": 198807
     },
     {
       "path": "driver/build.sh",
@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "2f6ea46c9a298ee4936dc15303aa79bdeb3e0c02d48d810a7a307e4031a05a21",
+      "sha256": "3639865da20fe37db7bbf602a932daa63d0516251a2cf555d569e28a2b4778c7",
       "mode": "0700",
-      "bytes": 54144
+      "bytes": 55205
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -502,9 +502,9 @@
     },
     {
       "path": "driver/unit_ownership.py",
-      "sha256": "9007d5800334140d7ff03a3f3769e535ff3d89460c963bf6b57fbbeaef042a5a",
+      "sha256": "2519a7cef63844cef1b96b16190da95b7d9cdcf448c264f41f2e27f8f9cf0494",
       "mode": "0700",
-      "bytes": 55753
+      "bytes": 56431
     },
     {
       "path": "driver/unit_records.py",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "2201493046b857acc57d061c0652924cd6a679f1a77ab7ea6d5122c7d87caa43"
+  "manifest_sha256": "26623d22a845c668ac094e6d61481ee29e63896c17596df043094ac58384ad1f"
 }
