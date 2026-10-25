@@ -2381,6 +2381,24 @@ class HistoricalReplayTests(DeclaredTestCase):
 # ---------------------------------------------------------------------------
 
 CONTROL_BASELINE_COMMIT = "86d7b40a30cd299cd3b6cd9cbe7e58ba4f26013a"
+# 承接输入收窄（Codex 升级工具优化第 10a 项）与中断运行封存（第 16 项）对 unit_records.py 的登记（随版本登记并入；声明级章节的“只新增行”守卫相应放宽到这几处）：
+# 窄化承接必须改 check_record 里整份输入摘要的比较与读集重放分支、verify_manifest 的承接项核对与全集核对，所以下面这几行被改写（行文不变的搬动也算）；
+# 新增的名字是窄化承接与部分完成清单的函数与常量；_narrowed_problems 调用审计模块的历史重放与承接补比（声明级章节本身仍不碰审计模块）。
+# Current 与 RunFacts 各加带缺省值的字段，check_record／verify_manifest 的函数体改动由上面这几行改写覆盖。
+INHERIT_NARROWING_REWRITTEN_LINES = [
+    '    if record.get("inputs_sha256") != current.inputs_sha256:',
+    '    required_audit = facts.require_read_audit or any(entry.get("name") == "require-read-audit" for entry in current.inputs or [])',
+    '    if required_audit:',
+    '    if missing or extra:',
+    '                     require_read_audit=mode == UNIT_INHERIT)',
+    '        if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):',
+    '                reasons = check_record(store, record_path, record, current, facts)',
+    '    for group, expected in (manifest.get("test_groups") or {}).items():',
+]
+INHERIT_NARROWING_NAMES = frozenset({"_INHERIT_VIEW_SCHEMA", "_narrowed_source", "_narrowed_problems", "_inherit_check_problem",
+                                     "PARTIAL_ORIGIN_STATES", "partial_shape_problems", "partial_problem"})
+INHERIT_NARROWING_AUDIT_REFERENCES = 1
+INHERIT_NARROWING_CHANGED_DEFINITIONS = frozenset({"Current", "check_record", "verify_manifest"})
 # control 两个 sidecar 文件的字节被执行器登记并在消费时核对（改一个字节，历史 control 凭证重放就报「当前四control执行器缺完整
 # sidecar 绑定或实际字节漂移」），所以写死摘要：谁改了它们，这个测试就红。
 CONTROL_AUDIT_SHA256 = "dc9238ae696880cd12eb17a246a09ac354d6db330b788b66ecf35c3142da2172"
@@ -2461,12 +2479,15 @@ class ControlInvariantTests(unittest.TestCase):
     def test_t_c1_only_declared_names_were_added_and_no_existing_line_was_rewritten(self) -> None:
         removed = [line for line in difflib.unified_diff(self.base_source.splitlines(), self.new_source.splitlines(), lineterm="", n=0)
                    if line.startswith("-") and not line.startswith("---")]
-        self.assertEqual(removed, [], "对 unit_records.py 只新增行：被改写或删除的行会让 Codex 对照批次登记出残差")
+        self.assertEqual([line[1:] for line in removed], INHERIT_NARROWING_REWRITTEN_LINES,
+                         "对 unit_records.py 只新增行：被改写或删除的行只有承接输入收窄登记的这几行")
         base_names, new_names = set(dir(self.base)), set(dir(self.new))
         self.assertEqual(base_names - new_names, set(), "没有名字被删除")
         added = new_names - base_names
         self.assertTrue(added)
-        self.assertTrue(all("declared" in name.lower() for name in added), f"新增的名字都属于声明级章节：{sorted(added)}")
+        self.assertTrue(all("declared" in name.lower() or name in INHERIT_NARROWING_NAMES for name in added),
+                        f"新增的名字都属于声明级章节或承接输入收窄：{sorted(added)}")
+        self.assertLessEqual(INHERIT_NARROWING_NAMES, added, "登记的承接输入收窄名字都在")
         frozen = {"DECLARED_REGISTRY_SCHEMA", "DECLARED_SCOPE_SCHEMA", "DECLARED_SAMPLE_SCHEMA", "DECLARED_CONTRACT_SCHEMA", "DECLARED_SCOPE_ENTRY",
                   "DECLARED_COVERAGE_SCOPE", "DECLARED_CLASSES", "DECLARED_TOLERATED_UNRESOLVED", "validate_declared_scope", "declared_coverage",
                   "_declared_scope_inputs", "_check_declared_route", "_check_declared_audit"}
@@ -2499,11 +2520,20 @@ class ControlInvariantTests(unittest.TestCase):
                 self.assertEqual(len(inserted), 1, f"{name} 头部恰有一处声明级插入")
                 self.assertIs(new_node.body[1 if ast.get_docstring(new_node) else 0], inserted[0], f"{name} 的插入紧接在说明之后")
                 new_node.body.remove(inserted[0])
+                if name in INHERIT_NARROWING_CHANGED_DEFINITIONS:
+                    continue   # 承接输入收窄登记的定义：函数体改写由“被改写的行”逐行登记（见 INHERIT_NARROWING_REWRITTEN_LINES），声明级插入仍在原位（上面已断言）
             elif name == "RunFacts":
-                inserted = [stmt for stmt in new_node.body if isinstance(stmt, ast.AnnAssign) and getattr(stmt.target, "id", "") == "declared_route"]
-                self.assertEqual(len(inserted), 1)
-                self.assertIs(new_node.body[-1], inserted[0], "新字段追加在最后")
-                new_node.body.remove(inserted[0])
+                fields = ("declared_route", "allow_partial_origin")      # allow_partial_origin：第 16 项，逐单元承接接受部分完成清单
+                inserted = [stmt for stmt in new_node.body if isinstance(stmt, ast.AnnAssign) and getattr(stmt.target, "id", "") in fields]
+                self.assertEqual([stmt.target.id for stmt in inserted], list(fields))
+                self.assertEqual(new_node.body[-2:], inserted, "新字段追加在最后")
+                for stmt in inserted:
+                    new_node.body.remove(stmt)
+            elif name in INHERIT_NARROWING_CHANGED_DEFINITIONS:
+                # 承接输入收窄登记的定义：函数体的改写由上一个用例的“被改写的行”逐行登记，这里只确认声明级插入仍在原位。
+                if name == "check_record":
+                    self.assertTrue(any(isinstance(stmt, ast.If) and "_check_declared_route" in ast.unparse(stmt) for stmt in new_node.body[:2]))
+                continue
             self.assertEqual(ast.dump(base_node), ast.dump(new_node), f"{name} 除声明级插入外与基线逐节点相同")
 
     # ---- T-C2：declared_inputs 与策略校验 ----
@@ -2710,7 +2740,7 @@ class ControlInvariantTests(unittest.TestCase):
         base_fields = [field.name for field in dataclasses.fields(self.base.RunFacts)]
         new_fields = [field.name for field in dataclasses.fields(self.new.RunFacts)]
         self.assertEqual(new_fields[:len(base_fields)], base_fields, "既有字段的顺序不变")
-        self.assertEqual(new_fields[len(base_fields):], ["declared_route"], "只在末尾追加一个字段")
+        self.assertEqual(new_fields[len(base_fields):], ["declared_route", "allow_partial_origin"], "只在末尾追加声明级与第 16 项的两个带缺省值的字段")
         self.assertIs(dataclasses.fields(self.new.RunFacts)[-1].default, False)
         positional = ["p" * 64, [], "e" * 64, {"files": {}, "sha256": "x"}, 168.0, 12.5]
         for module in (self.base, self.new):
@@ -2792,7 +2822,8 @@ class ControlInvariantTests(unittest.TestCase):
     def test_t_c12_the_declared_chapter_never_touches_the_audit_module(self) -> None:
         base_tree, new_tree = ast.parse(self.base_source), ast.parse(self.new_source)
         base_names = {node.name for node in base_tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
-        added = [node for node in new_tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name not in base_names]
+        added = [node for node in new_tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name not in base_names
+                 and node.name not in INHERIT_NARROWING_NAMES]
         self.assertGreaterEqual(len(added), 15, "新章节的函数")
 
         def references(node: ast.AST) -> list[str]:
@@ -2814,7 +2845,8 @@ class ControlInvariantTests(unittest.TestCase):
             with self.subTest(node.name):
                 self.assertEqual(references(node), [], f"{node.name} 不得引用 _audit_module、read_audit 或 control 适配器")
         count = lambda tree: sum(isinstance(node, ast.Name) and node.id == "_audit_module" for node in ast.walk(tree))  # noqa: E731
-        self.assertEqual(count(base_tree), count(new_tree), "整个模块里 _audit_module 的引用数与基线相同（三处插入也没有新增引用）")
+        self.assertEqual(count(base_tree) + INHERIT_NARROWING_AUDIT_REFERENCES, count(new_tree),
+                         "整个模块里 _audit_module 的引用数与基线相同（三处插入也没有新增引用），只多登记的承接输入收窄那一处")
 
     def test_the_control_adapter_still_loads_the_new_file_with_its_own_audit_module(self) -> None:
         records = control_audit._records_module()

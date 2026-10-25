@@ -889,6 +889,7 @@ CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runr
         '        _terminate(current)',
         'def stop_registered(data_root: Path, reason: str, *, keep: Path) -> list[str]:',
         '        _terminate(current)',
+        '    work = args.work or bound_roots[0]',
         '        inherit_reference = _inherit_reference(Path(inherit_request), vars(args))',
         '    if inherit_reference is not None:',
         '    superseded = stop(args.runroot, f"被提交 {args.commit[:12]} 在部署 {deployment[\'receipt\']} 上的后台验证取代", keep=path)',
@@ -968,12 +969,20 @@ CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(
         '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
 CLOSEOUT_PY_7_BASELINE = 'df90c329e3ba2b659ac7667b897e38a7a35d6269'
-CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '04056c95428c8d94d10290e14f403a36352935088e94b230a33976caea9312fc'}
+CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '031af5420256c586f22daf7f868fdb0d1ca16f532a4ba404ecb88be53f8bfff2'}
 CLOSEOUT_PY_7_REMOVED = {'tools/ci/unit_records.py': ['    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}',
         '        entries.append(_audit_module().host_snapshot(path))',
         '    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""',
         '        if (not isinstance(declaration, dict) or set(declaration) != {"host_paths", "require_read_audit", "runtime_contract"}',
-        '                replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,']}
+        '    if record.get("inputs_sha256") != current.inputs_sha256:',
+        '    required_audit = facts.require_read_audit or any(entry.get("name") == "require-read-audit" for entry in current.inputs or [])',
+        '    if required_audit:',
+        '                replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,',
+        '    if missing or extra:',
+        '                     require_read_audit=mode == UNIT_INHERIT)',
+        '        if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):',
+        '                reasons = check_record(store, record_path, record, current, facts)',
+        '    for group, expected in (manifest.get("test_groups") or {}).items():']}
 CLOSEOUT_PY_8_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
 CLOSEOUT_PY_8_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
 CLOSEOUT_PY_8_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}

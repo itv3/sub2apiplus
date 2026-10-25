@@ -116,7 +116,12 @@ TEMP_ROOT = "/private/tmp" if Path("/private/tmp").is_dir() else None
 
 # Codex 受管树相对当前基线的 control 层变化：受管树相对路径 → 工作项与理由。新增、删除、修改都要登记，且只能落在 control 层。
 # 被 Codex 策略忽略的文件（``claude_`` 前缀等 Claude 专属文件）不影响 Codex 身份，无须登记。基线重封时清空（见模块说明第二节）。
-REGISTERED_CONTROL_CHANGES: dict[str, str] = {}
+REGISTERED_CONTROL_CHANGES: dict[str, str] = {
+    # 承接输入收窄（Codex 升级工具优化第 10a／11／16／17 项，随版本登记并入）：承接验证器 unit_records.py／read_audit.py／target_platform_gate.py
+    # 加了承接视图、测试树坐标守卫、部分完成清单与收尾逐单元承接，它们的摘要被本文件的 TARGET_VERIFIER_SHA256S 钉住，所以钉住值要同步。
+    # 钉住值进了 compare／accept 读侧闭包，评估器读侧摘要（compare_reader_sha256、accept_reader_sha256）随之变化，基线要在同一个版本登记里重封。
+    "codex_upgrade_gate_receipt.py": "第 10a 项承接输入收窄：同步 target_platform_gate／unit_records／read_audit 三个验证器的钉住值（见 opt/reg-0164-inherit）",
+}
 
 
 # ----------------------------------------------------------------------
@@ -671,7 +676,8 @@ class CodexIdentityConservationTest(unittest.TestCase):
                 getattr(tampered, name)()
         registered_case = type(self)(name)
         registered_case.baseline, registered_case.snapshot = reference, self._tampered(base, {control_path: zero})
-        with mock.patch.dict(REGISTERED_CONTROL_CHANGES, {control_path: "测试登记"}):
+        # clear=True：被篡改清单只改了 control_path 一个文件，真实登记表里（相对基线确有变化的）其它登记项在这份清单上“没有变化”，不能混进来。
+        with mock.patch.dict(REGISTERED_CONTROL_CHANGES, {control_path: "测试登记"}, clear=True):
             getattr(registered_case, name)()
 
     # ------------------------------------------------------------------
