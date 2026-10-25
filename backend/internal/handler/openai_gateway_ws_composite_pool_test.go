@@ -378,7 +378,7 @@ func (e *compositePoolWSEnv) expectNoMoreUsageLogs() {
 	select {
 	case log := <-e.usage:
 		e.t.Fatalf("出现了多余的用量记录：request_id=%s tokens=%d", log.RequestID, log.InputTokens+log.OutputTokens)
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(400 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 

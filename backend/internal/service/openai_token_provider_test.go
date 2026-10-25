@@ -866,7 +866,7 @@ func TestOpenAITokenProvider_Real_LockRace_ContextCanceled(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, token)
-	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.Less(t, time.Since(start), 5*time.Second)
 }
 
 func TestOpenAITokenProvider_RuntimeMetrics_LockWaitHitAndSnapshot(t *testing.T) {

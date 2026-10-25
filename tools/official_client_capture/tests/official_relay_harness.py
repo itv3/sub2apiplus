@@ -93,7 +93,7 @@ class RelayProcess:
                 raise RuntimeError(f"中继提前退出：{self.stderr_text()}")
             try:
                 # 只做 TCP 探测（不握手）：中继会把它记成一条没有 TLS 的空连接，测试按字段选取记录，不依赖连接编号。
-                with socket.create_connection(("127.0.0.1", self.port), timeout=0.5):
+                with socket.create_connection(("127.0.0.1", self.port), timeout=0.5):  # time-threshold: allow 就绪探测的单次连接超时，外层有 15 秒的重试循环，不是断言上限
                     return
             except OSError:
                 time.sleep(0.05)

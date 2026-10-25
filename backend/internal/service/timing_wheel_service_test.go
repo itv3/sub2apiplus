@@ -83,14 +83,14 @@ func TestTimingWheelService_Schedule_ExecutesOnce(t *testing.T) {
 
 	select {
 	case <-ch:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatalf("等待任务执行超时")
 	}
 
 	select {
 	case <-ch:
 		t.Fatalf("任务不应重复执行")
-	case <-time.After(80 * time.Millisecond):
+	case <-time.After(80 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 
@@ -115,7 +115,7 @@ func TestTimingWheelService_Cancel_PreventsExecution(t *testing.T) {
 	select {
 	case <-ch:
 		t.Fatalf("任务已取消，不应执行")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 

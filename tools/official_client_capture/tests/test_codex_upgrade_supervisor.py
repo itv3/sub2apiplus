@@ -2931,7 +2931,7 @@ raise SystemExit(9)
 
     def test_heartbeat_gap_is_watchdog_abort_without_owner_kill(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            client = self._client(Path(directory), timeout=0.15)
+            client = self._client(Path(directory), timeout=0.15)  # time-threshold: allow 被测对象就是心跳断档的看门狗超时；等待终态已改为带 5 秒上限的有界轮询（见下一行注释）
             client.start()
             # 修好接着跑第 34 项：固定 sleep 0.35 秒在慢 CI runner 上偶发读到 running；改为有界等待终态。
             state = self._wait_campaign_state(client.run_dir, {"watchdog-aborted"}, timeout=5)

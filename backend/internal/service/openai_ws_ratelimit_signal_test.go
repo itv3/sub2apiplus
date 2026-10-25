@@ -449,7 +449,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_NonExhaustedSnapshotDoesN
 	select {
 	case resetAt := <-repo.rateLimitCh:
 		t.Fatalf("不应写入运行时限流时间: %v", resetAt)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 
@@ -482,7 +482,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ThrottlesExtraWrites(t *t
 	select {
 	case updates := <-repo.updateExtraCh:
 		t.Fatalf("unexpected second codex snapshot write: %v", updates)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 

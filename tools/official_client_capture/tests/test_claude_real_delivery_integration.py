@@ -871,7 +871,7 @@ class StoreDimensionLockTests(unittest.TestCase):
                     thread = threading.Thread(target=contender)
                     thread.start()
                     self.assertTrue(attempted.wait(1))
-                    self.assertFalse(acquired.wait(0.05))
+                    self.assertFalse(acquired.wait(0.05))  # time-threshold: allow 反向窗口检查：窗口内不应拿到锁，机器变慢只会让检查更宽松，不会抖红
                 self.assertFalse(acquired.is_set())
             thread.join(timeout=2)
             self.assertFalse(thread.is_alive())

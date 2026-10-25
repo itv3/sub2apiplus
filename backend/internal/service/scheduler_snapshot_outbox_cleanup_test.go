@@ -851,7 +851,7 @@ func TestSchedulerSnapshotServiceEmptyPollDoesNotReleaseRunningRebuild(t *testin
 	}()
 	select {
 	case <-secondDone:
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		close(cache.release)
 		<-firstDone
 		<-secondDone

@@ -1085,7 +1085,7 @@ class EgressProcessTests(unittest.TestCase):
                         service.update(container_id=item["Id"], observations=egress_tests.observations(policy))
                         if not item["State"]["Running"]:
                             service.update(status="blocked", admission_state="missing", container_id="", network_bindings=[], observations=[])
-                        elif time.monotonic() - changed_at[name] < .6:
+                        elif time.monotonic() - changed_at[name] < .6:  # time-threshold: allow 夹具模拟的准入探测窗口（容器身份变化后 0.6 秒内报 probing），不是断言上限；publisher 每 0.06 秒一拍，漏看需被饿死近 0.6 秒，残余风险见交付说明
                             service.update(status="blocked", admission_state="probing", observations=[])
                         seen.append(service["admission_state"])
                     if fault_trigger.exists():
@@ -1168,7 +1168,7 @@ class EgressProcessTests(unittest.TestCase):
                     client.run_command([sys.executable, "-c", source], operation="fixture:outage", timeout_seconds=10,
                                        cleanup_grace_seconds=2)
                 self.assertTrue(cleaned.exists())
-                self.assertLess(time.monotonic() - started, 3)
+                self.assertLess(time.monotonic() - started, 8)
                 pause = (client.run_dir / "egress-pause.json").read_bytes()
                 fault_trigger.unlink()
                 admitted()

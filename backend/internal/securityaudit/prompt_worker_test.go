@@ -503,7 +503,7 @@ func TestWorkerPanicLeaseLossAndLifecycleAreContained(t *testing.T) {
 			defer runner.wg.Done()
 			<-release
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 		defer cancel()
 		require.ErrorIs(t, runner.Shutdown(ctx), context.DeadlineExceeded)
 		close(release)

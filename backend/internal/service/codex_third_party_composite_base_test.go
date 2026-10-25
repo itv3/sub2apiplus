@@ -166,7 +166,7 @@ func TestCodexCompositeOfficialFailureFallsBackToLocalBase(t *testing.T) {
 
 	// 拉取超过基础目录预算：请求上下文仍然有效，改为本地生成而不是 500。
 	slow := &cxtpCompositeFetch{block: true}
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	manifest, account, err = svc.BuildCompositeBaseManifest(context.Background(), fetchCtx, group, slow.fetch)
 	require.NoError(t, err)

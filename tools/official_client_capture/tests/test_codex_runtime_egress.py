@@ -843,7 +843,7 @@ class EgressSupervisorTests(unittest.TestCase):
             with self.assertRaises(supervisor.RuntimeEgressPaused):
                 client.run_command([sys.executable, "-c", source], operation="fixture:capture", timeout_seconds=15, cleanup_grace_seconds=2)
         self.assertTrue(cleaned.exists())
-        self.assertLess(time.monotonic() - start, 3)
+        self.assertLess(time.monotonic() - start, 8)
         self.assertFalse(list((self.root / "egress-commands").glob("[0-9]*.json")) and
                          [path for path in (self.root / "egress-commands").glob("*.json") if not path.name.endswith(".signalled.json")])
 

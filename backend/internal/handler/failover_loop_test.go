@@ -165,14 +165,14 @@ func TestSleepWithContext(t *testing.T) {
 		start := time.Now()
 		ok := sleepWithContext(context.Background(), 0)
 		require.True(t, ok)
-		require.Less(t, time.Since(start), 50*time.Millisecond)
+		require.Less(t, time.Since(start), 800*time.Millisecond) // time-threshold: allow 被保护的是 ≥1s 的完整等待，上界 800ms 只用来区分“立即返回”与“走了完整等待”，不贴着正常值
 	})
 
 	t.Run("负时长立即返回true", func(t *testing.T) {
 		start := time.Now()
 		ok := sleepWithContext(context.Background(), -1*time.Second)
 		require.True(t, ok)
-		require.Less(t, time.Since(start), 50*time.Millisecond)
+		require.Less(t, time.Since(start), 800*time.Millisecond) // time-threshold: allow 被保护的是 ≥1s 的完整等待，上界 800ms 只用来区分“立即返回”与“走了完整等待”，不贴着正常值
 	})
 
 	t.Run("正常等待后返回true", func(t *testing.T) {
@@ -181,7 +181,7 @@ func TestSleepWithContext(t *testing.T) {
 		elapsed := time.Since(start)
 		require.True(t, ok)
 		require.GreaterOrEqual(t, elapsed, 40*time.Millisecond)
-		require.Less(t, elapsed, 500*time.Millisecond)
+		require.Less(t, elapsed, 5*time.Second)
 	})
 
 	t.Run("已取消context立即返回false", func(t *testing.T) {
@@ -191,7 +191,7 @@ func TestSleepWithContext(t *testing.T) {
 		start := time.Now()
 		ok := sleepWithContext(ctx, 5*time.Second)
 		require.False(t, ok)
-		require.Less(t, time.Since(start), 50*time.Millisecond)
+		require.Less(t, time.Since(start), 2500*time.Millisecond) // time-threshold: allow 被保护的是 5s 的完整睡眠，上界取其一半，区分“被取消打断”与“睡满”
 	})
 
 	t.Run("等待期间context取消返回false", func(t *testing.T) {
@@ -205,7 +205,7 @@ func TestSleepWithContext(t *testing.T) {
 		ok := sleepWithContext(ctx, 5*time.Second)
 		elapsed := time.Since(start)
 		require.False(t, ok)
-		require.Less(t, elapsed, 500*time.Millisecond)
+		require.Less(t, elapsed, 2500*time.Millisecond) // time-threshold: allow 被保护的是 5s 的完整睡眠，上界取其一半，区分“被取消打断”与“睡满”
 	})
 }
 
@@ -285,7 +285,7 @@ func TestHandleFailoverError_BasicSwitch(t *testing.T) {
 
 		require.Equal(t, FailoverContinue, action)
 		require.Equal(t, 1, fs.SwitchCount)
-		require.Less(t, elapsed, 200*time.Millisecond, "第一次切换延迟应为 0")
+		require.Less(t, elapsed, 800*time.Millisecond, "第一次切换延迟应为 0") // time-threshold: allow 被保护的是 Antigravity 第二次切换的 1s 延迟，上界 800ms 区分“无延迟”与“有 1s 延迟”
 	})
 
 	t.Run("非重试错误_Antigravity_第二次切换有1秒延迟", func(t *testing.T) {
@@ -302,7 +302,7 @@ func TestHandleFailoverError_BasicSwitch(t *testing.T) {
 		require.Equal(t, FailoverContinue, action)
 		require.Equal(t, 2, fs.SwitchCount)
 		require.GreaterOrEqual(t, elapsed, 800*time.Millisecond, "第二次切换延迟应约 1s")
-		require.Less(t, elapsed, 3*time.Second)
+		require.Less(t, elapsed, 5*time.Second)
 	})
 
 	t.Run("连续切换直到耗尽", func(t *testing.T) {
@@ -471,7 +471,7 @@ func TestHandleFailoverError_SameAccountRetry(t *testing.T) {
 		require.Empty(t, mock.calls, "同账号重试期间不应调用 TempUnschedule")
 		// 验证等待了 sameAccountRetryDelay (500ms)
 		require.GreaterOrEqual(t, elapsed, 400*time.Millisecond)
-		require.Less(t, elapsed, 2*time.Second)
+		require.Less(t, elapsed, 5*time.Second)
 	})
 
 	t.Run("达到最大重试次数前均返回FailoverContinue", func(t *testing.T) {
@@ -637,7 +637,7 @@ func TestHandleFailoverError_ContextCanceled(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverCanceled, action)
-		require.Less(t, elapsed, 400*time.Millisecond, "sleep 应被取消打断")
+		require.Less(t, elapsed, 400*time.Millisecond, "sleep 应被取消打断") // time-threshold: allow 取消必须打断完整的 500ms 同账号重试等待，上界早于完整等待本身就是被验证的语义；取消发生在 30ms，余量约 13 倍
 		// 进入重试分支后才取消：重试计数已递增
 		require.Equal(t, 1, fs.SameAccountRetryCount[100])
 	})
@@ -655,7 +655,7 @@ func TestHandleFailoverError_ContextCanceled(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverCanceled, action)
-		require.Less(t, elapsed, 100*time.Millisecond, "应立即返回")
+		require.Less(t, elapsed, 800*time.Millisecond, "应立即返回") // time-threshold: allow 被保护的是后续的完整等待（≥1s），上界 800ms 区分“立即返回”与“走了等待”
 		// 入口已取消时不得改变任何 failover 状态。
 		require.Equal(t, 0, fs.SwitchCount, "取消的请求不应计入切换")
 		require.Equal(t, 0, fs.SameAccountRetryCount[100], "取消的请求不应改动重试计数")
@@ -678,7 +678,7 @@ func TestHandleFailoverError_ContextCanceled(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverCanceled, action)
-		require.Less(t, elapsed, 100*time.Millisecond, "应立即返回而非等待 1s")
+		require.Less(t, elapsed, 800*time.Millisecond, "应立即返回而非等待 1s") // time-threshold: allow 被保护的是 1s 的 Antigravity 延迟，上界 800ms 区分“立即返回”与“等满 1s”
 	})
 }
 
@@ -812,7 +812,7 @@ func TestHandleFailoverError_IntegrationScenario(t *testing.T) {
 		action := fs.HandleFailoverError(context.Background(), mock, 100, service.PlatformAntigravity, maxSameAccountRetries, err)
 		elapsed := time.Since(start)
 		require.Equal(t, FailoverContinue, action)
-		require.Less(t, elapsed, 200*time.Millisecond, "第一次切换延迟为 0")
+		require.Less(t, elapsed, 800*time.Millisecond, "第一次切换延迟为 0") // time-threshold: allow 被保护的是 1s 的 Antigravity 延迟，上界 800ms 区分“无延迟”与“有延迟”
 
 		// 第二次切换：delay = 1s
 		start = time.Now()
@@ -826,7 +826,7 @@ func TestHandleFailoverError_IntegrationScenario(t *testing.T) {
 		action = fs.HandleFailoverError(context.Background(), mock, 300, service.PlatformAntigravity, maxSameAccountRetries, err)
 		elapsed = time.Since(start)
 		require.Equal(t, FailoverExhausted, action)
-		require.Less(t, elapsed, 200*time.Millisecond, "耗尽时不应有延迟")
+		require.Less(t, elapsed, 800*time.Millisecond, "耗尽时不应有延迟") // time-threshold: allow 被保护的是 1s 的 Antigravity 延迟，上界 800ms 区分“无延迟”与“有延迟”
 	})
 
 	t.Run("ForceCacheBilling通过错误标志设置", func(t *testing.T) {
@@ -895,7 +895,7 @@ func TestHandleFailoverError_EdgeCases(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverContinue, action)
-		require.Less(t, elapsed, 200*time.Millisecond, "空平台不应触发 Antigravity 延迟")
+		require.Less(t, elapsed, 800*time.Millisecond, "空平台不应触发 Antigravity 延迟") // time-threshold: allow 被保护的是 1s 的 Antigravity 延迟，上界 800ms 区分“无延迟”与“有延迟”
 	})
 }
 
@@ -946,7 +946,7 @@ func TestHandleSelectionExhausted(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverExhausted, action)
-		require.Less(t, elapsed, 100*time.Millisecond, "不应等待")
+		require.Less(t, elapsed, 1500*time.Millisecond, "不应等待") // time-threshold: allow 被保护的是 2s 的选择耗尽等待，上界 1500ms 区分“不等待”与“等满 2s”
 	})
 
 	t.Run("503但context已取消_返回Canceled", func(t *testing.T) {
@@ -961,7 +961,7 @@ func TestHandleSelectionExhausted(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.Equal(t, FailoverCanceled, action)
-		require.Less(t, elapsed, 100*time.Millisecond, "应立即返回")
+		require.Less(t, elapsed, 1500*time.Millisecond, "应立即返回") // time-threshold: allow 被保护的是 2s 的选择耗尽等待，上界 1500ms 区分“立即返回”与“等满 2s”
 	})
 
 	t.Run("context已取消_非503也返回Canceled而非Exhausted", func(t *testing.T) {

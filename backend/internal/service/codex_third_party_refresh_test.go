@@ -389,7 +389,7 @@ func TestCodexTPRefreshAccountTimeoutDoesNotBlockOthers(t *testing.T) {
 	started := time.Now()
 	report, err := svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
 	require.NoError(t, err)
-	require.Less(t, time.Since(started), 2*time.Second)
+	require.Less(t, time.Since(started), 5*time.Second)
 	items := cxtpRefreshItemsByKey(report)
 	require.False(t, items["model_protocol:11"].OK)
 	require.Equal(t, "拉取超时", items["model_protocol:11"].Reason)
@@ -415,7 +415,7 @@ func TestCodexTPRefreshTotalTimeoutBoundsTheWholeRun(t *testing.T) {
 	started := time.Now()
 	report, err := svc.RefreshCodexThirdPartyCatalogs(t.Context(), cxtpCompositeGroup())
 	require.NoError(t, err)
-	require.Less(t, time.Since(started), 2*time.Second, "总时限到了，排队中的账号不再发起拉取")
+	require.Less(t, time.Since(started), 5*time.Second, "总时限到了，排队中的账号不再发起拉取")
 	require.Equal(t, 3, report.Total)
 	require.Equal(t, 3, report.Failed)
 	require.Equal(t, 1, fetcher.totalCalls(), "并发为 1 时只有第一个账号真正发起过拉取，其余排队时就被总时限取消")
@@ -844,16 +844,16 @@ func TestModelProtocolCatalogWarmupRefreshesEnabledAccountsInBackground(t *testi
 	}}
 	repo := &warmupRepo{accounts: []Account{loaded, pending, disabled, plain}}
 	svc := NewModelProtocolCatalogWarmupService(repo, &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream})
-	svc.delay = 10 * time.Millisecond
+	svc.delay = 1500 * time.Millisecond
 
 	started := time.Now()
 	svc.Start()
-	require.Less(t, time.Since(started), 5*time.Millisecond, "Start 立即返回，不阻塞启动")
+	require.Less(t, time.Since(started), 750*time.Millisecond, "Start 立即返回，不阻塞启动") // time-threshold: allow 预热延迟已拉到 1.5s，Start 若退化成同步执行至少耗时 1.5s，上界 750ms 区分“立即返回”与“同步等待”
 	svc.Start() // 重复启动无副作用
 
 	require.Eventually(t, func() bool {
 		return upstreamModelProtocols.peek(modelProtocolCatalogKey(&pending, buildOpenAIModelsURL(base)), "deepseek/deepseek-v4.1-flash") != nil
-	}, 2*time.Second, 5*time.Millisecond)
+	}, 6*time.Second, 5*time.Millisecond)
 	svc.Stop()
 	upstream.mu.Lock()
 	defer upstream.mu.Unlock()

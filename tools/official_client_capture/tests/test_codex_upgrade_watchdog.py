@@ -146,7 +146,7 @@ class WatchdogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             campaign = self._lease_campaign(Path(directory))
             deadline = incremental_recovery.WallClockDeadline(0.08)
-            deadline.heartbeat_seconds = 0.02
+            deadline.heartbeat_seconds = 0.02  # time-threshold: allow 被测对象就是租约截止与心跳间隔，数值本身是输入；断言只看是否生成停止收据
             with mock.patch.object(
                 codex_upgrade,
                 "load_campaign_manifest",

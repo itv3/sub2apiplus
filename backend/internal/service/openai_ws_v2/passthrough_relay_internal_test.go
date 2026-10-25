@@ -223,7 +223,7 @@ func TestRunIdleWatchdog_NoTimeoutWhenDisabled(t *testing.T) {
 	select {
 	case <-exitCh:
 		t.Fatal("unexpected idle timeout signal")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 

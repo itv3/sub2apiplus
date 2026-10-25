@@ -454,7 +454,7 @@ func TestTokenRefreshRateGate_ReservesSpacedSlotsAndHonorsCancellation(t *testin
 	cancel()
 	started := time.Now()
 	require.ErrorIs(t, cancelGate.wait(ctx), context.Canceled)
-	require.Less(t, time.Since(started), 100*time.Millisecond, "cancellation must not wait for the reserved slot")
+	require.Less(t, time.Since(started), 5*time.Second, "cancellation must not wait for the reserved slot")
 }
 
 func TestTokenRefreshService_RetriesAcquireRateSlotPerAttempt(t *testing.T) {

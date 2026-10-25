@@ -625,7 +625,7 @@ class HostToolRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             # 一直不退出：超时失败关闭，不派发运行器、不写报告。
             root = Path(directory)
-            code, report = self._run(root, env={"FAKE_PS_FROM": "1"}, quiescence_timeout=0.05)
+            code, report = self._run(root, env={"FAKE_PS_FROM": "1"}, quiescence_timeout=0.05)  # time-threshold: allow 被测对象就是静默等待超时（残留进程一直不退出，超时即失败关闭），超时值本身是输入
             self.assertEqual(code, 2)
             self.assertEqual(report, {})
             self.assertFalse(any("unshare" in call for call in self._docker_calls(root)))

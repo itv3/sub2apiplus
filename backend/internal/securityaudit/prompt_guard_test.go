@@ -94,7 +94,7 @@ func TestGuardEvaluatorGlobalBulkheadIsNonBlocking(t *testing.T) {
 	_, err := evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: "two", PromptLength: 3})
 	require.Error(t, err)
 	// The blocked variant would wait out the 2000ms endpoint timeout; 1500ms still proves non-blocking on a loaded machine.
-	require.Less(t, time.Since(start), 1500*time.Millisecond)
+	require.Less(t, time.Since(start), 1500*time.Millisecond) // time-threshold: allow 已按满载放宽：被保护的是 2000ms 的端点超时，1500ms 仍能证明没有被阻塞（见上一行注释）
 	require.Equal(t, int64(1), metrics.Snapshot().BulkheadFull)
 	close(release)
 	require.NoError(t, <-done)
@@ -125,7 +125,7 @@ func TestGuardEvaluatorPerNodeBulkheadIsNonBlocking(t *testing.T) {
 	_, err := evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: "two", PromptLength: 3})
 	require.Error(t, err)
 	// The blocked variant would wait out the 2000ms endpoint timeout; 1500ms still proves non-blocking on a loaded machine.
-	require.Less(t, time.Since(started), 1500*time.Millisecond)
+	require.Less(t, time.Since(started), 1500*time.Millisecond) // time-threshold: allow 已按满载放宽：被保护的是 2000ms 的端点超时，1500ms 仍能证明没有被阻塞（见上一行注释）
 	require.GreaterOrEqual(t, metrics.Snapshot().BulkheadFull, int64(1))
 	close(release)
 	require.NoError(t, <-done)
@@ -205,7 +205,7 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 			calls++
 			if endpoint.ID == "first" {
 				select {
-				case <-time.After(20 * time.Millisecond):
+				case <-time.After(20 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
 				case <-ctx.Done():
 					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true, Cause: ctx.Err()}
@@ -231,7 +231,7 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 		// endpoint fails after 20ms, so the failover (calls == 2) only goes
 		// missing if the scheduler stalls for most of the 500ms shared deadline.
 		// The earlier 70ms/35ms/350ms version flaked under full CI load.
-		require.Less(t, elapsed, 3*time.Second)
+		require.Less(t, elapsed, 3*time.Second) // time-threshold: allow 已按满载放宽：不共享截止时间会落在约 10 秒，3 秒上界仍能失败，注释里写明了取值依据
 		require.GreaterOrEqual(t, elapsed, 400*time.Millisecond)
 		require.Equal(t, int64(1), metrics.Snapshot().Failovers)
 		require.Equal(t, int64(1), metrics.Snapshot().Timeouts)

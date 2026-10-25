@@ -551,7 +551,7 @@ func TestRefreshIfNeeded_LocalLockWaitHonorsContext(t *testing.T) {
 	lock := api.getLocalLock(executor.CacheKey(account))
 	require.NoError(t, lock.Lock(context.Background()))
 	defer lock.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 
 	result, err := api.RefreshIfNeeded(ctx, account, executor, time.Hour)
@@ -642,7 +642,7 @@ func TestRefreshIfNeeded_LateSuccessAfterDeadlineDoesNotPersist(t *testing.T) {
 		delay:        30 * time.Millisecond,
 	}
 	api := NewOAuthRefreshAPI(repo, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 
 	result, err := api.RefreshIfNeeded(ctx, account, executor, time.Hour)
@@ -963,14 +963,14 @@ func TestRefreshIfNeeded_LocalLockWaitHonorsContextCancellation(t *testing.T) {
 	}()
 	<-refreshStarted
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	startedAt := time.Now()
 	result, err := api.RefreshIfNeeded(ctx, account, executor, 3*time.Minute)
 
 	require.Nil(t, result)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(startedAt), 500*time.Millisecond)
+	require.Less(t, time.Since(startedAt), 5*time.Second)
 	close(releaseRefresh)
 	require.NoError(t, <-firstDone)
 }

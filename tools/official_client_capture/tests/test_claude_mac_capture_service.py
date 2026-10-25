@@ -420,7 +420,7 @@ class NativeCaptureTests(unittest.TestCase):
         self.assertFalse((self.data / "capture" / "reservation.json").exists())
         self.assertFalse((self.data / "capture" / "ready.json").exists())
         with self.assertRaises(OSError):
-            socket.create_connection(("127.0.0.1", self.listener_port), timeout=0.1)
+            socket.create_connection(("127.0.0.1", self.listener_port), timeout=0.1)  # time-threshold: allow 断言的是 OSError：连接被拒绝或超时（TimeoutError 也是 OSError）都满足，机器变慢不会抖红
 
     def _assert_capture_owner_lock_rejected(self, lock: Path) -> None:
         capture = c.private_directory(self.data / "capture")

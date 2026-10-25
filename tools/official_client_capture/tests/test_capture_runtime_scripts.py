@@ -305,7 +305,7 @@ class CaptureRuntimeScriptsTest(unittest.TestCase):
                 self.assertEqual(stopped.returncode, 0, stopped.stderr)
                 self.assertFalse(state_path.exists())
                 with socket.socket() as probe:
-                    probe.settimeout(0.2)
+                    probe.settimeout(0.2)  # time-threshold: allow 停止后的端口探测：连接被拒绝或超时都满足“端口已关闭”，机器变慢只会让探测更晚返回，不会抖红
                     self.assertNotEqual(probe.connect_ex(("127.0.0.1", port)), 0)
 
             failing_mitm = root / "failing-mitmdump.sh"

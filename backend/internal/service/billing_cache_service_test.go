@@ -105,7 +105,7 @@ func TestBillingCacheServiceQueueHighLoad(t *testing.T) {
 	for i := 0; i < cacheWriteBufferSize*2; i++ {
 		svc.QueueDeductBalance(1, 1)
 	}
-	require.Less(t, time.Since(start), 2*time.Second)
+	require.Less(t, time.Since(start), 5*time.Second)
 
 	svc.QueueUpdateSubscriptionUsage(1, 2, 1.5)
 

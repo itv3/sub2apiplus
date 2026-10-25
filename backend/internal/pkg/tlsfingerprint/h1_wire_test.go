@@ -322,7 +322,7 @@ func TestH1WireConnFirstFrameWaitsForConcurrentUpgradeWrite(t *testing.T) {
 	select {
 	case err := <-frameDone:
 		t.Fatalf("请求头的 Write 返回前第一帧已写完（err=%v）：帧被当作请求头缓冲，不会送出", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	close(hold.release)
 	if err := <-headDone; err != nil {

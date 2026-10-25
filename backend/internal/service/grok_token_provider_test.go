@@ -192,7 +192,7 @@ func TestGrokTokenProviderLockHeldTimeoutDoesNotReturnExpiredToken(t *testing.T)
 	cache := &grokTokenCacheForProviderTest{lockResult: false}
 	provider := NewGrokTokenProvider(repo, cache)
 	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache), &tokenRefresherStub{})
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 
 	token, err := provider.GetAccessToken(ctx, account)
@@ -222,7 +222,7 @@ func TestGrokTokenProviderLockHeldRejectsChangedTokenWithoutExpiry(t *testing.T)
 		cache.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	token, err := provider.GetAccessToken(ctx, account)
 

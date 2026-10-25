@@ -225,7 +225,7 @@ class CaptureStopTests(unittest.TestCase):
                 thread = threading.Thread(target=monitor)
                 threads.append(thread)
                 thread.start()
-                self.assertFalse(completed.wait(.05))
+                self.assertFalse(completed.wait(.05))  # time-threshold: allow 反向窗口检查：窗口内不应完成，机器变慢只会让检查更宽松，不会抖红
             return original(path, payload, **kwargs)
         try:
             with mock.patch.object(supervisor, "_write_json", side_effect=write):
