@@ -44,6 +44,13 @@
   不发布。决策收据随清单发布进记录库。执行的单元可以带读集审计（``--audit-reads``，承接的单元以来源记录的读集为准）。
   ``--decide-only --unit-inherit-propose <目录>`` 写出当前上下文与来源集合提案，供两类批准签字。
 
+* **失败单元补跑**（Codex 升级工具优化第 2 项，``run-gates`` 专用；调度配置的 ``retry.enabled`` 打开才生效，缺省关，规则与限制见同目录
+  ``retry_policy.py``）：并行段与独占段都跑完、机器腾空之后，对“执行失败”类（命令正常退出但退出码非 0、测试报告了失败）的失败单元逐个单独补跑一次；
+  通过则并入结论并标注“补跑通过”（汇总行 ``retry``、汇总 ``retry`` 段、运行清单 ``retries``，两次日志都留），同一次运行里补跑再红即判红。
+  超时被杀、读集未闭合、环境失败（信号终止、命令找不到、没写结果文件）不补跑，保持原来的诊断重跑（不改结论）。累计规则：同一单元最近 5 轮只许补跑
+  通过 1 次，第 2 次再红直接判红、不再补跑，按单元 ID 写进记录库的 ``retry-ledger/``。补跑尝试的记录记为“正式执行”（运行清单自检不用改）但永不作
+  承接来源。
+
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
 若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
@@ -142,12 +149,32 @@ _CONTROL_READ_AUDIT: ContextVar[Any] = ContextVar("unit_executor_control_read_au
 #   输入里有没有 declared-inputs-scope 条目」——control 四链的声明与条目里两者都没有，永远走不进去。
 _DECLARED_PROBE: ContextVar[Any] = ContextVar("unit_executor_declared_probe", default=None)
 _DECLARED_RUN: ContextVar[Any] = ContextVar("unit_executor_declared_run", default=None)
+# 失败单元补跑（优化第 2 项）：本次 ``run-gates`` 的调度配置里打开了补跑才为真。补跑策略 ``retry_policy.py`` 决定“什么算通过”，所以打开时
+# 它的字节算进执行器版本（改了它，旧记录整体不可承接）；关闭时执行器版本与改造前逐字相同。
+_RETRY_ACTIVE: ContextVar[bool] = ContextVar("unit_executor_retry_active", default=False)
 
 
 def _executor_files(helper: Path) -> list[Path]:
     """本次执行与首尾核对共同冻结固定sidecar，不给普通默认执行追加合同。"""
     adapter = _CONTROL_READ_AUDIT.get()
     return [helper, *(adapter.sidecar_paths() if adapter is not None else []), *_declared_executor_files()]
+
+
+def _retry_executor_files() -> list[Path]:
+    """打开补跑的运行把补跑策略模块 retry_policy.py的字节也算进执行器版本；没打开（缺省）返回空，执行器版本与改造前逐字相同。"""
+
+    here = Path(__file__).resolve().parent
+    # 补跑策略决定“什么算通过”，是执行器版本的一部分。
+    return [here / "retry_policy.py"] if _RETRY_ACTIVE.get() else []
+
+
+# 补跑打开时执行器版本多算补跑策略文件。用“包一层”的写法而不是改上面那个函数的返回行：control 四链的回归对 _executor_files 的
+# 既有行逐字比较（补跑关闭时返回值与改造前相同）。
+_executor_files_without_retry = _executor_files
+
+
+def _executor_files(helper: Path) -> list[Path]:   # noqa: F811 - 有意重绑定
+    return [*_executor_files_without_retry(helper), *_retry_executor_files()]
 
 
 def _declared_executor_files() -> list[Path]:
@@ -210,6 +237,24 @@ def _audit_module() -> Any:
     return sys.modules[name]
 
 
+def _retry_module() -> Any:
+    """同目录的 retry_policy.py（失败单元补跑策略，优化第 2 项）：同样按路径加载，纯标准库。"""
+
+    name = "retry_policy_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "retry_policy.py")
+        if spec is None or spec.loader is None:
+            raise ExecutorError("找不到同目录的 retry_policy.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
 # ---------------------------------------------------------------------------
 # 调度配置
 # ---------------------------------------------------------------------------
@@ -241,6 +286,8 @@ class ExecutorConfig:
     # 登记必须在配置的 unit_timeouts_basis 里写明依据。超时随单元规格（spec）进入记录与输入比对，所以必须在生成
     # 正式来源之前定好，来源与后继之间不得再改，否则旧记录的规格对不上、无法承接。
     unit_timeouts: dict[str, float] = field(default_factory=dict)
+    # 失败单元补跑（优化第 2 项）：配置里的 ``retry`` 段；没有这一段＝关闭，行为与改造前逐字相同。只对 ``run-gates`` 生效。
+    retry: Any = None
 
 
 def load_config(path: Path) -> ExecutorConfig:
@@ -315,6 +362,10 @@ def load_config(path: Path) -> ExecutorConfig:
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ExecutorError(name + " 必须是有限非负秒数；宽限期可用 null 关闭中止")
+    try:
+        retry = _retry_module().parse_config(payload.get("retry")) if "retry" in payload else None
+    except _retry_module().RetryPolicyError as error:
+        raise ExecutorError(f"调度配置的补跑段非法：{error}") from error
     return ExecutorConfig(
         default_parallelism=parallelism,
         default_quota=quota(payload.get("default_quota") or {}, "default_quota"),
@@ -327,6 +378,7 @@ def load_config(path: Path) -> ExecutorConfig:
         reservation_grace_seconds=float(reservation_grace) if reservation_grace is not None else None,
         reservation_stop_seconds=float(reservation_stop),
         unit_timeouts=unit_timeouts,
+        retry=retry,
     )
 
 
@@ -1330,6 +1382,8 @@ class Running:
     tag: str = ""
     # 后代名册：单元在世期间见过的后代 pid → 启动时间标识（见 Scheduler._remember）。
     known: dict[int, str] = field(default_factory=dict)
+    # 补跑尝试（kind == "retry"）才有：首次尝试的记录与日志摘要、失败类别，写进补跑记录（``retry_of``）。
+    retry_of: dict[str, Any] | None = None
 
 
 @dataclass
@@ -1457,6 +1511,11 @@ class Recorder:
             body.update(inheritable=False, not_inheritable_reason=outcome.extra["declared_not_inheritable"])
         if item.resumed_from:
             body["resumed_from"] = item.resumed_from
+        if item.kind == "retry":
+            # 补跑尝试（优化第 2 项）：记录仍记为“正式执行”（运行清单自检只认正式执行记录），但永不作承接来源，并写明它补的是哪次尝试。
+            # 补跑通过是“抖动后的通过”，不是干净的一次通过，所以不让后续运行当承接依据。
+            body.update(kind="formal", attempt="retry", retry_of=item.retry_of, inheritable=False,
+                        not_inheritable_reason="补跑尝试的记录不作承接来源（首次尝试已失败）")
         if outcome.extra.get("observed_failure"):
             body.update(observed_failure=outcome.extra["observed_failure"], inheritable=False,
                         not_inheritable_reason="预约中止前已登记测试失败，正式失败结论保留")
@@ -2579,6 +2638,8 @@ class Scheduler:
         self.max_cores_in_use = 0.0
         self.resume_validator = resume_validator
         self.deferred: list[tuple[Unit, str]] = []
+        # 补跑阶段用：单元 ID → 首次尝试的引用（见 Running.retry_of）。补跑阶段开始前由 ``_run_retry_phase`` 填好。
+        self.retry_of: dict[str, dict[str, Any]] = {}
         self.attempts: dict[tuple[str, str], int] = {}
         self.interruptions: list[dict[str, Any]] = []
         self._ledger_at = time.monotonic()
@@ -2872,6 +2933,8 @@ class Scheduler:
         pid = os.posix_spawn(executable, argv, env, file_actions=actions, setsid=True)
         self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind, started_at_utc=_utc_now())
         self.running[pid].tag = tag
+        if kind == "retry":
+            self.running[pid].retry_of = self.retry_of.get(unit.unit_id)
         self.running[pid].resumed_from = [row for row in self.interruptions if row["unit_id"] == unit.unit_id and row["kind"] == kind]
         self.max_cores_in_use = max(self.max_cores_in_use, self.cores_in_use())
         self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores, attempt=attempt)
@@ -3103,6 +3166,153 @@ def prepare_shared_bytecode(out_dir: Path, scheduler: Scheduler, *, helper: Path
 
 
 # ---------------------------------------------------------------------------
+# 失败单元补跑（优化第 2 项，规则与限制见 retry_policy.py）
+# ---------------------------------------------------------------------------
+
+
+def classify_outcome(outcome: Outcome) -> str | None:
+    """一次正式执行未通过时的失败类别（执行失败／超时被杀／读集未闭合／环境失败），通过返回 None。"""
+
+    audit = outcome.extra.get("read_audit")
+    return _retry_module().classify_failure(
+        is_command=bool(outcome.unit.command), exit_code=outcome.exit_code, signal=outcome.signal, timed_out=outcome.timed_out,
+        has_result=outcome.result is not None, result_successful=bool((outcome.result or {}).get("successful")),
+        audit_failed=outcome.execution_passed and not outcome.passed and audit is not None,
+        observed_failure=bool(outcome.extra.get("observed_failure")),
+    ) if not outcome.passed else None
+
+
+def _attempt_ref(records: Any, outcome: Outcome) -> dict[str, Any]:
+    digest = records.path_digest(outcome.log_path) if outcome.log_path.exists() else None
+    return _retry_module().attempt_ref(
+        kind=outcome.kind, passed=outcome.passed, exit_code=outcome.exit_code, signal=outcome.signal, timed_out=outcome.timed_out,
+        seconds=outcome.seconds, record_sha256=outcome.extra.get("record_sha256"), record_path=outcome.extra.get("record_path"),
+        log_path=str(outcome.log_path), log_sha256=digest)
+
+
+def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: Any, run_id: str, config: Any,
+                     audited: Any) -> tuple[list[Outcome], list[Outcome], list[Unit], dict[str, dict[str, Any]]]:
+    """并行段与独占段都跑完、机器腾空之后，对失败的单元补跑一次。
+
+    返回（最终的正式结论列表, 补跑尝试列表, 仍要做不改结论的诊断重跑的单元, 单元 ID → 补跑标注）。补跑通过的单元用补跑尝试
+    顶替首次失败的那一次（行里带标注）；补跑仍红、被拒绝、失败类别不可补跑的保持首次失败，同样带标注。补跑尝试一个一个单独
+    跑（``run_alone``），期间不派发别的单元，所以满载引起的抖动不会再重演。"""
+
+    policy, records = _retry_module(), scheduler.recorder.records
+    ledger = None
+    if store is not None:
+        ledger = policy.RetryLedger(policy.default_ledger_root(store.root))
+    markers: dict[str, dict[str, Any]] = {}
+    pending: dict[str, tuple[Outcome, str, dict[str, Any] | None]] = {}
+    for outcome in formal:
+        failure_class = classify_outcome(outcome)
+        if failure_class is None:
+            continue
+        unit = outcome.unit
+        first = _attempt_ref(records, outcome)
+        if failure_class != policy.CLASS_EXECUTION:
+            markers[unit.unit_id] = policy.build_marker(
+                status=policy.STATUS_NOT_RETRIABLE, failure_class=failure_class,
+                reason=f"{policy.CLASS_LABELS[failure_class]}不补跑，保持原来的行为（只做不改结论的诊断重跑）", first_attempt=first,
+                retry_attempt=None, ledger=None)
+            continue
+        allowance: dict[str, Any] | None = None
+        denied = None
+        if ledger is None:
+            denied = "没有记录库，无法累计补跑次数，不补跑"
+        elif unit.command and not unit.reservation_restartable:
+            denied = "命令单元不是可从头重跑的（pre-A3 认证场景等有副作用的单元不补跑）"
+        elif audited(unit):
+            denied = "本次运行对该单元做读集审计，补跑得不到完整读集，不补跑"
+        else:
+            try:
+                allowance = ledger.allowance(unit.unit_id, window_rounds=config.window_rounds, pass_limit=config.pass_limit)
+            except policy.LedgerError as error:
+                denied = f"补跑账本不可用，按拒绝处理：{error}"
+            else:
+                if not allowance["allowed"]:
+                    denied = (f"最近 {allowance['window_rounds']} 轮内已补跑通过 {allowance['prior_retry_passed']} 次"
+                              f"（上限 {allowance['pass_limit']} 次），这次再红直接判红、不再补跑")
+        if denied is not None:
+            markers[unit.unit_id] = policy.build_marker(status=policy.STATUS_DENIED, failure_class=failure_class, reason=denied,
+                                                        first_attempt=first, retry_attempt=None, ledger=allowance)
+            continue
+        pending[unit.unit_id] = (outcome, failure_class, allowance)
+        scheduler.retry_of[unit.unit_id] = {"record_sha256": first["record_sha256"], "record_path": first["record_path"],
+                                            "log_sha256": first["log_sha256"], "failure_class": failure_class}
+    retried: list[Outcome] = []
+    if pending:
+        # 机器此刻是空的（上面两段都已跑完）：逐个单独补跑。
+        retried = scheduler.run_alone([item[0].unit for item in pending.values()], "retry")
+    retry_by_unit = {outcome.unit.unit_id: outcome for outcome in retried}
+    final: list[Outcome] = []
+    entries: list[dict[str, Any]] = []
+    for outcome in formal:
+        unit_id = outcome.unit.unit_id
+        if unit_id in pending:
+            first_outcome, failure_class, allowance = pending[unit_id]
+            attempt = retry_by_unit.get(unit_id)
+            if attempt is None:
+                raise ExecutorError(f"补跑阶段没有拿到单元 {unit_id} 的补跑结果")
+            passed = attempt.passed
+            attempt.extra["retry_of"] = scheduler.retry_of[unit_id]
+            marker = policy.build_marker(
+                status=policy.STATUS_PASSED if passed else policy.STATUS_FAILED, failure_class=failure_class,
+                reason=("首次执行失败，机器腾空后单独补跑一次通过：结论算通过，但单列为补跑通过（两次日志都留）" if passed
+                        else "首次执行失败，补跑仍然失败：判红"),
+                first_attempt=_attempt_ref(records, first_outcome), retry_attempt=_attempt_ref(records, attempt), ledger=allowance)
+            markers[unit_id] = marker
+            winner = attempt if passed else first_outcome
+            winner.extra["retry"] = marker
+            final.append(winner)
+            entries.append({"unit_id": unit_id, "run_id": run_id, "completed_at_utc": _utc_now(),
+                            "outcome": policy.STATUS_PASSED if passed else policy.STATUS_FAILED, "failure_class": failure_class})
+            continue
+        if unit_id in markers:
+            outcome.extra["retry"] = markers[unit_id]
+        final.append(outcome)
+    if ledger is not None and entries:
+        # 补跑的结局立即落账（不等整轮结束）：整轮中途崩溃也不会让“补跑通过过一次”的记忆丢失而被绕过累计规则。
+        ledger.append(entries)
+    diagnostic_units = [outcome.unit for outcome in formal if not outcome.execution_passed and outcome.unit.unit_id not in pending]
+    return final, retried, diagnostic_units, markers
+
+
+def _attach_retry_summary(summary: dict[str, Any], outcomes: list[Outcome], gates: list[Gate], config: Any) -> None:
+    """打开补跑的运行：门禁项行带 ``retry_passed_units``（门禁项通过，但其中这几个单元是补跑才通过的，单列不静默放行），汇总带 ``retry`` 段。
+    作为汇总之后的后处理而不是改汇总函数：补跑关闭时汇总与改造前逐字相同。"""
+
+    passed = {o.unit.unit_id for o in outcomes if (o.extra.get("retry") or {}).get("status") == "retry-passed"}
+    for gate_row, gate in zip(summary["gates"], gates):
+        members = list(gate.units) + [row["unit_id"] for row in summary["units"] if row.get("group_id") in gate.test_groups]
+        gate_row["retry_passed_units"] = sorted(unit_id for unit_id in members if unit_id in passed)
+    summary["retry"] = _retry_module().summarize_markers(summary["units"], config=config)
+
+
+def _manifest_with_retries(records: Any, manifest: dict[str, Any], attempts: list[Outcome]) -> dict[str, Any]:
+    """运行清单另列 ``retries``：逐个补跑过的单元写明补跑尝试与首次尝试各自的记录（补跑通过的单元在 ``units`` 里引用补跑尝试的记录并带标注）。
+    重新封存清单自摘要；补跑关闭时不调用，清单与改造前逐字相同。"""
+
+    retries = [{"unit_id": o.unit.unit_id, "record_sha256": o.extra.get("record_sha256"), "record_path": o.extra.get("record_path"),
+                "passed": o.passed, "of": (o.extra.get("retry_of") or {}).get("record_sha256"),
+                "of_record_path": (o.extra.get("retry_of") or {}).get("record_path")} for o in attempts]
+    return records.seal({**{key: value for key, value in manifest.items() if key != "manifest_sha256"}, "retries": retries}, "manifest_sha256")
+
+
+def _record_round_in_ledger(final: list[Outcome], *, store: Any, run_id: str, already: set[str]) -> None:
+    """整轮结束：把其余真正执行过的单元的结局（通过／失败）也记进账本，窗口里的“轮”才数得准（承接的单元这一轮没有执行，不记）。"""
+
+    if store is None:
+        return
+    policy = _retry_module()
+    ledger = policy.RetryLedger(policy.default_ledger_root(store.root))
+    ledger.append({"unit_id": outcome.unit.unit_id, "run_id": run_id, "completed_at_utc": outcome.completed_at_utc or _utc_now(),
+                   "outcome": policy.OUTCOME_PASSED if outcome.passed else policy.OUTCOME_FAILED}
+                  for outcome in final
+                  if outcome.unit.unit_id not in already and outcome.extra.get("disposition", "executed") == "executed")
+
+
+# ---------------------------------------------------------------------------
 # 汇总与全集核对
 # ---------------------------------------------------------------------------
 
@@ -3113,6 +3323,9 @@ def _disposition(outcome: Outcome) -> dict[str, Any]:
     row = {"disposition": outcome.extra.get("disposition", "executed"), "record_sha256": outcome.extra.get("record_sha256")}
     if outcome.extra.get("inherited_from"):
         row["inherited_from"] = outcome.extra["inherited_from"]
+    if outcome.extra.get("retry"):
+        # 补跑标注（优化第 2 项，只有打开补跑的运行才有）：补跑通过、补跑仍红、补跑被拒绝、失败类别不可补跑，逐单元写明。
+        row["retry"] = outcome.extra["retry"]
     return row
 
 
@@ -3548,6 +3761,15 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
     for item in summary["diagnostic"]:
         verdict = "单独重跑通过" if item["passed"] else "单独重跑仍失败"
         print(f"诊断重跑（不改结论）：{item['unit_id']} {verdict}（日志 {item['log']}）", file=sys.stderr)
+    retry = summary.get("retry") or {}
+    for unit_id in retry.get("retry_passed", []):
+        marker = retry["units"][unit_id]
+        print(f"补跑通过（算入结论，单列）：{unit_id}（首次失败日志 {marker['first_attempt']['log']}；补跑日志 {marker['retry_attempt']['log']}）", file=sys.stderr)
+    for unit_id in retry.get("retry_failed", []):
+        marker = retry["units"][unit_id]
+        print(f"补跑仍失败（判红）：{unit_id}（补跑日志 {marker['retry_attempt']['log']}）", file=sys.stderr)
+    for unit_id in retry.get("retry_denied", []):
+        print(f"补跑被拒绝（判红）：{unit_id}：{retry['units'][unit_id]['reason']}", file=sys.stderr)
     for group_id, group in summary["test_groups"].items():
         for key, label in (("missing", "缺报"), ("duplicated", "重复上报"), ("unexpected", "全集之外"), ("units_not_run", "未执行的单元")):
             if group["full_set"][key]:
@@ -3739,6 +3961,8 @@ def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, stor
             entry["basis"] = outcome.extra["inherited_from"]
         else:
             entry["reasons"] = list(decisions[unit.unit_id].reasons)
+        if outcome is not None and outcome.extra.get("retry"):
+            entry["retry"] = outcome.extra["retry"]
         entries.append(entry)
     inherited = [outcome for outcome in outcomes if outcome.extra.get("disposition") == "inherited"]
     return records.build_manifest(
@@ -3776,9 +4000,11 @@ def _run_gates(args: argparse.Namespace) -> int:
     token = _CONTROL_READ_AUDIT.set(None)
     # 声明级承接的两个上下文变量同样只活在本次调用里：探测工厂复位成调用前的值（测试可以预先设成带假 runner 的工厂），运行上下文清空。
     declared_tokens = (_DECLARED_PROBE.set(_DECLARED_PROBE.get()), _DECLARED_RUN.set(None))
+    retry_token = _RETRY_ACTIVE.set(False)   # 补跑开关同样只活在本次调用里（调度配置打开补跑时由 _run_gates_current 置位）
     try:
         return _run_gates_current(args)
     finally:
+        _RETRY_ACTIVE.reset(retry_token)
         _CONTROL_READ_AUDIT.reset(token)
         _DECLARED_RUN.reset(declared_tokens[1])
         _DECLARED_PROBE.reset(declared_tokens[0])
@@ -3808,6 +4034,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
     if not 0 < max_age <= records.MAX_AGE_HOURS:
         raise ExecutorError(f"承接期限只能在 0～{records.MAX_AGE_HOURS:g} 小时之间（只能调小）")
     config = load_config(args.config)
+    # 失败单元补跑（优化第 2 项）：调度配置里 retry.enabled 为真才打开；要在算执行器版本之前置位（打开时 retry_policy.py 算进执行器版本）。
+    retry_config = config.retry if config.retry is not None and config.retry.enabled else None
+    _RETRY_ACTIVE.set(retry_config is not None)
     weights = load_weights(args.weights)
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
@@ -4152,15 +4381,32 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             auditor.inherited = frozenset(unit.unit_id for unit in units if decisions[unit.unit_id].inherit)
         formal = scheduler.run_parallel([u for u in to_run if not u.exclusive], "formal")
         formal += scheduler.run_alone([u for u in to_run if u.exclusive], "formal")
-        # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
-        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")
+        retry_attempts: list[Outcome] | None = None
+        if retry_config is not None:
+            # 失败单元补跑（优化第 2 项）：只补跑“执行失败”类、账本放行的单元，机器腾空后逐个单独跑一次；通过的并入结论并标注，
+            # 仍红的判红。读集未闭合、超时、环境失败的单元不补跑，保持原来的诊断重跑（不改结论）。
+            def _audited(unit: Unit) -> bool:
+                active = scheduler.auditor
+                return active is not None and (not getattr(active, "declared_only", False) or active.handles_declared(unit))
+
+            formal, retry_attempts, diagnostic_units, _markers = _run_retry_phase(
+                scheduler, formal, store=store, run_id=run_id, config=retry_config, audited=_audited)
+            diagnostic = scheduler.run_alone(diagnostic_units, "diagnostic")
+            _record_round_in_ledger(formal, store=store, run_id=run_id, already={o.unit.unit_id for o in retry_attempts})
+        else:
+            # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
+            diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")
         inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store) for unit in units if decisions[unit.unit_id].inherit]
         outcomes = formal + inherited
         summary = summarize_gates(groups, group_units, expected, command_units, gates, outcomes, diagnostic, time.monotonic() - started, policy)
+        if retry_config is not None:
+            _attach_retry_summary(summary, outcomes, gates, retry_config)
         unit_manifest = _unit_manifest(records, run_id=run_id, mode=args.mode, max_age=max_age, store=store, out_dir=out_dir,
                                        decided_at=decided_at, policy=policy, environment=environment, executor=executor, units=units,
                                        gates=gates, group_units=group_units, expected=expected, currents=currents, decisions=decisions,
                                        outcomes=outcomes, diagnostic=diagnostic)
+        if retry_attempts is not None:
+            unit_manifest = _manifest_with_retries(records, unit_manifest, retry_attempts)
         if full_set_verdict is not None:
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
                                           decision_key: full_set_verdict}, "manifest_sha256")

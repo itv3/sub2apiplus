@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 114,
+  "file_count": 115,
   "files": [
     {
       "path": "README.md",
@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "be7e6a6d9041796644e04e883ff8ce2d4b440ed19dc7b44d8fecd3a49eb9caef",
+      "sha256": "09711501951421900e1b84126f16e1ea959ab493593bb965e882104cda46a1b0",
       "mode": "0700",
-      "bytes": 154658
+      "bytes": 159802
     },
     {
       "path": "driver/build.sh",
@@ -190,15 +190,15 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "c72b89c668989ecb04f90ceaad8abe3c3554c3c16fc4f304799d450653c1afee",
+      "sha256": "0f75ca753207e9e723e40e53eb164f2b49e1d774d09f2613ef6fde84747581f1",
       "mode": "0700",
-      "bytes": 182093
+      "bytes": 182862
     },
     {
       "path": "driver/entry_housekeeping.py",
-      "sha256": "09f21b36639ddf8ad59602416a587680172e7c790f7895993096e6f9ec70b722",
+      "sha256": "9498504ca6253bed7a1f3c803932c8df0860d4fca7ad1e268daf230520820fba",
       "mode": "0700",
-      "bytes": 37957
+      "bytes": 38476
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -387,6 +387,12 @@
       "bytes": 127541
     },
     {
+      "path": "driver/retry_policy.py",
+      "sha256": "e5013a35a80ee6e1753f654d23999c684a3017ebaf4018f100fefb382d98e743",
+      "mode": "0700",
+      "bytes": 21193
+    },
+    {
       "path": "driver/round_context.py",
       "sha256": "af9407ef022e673dc1b1f228719e9a91b7939b4ca6968d4cc2fb4fec0a4d402d",
       "mode": "0700",
@@ -430,15 +436,15 @@
     },
     {
       "path": "driver/unit_executor.json",
-      "sha256": "7500f5ec4572fb6e2d88cb8f4a3b66d553c13180bfd72b141b34e748964907a0",
+      "sha256": "c3bc01b8fb73f32f8dea4dc73a947d9be2ffb238337767a05d99a9c813d0214c",
       "mode": "0600",
-      "bytes": 16724
+      "bytes": 16807
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "6ab9a69743215a49939436889770a8a6df3e36a759a9fe41dce3fe1774e15c0a",
+      "sha256": "ea31081132052fb398d85d3d674405653d3d71570f7edd47b379a0345dd4e9e7",
       "mode": "0700",
-      "bytes": 284398
+      "bytes": 301660
     },
     {
       "path": "driver/unit_inherit.py",
@@ -687,5 +693,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "f0beed8d0f088f35eb85aea47f2371f122ee96cd1247f4522d9d1908d7c22dbe"
+  "manifest_sha256": "92f2eed65e25c9abcf2932491517d55c6992f485665276b8e0cd1bc3270ae619"
 }

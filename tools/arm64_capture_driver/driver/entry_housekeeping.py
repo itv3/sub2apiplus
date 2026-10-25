@@ -397,7 +397,11 @@ def gc_record_store(store: Path, *, reference_roots: Iterable[Path], retention_h
                 continue
             keep.add(path)
             manifest = records._read_json(path) or {}
-            for entry in [*(manifest.get("units") or []), *(manifest.get("diagnostic") or [])]:
+            # 补跑尝试（优化第 2 项）：补跑记录与它的首次失败记录都留着（补跑仍红的单元，清单 units 里引用的是首次失败那一条）。
+            retry_entries = [item for entry in (manifest.get("retries") or []) if isinstance(entry, Mapping)
+                             for item in (entry, {"unit_id": entry.get("unit_id"), "record_sha256": entry.get("of"),
+                                                  "record_path": entry.get("of_record_path")})]
+            for entry in [*(manifest.get("units") or []), *(manifest.get("diagnostic") or []), *retry_entries]:
                 if not isinstance(entry, Mapping):
                     continue
                 unit_id, digest = entry.get("unit_id"), entry.get("record_sha256")

@@ -867,7 +867,7 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': 'be7e6a6d9041796644e04e883ff8ce2d4b440ed19dc7b44d8fecd3a49eb9caef'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '09711501951421900e1b84126f16e1ea959ab493593bb965e882104cda46a1b0'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',
@@ -902,7 +902,7 @@ CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
 CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'c72b89c668989ecb04f90ceaad8abe3c3554c3c16fc4f304799d450653c1afee'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '0f75ca753207e9e723e40e53eb164f2b49e1d774d09f2613ef6fde84747581f1'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '4f45830872e05e732b507db210bf861f34f4bd7b752f4d2763e0c1e5732e1f2b'}
@@ -919,7 +919,7 @@ CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '6ab9a69743215a49939436889770a8a6df3e36a759a9fe41dce3fe1774e15c0a'}
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'ea31081132052fb398d85d3d674405653d3d71570f7edd47b379a0345dd4e9e7'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
         '            for member in [pid, *_session_members(pid)]:',
         '                    os.kill(member, signal.SIGKILL)',
@@ -955,6 +955,8 @@ CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(
         '                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age))',
         '                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:',
         '                or records.executor_version([args.bytecode_helper]) != recorder.executor',
+        '        # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。',
+        '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
 CLOSEOUT_PY_7_BASELINE = 'df90c329e3ba2b659ac7667b897e38a7a35d6269'
 CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '04056c95428c8d94d10290e14f403a36352935088e94b230a33976caea9312fc'}

@@ -37,6 +37,7 @@ if __package__ in {None, ""}:
 
 from tools.arm64_capture_driver.driver import fix_safety as safety
 from tools.ci import client_table
+from tools.ci import retry_policy
 
 GUIDE = "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 PART2 = "# 第二部分 Codex CLI 客户端规则画像"
@@ -754,11 +755,13 @@ def check_gate_result(plan):
     if (manifest.get("schema_version") != entry_gates.GATES_SCHEMA or manifest.get("profile") != "full-gates"
             or {r.get("gate_id") for r in manifest.get("gates", [])} != expected):
         raise CloseoutError("门禁执行清单不完整")
+    gate_retry_passed = set()
     for row in rows:
         if row.get("status") != "passed" or row.get("exit_code") != 0:
             raise CloseoutError("存在未通过的收尾门禁")
         path = inside(root, row["gate_json"])
         result = safety.read(path)
+        gate_retry_passed.update(result.get("retry_passed_units") or [])
         command, directory = entry_gates.GATE_COMMANDS[row["gate_id"]]
         if (result.get("gate_id") != row["gate_id"] or result.get("status") != "passed"
                 or result.get("exit_code") != 0 or result.get("failed_units")
@@ -779,6 +782,14 @@ def check_gate_result(plan):
                    or row.get("missing") for row in summary.get("units", []))
             or not summary.get("units")):
         raise CloseoutError("执行器存在未运行、失败或承接单元")
+    # 失败单元补跑（优化第 2 项）：补跑通过的单元算通过，但必须带自洽的标注、两次日志都在盘上且摘要相符、汇总与门禁记录一致；
+    # 不静默放行——任何一处对不上都按收尾门禁未通过处理。发布汇报从 gate_retry_summary 取单列的补跑通过名单。
+    retry_problems = retry_policy.summary_problems(summary, require_files=True)
+    retry_block = summary.get("retry") if isinstance(summary.get("retry"), dict) else {}
+    if retry_problems or sorted(retry_block.get("retry_passed") or []) != sorted(gate_retry_passed):
+        raise CloseoutError("收尾门禁的补跑标注不自洽或与门禁记录不一致：" + "；".join(retry_problems[:5] or ["补跑通过名单不一致"]))
+    if retry_block.get("retry_failed") or retry_block.get("retry_denied"):
+        raise CloseoutError("收尾门禁存在补跑仍失败或被拒绝补跑的单元")
     group_ids = {row["group_id"] for row in manifest.get("test_groups", [])}
     groups = summary.get("test_groups", {})
     if set(groups) != group_ids:
@@ -801,7 +812,27 @@ def check_gate_result(plan):
         if not log.is_relative_to(root):
             raise CloseoutError("单元日志不在本轮门禁目录")
         files.append(log)
+        # 补跑通过的单元：首次失败那次的日志也是证据，同样进索引（两次日志都留）。
+        first_log = ((row.get("retry") or {}).get("first_attempt") or {}).get("log")
+        if row.get("retry") and first_log:
+            first = safety.plain(first_log)
+            if not first.is_relative_to(root):
+                raise CloseoutError("补跑单元的首次尝试日志不在本轮门禁目录")
+            files.append(first)
     return {str(path): safety.file_binding(path)["sha256"] for path in sorted(set(files))}
+
+
+def gate_retry_summary(plan):
+    """收尾门禁里补跑通过的单元（优化第 2 项）：发布汇报要单列写明。先走 ``check_gate_result`` 的全部校验，再取名单与两次尝试的日志。"""
+    check_gate_result(plan)
+    root = Path(plan["basis"]["config"]["work_root"]) / "gates"
+    entry = safety.read(root / "entry-gates.json")
+    summary = safety.read(safety.plain(entry["executor_summary"]))
+    block = summary.get("retry") or {}
+    return [{"unit_id": unit_id, "first_attempt_log": block["units"][unit_id]["first_attempt"]["log"],
+             "retry_attempt_log": block["units"][unit_id]["retry_attempt"]["log"],
+             "window_rounds": block.get("window_rounds"), "pass_limit": block.get("pass_limit")}
+            for unit_id in block.get("retry_passed", [])]
 
 
 def run_gates(plan_path):
@@ -840,7 +871,9 @@ def run_gates(plan_path):
                 raise CloseoutError("收尾全量门禁失败，正式发布仍关闭；日志已保留")
             files = check_gate_result(plan)
         load_plan(plan_path)
-        return journal(plan, "gates", "done", {"status": "passed", "files": files})
+        # 补跑通过的单元（优化第 2 项）单列进完成占位，发布汇报据此写明“全绿，允许单次抖动补跑”；没有补跑时占位与改造前逐字相同。
+        retried = gate_retry_summary(plan)
+        return journal(plan, "gates", "done", {"status": "passed", "files": files, **({"retry_passed": retried} if retried else {})})
 
 
 def check_action_result(plan, name):
@@ -1002,10 +1035,13 @@ def publish(plan_path, approvals):
         receipts = {name: safety.file_binding(work / "journal" / (name + "-done.json"))
                     for name in ("gates", "deployment_check", "integrate", "cleanup", "push")}
         completed = datetime.now(timezone.utc)
+        retried = (journal_read(plan, "gates", "done") or {}).get("retry_passed")
         return journal(plan, "publish", "done", {"status": "passed", "receipts": receipts,
                      "completed_at_utc": completed.isoformat(), "started_at_utc": plan["started_at_utc"],
                      "wall_seconds": (completed - datetime.fromisoformat(plan["started_at_utc"])).total_seconds(),
-                     "performance_claim": False})
+                     "performance_claim": False,
+                     # 全绿但其中有补跑通过的单元（允许单次抖动补跑，优化第 2 项）：发布汇报必须写明，不静默放行。
+                     **({"gate_retry_passed": retried} if retried else {})})
 
 
 def main(argv=None):

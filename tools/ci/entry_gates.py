@@ -2374,6 +2374,8 @@ def export_records(
             "executor_summary": str(summary_path), "inputs": inputs, "inputs_sha256": steps.inputs_sha256(inputs),
             # E3-01：本门禁项承接的单元（起止时间只算本次执行的单元）与运行模式。
             "mode": mode, "inherited_units": list(row.get("inherited_units") or []),
+            # 优化第 2 项：打开补跑的运行才有这个键；门禁项通过但其中这几个单元是补跑才通过的，单列、不静默放行。
+            **({"retry_passed_units": list(row["retry_passed_units"])} if "retry_passed_units" in row else {}),
         })
         _write(out / "logs" / f"{gate_id}.gate.json", record)
         records[gate_id] = record
@@ -2488,6 +2490,11 @@ def export_records(
         # E3-04：读集审计（带 --audit-reads 时才有）：结论、有未声明读取的单元与明细位置。
         "read_audit": summary.get("read_audit"),
     }
+    if isinstance(summary.get("retry"), dict):
+        # 优化第 2 项：补跑（打开时才有）。总摘要只列规则与单元清单；两次尝试的记录与日志摘要在执行器汇总的 retry.units 里。
+        retry = summary["retry"]
+        entry["retry"] = {key: retry.get(key) for key in ("schema_version", "enabled", "window_rounds", "pass_limit", "retry_passed",
+                                                         "retry_failed", "retry_denied", "not_retriable")}
     if all(gate_id in records for gate_id in MAKE_TEST_GATES + FULL_GATES_EXTRA):
         order = ("full-regression",) + FULL_GATES_EXTRA
         entry["full_gates_summary"] = _write(out / "full-gates-summary.json", {

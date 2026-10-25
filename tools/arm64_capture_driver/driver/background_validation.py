@@ -60,6 +60,11 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 ``check-boundary``／``require-passed`` 按 ``--client`` 取该客户端当前部署收据所绑定的结论：先找本 RUNROOT，再找数据根的登记。
 只有一个客户端纳管时结论、文件名与命令行与改造前逐字相同（不写 ``deployments``，不登记）。
 
+失败单元补跑（Codex 升级工具优化第 2 项）：执行器在调度配置打开补跑时，对“执行失败”类的失败单元在机器腾空后单独补跑一次，通过则算入门禁结论并标注
+“补跑通过”。结论文件因此多一个键 ``retry_passed_units``（只在有补跑通过的单元时出现：单元、首次失败日志、补跑日志、累计窗口），``check-boundary``／
+``require-passed``（VC-5 统一准入 ``vc5_admission.state`` 也经 ``check`` 取同一份判定）的提示单列这些单元，并在判定时按执行器汇总重放标注（含两次
+日志的摘要）——标注被改写、被藏起来、日志缺失，结论就不是通过，不静默放行。补跑关闭或没有补跑时结论与改造前逐字相同。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
@@ -1813,6 +1818,50 @@ def _entry_summary(out: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _retry_policy() -> Any:
+    """同目录的 retry_policy.py（失败单元补跑策略，优化第 2 项）：按路径加载，纯标准库。"""
+
+    name = "retry_policy_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "retry_policy.py")
+        if spec is None or spec.loader is None:
+            raise ValidationError(f"找不到同目录的 retry_policy.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def retry_report(out: Path | str) -> dict[str, Any]:
+    """后台验证一次运行里的补跑情况（优化第 2 项）：读入口门禁总摘要指向的执行器汇总，自检补跑标注（含两次日志在盘且摘要相符）。
+
+    返回 ``{"enabled", "passed_units", "failed_units", "problems"}``。``passed_units`` 每项带单元、首次失败日志、补跑日志与累计窗口，
+    结论文件据此单列；``problems`` 非空时调用方不得把结论标成通过（标注被改写、被藏起来、日志缺失都算）。补跑关闭或没有补跑的运行
+    ``passed_units`` 为空，不产生任何问题。"""
+
+    entry = _entry_summary(Path(out))
+    summary = None
+    if entry is None or not entry.get("executor_summary"):
+        # 入口门禁总摘要没有指向执行器汇总（不是真实导出的总摘要，如测试替身）：没有补跑信息可核，行为与改造前相同。
+        return {"enabled": False, "passed_units": [], "failed_units": [], "problems": []}
+    try:
+        summary = json.loads(Path(str(entry["executor_summary"])).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        summary = None
+    if not isinstance(summary, dict):
+        return {"enabled": False, "passed_units": [], "failed_units": [], "problems": ["读不到执行器汇总，无法核对补跑标注"]}
+    policy = _retry_policy()
+    problems = policy.summary_problems(summary, require_files=True)
+    block = summary.get("retry") if isinstance(summary.get("retry"), dict) else {}
+    units = block.get("units") if isinstance(block.get("units"), dict) else {}
+    passed = [{"unit_id": unit_id, "first_attempt_log": units.get(unit_id, {}).get("first_attempt", {}).get("log"),
+               "retry_attempt_log": (units.get(unit_id, {}).get("retry_attempt") or {}).get("log"),
+               "window_rounds": block.get("window_rounds"), "pass_limit": block.get("pass_limit")}
+              for unit_id in block.get("retry_passed", [])]
+    return {"enabled": bool(block.get("enabled")), "passed_units": passed, "failed_units": list(block.get("retry_failed", [])),
+            "problems": problems}
+
+
 def run(result: Path) -> int:
     path = Path(result)
     payload = _read(path)
@@ -1921,6 +1970,14 @@ def run(result: Path) -> int:
         status, reason = "passed", None
     else:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
+    if status == "passed":
+        # 失败单元补跑（优化第 2 项）：补跑通过的单元算入结论，但必须单列在结论里；标注自检不通过（被改写、被藏起来、日志缺失）
+        # 就不是通过——结论不静默放行。补跑关闭或没有补跑时结论与改造前逐字相同。
+        retried = retry_report(payload["out"])
+        if retried["problems"]:
+            status, reason = "failed", "补跑标注自检不通过：" + "；".join(retried["problems"][:5])
+        elif retried["passed_units"]:
+            current = {**current, "retry_passed_units": retried["passed_units"]}
     if status == "passed" and current.get("unit_inherit_request"):
         try:
             current = {**current, "unit_inherit_consumption": _inherit_completion(current)}
@@ -2064,6 +2121,15 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
                 return 0, (f"后台验证通过（{where}）；跨提交后继：承接 {summary.get('inherited')} 个、重跑 {summary.get('executed')} 个"
                            + ("（没有任何单元被承接，实际是整套重新执行）" if summary.get("outcome") == "full_rerun" else "")
                            + _ancestry_note(payload.get("unit_inherit_source")))
+        retried = payload.get("retry_passed_units")
+        if retried:
+            # 结论带补跑通过的单元（优化第 2 项）：不能只信 passed 标签，按执行器汇总重放标注（含两次日志的摘要）；对不上就不放行。
+            replay = retry_report(payload.get("out") or "")
+            registered = sorted(str(item.get("unit_id")) for item in retried if isinstance(item, Mapping))
+            if replay["problems"] or sorted(item["unit_id"] for item in replay["passed_units"]) != registered:
+                reasons = replay["problems"] or ["结论登记的补跑通过名单与执行器汇总不一致"]
+                return 3, f"后台验证的补跑标注不能重放（{where}）：{'；'.join(reasons[:5])}"
+            return 0, f"后台验证通过（{where}）；其中补跑通过的单元 {len(registered)} 个（首次失败后单独补跑一次通过，已单列）：{'、'.join(registered[:8])}"
         return 0, f"后台验证通过（{where}）"
     if status == "failed":
         return 3, f"后台验证失败（没通过的门禁项 {payload.get('failed_gates')}；{where}）：拒绝派发下一批，修好、定向回归、部署后重新 start"

@@ -347,6 +347,119 @@ class CloseoutTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(closeout.CloseoutError):
                 closeout.check_gate_result(self.plan)
 
+    def make_retry_passed(self, unit="backend-go-test"):
+        """把收尾门禁夹具里一个单元改成“首次失败、补跑通过”：两次日志落盘、标注与汇总／门禁记录一致（优化第 2 项）。"""
+        from tools.ci import retry_policy
+        root = self.work / "gates"
+        path = root / "executor/summary.json"
+        summary = json.loads(path.read_text())
+        row = next(item for item in summary["units"] if item["unit_id"] == unit)
+        first_log = root / "executor" / (unit + ".first.log")
+        first_log.write_text("首次失败的日志\n")
+        retry_log = Path(row["log"])
+
+        def digest(file):
+            return closeout.sha(file.read_bytes())
+
+        marker = retry_policy.build_marker(
+            status="retry-passed", failure_class="execution", reason="夹具",
+            first_attempt=retry_policy.attempt_ref(kind="formal", passed=False, exit_code=1, signal=None, timed_out=False, seconds=1.0,
+                                                   record_sha256="a" * 64, record_path="x", log_path=str(first_log), log_sha256=digest(first_log)),
+            retry_attempt=retry_policy.attempt_ref(kind="retry", passed=True, exit_code=0, signal=None, timed_out=False, seconds=1.0,
+                                                   record_sha256="b" * 64, record_path="y", log_path=str(retry_log), log_sha256=digest(retry_log)),
+            ledger={"allowed": True, "window_rounds": 5, "pass_limit": 1, "prior_retry_passed": 0, "recent": []})
+        row.update(kind="retry", retry=marker)
+        summary["retry"] = retry_policy.summarize_markers(summary["units"], config=retry_policy.RetryConfig(enabled=True))
+        write_json(path, summary)
+        gate_path = root / "logs" / (unit + ".gate.json")
+        gate = json.loads(gate_path.read_text())
+        write_json(gate_path, {**gate, "retry_passed_units": [unit]})
+        return path, gate_path, first_log, marker
+
+    def test_retry_passed_unit_is_accepted_but_listed_with_both_logs(self):
+        self.prepare()
+        self.gate_result()
+        _path, _gate, first_log, _marker = self.make_retry_passed()
+        files = closeout.check_gate_result(self.plan)
+        self.assertIn(str(first_log), files, "首次失败的日志也进不可变证据索引")
+        listed = closeout.gate_retry_summary(self.plan)
+        self.assertEqual([item["unit_id"] for item in listed], ["backend-go-test"])
+        self.assertEqual((listed[0]["window_rounds"], listed[0]["pass_limit"]), (5, 1))
+
+    def test_retry_passed_is_recorded_in_the_gates_done_journal_and_the_release_receipt(self):
+        self.prepare()
+        # 夹具先造出补跑通过的汇总，再让 run_gates 走“已有输出完备则确认原运行”的分支，完成占位应单列补跑名单。
+        closeout.journal(self.plan, "gates", "started", {"fixture": True})
+        self.gate_result_files_only()
+        self.make_retry_passed()
+        done = closeout.run_gates(self.plan_path)
+        self.assertEqual([item["unit_id"] for item in done["retry_passed"]], ["backend-go-test"])
+
+    def gate_result_files_only(self):
+        """只写门禁输出文件，不走 run_gates（先造补跑再确认）。"""
+        root = self.work / "gates"
+        rows, manifest_rows, units = [], [], []
+        for name in entry_gates.profile_gates("full-gates"):
+            command, directory = entry_gates.GATE_COMMANDS[name]
+            log = root / "executor" / (name + ".log")
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text("隔离结果夹具\n")
+            write_json(root / "logs" / (name + ".gate.json"), {
+                "gate_id": name, "command": command, "working_directory": directory, "status": "passed", "exit_code": 0,
+                "tree_head": self.plan["candidate_commit"], "mode": "re-execute", "failed_units": [], "inherited_units": [],
+                "started_at_utc": "2026-10-05T00:00:00Z", "completed_at_utc": "2026-10-05T00:01:00Z"})
+            rows.append({"gate_id": name, "status": "passed", "exit_code": 0, "gate_json": "logs/" + name + ".gate.json"})
+            manifest_rows.append({"gate_id": name, "units": [name]})
+            units.append({"unit_id": name, "passed": True, "exit_code": 0, "orphans": 0, "log": str(log)})
+        write_json(root / "entry-gates.json", {"schema_version": entry_gates.ENTRY_SUMMARY_SCHEMA, "status": "passed", "profile": "full-gates",
+                   "mode": "re-execute", "source": {"commit": self.plan["candidate_commit"], "tree_head": self.plan["candidate_commit"]},
+                   "gates": rows, "executor_summary": str(root / "executor/summary.json")})
+        write_json(root / "gates-manifest.json", {"schema_version": entry_gates.GATES_SCHEMA, "profile": "full-gates", "gates": manifest_rows,
+                   "units": [{"unit_id": row["unit_id"]} for row in units]})
+        write_json(root / "executor/summary.json", {"schema_version": entry_gates.GATES_SUMMARY_SCHEMA, "status": "passed", "mode": "re-execute",
+                   "units": units, "units_not_run": [], "test_groups": {}})
+
+    def test_forged_or_hidden_retry_cannot_pass_the_closeout_gate(self):
+        self.prepare()
+        self.gate_result()
+        path, gate_path, first_log, marker = self.make_retry_passed()
+        good_summary, good_gate = path.read_text(), gate_path.read_text()
+
+        def restore():
+            path.write_text(good_summary)
+            gate_path.write_text(good_gate)
+            first_log.write_text("首次失败的日志\n")
+
+        def hide_block(summary, _gate):
+            del summary["retry"]
+
+        def drop_gate_record(_summary, gate):
+            gate.pop("retry_passed_units")
+
+        def deny_listed(summary, _gate):
+            summary["retry"]["retry_denied"] = ["backend-lint"]
+
+        def wrong_class(summary, _gate):
+            summary["units"][0 if summary["units"][0]["unit_id"] == "backend-go-test" else 1]["retry"]["failure_class"] = "timeout"
+
+        for label, mutate in {"藏起补跑段": hide_block, "门禁记录漏列": drop_gate_record, "被拒绝补跑": deny_listed, "类别被改": wrong_class}.items():
+            with self.subTest(label):
+                restore()
+                summary, gate = json.loads(path.read_text()), json.loads(gate_path.read_text())
+                mutate(summary, gate)
+                write_json(path, summary)
+                write_json(gate_path, gate)
+                with self.assertRaises(closeout.CloseoutError):
+                    closeout.check_gate_result(self.plan)
+        restore()
+        first_log.write_text("被换掉的首次日志\n")
+        with self.subTest("首次日志被换"), self.assertRaises(closeout.CloseoutError):
+            closeout.check_gate_result(self.plan)
+        restore()
+        first_log.unlink()
+        with self.subTest("首次日志缺失"), self.assertRaises(closeout.CloseoutError):
+            closeout.check_gate_result(self.plan)
+
     def test_gate_log_tamper_blocks_publication(self):
         self.prepare()
         self.gate_result()

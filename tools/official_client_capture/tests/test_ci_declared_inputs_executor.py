@@ -2756,6 +2756,11 @@ class ControlInvariantTests(unittest.TestCase):
                 "                            continue",
                 "                        if state not in ('Z', 'X'):",
                 "                            active.append(member)",
+                # 以下 2 行是失败单元补跑（优化第 2 项）对 run-gates 诊断重跑的必要改写：补跑打开时（调度配置 retry.enabled，缺省关）先对“执行失败”类单元
+                # 补跑一次，补跑过的单元不再做第三次诊断重跑，所以诊断重跑的单元清单由补跑阶段给出；补跑关闭时这两行原样保留（挪进 else 分支，行文不变，
+                # 缩进随分支变化）——control 四链走的就是补跑关闭的分支，诊断重跑的清单与改造前相同。
+                "        # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。",
+                '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
             ],
             "tools/ci/entry_gates.py": [
                 "DECLARED_REQUIRE_OFFLINE = False",
