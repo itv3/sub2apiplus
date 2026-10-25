@@ -87,6 +87,20 @@ func openAIWSHTTPFallbackPinKeyOf(apiKeyID int64, sessionID string) openAIWSHTTP
 	return key
 }
 
+// pinEntryOf 取出链表节点里的条目；节点只由本文件写入，类型不符（理论上不会发生）时返回 nil。
+func pinEntryOf(element *list.Element) *openAIWSHTTPFallbackPinEntry {
+	entry, _ := element.Value.(*openAIWSHTTPFallbackPinEntry)
+	return entry
+}
+
+// removeLocked 删除一个链表节点及其映射，调用方必须持有 mu。
+func (s *openAIWSHTTPFallbackPinStore) removeLocked(element *list.Element) {
+	if entry := pinEntryOf(element); entry != nil {
+		delete(s.items, entry.key)
+	}
+	s.order.Remove(element)
+}
+
 // purgeExpiredLocked 从尾部清掉已过期的条目，调用方必须持有 mu。
 func (s *openAIWSHTTPFallbackPinStore) purgeExpiredLocked(now time.Time) {
 	for {
@@ -94,12 +108,10 @@ func (s *openAIWSHTTPFallbackPinStore) purgeExpiredLocked(now time.Time) {
 		if tail == nil {
 			return
 		}
-		entry := tail.Value.(*openAIWSHTTPFallbackPinEntry)
-		if now.Before(entry.expireAt) {
+		if entry := pinEntryOf(tail); entry != nil && now.Before(entry.expireAt) {
 			return
 		}
-		s.order.Remove(tail)
-		delete(s.items, entry.key)
+		s.removeLocked(tail)
 	}
 }
 
@@ -114,9 +126,12 @@ func (s *openAIWSHTTPFallbackPinStore) record(key openAIWSHTTPFallbackPinKey) {
 	s.purgeExpiredLocked(now)
 	expireAt := now.Add(s.ttl)
 	if element, ok := s.items[key]; ok {
-		element.Value.(*openAIWSHTTPFallbackPinEntry).expireAt = expireAt
-		s.order.MoveToFront(element)
-		return
+		if entry := pinEntryOf(element); entry != nil {
+			entry.expireAt = expireAt
+			s.order.MoveToFront(element)
+			return
+		}
+		s.removeLocked(element)
 	}
 	// 淘汰最久未被使用的条目，给新条目腾位置。
 	for len(s.items) >= s.maxEntries {
@@ -124,8 +139,7 @@ func (s *openAIWSHTTPFallbackPinStore) record(key openAIWSHTTPFallbackPinKey) {
 		if tail == nil {
 			break
 		}
-		s.order.Remove(tail)
-		delete(s.items, tail.Value.(*openAIWSHTTPFallbackPinEntry).key)
+		s.removeLocked(tail)
 	}
 	s.items[key] = s.order.PushFront(&openAIWSHTTPFallbackPinEntry{key: key, expireAt: expireAt})
 }
@@ -142,10 +156,9 @@ func (s *openAIWSHTTPFallbackPinStore) pinned(key openAIWSHTTPFallbackPinKey) bo
 	if !ok {
 		return false
 	}
-	entry := element.Value.(*openAIWSHTTPFallbackPinEntry)
-	if !now.Before(entry.expireAt) {
-		s.order.Remove(element)
-		delete(s.items, key)
+	entry := pinEntryOf(element)
+	if entry == nil || !now.Before(entry.expireAt) {
+		s.removeLocked(element)
 		return false
 	}
 	entry.expireAt = now.Add(s.ttl)
