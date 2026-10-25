@@ -26,7 +26,13 @@ Claude 单元约占一半核·秒），Codex 升级时这些测试几乎不会�
 4. 联动文件（版本登记机械改动的 Claude 场景清单、期望画像、冻结摘要）：只并入直接验证它们的模块；
 5. 非 Python 改动：按路径字面量反向索引与受管树内数据文件的读取者并入；
 6. 失败关闭：改动路径不在已登记的目录范围、Python 文件解析失败、受管树内数据文件找不到任何读取者——并入全部重模块；
-   归属表或选择器自己在改动里——本轮不筛选（全集）。
+   归属表或选择器自己在改动里——本轮不筛选（全集）；改动的 Python 文件**没有任何静态使用者**（导入图里没有入边、别的文件文本里也没提到它的名字），
+   而某个重模块可达的文件里有**解析不了目标的动态加载**（目标既不含像名字的字符串字面量、也不是函数参数转发、也不是绑定过字面量的名字，
+   或取自数据表）——并入这些重模块：这个文件除了被它们动态加载，想不出别的用处。有静态使用者的文件按导入边处理（1 跳口径）。
+
+导入图的边除了 ``import``／``from … import``（含函数内导入）、字符串里写全的模块路径与 ``名字.py`` 脚本名，还认**按名字加载**：测试里的
+``load_script("vc4_resume")``、``load_driver("phase_context", …)`` 这类写法，字符串字面量整串等于某个脚本的 stem（含下划线，或位于驱动目录），就算一条导入边
+（驱动目录里只在驱动存在的脚本没有包路径，测试只能这样按名字加载）。
 
 选择结果写进门禁清单的 ``selection`` 块，执行器据此只保留标 ``run`` 的模块；清单里单元 ID、单元规格、额度都不变，
 所以和全集运行的记录逐字相通。
@@ -79,6 +85,9 @@ _PATH_REF = re.compile(
 _STRING_MODULE = re.compile(r"tools[./][A-Za-z_][A-Za-z0-9_]*(?:[./][A-Za-z0-9_]+)*")
 _STRING_SCRIPT = re.compile(r"[\"'/ ]([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.py\b")
 _DYNAMIC_CALLS = frozenset({"import_module", "__import__", "spec_from_file_location", "run_path", "run_module"})
+# 按名字加载的字符串字面量：整串是小写标识符（脚本 stem 的写法）。
+_BARE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+DRIVER_DIR = "tools/arm64_capture_driver/driver/"
 
 
 class OwnershipError(ValueError):
@@ -203,6 +212,79 @@ def path_refs_of(tree: ast.AST) -> set[str]:
     return refs
 
 
+_NAME_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+
+
+def _name_literals(expr: ast.AST | None) -> list[str]:
+    """表达式里"像名字"的字符串字面量：要至少含一段 3 个字符以上的标识符（去掉 ``.py`` 后缀）——``'.py'``、``'/'`` 这类拼接用的碎片不算；
+    下标的键（``row['orchestrator_module']``）和 ``.get('键')`` 的实参是字典的键不是要加载的名字，也不算。"""
+
+    if expr is None:
+        return []
+    skipped: set[int] = set()
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Subscript):
+            skipped.update(id(item) for item in ast.walk(node.slice))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("get", "pop", "setdefault"):
+            for argument in node.args:
+                skipped.update(id(item) for item in ast.walk(argument))
+    return [item.value for item in ast.walk(expr)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str) and id(item) not in skipped
+            and _NAME_LIKE.search(item.value.removesuffix(".py"))]
+
+
+def _dynamic_target(call: ast.Call, name: str) -> ast.AST | None:
+    """动态加载调用里"指名要加载什么"的那个实参：``spec_from_file_location(名字, 位置)`` 看位置，其余看第一个实参（或 ``name``／``path``／``module`` 关键字）。"""
+
+    arguments = list(call.args)
+    if name == "spec_from_file_location":
+        return arguments[1] if len(arguments) > 1 else next((item.value for item in call.keywords if item.arg == "location"), None)
+    return arguments[0] if arguments else next((item.value for item in call.keywords if item.arg in ("name", "path", "mod_name", "module")), None)
+
+
+def unresolved_dynamic_lines(tree: ast.AST) -> list[int]:
+    """文件里**解析不了目标**的动态加载调用所在行。
+
+    一个动态加载调用的目标算"解析得了"，当且仅当：指名实参的表达式里含"像名字"的字符串字面量（``_name_literals``；边由文本里的脚本名／模块路径规则与按名字加载规则建立）；
+    或它没有从数据表里取值（无下标）、且引用了外层函数的形参（参数转发的加载器，真正的名字在调用者的字面量里，由调用者文件建边）；
+    或它没有从数据表里取值、引用的名字在同一文件里被绑定过含字面量的表达式（``HELPER = ROOT / "x.py"``）。
+    其余（取自配置表、函数返回值、运行时拼出的名字）解析不了，选择器对可达到它的重模块失败关闭。"""
+
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _name_literals(node.value):
+            for target in node.targets:
+                bound.update(item.id for item in ast.walk(target) if isinstance(item, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and _name_literals(node.value) and isinstance(node.target, ast.Name):
+            bound.add(node.target.id)
+    lines: list[int] = []
+
+    def visit(node: ast.AST, parameters: frozenset[str]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                arguments = child.args
+                names = {item.arg for item in [*arguments.args, *arguments.kwonlyargs, *arguments.posonlyargs]}
+                names.update(item.arg for item in (arguments.vararg, arguments.kwarg) if item is not None)
+                visit(child, parameters | names)
+                continue
+            if isinstance(child, ast.Call):
+                func = child.func
+                name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+                if name in _DYNAMIC_CALLS:
+                    expr = _dynamic_target(child, name)
+                    used = {item.id for item in ast.walk(expr) if isinstance(item, ast.Name)} if expr is not None else set()
+                    from_table = expr is not None and any(
+                        isinstance(item, ast.Subscript) or (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)
+                                                            and item.func.attr in ("get", "pop", "setdefault"))
+                        for item in ast.walk(expr))
+                    if not (_name_literals(expr) or (not from_table and (used & parameters or (used and used <= bound)))):
+                        lines.append(child.lineno)
+            visit(child, parameters)
+
+    visit(tree, frozenset())
+    return sorted(set(lines))
+
+
 class Graph:
     """``tools/`` 下全部 Python 文件的导入图。
 
@@ -230,6 +312,10 @@ class Graph:
         self.imports: dict[str, set[str]] = {}
         self.refs: dict[str, set[str]] = {}
         self.dynamic: set[str] = set()
+        # 含解析不了目标的动态加载调用的文件 → 行号（见 ``unresolved_dynamic_lines``）；选择器对可达到它们的重模块失败关闭。
+        self.unresolved_dynamic: dict[str, list[int]] = {}
+        # 每个文件里"整串是小写标识符"的字符串字面量（按名字加载脚本时的写法）。
+        self.literals: dict[str, set[str]] = {}
         self.unparsed: set[str] = set()
         for rel in files:
             self._analyze(rel)
@@ -241,6 +327,31 @@ class Graph:
                 candidates = stems.get(match.group(1), [])
                 if len(candidates) == 1 and candidates[0] != rel:
                     self.imports[rel].add(candidates[0])
+            # 按名字加载（验收修正）：字符串字面量整串等于脚本 stem（含下划线，或脚本在驱动目录里）→ 导入边。驱动目录里的脚本与 ``tools/ci`` 里的
+            # 同名镜像都是候选，全部连上（测试加载的是哪一份看运行时的路径，宁可都连）。
+            for literal in self.literals.get(rel, ()):
+                for candidate in stems.get(literal, ()):
+                    if candidate != rel and ("_" in literal or candidate.startswith(DRIVER_DIR)):
+                        self.imports[rel].add(candidate)
+
+    def unused(self, rels: Iterable[str]) -> set[str]:
+        """这些文件里没有任何静态使用者的：导入图里没有入边，别的文件文本里也没有以完整单词提到它的名字（stem）。
+
+        一次扫描全部文件文本（所有候选的名字合成一个正则），不逐个文件扫。"""
+
+        incoming = {target for targets in self.imports.values() for target in targets}
+        candidates = {rel for rel in rels if rel in self.imports and rel not in incoming}
+        if not candidates:
+            return set()
+        stems: dict[str, list[str]] = {}
+        for rel in candidates:
+            stems.setdefault(PurePosixPath(rel).stem, []).append(rel)
+        token = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(re.escape(stem) for stem in sorted(stems)) + r")(?![A-Za-z0-9_])")
+        mentioned: set[str] = set()
+        for member in self.files:
+            for stem in set(token.findall(self.text[member])):
+                mentioned.update(rel for rel in stems[stem] if rel != member)
+        return candidates - mentioned
 
     def resolve(self, dotted: str) -> str | None:
         parts = dotted.split(".")
@@ -255,6 +366,7 @@ class Graph:
         imports: set[str] = set()
         self.imports[rel] = imports
         self.refs[rel] = set()
+        self.literals[rel] = set()
         try:
             tree = ast.parse(self.text[rel])
         except (SyntaxError, ValueError, RecursionError):
@@ -286,6 +398,8 @@ class Graph:
                 if name in _DYNAMIC_CALLS:
                     self.dynamic.add(rel)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if _BARE_NAME.fullmatch(node.value):
+                    self.literals[rel].add(node.value)
                 for match in _STRING_MODULE.finditer(node.value):
                     dotted = re.sub(r"\.py$", "", match.group(0).replace("/", "."))
                     hit = self.resolve(dotted)
@@ -293,6 +407,9 @@ class Graph:
                         imports.add(hit)
         imports.discard(rel)
         self.refs[rel] = path_refs_of(tree)
+        unresolved = unresolved_dynamic_lines(tree) if rel in self.dynamic else []   # 只分析含动态加载调用的文件（约十分之一），导入图构建不变慢
+        if unresolved:
+            self.unresolved_dynamic[rel] = unresolved
 
     # -- 可达集 -------------------------------------------------------------
 
@@ -331,6 +448,22 @@ class Graph:
                 out.add(target)
                 if (is_fixture(target) or name_owner(target) == "claude") and target not in seen:
                     seen.add(target)
+                    stack.append(target)
+        return out
+
+    def driver_reach(self, module_rel: str) -> set[str]:
+        """``direct_reach`` 再加上驱动目录脚本族内部的传递：从测试直接到达的驱动脚本出发，只沿驱动目录内部的导入边继续走。
+
+        驱动目录里的脚本是一族互相导入的兄弟（``phase_context`` 导入 ``round_context``……），测试只能按名字加载其中几个，所以 1 跳口径在这里太窄：
+        改了 ``round_context``，加载 ``phase_context`` 的测试同样在测它。只在驱动目录内部传递——不沿 Claude 面文件链走，否则几乎所有重模块都会被拉进来。"""
+
+        out = set(self.direct_reach(module_rel))
+        stack = [item for item in out if item.startswith(DRIVER_DIR)]
+        while stack:
+            current = stack.pop()
+            for target in self.imports.get(current, ()):
+                if target.startswith(DRIVER_DIR) and target not in out:
+                    out.add(target)
                     stack.append(target)
         return out
 
@@ -679,6 +812,14 @@ def latest_release_base(tree: Path) -> tuple[str, str]:
     return commit, name
 
 
+def release_tags_at(tree: Path, commit: str) -> list[str]:
+    """指向这个提交的发版 tag（形如 ``v0.2.18``、``v0.2.18-1``），按名字排序；没有（或测试树里没有 tag）返回空列表。"""
+
+    listed = _git(tree, "tag", "--points-at", commit, "--list", "v[0-9]*", check_rc=False)
+    names = listed.stdout.decode("utf-8", "replace").split() if listed.returncode == 0 else []
+    return sorted(name for name in names if RELEASE_TAG.fullmatch(name))
+
+
 def _git_show(tree: Path, revision: str, path: str) -> str | None:
     result = _git(tree, "show", f"{revision}:{path}", check_rc=False)
     return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else None
@@ -759,7 +900,9 @@ class Selector:
         self.hubs = set(data["hubs"])
         self._direct: dict[str, set[str]] = {}
         self._chain: dict[str, set[str]] = {}
+        self._driver: dict[str, set[str]] = {}
         self._index: dict[str, set[str]] = {}
+        self._exposed: dict[str, list[str]] | None = None
 
     def rel(self, module: str) -> str:
         return f"{TESTS_DIR}/{module}.py"
@@ -768,6 +911,11 @@ class Selector:
         if module not in self._direct:
             self._direct[module] = self.graph.direct_reach(self.rel(module))
         return self._direct[module]
+
+    def driver(self, module: str) -> set[str]:
+        if module not in self._driver:
+            self._driver[module] = self.graph.driver_reach(self.rel(module))
+        return self._driver[module]
 
     def chain(self, module: str) -> set[str]:
         if module not in self._chain:
@@ -782,14 +930,33 @@ class Selector:
     def importers_of(self, target: str, *, chain: bool | None = None) -> list[str]:
         """会因 ``target`` 这个 Python 文件改动而被拉入的重模块：自己就是它，或（一层夹具内）直接导入它。
 
-        ``chain`` 缺省按文件归属：Claude 面文件的改动沿夹具与 Claude 面文件的导入链传递（宁可多拉），其余文件只看直接导入。"""
+        ``chain`` 缺省按文件归属：Claude 面文件的改动沿夹具与 Claude 面文件的导入链传递（宁可多拉）；驱动目录脚本的改动沿驱动脚本族内部的导入传递；
+        其余文件只看直接导入。"""
 
         use_chain = name_owner(target) == "claude" if chain is None else chain
+        if chain is None and target.startswith(DRIVER_DIR):
+            return [module for module in self.heavy if self.rel(module) == target or target in self.driver(module)]
         out = []
         for module in self.heavy:
             if self.rel(module) == target or target in (self.chain(module) if use_chain else self.direct(module)):
                 out.append(module)
         return out
+
+    def exposed(self) -> dict[str, list[str]]:
+        """重模块 → 它可达的文件里解析不了目标的动态加载点所在文件：模块自己、它直接导入的文件、它的夹具闭包里的文件。
+
+        这些重模块可能在运行时动态加载任何一个改动过的 Python 文件，导入图看不见这条边——改动的文件没有任何静态使用者时失败关闭，把它们并入。"""
+
+        if self._exposed is None:
+            sites = set(self.graph.unresolved_dynamic)
+            found: dict[str, list[str]] = {}
+            for module in self.heavy:
+                reach = self.direct(module) | self.graph.fixture_closure(self.rel(module))
+                hit = sorted(reach & sites)
+                if hit:
+                    found[module] = hit
+            self._exposed = found
+        return self._exposed
 
     def mentioning(self, reader: str) -> list[str]:
         """测试目录里的 ``reader`` 文件（测试模块或夹具）提到了某个文件时，会被拉入的重模块：模块自己或它的夹具闭包含这个文件。"""
@@ -841,6 +1008,16 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     elif not fallback:
         for status, path in changes:
             _handle_change(selector, data, tree, base, head, status, path, heavy, pull, close, advise)
+    if not fallback and not include_claude:
+        # 动态加载的失败关闭：改动的 Python 文件没有任何静态使用者，而重模块可达的文件里有解析不了目标的动态加载点——这个文件可能就是被它们加载的。
+        exposed = selector.exposed()
+        unused = sorted(selector.graph.unused(path for status, path in changes if status != "D" and path.endswith(".py")
+                                              and path.startswith(GRAPH_ROOT + "/"))) if exposed else []
+        if unused:
+            for module, sites in exposed.items():
+                fail_closed.append({"reason": f"改动的 Python 文件没有任何静态使用者，而重模块 {module} 可达的 {sites[0]} 里有解析不了目标的动态加载，它可能被加载",
+                                    "file": unused[0]})
+                pull([module], f"失败关闭：含解析不了的动态加载（{sites[0]}），改动的 {unused[0]} 没有静态使用者")
     state = {module: RUN for module in found}
     if not fallback:
         for module in selector.heavy:
@@ -848,6 +1025,12 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
                 state[module] = SKIP
     scope = SCOPE_FULL if fallback else SCOPE_CLIENT_PLAN
     seconds = {module: table[module]["core_seconds"] or 0.0 for module in selector.heavy}
+    cheap = data["cheap_core_seconds"]
+    # 被剔除的模块逐个列出理由（验收要求）：谁、归属、规则、核·秒、为什么可以不跑。
+    skipped_rows = [{"module": module, "owner": table[module]["owner"], "rule": table[module]["rule"], "core_seconds": table[module]["core_seconds"],
+                     "reason": skip_reason(module, table[module], client, cheap=cheap)}
+                    for module in sorted(name for name, chosen in state.items() if chosen == SKIP)]
+    release_tags = release_tags_at(tree, base)
     advisory_rows = []
     for hub, modules in sorted(advisories.items()):
         advisory_rows.append({"file": hub, f"{other_client(client)}_modules": len(modules),
@@ -860,10 +1043,14 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         "ownership_sha256": sha256_file(data_path(tree)),
         "selector_sha256": sha256_file(Path(__file__)),
         "base_commit": base,
+        # 基点是不是带 v* 发版 tag 的提交（验收要求）：auto 取的基点必然是；显式给的基点可能不是，评审时一眼看得出。
+        "base_release_tags": release_tags,
+        "base_is_release": bool(release_tags),
         "head_commit": head,
         "changed_files_count": len(changes),
         "changed_files_sha256": sha256_json([[status, path] for status, path in changes]),
         "modules": dict(sorted(state.items())),
+        "skipped": skipped_rows,
         "pulled": [{"module": module, "because": sorted(reasons)} for module, reasons in sorted(pulled.items())],
         "advisories": advisory_rows,
         "unclassified": unclassified,

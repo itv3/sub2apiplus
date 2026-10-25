@@ -52,7 +52,7 @@ Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，沿用下面
 加上基点..候选提交的改动确实会影响到的 Claude 重模块；命令单元与 pre-A3 场景不受影响），入口门禁这一次运行同时产出 VC-0 预跑记录（``preflight.json``）。改动集的来源：
 基点是 ``--select-base`` 显式给的提交，缺省由入口门禁取测试树里最近的发版 tag（最近一次发版的提交），候选提交取测试树 HEAD；选择器出错、找不到 tag、归属表与执行器 discover 的
 全集身份对不上，一律回退全集并把原因写进入口门禁总摘要的 ``gate_scope``。以下情形保持全集（命令行与改造前逐字相同）：全集通过（B-09）、逐单元承接、读集审计／合同、``--reexecute-gates``
-（显式要求重新执行全集）、Claude；``--gate-scope full`` 强制全集。子集结论的限制：不承接别人的记录也不被承接、不接后台验证的入口空跑（后台验证的筛选需显式开）、不签 B-09 全集收据；
+（显式要求重新执行全集）、Claude；``--gate-scope full`` 强制全集。子集结论的限制：不承接别人的记录也不被承接、不签 B-09 全集收据；后台验证（``background-validate.sh start``）对 Codex 缺省也走 auto，实际是子集的后台结论不自动接入口空跑；
 收尾 full-gates 与 VC-4／VC-5 的 ``make test`` 不经本编排器，保持全集。范围进入 ``entry-gates`` 一步的输入（``ENTRY_GATES_SCOPE``），pre-A3 一步不受影响。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
@@ -1182,7 +1182,7 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--approved-by", help="只交给 VC-0 收口：批准人")
     parser.add_argument("--reason", help="只交给 VC-0 收口：上限后的恢复里，失败原因已如何消除")
     parser.add_argument("--reexecute-gates", action="store_true",
-                        help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")
+                        help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时按请求定模式：有 --full-set-request 为全集通过，有 --unit-inherit-request 为逐单元承接，都没有就重新执行（Codex 缺省按 --gate-scope auto 只跑 Codex 计划，回退全集时同全集）")
     parser.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；仍须入口实时核对全部条件")
     parser.add_argument("--full-set-work", type=Path, help="来源后台验证的 work 目录；保持严格输入和命令路径一致")
     parser.add_argument("--gate-parallel", type=_positive_parallel, help="入口门禁和 pre-A3 单元并发数；缺省沿用执行器配置")

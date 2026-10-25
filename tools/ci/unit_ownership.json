@@ -20,6 +20,7 @@
     "test_claude_upgrade_boundary_codex",
     "test_claude_upgrade_candidate_seal_evidence",
     "test_claude_upgrade_compare_accept",
+    "test_claude_upgrade_scenarios",
     "test_claude_vc5_chain_fixture"
    ],
    "patterns": [
@@ -3036,6 +3037,7 @@
   "tools/official_client_capture/model_condition_receipts.py",
   "tools/official_client_capture/pcap_clienthello.py",
   "tools/official_client_capture/runtime_host_receipt.py",
+  "tools/official_client_capture/scenario_receipts.py",
   "tools/official_client_capture/scrub_raw_bytes.py",
   "tools/official_client_capture/upgrade_client_adapter.py",
   "tools/official_client_capture/upgrade_control_plane.py",

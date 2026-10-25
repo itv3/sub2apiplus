@@ -867,7 +867,7 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '1cec70cc5eb24cabfbcd819232ce9c21a53b2d4bab26b60ef6fb31af29710910'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '28caf3687cb999d105a08640f56cdf5efc77edca9f98323ef0bb3dc42fc1077e'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',
@@ -900,13 +900,14 @@ CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runr
         '    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")',
         '            print(json.dumps({"stopped": stop(args.runroot, args.reason)}, ensure_ascii=False))']}
 CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
-CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
+CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '0354b483d92b229150a4c57ed3322e41cd1cce9ee02920b426191b6092eced66'}
+CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': ['  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库；默认重新执行全集（B-09），只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同',
+        '  逐单元承接。']}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '1e374a9431705cf74177ab378beb9f45cf5927e42b3ad534101a03e8c4e52087'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'afb6e48c26ec20e7e7db8caa68979e763645110afc967e02a8666ab680b844e3'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '453f1c2a6180dd917dffc70d9b7c442a860559870168c2028cc185bdc79a445f'}
+CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': 'f6a7d2172f360eaa14fbb74f33828ccd7b4b8449727b2cfdc52410ace34c2f20'}
 CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
         '  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。',
         '                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:',
@@ -915,12 +916,13 @@ CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步�
         '        refresh_reuse = gates_run and self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))',
         '            external_present = bridge and pre_a3_run and Path(self.p("PRE_A3_CERTIFICATION")).exists()',
         '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:',
+        '                        help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")',
         '                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)']}
 CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '8ea7896217fb3d68b419a013cc90b8f38cb969daed476e84ae41c8d245bd46b0'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '80f87d073eb41f21eb1c1bd1188be76e265cfecd079d8486b7454261807848a7'}
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '365b6ad2cb7439801e37cf3d9cfc46f1714b4a231df8355931133b35eb86391c'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
         '            for member in [pid, *_session_members(pid)]:',
         '                    os.kill(member, signal.SIGKILL)',

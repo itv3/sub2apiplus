@@ -275,6 +275,20 @@ class ScopeProblemTests(unittest.TestCase):
         self.assertIn("跳过 ?/?", bv.scope_label({"gate_scope": "client-plan", "select_base": BASE}) or "", "没有登记计数时写 ?，不悄悄当 0")
         self.assertEqual(bv.scope_note({}), "", "缺省全集没有任何额外提示")
 
+    def test_subset_labels_show_whether_the_base_is_a_release_and_name_the_skipped_modules(self) -> None:
+        names = ["test_claude_a", "test_claude_b"]
+        released = {**SELECTION, "base_is_release": True, "base_release_tags": ["v0.2.18-1"], "skipped_modules": names}
+        self.assertEqual(bv.scope_label({"selection": released}), f"codex 计划，跳过 4/10 个测试模块，基点 {BASE[:12]}（发版 tag v0.2.18-1）")
+        self.assertIn("；被剔除的 2 个模块：test_claude_a、test_claude_b", bv.scope_note({"selection": released}))
+        plain = {**SELECTION, "base_is_release": False, "base_release_tags": [], "skipped_modules": names}
+        self.assertIn("（不是发版 tag 提交）", bv.scope_label({"selection": plain}) or "", "显式给的基点不是发版提交：写明，评审时看得出")
+        old_record = bv.scope_label({"selection": SELECTION}) or ""
+        self.assertNotIn("发版", old_record, "旧记录没有这个字段就不写")
+        self.assertNotIn("被剔除", bv.scope_note({"selection": SELECTION}))
+        many = {**SELECTION, "skipped_modules": [f"test_m{index}" for index in range(70)]}
+        self.assertIn("被剔除的 70 个模块：", bv.scope_note({"selection": many}))
+        self.assertTrue(bv.scope_note({"selection": many}).endswith("等"), "清单过长只列前 60 个")
+
     def test_a_payload_without_an_output_directory_is_a_full_conclusion_as_before(self) -> None:
         self.assertIsNone(bv.scope_problem({"status": "passed"}, "claude"))
         self.assertIsNone(bv.scope_problem({"status": "passed", "out": "/nonexistent/out"}, "claude"))
@@ -373,6 +387,16 @@ class TwoClientAutoTests(TwoClientWorld):
         # 统一准入 vc5_admission.state 靠这个固定写法从提示里取范围说明（它自己不读结论文件）：两端的约定在这里钉住，任何一端改了写法都会红。
         taken = re.search(r"【子集：([^】]*)】", message)
         self.assertEqual(taken.group(1), f"codex 计划，跳过 4/10 个测试模块，基点 {BASE[:12]}，筛选摘要 {'s' * 12}")
+
+    def test_the_admission_message_names_the_skipped_modules_and_the_release_base(self) -> None:
+        selection = {**SELECTION, "base_is_release": True, "base_release_tags": ["v0.2.18"], "skipped_modules": ["test_claude_a", "test_claude_b"]}
+        self.conclusion(info=INFO_SUBSET, echoed=selection, recorded=selection)
+        code, message = bv.check(self.codex_run, self.data, require_passed=True, client="codex")
+        self.assertEqual(code, 0, message)
+        self.assertIn("（发版 tag v0.2.18）", message)
+        self.assertIn("被剔除的 2 个模块：test_claude_a、test_claude_b", message)
+        taken = re.search(r"【子集：([^】]*)】", message)
+        self.assertNotIn("test_claude_a", taken.group(1), "进准入键的范围说明保持短：模块名只在提示与结论里")
         for require in (True, False):
             code, message = bv.check(self.codex_run, self.data, require_passed=require, client="claude")
             self.assertEqual(code, 3, f"Claude 的 {'VC-5 前核对' if require else '批次边界'}不能把 Codex 计划的子集当成全集")

@@ -4653,6 +4653,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             summary["unit_inherit_decision"] = inherit_verdict
         if client_selection is not None:
             summary["client_selection"] = _client_selection_summary(client_selection)
+            for group_row in summary["test_groups"].values():
+                group_row["subset"] = client_selection.get("scope") == "client-plan"   # 组行的通过只是计划子集的通过
         if declared_run is not None:
             # 声明级承接的四个数（登记、审计通过、消费者接受、实际承接）与每个被重跑单元的原因和耗时；清单已发布，所以刚写下的记录能按承接用的同一个核验检查。
             summary["declared_inputs"] = _declared_run_summary(records, run=declared_run, outcomes=outcomes, decisions=decisions,

@@ -12,8 +12,9 @@
   （首批是真实官方取证），空跑最远到 ``p0-receipt``。
 * 跑：``env -i`` 干净环境里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连
   建账本之后一起）；升级开工的空跑 ``--opening``：重新执行全集并带读集审计（``--reexecute-gates --audit-reads``），默认到
-  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库；默认重新执行全集（B-09），只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同
-  逐单元承接。
+  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库。入口门禁的范围（第 9 项）：缺省（不带 ``--opening``／``--reexecute``）走入口编排器的缺省 ``--gate-scope auto``——Codex
+  只重新执行 Codex 计划的采集工具测试，基点与回退规则见 ``entry_orchestrator.py``（找不到发版 tag 等一律回退全集并写明原因）；``--opening``／``--reexecute``（编排器的
+  ``--reexecute-gates``）显式重新执行**全集**，Claude 也保持全集；只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同逐单元承接（也是全集口径）。
 * 让路：有采集在跑（统一调度执行器的整机预约有存活的申请方）就不起，记 ``yielded``；空跑不申请整机，不能挡采集——门禁单元
   本来就会被采集预约停派。
 * 排队（10-07 B5a-10 ARM64 验收发现）：入口门禁工作目录（``entry-gates.sh`` 缺省的数据根上一级 ``entry-gates-work``）同一时刻

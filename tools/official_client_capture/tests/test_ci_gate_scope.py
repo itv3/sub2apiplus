@@ -283,6 +283,8 @@ class GateScopeExecutorTests(unittest.TestCase):
         group = summary["test_groups"]["capture-tools"]
         self.assertEqual((group["status"], group["expected_tests"], group["reported_tests"]), ("passed", 3, 3), "全集核对只含保留的模块")
         self.assertEqual(summary_full["test_groups"]["capture-tools"]["expected_tests"], 4)
+        self.assertIs(group["subset"], True, "筛选后的运行，组行的通过只是计划子集的通过：组行自己写明 subset")
+        self.assertNotIn("subset", summary_full["test_groups"]["capture-tools"], "全集运行的组行与改造前逐字相同")
         self.assertEqual(summary["client_selection"]["modules_skipped"], 1)
         self.assertEqual(summary["client_selection"]["scope"], "client-plan")
         self.assertNotIn("client_selection", summary_full)
@@ -354,6 +356,9 @@ class GateScopeExecutorTests(unittest.TestCase):
         self.assertEqual((echoed["gate_scope"], echoed["client"], echoed["modules_skipped"]), ("client-plan", "codex", 1))
         self.assertEqual(echoed["selection_sha256"], scoped["selection"]["selection_sha256"])
         self.assertEqual(json.loads((out / "entry-gates.json").read_text(encoding="utf-8"))["client_selection"], echoed)
+        self.assertEqual(echoed["skipped_modules"], ["test_claude_big"], "被剔除的模块逐个写进回显（逐个理由在 selection.skipped）")
+        self.assertEqual([row["module"] for row in scoped["selection"]["skipped"]], ["test_claude_big"])
+        self.assertEqual((echoed["base_is_release"], echoed["base_release_tags"]), (False, []), "合成仓库的基点没有发版 tag：如实记 False")
 
 
 class GateScopeExportTests(unittest.TestCase):

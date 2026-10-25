@@ -2741,6 +2741,8 @@ def export_records(
         scope_info = {"gate_scope": chosen.get("scope"), "client": chosen.get("client"), "base_commit": chosen.get("base_commit"),
                       "head_commit": chosen.get("head_commit"), "selection_sha256": chosen.get("selection_sha256"),
                       "ownership_sha256": chosen.get("ownership_sha256"), "include_claude": chosen.get("include_claude"),
+                      "base_release_tags": chosen.get("base_release_tags"), "base_is_release": chosen.get("base_is_release"),
+                      "skipped_modules": [row.get("module") for row in chosen.get("skipped") or []],
                       "modules_total": len(modules), "modules_skipped": sum(1 for state in modules.values() if state == "skip"),
                       "modules_pulled": len(chosen.get("pulled") or []), "advisories": len(chosen.get("advisories") or [])}
         entry["client_selection"] = scope_info

@@ -2582,7 +2582,12 @@ def scope_label(payload: Mapping[str, Any]) -> str | None:
     selection = payload.get("selection") if isinstance(payload.get("selection"), Mapping) else {}
     client = selection.get("client") or payload.get("select_client") or "codex"
     base = str(selection.get("base_commit") or payload.get("select_base") or "未知")[:12]
-    return f"{client} 计划，跳过 {_count(selection.get('modules_skipped'))}/{_count(selection.get('modules_total'))} 个测试模块，基点 {base}"
+    # 基点是不是带 v* 发版 tag 的提交（选择器记录的；旧记录没有这个字段就不写）：显式给的基点可能不是发版提交，评审时一眼看得出。
+    release = ""
+    if isinstance(selection.get("base_is_release"), bool):
+        tags = [str(item) for item in selection.get("base_release_tags") or []]
+        release = f"（发版 tag {'、'.join(tags[:2])}）" if selection["base_is_release"] and tags else "（不是发版 tag 提交）"
+    return f"{client} 计划，跳过 {_count(selection.get('modules_skipped'))}/{_count(selection.get('modules_total'))} 个测试模块，基点 {base}{release}"
 
 
 def scope_note(payload: Mapping[str, Any]) -> str:
@@ -2593,7 +2598,12 @@ def scope_note(payload: Mapping[str, Any]) -> str:
         selection = payload.get("selection") if isinstance(payload.get("selection"), Mapping) else {}
         client = selection.get("client") or payload.get("select_client") or "codex"
         digest = str(selection.get("selection_sha256") or "未登记")[:12]
-        return f"；按客户端筛选（{client} 计划的子集，不是全集）【子集：{label}，筛选摘要 {digest}】"
+        note = f"；按客户端筛选（{client} 计划的子集，不是全集）【子集：{label}，筛选摘要 {digest}】"
+        names = selection.get("skipped_modules")
+        if isinstance(names, list) and names:
+            # 被剔除的模块逐个列出（完整清单与逐个理由在结论的 selection 与运行清单的 selection.skipped 里）。
+            note += f"；被剔除的 {len(names)} 个模块：{'、'.join(str(item) for item in names[:60])}{'等' if len(names) > 60 else ''}"
+        return note
     resolved = payload.get("gate_scope_resolved")
     if payload.get("gate_scope") == GATE_SCOPE_AUTO and isinstance(resolved, Mapping):
         reason = resolved.get("fallback_reason")

@@ -41,7 +41,7 @@ def base_data() -> dict[str, Any]:
             "patterns": [f"{CAPTURE}/claude_upgrade_scenarios_[0-9]*.json", f"{CAPTURE}/claude_rule_assertion.py"],
             "ignore_assignments": ["FROZEN_PROFILE_SHA256S"], "modules": ["test_claude_heavy_d"], "reason": "镜像式重锚",
         }],
-        "recognized_areas": ["docs/", "backend/", "tools/ci/", f"{CAPTURE}/", "tools/official_client_control/", "Makefile"],
+        "recognized_areas": ["docs/", "backend/", "tools/ci/", "tools/arm64_capture_driver/", f"{CAPTURE}/", "tools/official_client_control/", "Makefile"],
         "generic_refs": ["docs/egress"], "generic_names": ["__init__.py"],
         "hubs": [], "shared_kernel": [], "modules": {"placeholder": {"owner": "shared", "rule": "x", "core_seconds": None,
                                                                        "codex_plan": "run", "claude_plan": "run"}},
@@ -92,16 +92,19 @@ HEAVY_MODULES = ["test_claude_heavy_a", "test_claude_heavy_b", "test_claude_heav
 class World:
     """合成 git 仓库：基点提交带数据文件，测试里再改文件、提交候选提交后选择。"""
 
-    def __init__(self, case: unittest.TestCase, files: dict[str, str] | None = None, calibration: dict[str, float] | None = None) -> None:
+    def __init__(self, case: unittest.TestCase, files: dict[str, str] | None = None, calibration: dict[str, float] | None = None,
+                 base: dict[str, Any] | None = None, base_tag: str | None = None) -> None:
         directory = tempfile.TemporaryDirectory()
         case.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()
         git(self.root, "init", "-q")
         for rel, text in (files or WORLD).items():
             self.write(rel, text)
-        self.data = uo.materialize(self.root, base_data(), calibration or CALIBRATION)
+        self.data = uo.materialize(self.root, base or base_data(), calibration or CALIBRATION)
         self.write_data()
         self.base = self.commit("基点")
+        if base_tag is not None:
+            git(self.root, "tag", base_tag, self.base)
 
     def write(self, rel: str, text: str) -> None:
         path = self.root / rel

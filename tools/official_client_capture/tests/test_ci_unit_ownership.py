@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import tempfile
 import unittest
@@ -99,14 +100,15 @@ class RealTreeGuardTests(unittest.TestCase):
         self.assertIn("tools/ci/unit_ownership.py", uo.SELF_PATHS)
         self.assertIn("tools/arm64_capture_driver/driver/unit_ownership.py", uo.SELF_PATHS)
 
-    def test_the_coupled_table_is_the_ten_modules_approved_for_the_registration_anchors(self) -> None:
-        # 拍板 4：Claude 联动文件（场景清单、期望画像、冻结摘要）被改时，只并入直接验证它们的这 10 个单元；改这张表要在评审里显式看到。
+    def test_the_coupled_table_is_the_eleven_modules_approved_for_the_registration_anchors(self) -> None:
+        # 拍板 4：Claude 联动文件（场景清单、期望画像、冻结摘要）被改时，只并入直接验证它们的这 11 个单元；改这张表要在评审里显式看到。
+        # 验收修正补进 test_claude_upgrade_scenarios（它用 glob("claude_upgrade_scenarios_*.json") 核对每份场景清单的 tool_dependencies）。
         [entry] = self.data["coupled"]
         self.assertEqual(sorted(entry["modules"]), [
             "test_claude_build_rule_assertion_results", "test_claude_candidate_draft_projection", "test_claude_recorded_candidate_source",
             "test_claude_recorded_full_validation", "test_claude_rule_assertion", "test_claude_rule_expectations_2_1_226",
             "test_claude_upgrade_boundary_codex", "test_claude_upgrade_candidate_seal_evidence", "test_claude_upgrade_compare_accept",
-            "test_claude_vc5_chain_fixture"])
+            "test_claude_upgrade_scenarios", "test_claude_vc5_chain_fixture"])
         self.assertEqual(entry["ignore_assignments"], ["FROZEN_PROFILE_SHA256S"])
         self.assertEqual(len(entry["patterns"]), 3)
 
@@ -334,6 +336,202 @@ class SelectionTests(unittest.TestCase):
         world.commit("候选")
         with self.assertRaisesRegex(uo.OwnershipError, "不是测试树当前 HEAD"):
             uo.select(world.root, client="codex", base=world.base, head="1" * 40)
+
+
+class DriverScriptsLoadedByNameTests(unittest.TestCase):
+    """验收修正：驱动目录里只在驱动存在的脚本，被测试用 ``load_script("名字")``／``load_driver("名字")`` 按名字加载，导入图原来没有这条边。"""
+
+    DRIVER = "tools/arm64_capture_driver/driver"
+    SCRIPTS = ("vc4_resume", "implementation_gates", "claude_catalog_chain", "phase_context", "round_context")
+
+    def world(self, extra: dict[str, str] | None = None, heavy: tuple[str, ...] = ()) -> World:
+        files = {
+            **WORLD,
+            f"{self.DRIVER}/vc4_resume.py": "RESUME = 1\n",
+            f"{self.DRIVER}/implementation_gates.py": "GATES = 1\n",
+            f"{self.DRIVER}/claude_catalog_chain.py": "CHAIN = 1\n",
+            f"{self.DRIVER}/round_context.py": "ROUND = 1\n",
+            # phase_context 导入同族的 round_context（驱动脚本族内部的导入）
+            f"{self.DRIVER}/phase_context.py": "from tools.arm64_capture_driver.driver import round_context\nPHASE = 1\n",
+            # 重模块按名字加载（字符串字面量整串等于脚本 stem），没有任何 import 语句
+            f"{TESTS}/test_claude_vc4_driver_x.py": ("def load_driver(name):\n    return name\n\n"
+                                                    "RESUME = load_driver('vc4_resume')\nGATES = load_driver(\"implementation_gates\")\n"
+                                                    "CHAIN = load_driver('claude_catalog_chain')\n"),
+            f"{TESTS}/test_claude_vc5_driver_x.py": "def load_script(name):\n    return name\n\nPHASE = load_script('phase_context')\n",
+            **(extra or {}),
+        }
+        calibration = {**CALIBRATION, "test_claude_vc4_driver_x": HEAVY, "test_claude_vc5_driver_x": HEAVY, **{name: HEAVY for name in heavy}}
+        return World(self, files, calibration)
+
+    def test_a_string_literal_equal_to_a_script_stem_is_an_import_edge(self) -> None:
+        world = self.world()
+        graph = uo.Graph(world.root)
+        edges = graph.imports[f"{TESTS}/test_claude_vc4_driver_x.py"]
+        for name in ("vc4_resume", "implementation_gates", "claude_catalog_chain"):
+            self.assertIn(f"{self.DRIVER}/{name}.py", edges)
+        self.assertNotIn(f"{self.DRIVER}/phase_context.py", edges)
+
+    def test_changing_each_driver_script_pulls_the_driver_module_that_loads_it(self) -> None:
+        expected = {
+            "vc4_resume": ["test_claude_vc4_driver_x"], "implementation_gates": ["test_claude_vc4_driver_x"],
+            "claude_catalog_chain": ["test_claude_vc4_driver_x"], "phase_context": ["test_claude_vc5_driver_x"],
+            # round_context 只被同族的 phase_context 导入：加载 phase_context 的测试同样在测它（驱动脚本族内部的传递）
+            "round_context": ["test_claude_vc5_driver_x"],
+        }
+        for name, modules in expected.items():
+            with self.subTest(script=name):
+                selection = self.world().select((f"{self.DRIVER}/{name}.py", "CHANGED = 2\n"))
+                self.assertEqual(sorted(pulled(selection)), modules)
+                self.assertEqual(selection["fail_closed"], [])
+                # 其余重模块照样剔除
+                self.assertIn("test_claude_heavy_a", skipped(selection))
+
+    def test_the_family_transitivity_stays_inside_the_driver_directory(self) -> None:
+        # 重模块只导入一个 Claude 面文件、它再导入 phase_context：不沿 Claude 面文件链把驱动脚本拉进来（否则几乎所有重模块都被拉入）。
+        extra = {f"{CAPTURE}/claude_bridge.py": "from tools.arm64_capture_driver.driver import phase_context\n",
+                 f"{TESTS}/test_claude_bridge_x.py": "from tools.official_client_capture import claude_bridge\n"}
+        world = self.world(extra, heavy=("test_claude_bridge_x",))
+        selection = world.select((f"{self.DRIVER}/phase_context.py", "CHANGED = 3\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_vc5_driver_x"])
+
+    def test_a_literal_that_is_not_a_script_stem_is_not_an_edge(self) -> None:
+        extra = {f"{TESTS}/test_claude_vc5_driver_x.py": "NOTE = 'phase_context_is_documented_elsewhere'\nOTHER = 'round'\n"}
+        selection = self.world(extra).select((f"{self.DRIVER}/phase_context.py", "CHANGED = 4\n"))
+        self.assertEqual(pulled(selection), {})
+
+
+class UnresolvedDynamicLoadTests(unittest.TestCase):
+    """验收修正：重模块可达的文件里有解析不了目标的动态加载，而改动的 Python 文件没有任何静态使用者时失败关闭——并入这些重模块；
+    有静态使用者的文件按导入边处理，解析得了的动态加载不受影响。"""
+
+    LOADER = (
+        "import importlib\n\n"
+        "def run(config):\n    return importlib.import_module(config['module'])\n")
+    ORPHAN = "tools/ci/brand_new_tool.py"
+
+    def world(self, text: str, extra: dict[str, str] | None = None) -> World:
+        files = {**WORLD, f"{TESTS}/test_claude_dynamic_e.py": text, **(extra or {})}
+        return World(self, files, {**CALIBRATION, "test_claude_dynamic_e": HEAVY})
+
+    def test_a_python_file_nobody_uses_pulls_the_module_with_an_unresolvable_dynamic_load(self) -> None:
+        world = self.world(self.LOADER)
+        graph = uo.Graph(world.root)
+        self.assertEqual(sorted(graph.unresolved_dynamic), [f"{TESTS}/test_claude_dynamic_e.py"])
+        selection = world.select((self.ORPHAN, "X = 1\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_dynamic_e"])
+        self.assertIn("失败关闭：含解析不了的动态加载", pulled(selection)["test_claude_dynamic_e"][0])
+        self.assertEqual([item["file"] for item in selection["fail_closed"]], [self.ORPHAN])
+        self.assertIn("test_claude_dynamic_e", selection["fail_closed"][0]["reason"])
+        self.assertEqual(skipped(selection), HEAVY_MODULES, "其余重模块照样剔除")
+
+    def test_a_python_file_somebody_imports_or_names_is_handled_by_its_edges_instead(self) -> None:
+        # kernel_util 被别的文件导入（有入边）；helper 没有入边，但另一个文件的文本里提到了它的名字。
+        world = self.world(self.LOADER, {f"{CAPTURE}/mentions_helper.py": "NOTE = 'see helper for the details'\n"})
+        selection = world.select((f"{CAPTURE}/kernel_util.py", "VALUE = 2\n"), ("tools/ci/helper.py", "X = 2\n"))
+        self.assertNotIn("test_claude_dynamic_e", pulled(selection))
+        self.assertEqual(selection["fail_closed"], [])
+
+    def test_a_change_without_python_does_not_trigger_it(self) -> None:
+        selection = self.world(self.LOADER).select(("docs/other.md", "# other changed\n"))
+        self.assertEqual(pulled(selection), {})
+        self.assertEqual(selection["fail_closed"], [])
+
+    def test_a_deleted_python_file_is_not_an_unused_file(self) -> None:
+        selection = self.world(self.LOADER, {self.ORPHAN: "X = 1\n"}).select((self.ORPHAN, None))
+        self.assertNotIn("test_claude_dynamic_e", pulled(selection), "删除的文件走已有的“仍被提到”规则，不在这条里")
+
+    def test_the_failure_is_only_for_modules_that_can_reach_the_site(self) -> None:
+        # 动态加载点在夹具里，只有导入这个夹具的重模块 e 被拉入；没有这条可达路径的 a～d 不被拉入。
+        extra = {f"{TESTS}/dynamic_fixture.py": self.LOADER}
+        world = self.world("from tools.official_client_capture.tests import dynamic_fixture\n", extra)
+        selection = world.select((self.ORPHAN, "X = 3\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_dynamic_e"])
+
+    def test_resolvable_dynamic_loads_are_not_a_reason_to_fail_closed(self) -> None:
+        resolvable = {
+            "字面量目标": "import importlib\nMODULE = importlib.import_module('tools.official_client_capture.codex_only')\n",
+            "参数转发的加载器": ("import importlib.util\n\ndef load(name):\n"
+                          "    return importlib.util.spec_from_file_location(name, 'x/' + name + '.py')\n"),
+            "绑定过字面量的名字": ("import importlib.util\nHELPER = 'tools/ci/helper.py'\n"
+                           "SPEC = importlib.util.spec_from_file_location('helper', HELPER)\n"),
+            "标准库的字面量": "MODULE = __import__('hashlib')\n",
+        }
+        for label, text in resolvable.items():
+            with self.subTest(label):
+                world = self.world(text)
+                self.assertEqual(uo.Graph(world.root).unresolved_dynamic, {})
+                selection = world.select((self.ORPHAN, "X = 4\n"))
+                self.assertEqual(selection["fail_closed"], [])
+                self.assertEqual(pulled(selection), {})
+
+    def test_a_value_taken_from_a_table_is_not_a_resolved_target(self) -> None:
+        # 参数转发看起来像"解析得了"，但从数据表里取出来的名字（下标、.get）不是调用者传的字面量。
+        for label, text in {
+                "下标": "import importlib\n\ndef run(row):\n    return importlib.import_module(row['orchestrator_module'])\n",
+                ".get": "import importlib\n\ndef run(row):\n    return importlib.import_module(row.get('orchestrator_module'))\n",
+                "运行时拼出": "import importlib\n\ndef run():\n    return importlib.import_module(compute_name())\n"}.items():
+            with self.subTest(label):
+                self.assertEqual(sorted(uo.Graph(self.world(text).root).unresolved_dynamic), [f"{TESTS}/test_claude_dynamic_e.py"])
+
+    def test_the_real_tree_exposure_is_the_two_reviewed_table_driven_loads(self) -> None:
+        # 现状核对：真实树里重模块可达的、解析不了目标的动态加载点只有这两处（都是按客户端表的行加载编排器／账本模块）。以后谁再加一个，这条会红，
+        # 提醒评审看清楚它加载什么、值不值得并入。
+        selector = uo.Selector(REPO_ROOT, uo.load_data(REPO_ROOT), "codex")
+        self.assertEqual(selector.exposed(), {
+            "test_claude_sealed_gate_materials": ["tools/arm64_capture_driver/driver/vc5_admission.py"],
+            "test_claude_vc4_driver": ["tools/arm64_capture_driver/driver/vc4_client.py"]})
+
+
+class ReviewRequirementTests(unittest.TestCase):
+    """验收修正：联动清单、剔除逐个列理由、基点是否发版提交。"""
+
+    def test_a_new_scenario_version_file_pulls_test_claude_upgrade_scenarios(self) -> None:
+        real = uo.load_data(REPO_ROOT)
+        [entry] = real["coupled"]
+        self.assertIn("test_claude_upgrade_scenarios", entry["modules"])
+        pattern = [item for item in entry["patterns"] if "claude_upgrade_scenarios" in item]
+        self.assertTrue(pattern and fnmatch.fnmatchcase(f"{CAPTURE}/claude_upgrade_scenarios_0_164_0.json", pattern[0]))
+        # 合成仓库用真实的联动表：模拟新增 _0_164_0 版本的场景清单
+        base = base_data()
+        base["coupled"] = real["coupled"]
+        files = {**WORLD, f"{TESTS}/test_claude_upgrade_scenarios.py": "import glob\nPATHS = glob.glob('claude_upgrade_scenarios_*.json')\n",
+                 f"{CAPTURE}/claude_upgrade_scenarios_0_163_0.json": '{"tools": []}\n'}
+        world = World(self, files, {**CALIBRATION, "test_claude_upgrade_scenarios": HEAVY}, base=base)
+        selection = world.select((f"{CAPTURE}/claude_upgrade_scenarios_0_164_0.json", '{"tools": ["x.sh"]}\n'))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_upgrade_scenarios"])
+        self.assertEqual(selection["fail_closed"], [])
+
+    def test_every_skipped_module_is_listed_with_its_reason(self) -> None:
+        selection = World(self).select()
+        rows = selection["skipped"]
+        self.assertEqual([row["module"] for row in rows], skipped(selection))
+        for row in rows:
+            self.assertEqual(sorted(row), ["core_seconds", "module", "owner", "reason", "rule"])
+            self.assertEqual(row["owner"], "claude")
+            self.assertEqual(row["core_seconds"], HEAVY)
+            self.assertIn("核·秒", row["reason"])
+            self.assertIn("守卫已核", row["reason"])
+        self.assertTrue(uo.seal_ok(selection), "清单进了 selection 的自摘要")
+
+    def test_pulled_modules_are_not_listed_as_skipped_and_a_whole_set_fallback_lists_none(self) -> None:
+        selection = World(self).select((f"{CAPTURE}/claude_lib.py", "from tools.official_client_capture import codex_hub, kernel_util\nCHANGED = 1\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_heavy_c"])
+        self.assertNotIn("test_claude_heavy_c", [row["module"] for row in selection["skipped"]])
+        world = World(self)
+        world.data["cheap_core_seconds"] = 31
+        world.write_data()
+        fallback = world.select()
+        self.assertEqual(fallback["scope"], uo.SCOPE_FULL)
+        self.assertEqual(fallback["skipped"], [])
+
+    def test_the_base_records_whether_it_is_a_release_tag_commit(self) -> None:
+        tagged = World(self, base_tag="v0.2.18-1").select()
+        self.assertEqual((tagged["base_is_release"], tagged["base_release_tags"]), (True, ["v0.2.18-1"]))
+        plain = World(self).select()
+        self.assertEqual((plain["base_is_release"], plain["base_release_tags"]), (False, []))
+        odd = World(self, base_tag="nightly-1").select()
+        self.assertEqual((odd["base_is_release"], odd["base_release_tags"]), (False, []), "只认 vX.Y.Z[-N] 形式的发版 tag")
+
 
 
 class DiffReportTests(unittest.TestCase):
