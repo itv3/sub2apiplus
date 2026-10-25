@@ -1029,6 +1029,14 @@ def _verify_published_current(manifest: Mapping[str, Any], store_root: Path | st
         current = R.Current(unit_id=unit_id, unit_type=str(record.get("unit_type")), spec=record.get("spec") or {},
                             spec_sha256=str(entry.get("spec_sha256")), inputs=list(record.get("inputs") or []),
                             inputs_sha256=str(entry.get("inputs_sha256")), inheritable=True)
+        if R._narrowed_source(record):
+            # 窄化承接项（第 10a 项）：消费端不能重新快照，当前侧视图摘要与测试树坐标只能取自清单承接项的 inherit_check
+            # （执行器写清单时现算；与 verify_manifest 同口径）。缺失或格式不对即拒绝（失败关闭）。
+            shape = R._inherit_check_problem(entry, record)
+            if shape is not None:
+                raise ContractError(f"{unit_id}：{shape}")
+            current.inherit_repo_root = entry["inherit_check"]["repo_root"]
+            current.inherit_inputs_sha256 = entry["inherit_check"]["inherit_inputs_sha256"]
         reasons = R.check_record(store, path, record, current, facts)
         if reasons:
             raise ContractError(f"{unit_id}：按决策收据登记的上下文重做承接核对不通过：{'；'.join(reasons)}")

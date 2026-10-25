@@ -116,7 +116,10 @@ def _assess(request, currents, facts, *, gate_ids, now, historical=False):
                 decision = records.Decision(reasons=["目标新增单元：完整执行"])
             elif not current.inheritable:
                 raise fs.ContractError(f"当前单元 {unit_id} 输入覆盖未闭合")
-            elif row["spec_sha256"] != current.spec_sha256 or row["inputs_sha256"] != current.inputs_sha256:
+            elif row["spec_sha256"] != current.spec_sha256 or (
+                    row["inputs_sha256"] != current.inputs_sha256 and not records._narrowed_source(fs.read(row["record_path"]))):
+                # 来源是窄化记录（第 10a 项）时不在这里比整份输入摘要：整份摘要含来源没访问过的条目，本来就可能不同；
+                # 下面的 check_record 按承接视图（只含来源被访问过的条目）比较。旧口径记录仍要求整份相等。
                 decision = records.Decision(reasons=["目标单元规格或输入不同：完整执行"])
             else:
                 record = fs.read(row["record_path"])
@@ -224,6 +227,13 @@ def verify_evidence(evidence, *, subject=None, current_request=None, deployment=
         record = fs.read(row["record_path"])
         currents[row["unit_id"]] = records.Current(row["unit_id"], record["unit_type"], record["spec"],
             row["spec_sha256"], record["inputs"], row["inputs_sha256"], True)
+        if row["disposition"] == "inherited" and records._narrowed_source(record):
+            # 窄化承接项（第 10a 项）：当前侧视图摘要与测试树坐标取自清单承接项的 inherit_check；缺失即拒绝（失败关闭）。
+            shape = records._inherit_check_problem(row, record)
+            if shape is not None:
+                raise fs.ContractError(f"单元 {row['unit_id']}：{shape}")
+            currents[row["unit_id"]].inherit_repo_root = row["inherit_check"]["repo_root"]
+            currents[row["unit_id"]].inherit_inputs_sha256 = row["inherit_check"]["inherit_inputs_sha256"]
     facts = records.RunFacts(manifest["policy_sha256"], manifest["environment"], manifest["environment_sha256"],
                              manifest["executor"], 24, reference_time)
     verdict, decisions = _assess(request, currents, facts, gate_ids=sorted(GATE_IDS), now=reference_time, historical=historical)

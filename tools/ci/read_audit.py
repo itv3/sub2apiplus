@@ -1859,6 +1859,232 @@ def host_inputs_inherit_problems(trace_document: Mapping[str, Any], recorded_inp
     return problems
 
 
+# ---------------------------------------------------------------------------
+# 承接视图 v1（Codex 升级工具优化第 10a 项：承接输入收窄）
+#
+# 要解决的问题：严格闭合的记录里，输入明细是逐路径的 v3 宿主快照（实例 3538 条），其中约八成这次运行根本没有被访问；但
+# ``check_record`` 先比整份 ``inputs_sha256``，任何一个未访问条目变了都判“输入变了”，按访问方式分级的比较永远轮不到。
+#
+# 做法：把“承接依赖”与“完整审计证据”分开。完整审计证据（全部条目）永远在来源自己的输入上历史重放，不碰当前输入；承接依赖
+# 只由本节的 ``inherit_view`` 一个函数定义——来源被访问过的宿主条目（按访问方式取比较面）加全部非宿主条目（范围项除外，
+# 见下）。写记录时算一个摘要封存进 ``read_audit``，承接时在当前输入上用同一函数、同一份访问集合再算一次比对；摘要不等时
+# ``narrowed_inherit_problems`` 逐条给出原因。比较规则只有这一处，所以不会出现“一处放行、另一处拒绝”。
+#
+# 为什么只比被访问的条目是对的（可观察等价）：单元是确定性程序，它能学到的外部信息只来自系统调用的返回值。严格审计为每个
+# 单元记录了“问过哪些路径、怎么问的”，宿主快照 v3 封存了“这种问法能得到的答案”（见上面 v3 一节的表）；若新世界对该单元
+# 问过的每个问题给出与来源完全相同的答案，则归纳地每个系统调用的返回值都相同，执行轨迹与结果相同。没问过的问题，答案怎么
+# 变都碰不到这个单元。前提 E1～E6（轨迹完整、答案粒度、非文件通道、确定性、隔离、同一坐标上现场取得当前侧答案）逐条
+# 对应的保证与残余风险写在 local-analysis/opt-1025/item10a/spec.md 第 2 节。
+#
+# 本节只新增名字，不改任何既有函数或常量：control 四链 sidecar 动态复用本模块的函数对象，既有默认行为必须字节不变。
+# ---------------------------------------------------------------------------
+
+INHERIT_VIEW_SCHEMA = "unit-inherit-view/v1"
+# 严格闭合记录里不进视图的非宿主条目（F3）：仓库范围项与单个文件项、HEAD。严格闭合已经证明单元的每次文件类访问都有精确
+# 的宿主快照，这些范围项只是读集的过度近似，留着只会让无关改动拖垮承接。用排除名单而不是白名单：其它所有非宿主条目
+# （require-read-audit、runtime-contract、runtime-test-spec、将来新增的未知类型）一律整份纳入，宁严勿松。
+_REPO_DECLARATION_PREFIXES = ("repo:", "file:")
+_REPO_DECLARATION_NAMES = frozenset({"head"})
+# PEP 3147 的镜像字节码文件名后缀（PYTHONPYCACHEPREFIX 把 ``<源文件绝对路径去掉 .py>.cpython-3NN.pyc`` 接在前缀目录之后）。
+_PYC_TAIL = re.compile(r"\.cpython-3[0-9]+\.pyc$")
+
+
+def _under_any(path: str, roots: Iterable[Any]) -> bool:
+    return any(isinstance(root, str) and bool(root) and _under(path, root) for root in roots)
+
+
+def _pyc_promotions(modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) -> frozenset[str]:
+    """G-P 守卫：只被 stat 的 ``.py`` 若其镜像字节码被读取，视同被读取。
+
+    时间戳模式的 pyc 解释器只 stat 源文件、不读它，内容靠 pyc 可见；今天仓库自己的源码是 CHECKED_HASH（解释器会读源文件），
+    所以没有洞，但只要有人把字节码改成时间戳模式或换成持久共享层就会出洞，这里零成本地补上：位于测试树或数据根下的 ``.py``
+    若只有 stat 级访问、而某个以“该源文件绝对路径去掉 .py”结尾的 pyc 被 read，就把它提升为按内容比较。前缀目录不进记录，
+    所以按后缀匹配而不去猜前缀；标准库路径不在 ``roots`` 之下，不提升（它们的内容由环境指纹里的 Python 构建与 dpkg 清单兜住）。"""
+
+    by_base: dict[str, list[str]] = {}
+    for path, kinds in modes.items():
+        if "read" in kinds and _PYC_TAIL.search(path):
+            stem = _PYC_TAIL.sub("", path)
+            by_base.setdefault(stem.rsplit("/", 1)[-1], []).append(stem)
+    if not by_base:
+        return frozenset()
+    promoted: set[str] = set()
+    for path, kinds in modes.items():
+        if not path.endswith(".py") or not kinds or CONTENT_ACCESS_KINDS & set(kinds) or not _under_any(path, roots):
+            continue
+        stem = path[:-3]
+        if any(candidate.endswith(stem) for candidate in by_base.get(stem.rsplit("/", 1)[-1], ())):
+            promoted.add(path)
+    return frozenset(promoted)
+
+
+def inherit_view(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str, Sequence[str]], *, roots: Iterable[Any] = (),
+                 only: Iterable[str] | None = None) -> dict[str, tuple]:
+    """一份输入明细的承接视图：``{条目名: 比较面}``，比较面是不可变的小元组。
+
+    ``modes`` 是来源记录封存的 ``host_path_modes``（路径 → 访问类型），必须已与轨迹交叉核对；``roots`` 是（测试树, 数据根），
+    只用于 G-P 提升；``only`` 限定名字全集——当前侧用来源视图的名字：当前输入里多出来的条目（旧口径范围项、策略多登记的宿主
+    路径）因为不在来源访问集合里而被自然忽略，来源访问过的条目当前没有则缺失，由调用方判拒绝。
+
+    * v3 宿主条目：没被访问（访问类型为空）不进视图；否则比较面是 ``("host", 条目摘要, 内容, 目录项)``。条目摘要已绑定无条件
+      比较集（kind／target／links／ancestors／core）和被声明的易变字段值；内容摘要只在“文件且被 read／exec”（或 G-P 提升）时取，
+      目录项只在“目录且被 list”时取。**调用方必须保证条目已过 ``check_host_entry_v3`` 自洽复核**，否则条目摘要不可信。
+    * v2 宿主条目：不应出现在严格闭合记录里；出现就整份纳入。
+    * 非宿主条目：``repo:*``、``file:*``、``head`` 不进视图（F3）；其余一律整份纳入。"""
+
+    names = None if only is None else frozenset(only)
+    promoted = _pyc_promotions(modes, roots)
+    view: dict[str, tuple] = {}
+    for entry in inputs or []:
+        name = entry["name"]
+        if names is not None and name not in names:
+            continue
+        if is_host_entry_v3(entry):
+            path = entry["detail"]["path"]
+            kinds = frozenset(modes.get(path) or ())
+            if not kinds:
+                continue
+            snapshot = entry["detail"]["snapshot"]
+            content = snapshot["content_sha256"] if snapshot["kind"] == "file" and (kinds & CONTENT_ACCESS_KINDS or path in promoted) else None
+            listing = tuple(snapshot["entries"]) if snapshot["kind"] == "directory" and kinds & LIST_ACCESS_KINDS else None
+            view[name] = ("host", entry["sha256"], content, listing)
+        elif name.startswith("host:"):
+            view[name] = ("whole", entry["sha256"])
+        elif name.startswith(_REPO_DECLARATION_PREFIXES) or name in _REPO_DECLARATION_NAMES:
+            continue
+        else:
+            view[name] = ("whole", entry["sha256"])
+    return view
+
+
+def inherit_view_digest(view: Mapping[str, Sequence[Any]]) -> str:
+    """视图摘要：排序后的 ``[名字, 比较面]`` 的规范化 JSON 摘要（与 ``unit_records.entries_sha256`` 同一套规范化）。"""
+
+    return _canonical_digest(sorted([name, list(face)] for name, face in view.items()))
+
+
+def inherit_current_digest(record: Mapping[str, Any], current_inputs: Sequence[Mapping[str, Any]] | None) -> str:
+    """当前侧摘要：用来源记录封存的访问集合，在当前输入上取视图并求摘要（执行器写清单承接项、消费端核对共用）。"""
+
+    audit = record["read_audit"]
+    modes = audit["host_path_modes"]
+    roots = (audit.get("repo_root"), audit.get("data_root"))
+    source = inherit_view(record["inputs"], modes, roots=roots)
+    return inherit_view_digest(inherit_view(current_inputs, modes, roots=roots, only=source))
+
+
+def _narrowed_entry_reason(name: str, old: Mapping[str, Any], new: Mapping[str, Any], modes: Mapping[str, Sequence[str]],
+                           promoted: frozenset[str]) -> str | None:
+    """一个被访问的宿主条目在来源与当前之间的差异原因（没有差异返回 None）：与视图比较面逐项对应。"""
+
+    try:
+        planned, current = check_host_entry_v3(old), check_host_entry_v3(new)
+    except AuditError as error:
+        return f"{name}：{error}"
+    if old["detail"].get("metadata_dependency") != new["detail"].get("metadata_dependency"):
+        return f"{name}：元数据依赖声明与来源记录不同"
+    path = old["detail"]["path"]
+    ok, reason = host_snapshot_matches(planned, current, modes.get(path, ()), entry_declared_fields(old))
+    if not ok:
+        return f"{name}：{reason}"
+    if path in promoted and planned.get("kind") == "file" and planned.get("content_sha256") != current.get("content_sha256"):
+        # G-P 提升：只 stat 的源文件，因其镜像字节码被读取而按读取处理；host_snapshot_matches 按 stat 级不比内容，这里补上。
+        return f"{name}：文件内容变了（只 stat 了它，但其镜像字节码被读取，按读取过处理）"
+    return None
+
+
+def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs: Sequence[Mapping[str, Any]] | None,
+                              current_inputs: Sequence[Mapping[str, Any]] | None, audit_summary: Mapping[str, Any] | None,
+                              *, live: bool, current_digest: str | None = None) -> list[str]:
+    """窄化承接的补比（替代窄化路径里的 ``host_inputs_inherit_problems``）；返回问题列表，空＝通过，不向外抛异常。
+
+    1. 取记录封存的 ``host_path_modes``，必须与完整轨迹重算的结果逐项相等；封存的 ``inherit_inputs_sha256`` 必须等于由来源
+       输入与这份访问集合重算的视图摘要（两道交叉核对，封存值被改或与轨迹不符即失败关闭）。
+    2. 在当前输入上按来源的访问集合取视图，与来源视图比摘要；不等时逐条给出原因，逐条比较找不到原因也按失败处理（防分叉兜底：
+       摘要不等必有原因）。``current_digest`` 非空是消费端（不能重新快照）：只比清单里绑定的摘要。
+    3. ``live``（非历史、现场承接）时，对被访问的宿主条目做现场漂移检查（计划快照与现场按访问方式比较）和硬链接守卫 G-H：
+       测试树或数据根下被访问的普通文件 ``st_nlink`` 必须为 1（nlink／inode 相等性不在快照里，按保守口径拒绝；系统路径不查，
+       其变化随包版本进环境指纹）。消费端给了摘要时没有当前条目，现场检查改用来源条目（与旧路径“现场重取来源快照”等价）。
+
+    来源记录是可被改写的输入：畸形的条目、轨迹一律返回问题而不抛异常（否则一条畸形记录就能让整次承接评估中断）。"""
+
+    audit = audit_summary or {}
+    roots = (audit.get("repo_root"), audit.get("data_root"))
+    recorded, bad_recorded = _v3_entries_by_name(recorded_inputs, "来源记录")
+    if bad_recorded:
+        return bad_recorded
+    current: dict[str, Mapping[str, Any]] = {}
+    if current_digest is None:
+        current, bad_current = _v3_entries_by_name(current_inputs, "当前输入")
+        if bad_current:
+            return bad_current
+    if not recorded:
+        return ["来源记录没有 v3 宿主条目，不能按窄化口径承接"]
+    try:
+        modes = host_path_modes(trace_document, list(recorded.values()))
+    except AuditError as error:
+        return ["宿主快照 v3 无法确定访问方式：" + str(error)]
+    except (KeyError, TypeError, AttributeError) as error:
+        return [f"宿主快照 v3 无法确定访问方式：来源记录的读集轨迹格式畸形（{type(error).__name__}：{error}）"]
+    problems: list[str] = []
+    if audit.get("host_path_modes") != modes:
+        problems.append("记录封存的宿主访问类型缺失，或与完整轨迹重算的结果不符")
+    try:
+        source = inherit_view(recorded_inputs, modes, roots=roots)
+        source_digest = inherit_view_digest(source)
+        names = frozenset(source)
+        promoted = _pyc_promotions(modes, roots)
+        if audit.get("inherit_inputs_sha256") != source_digest:
+            problems.append("记录封存的承接视图摘要缺失，或与由轨迹和来源输入重算的结果不符")
+        if current_digest is not None:
+            if current_digest != source_digest:
+                problems.append("清单登记的当前承接视图摘要与来源记录的不同（承接依赖变了，或清单被改过）")
+        else:
+            now_view = inherit_view(current_inputs, modes, roots=roots, only=names)
+            if inherit_view_digest(now_view) != source_digest:
+                before = len(problems)
+                for name in sorted(names):
+                    if source[name] == now_view.get(name):
+                        continue
+                    if name.startswith("host:") and source[name][0] == "host":
+                        new = current.get(name)
+                        if new is None:
+                            problems.append(f"{name}：当前输入没有这个被访问过的宿主条目")
+                            continue
+                        reason = _narrowed_entry_reason(name, recorded[name], new, modes, promoted)
+                        problems.append(reason or f"{name}：承接视图的比较面不同（逐项比较未发现具体原因，按失败处理）")
+                    elif name not in now_view:
+                        problems.append(f"{name}：当前输入没有这个条目")
+                    else:
+                        problems.append(f"{name}：非宿主输入变了")
+                if len(problems) == before:
+                    problems.append("承接视图摘要不符（逐条比较未发现原因，按失败处理）")
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        problems.append(f"承接视图无法构造（输入明细格式畸形：{type(error).__name__}：{error}）")
+        return problems
+    if live:
+        pool = current if current_digest is None else recorded
+        for name in sorted(names):
+            entry = pool.get(name)
+            if source[name][0] != "host" or entry is None:
+                continue
+            path = entry["detail"]["path"]
+            try:
+                _verify_host_entry_v3(entry, modes, historical=False)
+            except (OSError, ValueError, TypeError, AuditError) as error:
+                problems.append(f"{name}：{error}")
+                continue
+            if entry["detail"]["snapshot"]["kind"] == "file" and _under_any(path, roots):
+                try:
+                    links = os.stat(entry["detail"]["snapshot"]["target"]).st_nlink
+                except OSError as error:
+                    problems.append(f"{name}：硬链接数取不到（{error}）")
+                else:
+                    if links != 1:
+                        problems.append(f"{name}：硬链接数不是 1（nlink／inode 相等性不在快照里，按保守口径拒绝）")
+    return problems
+
+
 def _verify_host_entry_v3(entry: Mapping[str, Any], modes: Mapping[str, Sequence[str]] | None, *, historical: bool) -> Mapping[str, Any]:
     """``strict_audit_reads`` 对一个 v3 条目的核对：先自洽复核；非历史重放时再现取 v3 快照，按本次轨迹的访问方式与条目
     比较（``modes`` 为 None 表示轨迹不完整，退到整份相等）。历史重放只校验封存内容自身，不读宿主。返回封存载荷。"""

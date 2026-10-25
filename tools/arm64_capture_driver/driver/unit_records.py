@@ -895,6 +895,11 @@ class Current:
     inputs_sha256: str | None
     inheritable: bool
     reason: str = ""
+    # 窄化承接（第 10a 项）：当前执行器的测试树坐标（只有 ``unit_executor._gate_currents`` 这个活构造点填；自推导的 ``Current``
+    # 保持 None，由清单承接项的 ``inherit_check.repo_root`` 在 ``verify_manifest`` 里补验）；以及消费端从清单取的当前侧视图摘要
+    # （消费端不能重新快照，靠清单登记的摘要把“当前≈来源”绑回来）。两者都带缺省值，既有的位置参数构造不受影响。
+    inherit_repo_root: str | None = None
+    inherit_inputs_sha256: str | None = None
 
 
 @dataclass
@@ -927,6 +932,81 @@ def _listed_as_formal(manifest: Mapping[str, Any], unit_id: str, record_sha256: 
                and entry.get("record_sha256") == record_sha256 for entry in manifest.get("units") or [])
 
 
+# ---------------------------------------------------------------------------
+# 窄化承接（第 10a 项，``unit-inherit-view/v1``）
+#
+# 严格闭合的记录在 ``read_audit`` 块里另封存 ``inherit_view_schema`` 与 ``inherit_inputs_sha256``（只含来源被访问过的宿主条目与
+# 非宿主条目，规则的唯一定义在 ``read_audit.inherit_view``）。承接时不再比整份 ``inputs_sha256``，改为在当前输入上按来源的访问
+# 集合取同一个视图比对；来源自己的完整审计证据在来源自己的输入上历史重放，不碰当前输入。当前测试树坐标必须等于来源
+# ``read_audit.repo_root``（否则一律拒绝）。没有这两个字段的旧记录、视图版本未知的记录、读集要求不成立的记录，一字不变地走整份
+# 比较。承接项的清单条目另带 ``inherit_check``（当前侧视图摘要与测试树坐标），消费端靠它把“当前≈来源”绑回清单。
+# 为什么不写进模块说明：声明级章节的守卫测试要求模块说明相对基线未改。
+# ---------------------------------------------------------------------------
+
+# 承接视图的版本串：与 ``read_audit.INHERIT_VIEW_SCHEMA`` 同值（两个文件互不导入，测试固定两处相等）。
+_INHERIT_VIEW_SCHEMA = "unit-inherit-view/v1"
+
+
+def _narrowed_source(record: Any) -> bool:
+    """来源记录能不能走窄化承接：``read_audit`` 里有已知版本的视图标识、64 位十六进制的视图摘要，且封存的宿主访问类型是
+    非空对象（没有 v3 宿主条目的 v2／control 记录不加这些字段，也不会被判成可窄化）。任何一项不符都走旧的整份比较，只会更严。"""
+
+    audit = record.get("read_audit") if isinstance(record, Mapping) else None
+    return (isinstance(audit, Mapping) and audit.get("inherit_view_schema") == _INHERIT_VIEW_SCHEMA
+            and isinstance(audit.get("inherit_inputs_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", audit["inherit_inputs_sha256"]) is not None
+            and isinstance(audit.get("host_path_modes"), dict) and bool(audit["host_path_modes"]))
+
+
+def _narrowed_problems(store: RecordStore, record: Mapping[str, Any], current: Current, facts: RunFacts) -> list[str]:
+    """窄化承接的读集核对（替代整份 ``inputs_sha256`` 比较与旧的“来源轨迹放在当前输入上重放”）。
+
+    1. 记录内部一致：读集覆盖闭合；``read_audit.inputs_sha256``、``entries_sha256(inputs)`` 都等于 ``inputs_sha256``（旧路径靠
+       “当前摘要＝记录摘要＋当前输入＝记录输入”间接保证，窄化路径对来源自己的输入重放，必须直接核）。
+    2. 测试树坐标守卫：当前坐标（只有执行器的活构造点填）必须等于来源 ``read_audit.repo_root``，否则不再做任何视图比较，
+       免得“旧树对旧树”产生误导性的通过。
+    3. 来源自己的完整读集轨迹在来源自己的输入上历史重放（不碰当前输入、不碰宿主）。
+    4. ``read_audit.narrowed_inherit_problems``：封存的访问类型与视图摘要交叉核对、当前侧按同一视图比对，现场承接时再做被访问
+       条目的漂移检查与硬链接守卫。"""
+
+    audit = record.get("read_audit") or {}
+    if (audit.get("coverage_complete") is not True or audit.get("coverage_scope") != "all-file-paths/v1"
+            or audit.get("inputs_sha256") != record.get("inputs_sha256")):
+        return ["读集覆盖未闭合，不能承接"]
+    recorded = record.get("inputs")
+    try:
+        sealed = isinstance(recorded, list) and entries_sha256(recorded) == record.get("inputs_sha256")
+    except (KeyError, TypeError):
+        sealed = False
+    if not sealed:
+        return ["记录的输入明细与登记的输入摘要不符，不能承接"]
+    if current.inherit_repo_root is not None and current.inherit_repo_root != audit.get("repo_root"):
+        return [f"测试树坐标与来源不同（来源 {audit.get('repo_root')}，当前 {current.inherit_repo_root}）：窄化承接要求在同一绝对路径上比较"]
+    trace = audit.get("trace") or {}
+    digest = str(trace.get("sha256") or "")
+    stored_trace = store.log_path(digest) if re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    problems: list[str] = []
+    try:
+        if stored_trace is None or not stored_trace.is_file() or file_sha256(stored_trace) != digest:
+            raise RecordsError("完整读集轨迹缺失或摘要漂移")
+        trace_document = json.loads(stored_trace.read_text())
+        module = _audit_module()
+        replay = module.strict_audit_reads(trace_document, recorded, repo_root=str(audit.get("repo_root") or "/unbound-repo"),
+                                           data_root=audit.get("data_root"), historical=True)
+        if not replay["coverage_complete"]:
+            first = (replay.get("undeclared") or [{}])[0]
+            raise RecordsError("完整读集轨迹不能在来源自己的输入上重放" + (f"：{first.get('path')} {first.get('suggestion')}" if first else ""))
+        found = module.narrowed_inherit_problems(trace_document, recorded, current.inputs, audit,
+                                                 live=not facts.historical_read_audit, current_digest=current.inherit_inputs_sha256)
+        if any("宿主输入快照漂移" in problem for problem in found):
+            # 与旧路径同一说法：旧路径把来源轨迹放在当前输入上重放，被访问的宿主输入现场漂移时报“完整读集轨迹不能按当前输入重放”。
+            found.insert(0, "完整读集轨迹不能按当前输入重放（被访问的宿主输入已漂移）")
+        problems.extend(found)
+    except (OSError, ValueError, RuntimeError) as error:
+        problems.append(str(error))
+    return problems
+
+
 def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, current: Current, facts: RunFacts,
                  *, thorough: bool = True) -> list[str]:
     """一条候选记录不能承接的原因（空列表＝可以承接）。便宜的核对在前；``thorough`` 为假时前面已有问题就不再做贵的
@@ -954,7 +1034,11 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
         problems.append(f"该次执行没通过（{why}）")
     if record.get("spec_sha256") != current.spec_sha256:
         problems.append("单元规格变了（测试集合、命令、环境、额度、独占或超时）")
-    if record.get("inputs_sha256") != current.inputs_sha256:
+    # 读集要求成立且来源记录是窄化记录：不比整份输入摘要（那会让来源没访问过的条目的任何变化都拒绝承接），改在下面的读集核对里
+    # 按承接视图比较；其余情形（旧记录、版本未知、读集要求不成立）一字不变地走整份比较。
+    required_audit = facts.require_read_audit or any(entry.get("name") == "require-read-audit" for entry in current.inputs or [])
+    narrowed = required_audit and _narrowed_source(record)
+    if not narrowed and record.get("inputs_sha256") != current.inputs_sha256:
         changed = _diff_names(record.get("inputs"), current.inputs)
         problems.append(f"输入变了：{'、'.join(changed[:8]) or '（声明不同）'}{' 等' if len(changed) > 8 else ''}")
     if record.get("policy_sha256") != facts.policy_sha256:
@@ -967,8 +1051,11 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
         old, new = executor.get("files") or {}, facts.executor.get("files") or {}
         changed = sorted(name for name in set(old) | set(new) if old.get(name) != new.get(name))
         problems.append(f"执行器变了：{'、'.join(changed) or '（版本不同）'}")
-    required_audit = facts.require_read_audit or any(entry.get("name") == "require-read-audit" for entry in current.inputs or [])
-    if required_audit:
+    if narrowed:
+        # 前面已有便宜的核对不通过且本次不要求彻底时，不再做贵的轨迹重放与逐条比较（结论本来就是拒绝；彻底核对会给出完整原因）。
+        if thorough or not problems:
+            problems.extend(_narrowed_problems(store, record, current, facts))
+    elif required_audit:
         audit = record.get("read_audit") or {}
         if (audit.get("coverage_complete") is not True or audit.get("coverage_scope") != "all-file-paths/v1"
                 or audit.get("inputs_sha256") != record.get("inputs_sha256")):
@@ -1102,7 +1189,11 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
         if record.get("kind") != "formal" or record.get("unit_id") != unit_id:
             problems.append(f"{unit_id}：记录不是本单元的正式执行")
             continue
-        if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):
+        # 窄化承接项（第 10a 项）：清单里登记的是当前侧整份输入摘要，来源是窄化记录时它本来就不必等于记录的；“当前≈来源”改由
+        # 下面承接项的 inherit_check（当前侧视图摘要与测试树坐标）绑定。读集要求不成立的旧口径记录仍要求整份相等。
+        narrowed_entry = (disposition == "inherited" and _narrowed_source(record)
+                          and (facts.require_read_audit or any(item.get("name") == "require-read-audit" for item in record.get("inputs") or [])))
+        if record.get("spec_sha256") != entry.get("spec_sha256") or (not narrowed_entry and record.get("inputs_sha256") != entry.get("inputs_sha256")):
             problems.append(f"{unit_id}：记录的单元规格或输入摘要与清单不符")
         run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
         if disposition == "executed":
@@ -1116,7 +1207,11 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
             else:
                 current = Current(unit_id=unit_id, unit_type=str(record.get("unit_type")), spec={}, spec_sha256=str(entry.get("spec_sha256")),
                                   inputs=list(record.get("inputs") or []), inputs_sha256=str(entry.get("inputs_sha256")), inheritable=True)
-                reasons = check_record(store, record_path, record, current, facts)
+                shape = _inherit_check_problem(entry, record) if narrowed_entry else None
+                if narrowed_entry and shape is None:
+                    check = entry["inherit_check"]
+                    current.inherit_repo_root, current.inherit_inputs_sha256 = check["repo_root"], check["inherit_inputs_sha256"]
+                reasons = [shape] if shape else check_record(store, record_path, record, current, facts)
                 if run.get("run_id") == manifest.get("run_id"):
                     reasons.append("承接项的记录来自本次运行")
                 if reasons:
@@ -1139,6 +1234,21 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
     if mode == UNIT_INHERIT:
         problems.extend(_unit_inherit_problems(manifest, entries, store))
     return problems
+
+
+def _inherit_check_problem(entry: Mapping[str, Any], record: Mapping[str, Any]) -> str | None:
+    """窄化承接项的清单条目必须带形状正确的 ``inherit_check``（失败关闭：缺失、多余键、版本串与来源记录不同、摘要或坐标类型不对
+    都算问题）。摘要与坐标的取值是否与来源相符，由 ``check_record`` 的窄化分支比对。"""
+
+    check = entry.get("inherit_check")
+    audit = record.get("read_audit") or {}
+    if (not isinstance(check, Mapping) or set(check) != {"schema_version", "inherit_inputs_sha256", "repo_root"}
+            or check.get("schema_version") != audit.get("inherit_view_schema")
+            or not isinstance(check.get("inherit_inputs_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", check["inherit_inputs_sha256"]) is None
+            or not isinstance(check.get("repo_root"), str) or not check["repo_root"]):
+        return "窄化承接项缺少 inherit_check，或它的版本、摘要、测试树坐标格式不对"
+    return None
 
 
 def _unit_inherit_problems(manifest: Mapping[str, Any], entries: list[Any], store: RecordStore | None) -> list[str]:

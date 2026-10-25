@@ -2306,6 +2306,11 @@ class ReadAuditor:
                         modes = {}  # 取不到就不封存；v3 记录缺该字段时承接失败关闭
                     if modes:
                         result["host_path_modes"] = modes
+                        # 窄化承接（第 10a 项）：同一份轨迹与输入派生的承接视图摘要，随记录自摘要封存；写入条件与访问类型完全相同
+                        # （v2／control 没有 v3 条目，modes 为空，不加字段，记录与过去逐字相同）。承接时按它在当前输入上取同一视图比对。
+                        result["inherit_view_schema"] = self.module.INHERIT_VIEW_SCHEMA
+                        result["inherit_inputs_sha256"] = self.module.inherit_view_digest(
+                            self.module.inherit_view(inputs, modes, roots=(self.repo_root, self.data_root)))
         result.setdefault("status", "failed" if result.get("undeclared_count") else "passed")
         result.setdefault("coverage_complete", False)
         result.update(inputs_sha256=current.inputs_sha256 if current else None, repo_root=self.repo_root, data_root=self.data_root)
@@ -4019,9 +4024,12 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     def current(unit: Unit, spec: dict[str, Any], inputs: list[dict[str, Any]] | None, reason: str) -> Any:
         if inputs is not None and not unit.command and any(item.get("name") == "runtime-contract" for item in inputs):
             inputs = records._unique([*inputs, records._audit_module()._runtime_module().test_spec_entry(spec)])
+        # inherit_repo_root：窄化承接的测试树坐标守卫（第 10a 项）。本函数是全库唯一的“活”构造点，每个单元都必须带上，
+        # 否则窄化比较会拿旧树当新树（测试固定“这里产出的每个 Current 都带坐标”）。
         return records.Current(unit_id=unit.unit_id, unit_type="command" if unit.command else "test", spec=spec, spec_sha256=_sha256(spec),
                                inputs=inputs, inputs_sha256=records.entries_sha256(inputs) if inputs is not None else None,
-                               inheritable=inputs is not None and not reason, reason=reason)
+                               inheritable=inputs is not None and not reason, reason=reason,
+                               inherit_repo_root=str(Path.cwd().resolve()))
 
     for group in groups:
         deps = records.TestDependencies(group.start.resolve().parent) if not problem else None
@@ -4083,18 +4091,26 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     return currents
 
 
-def _inherited_outcome(unit: Unit, decision: Any, store: Any) -> Outcome:
-    """承接的单元按原记录参加全集核对与门禁聚合（结论、测试结果、用量与起止时间都是原记录的）。"""
+def _inherited_outcome(unit: Unit, decision: Any, store: Any, current: Any = None) -> Outcome:
+    """承接的单元按原记录参加全集核对与门禁聚合（结论、测试结果、用量与起止时间都是原记录的）。
+
+    来源是窄化记录（第 10a 项）时另带 ``inherit_check``：当前侧按来源访问集合现算的视图摘要与本轮测试树坐标，写进清单承接项，
+    消费端不能重新快照，靠它把“当前≈来源”绑回清单。``current`` 是做出承接决策时用的当前事实（输入已含沿用的宿主快照）。"""
 
     record = decision.record
+    extra = {"disposition": "inherited", "record_sha256": record["record_sha256"], "record_path": str(decision.record_path),
+             "inherited_from": {"run_id": record["run"]["run_id"], "completed_at_utc": record["completed_at_utc"]}}
+    if current is not None and _records_module()._narrowed_source(record):
+        audit = record["read_audit"]
+        extra["inherit_check"] = {"schema_version": audit["inherit_view_schema"],
+                                  "inherit_inputs_sha256": _audit_module().inherit_current_digest(record, current.inputs),
+                                  "repo_root": current.inherit_repo_root}
     return Outcome(
         unit=unit, kind="formal", exit_code=record["exit_code"], signal=None, timed_out=False,
         seconds=float(record.get("seconds") or 0.0), cpu_seconds=float(record.get("cpu_seconds") or 0.0),
         max_rss_mb=float(record.get("max_rss_mb") or 0.0), orphans=[], log_path=store.log_path(str(record["log"]["sha256"])),
         result=None if unit.command else {"tests": record["tests"], "tests_run": len(record["tests"]), "successful": True},
-        extra={"disposition": "inherited", "record_sha256": record["record_sha256"], "record_path": str(decision.record_path),
-               "inherited_from": {"run_id": record["run"]["run_id"], "completed_at_utc": record["completed_at_utc"]}},
-        started_at_utc=record["started_at_utc"], completed_at_utc=record["completed_at_utc"],
+        extra=extra, started_at_utc=record["started_at_utc"], completed_at_utc=record["completed_at_utc"],
     )
 
 
@@ -4127,6 +4143,8 @@ def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, stor
         }
         if outcome is not None and outcome.extra.get("disposition") == "inherited":
             entry["basis"] = outcome.extra["inherited_from"]
+            if outcome.extra.get("inherit_check") is not None:
+                entry["inherit_check"] = outcome.extra["inherit_check"]
         else:
             entry["reasons"] = list(decisions[unit.unit_id].reasons)
         if outcome is not None and outcome.extra.get("retry"):
@@ -4572,7 +4590,7 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         else:
             # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
             diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")
-        inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store) for unit in units if decisions[unit.unit_id].inherit]
+        inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store, currents[unit.unit_id]) for unit in units if decisions[unit.unit_id].inherit]
         outcomes = formal + inherited
         summary = summarize_gates(groups, group_units, expected, command_units, gates, outcomes, diagnostic, time.monotonic() - started, policy)
         if retry_config is not None:
