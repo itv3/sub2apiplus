@@ -332,10 +332,11 @@ class MakeCommandTests(unittest.TestCase):
 
     def test_a_non_make_command_may_not_(self) -> None:
         world = et.World(self)
-        self.assertEqual(world.command_of("backend:go-test")[0][0], "go")
+        # 后端 go test 实际由按包运行的包装器（python3 go_test_packages.py，优化第 3 项）执行：命令的第一个词不是 make，照样拒绝声明 make 展开合同。
+        self.assertEqual(world.command_of("backend:go-test")[0][0], "python3")
         world.declare("backend:go-test", self.SCOPE)
         world.write()
-        with self.assertRaisesRegex(ValueError, "backend:go-test.*声明了 make 展开合同，但单元命令的第一个词是 'go' 而不是 make"):
+        with self.assertRaisesRegex(ValueError, "backend:go-test.*声明了 make 展开合同，但单元命令的第一个词是 'python3' 而不是 make"):
             world.plan()
 
     def test_the_first_word_is_judged_after_the_launcher_and_by_its_basename(self) -> None:
