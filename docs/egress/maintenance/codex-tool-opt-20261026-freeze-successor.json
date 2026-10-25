@@ -1,0 +1,718 @@
+{
+  "base_commit": "2c412c19f58179ed5e241ee632f102b2d5762f07",
+  "changed_path_count": 198,
+  "current_commit": "f5bf5e2d33ebb63381ee3a78e180b0c7dd530054",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7024,
+  "frozen_path_count": 2318,
+  "identity_sha256": "4f3087ee7d4b04ed56bfed28a5c6fb78b64013a165fe41eba9f3f7a83a5aa07d",
+  "issued_at_utc": "2026-10-25T20:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-tool-opt-20261026-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler_privacy_create_test.go",
+      "predecessor_sha256s": [
+        "34f89f202d66d08566294963d5da2312b8fa36d701291ad5919f3e253e86afc1"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/handler/admin/account_handler_privacy_create_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2ea9839bacd9432a5d60bb54638d41ad513e75eb0dc62140248885b4e38dd66f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler_test.go",
+      "predecessor_sha256s": [
+        "6ca9c1e96da3ae3573f2dd635f34fbc0bd6bde4699d46d99ee7f07aa40d9d3e3"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/handler/openai_gateway_handler_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "61f11f7efe53b64770a25264a8e354a738245643a895b560ac88cb84ca8aec3a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/typesafe/client_test.go",
+      "predecessor_sha256s": [
+        "176ed387635bd0df4e1352a4bbd17ad6434495da3ec35a8c3100cdcca32df42b"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/pkg/typesafe/client_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "75c535ada30364a7fa5058cb1efad964ba4729fe37b4af67d1368d0f08a664c1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/affiliate_repo_integration_test.go",
+      "predecessor_sha256s": [
+        "64603de2ef201d79eff044b46e6c532f820d38ca65900b831744b8c96200691e"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/affiliate_repo_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d1c6be9b5897b58945c0c3417037d3b9f755b414697d461b4a346e40c1c19bbf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/group_repo_integration_test.go",
+      "predecessor_sha256s": [
+        "3d8cbac0fa4408c65e6fd9feef18a72da73cf664881fae2673403d4232f5f9d1"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/group_repo_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2c7f4e15364b8e8d6a428cdad454bf7976ac6bc2767c5262557f55c4391186a9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/http_upstream_body_lifecycle_test.go",
+      "predecessor_sha256s": [
+        "f82e67c115540837b4d1704667cdd550dc8064375a050c6084b339b717db3c0f"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/http_upstream_body_lifecycle_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7aedfe036dd8d80ce0b8a390fa7f9b6738e5520820b0785ae667e26cc8f22add"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/http_upstream_test.go",
+      "predecessor_sha256s": [
+        "7d1bc2b28fc2d3c418ce3e9c29e5c168860609383ff0676d6688e179bf928011"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/http_upstream_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7cbca33a5396af0b69ec9731aece8ba4924777798a7af06825f7fe0ac2738ac1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/official_egress_req_guard_test.go",
+      "predecessor_sha256s": [
+        "afb1d675d60b95df451dd0aae4e42e6e92b3e12aa0e3747c68496e8f5bb35c79"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/official_egress_req_guard_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0c127ab88f078bcafcaf4de40068b61d2e19cc15684902539f9e32ae1307f4a3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/ops_repo_dashboard_integration_test.go",
+      "predecessor_sha256s": [
+        "9646f8466c8b8a864e8f88ca0a26beb3217dd91add55607c27a5e7a0b55bc5b1"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/ops_repo_dashboard_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "16fa96c8f26d074a567edfd51c885bb27dddebdbdd95b2460835bdb026518d34"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/usage_log_repo_integration_test.go",
+      "predecessor_sha256s": [
+        "2db2b658df0d57c54eb6205942c1c273196c069685a635ca0d4dd3ccccb87ec2"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/repository/usage_log_repo_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "29a9a8f9fef8762baf2c8ca7de8be83f36c61539ae7fe72aea89498213b47380"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/auth_cache_invalidation_outbox_test.go",
+      "predecessor_sha256s": [
+        "3e7e677d3f540dc7434e4a88b5618f707c7c6bf94af91c2c46ecbc940386b4db"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/auth_cache_invalidation_outbox_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f184999a3e6423bf091f346e0d21411e564dc8c5f41594695f91192810ef02cc"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/backup_service_test.go",
+      "predecessor_sha256s": [
+        "7853092b4eb55b4bd937454a034754ee5da6e68a054191e8c1f56f5e6b58e38e"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/backup_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ccf258294cdc76f0f19081f3cc5da535c625cab89824e7a494f7a4799ae8b05a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/content_moderation_runtime_cache_test.go",
+      "predecessor_sha256s": [
+        "e3f33502e269015c62f338fb4cfe392a1830c6eabb0610983c5be7a70853448e"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/content_moderation_runtime_cache_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "12182b5d5b75ff3324ca55af8009defc9cfe0f789adb2707407feb35baa67acb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_upstream_transport_error_test.go",
+      "predecessor_sha256s": [
+        "696adea2fbcb2d5634432535024c9ed56722d43239ad899127e05dda4724ae1d"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/gemini_upstream_transport_error_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e85cb481eb4d6e2b7c6d2039b6d07ce5132f4ccb188c3e7b05177ec2752ba9e4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/grok_credential_failure_test.go",
+      "predecessor_sha256s": [
+        "c69714b88c4535d479f21e32e9e87c7895ab2dc328fe6d43c49d3c4447d65842"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/grok_credential_failure_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ba3c60070f3b5e3ec1cd3366794772fb95a4a1e892e4eec04dac3dd83f2e672a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ollama_cloud_usage_rate_limit_probe_test.go",
+      "predecessor_sha256s": [
+        "d15165e6fb268b4c6abb7fee5b80f56e3d40ffd32cb3f0df34c84588cabe4a2a"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/ollama_cloud_usage_rate_limit_probe_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d334ee6615a497fddf93d1da1bbf11a1c82ba1d185514f329998c1d5839f1be9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "predecessor_sha256s": [
+        "6af3ea2cf6a1d178a96e10fdd8f745bc90cdd932be8c6e1b7ec258b4439ae5b4"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_codex_models_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bb3ee6a40d668ebcea1e4908a80cdda86221aeceb434621f4d7ffd6c3a13188b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_first_output_timeout_test.go",
+      "predecessor_sha256s": [
+        "4f8dff7a7c0347d2dad497518e4df0fc06d7e6cf7c2f2f439afad7c309c9eb65"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_first_output_timeout_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b12999c9daa50a560b5bfdfef4fc2cd7b9cf97a3c181af62993379c7d3339e0e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_test.go",
+      "predecessor_sha256s": [
+        "b97ed3f718ef63fad94141701548b278dd25bc7956e8907269e2041d9724f434"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_gateway_chat_completions_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9660ecd2542a0e87fff99206e1b867b18d635811c88df14be86cb265aa7b3628"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_service_test.go",
+      "predecessor_sha256s": [
+        "e776de6de29a3c48ecb694147278c05b6e09137e8872008cc5713fb134f20a64"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_gateway_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "859f973e7ef22dcf7f16aceeef728752589add527f2e03632a4ade6a923b95f1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_models_list_test.go",
+      "predecessor_sha256s": [
+        "7eb8add3fda9903462b812d427b21b79d1fe4797d360a8bcdf4d24e24f0a52a2"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_models_list_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "013c53696d281a2b0d9734299614abcc7bf8870495cf0b2b38f5a10d64c2bfb5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_tool_schema_test.go",
+      "predecessor_sha256s": [
+        "847d82748b1c816b73c08b258a6232a263ec25c04f641fc2812aec80e395d47a"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_responses_tool_schema_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4f6a424c090b0b3fd6b728f25607657e062c7a4a1f89422f13db68438e243a39"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "predecessor_sha256s": [
+        "db1ab8678f8ba908e8f10d77c99e7c06fc7d2b645d5db2f2afce5db79db921b9"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e3e2de5c2c5447448988ff392d4455bdb417baabef81a48399137fbfb4f83a58"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_success_test.go",
+      "predecessor_sha256s": [
+        "a80387557d157a13e73df7c9772fb5c6df165f68650d7cc24f138477f4d331b2"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_forwarder_success_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d7d83f3aee494d9f92e964eee13361df8a38c113fdd60043442bb3c21e5ae120"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_passthrough_turn_pricing_test.go",
+      "predecessor_sha256s": [
+        "7f8c4f39a1fa52b44d3c521e6caae52c8d0a8321bdeb87ad0506e671cda3371a"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_passthrough_turn_pricing_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c68ce83b48c35e91a17d215832e8e8576480bb5e0a7f451d6d8ca60fade91646"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_pool_reader_loop_test.go",
+      "predecessor_sha256s": [
+        "b8bb8fba891b512e01a5bad92ccffb51c3fc3b323a7effc991fdf61940362c40"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_pool_reader_loop_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "72ca0e592086397e08a7a59bc17fea41abb6bb11162dfcf483e23c96233c5deb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_pool_test.go",
+      "predecessor_sha256s": [
+        "2e5a33c31fd817e487d150d1ec7ac33c05db61ec4c572e8d7f9e10470664d77f"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_pool_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "15cb9f6a6c82aee93b59b338c0a147a57d45c7903cb2169d14fd23f51362b7a0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_session_preemption_test.go",
+      "predecessor_sha256s": [
+        "c3d1a31f20f2007e4b29dbae8d10fe20d45e8b461d39d6e5ad5bad85b813c5e5"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_session_preemption_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1bd52b752018ea29ab4b33fdaed02461f4c66ef53214420d0ea6660e6f4753b3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2/passthrough_relay_test.go",
+      "predecessor_sha256s": [
+        "9810b8e0bf3927eede6833691fd1cb5c21b02071e690969b49f6c083ccfcef41"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_v2/passthrough_relay_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5600984c05d582ebf0d557ddbe4f58ca34ec241762c225454ac265346831fe59"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2_passthrough_lifecycle_test.go",
+      "predecessor_sha256s": [
+        "afac9120abe9a92debf444a1c16f4a5173c6d8ff4936b366e16ee3764a7a206d"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/openai_ws_v2_passthrough_lifecycle_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3b735cdf4abf661750599f31a7810c3d3f5ae1065faf2e7cfb7802a78bbaf988"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ops_settings_advanced_test.go",
+      "predecessor_sha256s": [
+        "978e8e1da179790464fb05ea2c6e9dc0cc586895c56e13247abcf97597920af1"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/ops_settings_advanced_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f90a66039b85d1b64e637f9c346ea152a16c1d230dbeadfb1587dc4f635232c9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/plugin_runtime_integration_test.go",
+      "predecessor_sha256s": [
+        "12f4a28c1580451c9dbfb165210827f44650da23f801faeea74adb454f297b47"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/plugin_runtime_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d2a25e5589a3593f01bbf28f8253209df324203b0831e6926d0eb566bdea235d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service_hot_reload_test.go",
+      "predecessor_sha256s": [
+        "108c66bc15ccbfcc09f6bd8abd351184c47d3534c0e0c036589004470e2f2500"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/pricing_service_hot_reload_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "571f7bd3decffed2c0c39e79627867ceb69365ef1e64663d3dcdb7ca455b60f5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service_test.go",
+      "predecessor_sha256s": [
+        "8df1bedb7d64ca14a56848e7c00ff1d1e4a15213946e419c4af53e50ab0beea1"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/pricing_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5802721a0c4775ac13889f1e6e61b7108a7119cf35302103fa8ef1dfbc4fcedc"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_billing_probe_test.go",
+      "predecessor_sha256s": [
+        "6e112f4ac172fede5bcef39c38928e501360e305ae807a22b5e35050ed9ebcab"
+      ],
+      "reason": "Codex 升级工具优化与 CI 提速（执行器补跑、门禁按客户端归属、恢复计划、开工前空跑、测试去重与时间阈值改写）只改测试与工具，不改官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/upstream_billing_probe_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fb504ba9569ef12f1573e2f7f1954024645040c3d11fdc5ab14d2a30d40c816a"
+    }
+  ],
+  "unregistered_path_count": 163,
+  "unregistered_paths": [
+    "backend/internal/handler/admin/account_handler_batch_delete_test.go",
+    "backend/internal/handler/admin/grok_import_probe_test.go",
+    "backend/internal/handler/failover_loop_test.go",
+    "backend/internal/handler/openai_gateway_ws_composite_pool_test.go",
+    "backend/internal/handler/ops_capture_writer_nil_test.go",
+    "backend/internal/officialegress/execution_policy_test.go",
+    "backend/internal/officialegress/runtime_error_test.go",
+    "backend/internal/pkg/tlsfingerprint/clienthello_local_test.go",
+    "backend/internal/pkg/tlsfingerprint/dialer_integration_test.go",
+    "backend/internal/pkg/tlsfingerprint/h1_wire_test.go",
+    "backend/internal/repository/migrations_runner_extra_test.go",
+    "backend/internal/securityaudit/prompt_guard_test.go",
+    "backend/internal/securityaudit/prompt_worker_test.go",
+    "backend/internal/service/account_usage_service_test.go",
+    "backend/internal/service/billing_cache_service_test.go",
+    "backend/internal/service/codex_third_party_composite_base_test.go",
+    "backend/internal/service/codex_third_party_refresh_test.go",
+    "backend/internal/service/concurrency_service_test.go",
+    "backend/internal/service/dns_stub_test.go",
+    "backend/internal/service/error_policy_integration_test.go",
+    "backend/internal/service/grok_token_provider_test.go",
+    "backend/internal/service/oauth_refresh_api_test.go",
+    "backend/internal/service/openai_privacy_retry_test.go",
+    "backend/internal/service/openai_token_provider_test.go",
+    "backend/internal/service/openai_ws_ratelimit_signal_test.go",
+    "backend/internal/service/openai_ws_v2/passthrough_relay_internal_test.go",
+    "backend/internal/service/scheduler_snapshot_outbox_cleanup_test.go",
+    "backend/internal/service/timing_wheel_service_test.go",
+    "backend/internal/service/token_refresh_pool_health_test.go",
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/backend_dependencies.py",
+    "tools/arm64_capture_driver/driver/background-validate.sh",
+    "tools/arm64_capture_driver/driver/background_preflight.py",
+    "tools/arm64_capture_driver/driver/background_validation.py",
+    "tools/arm64_capture_driver/driver/chain-rehearsal.sh",
+    "tools/arm64_capture_driver/driver/entry-gates.sh",
+    "tools/arm64_capture_driver/driver/entry-preflight.sh",
+    "tools/arm64_capture_driver/driver/entry_dryrun.py",
+    "tools/arm64_capture_driver/driver/entry_gates.py",
+    "tools/arm64_capture_driver/driver/entry_housekeeping.py",
+    "tools/arm64_capture_driver/driver/entry_orchestrator.py",
+    "tools/arm64_capture_driver/driver/entry_steps.py",
+    "tools/arm64_capture_driver/driver/env.example.sh",
+    "tools/arm64_capture_driver/driver/fix_safety.py",
+    "tools/arm64_capture_driver/driver/go_test_packages.py",
+    "tools/arm64_capture_driver/driver/opening_checks.py",
+    "tools/arm64_capture_driver/driver/recovery-plan.example.params",
+    "tools/arm64_capture_driver/driver/recovery-plan.sh",
+    "tools/arm64_capture_driver/driver/recovery_plan.py",
+    "tools/arm64_capture_driver/driver/retry_policy.py",
+    "tools/arm64_capture_driver/driver/unit_executor.json",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/driver/unit_ownership.py",
+    "tools/arm64_capture_driver/driver/vc0-gate-target.sh",
+    "tools/arm64_capture_driver/driver/vc5_admission.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/backend_dependencies.py",
+    "tools/ci/background_preflight.py",
+    "tools/ci/background_validation.py",
+    "tools/ci/command_input_scopes.json",
+    "tools/ci/entry_dryrun.py",
+    "tools/ci/entry_gates.py",
+    "tools/ci/entry_housekeeping.py",
+    "tools/ci/entry_orchestrator.py",
+    "tools/ci/entry_steps.py",
+    "tools/ci/go_test_packages.py",
+    "tools/ci/opening_checks.py",
+    "tools/ci/retry_policy.py",
+    "tools/ci/time_jitter_stress.py",
+    "tools/ci/time_threshold_baseline.json",
+    "tools/ci/time_threshold_lint.py",
+    "tools/ci/unit_executor.json",
+    "tools/ci/unit_executor.py",
+    "tools/ci/unit_ownership.json",
+    "tools/ci/unit_ownership.py",
+    "tools/codex_closeout.py",
+    "tools/official_client_capture/tests/background_cross_commit_fixture.py",
+    "tools/official_client_capture/tests/chain_rehearsal.py",
+    "tools/official_client_capture/tests/chain_rehearsal_catalog.py",
+    "tools/official_client_capture/tests/chain_rehearsal_inject.py",
+    "tools/official_client_capture/tests/chain_rehearsal_phenomena.py",
+    "tools/official_client_capture/tests/chain_rehearsal_sample_cases.py",
+    "tools/official_client_capture/tests/claude_stage_result_read_once.py",
+    "tools/official_client_capture/tests/claude_tool_snapshot_memo.py",
+    "tools/official_client_capture/tests/claude_typed_vc6_fixture.py",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/capture-host-container-id.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/compaction-first-model-lite-flag.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/compaction-reason-downshift.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/core-capture-lite-final-assertions.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/kilo-http-usage-order.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/main-track-lite-compact-limit.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/official-core-models-expectation-lite.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/official-directed-response-model.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/orphan-candidate-recovery-preview.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/producer-replay-registration.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/r17-evolution-reuse-context.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/r17-isolated-attempt-continuity.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/r17-preview-isolation-window.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/r17-strict-pre-job-failure.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/vc2-offline-gate-dual-wire.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/vc6-delivery-batch-phase-resolution.patch",
+    "tools/official_client_capture/tests/fixtures/chain_rehearsal/zero-result-isolation-source.patch",
+    "tools/official_client_capture/tests/official_relay_harness.py",
+    "tools/official_client_capture/tests/real_chains/test_codex_upgrade_fault_fixtures.py",
+    "tools/official_client_capture/tests/recovery_plan_world.py",
+    "tools/official_client_capture/tests/scaling_guard.py",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/official_client_capture/tests/test_arm64_driver_chain_rehearsal.py",
+    "tools/official_client_capture/tests/test_arm64_driver_recovery_plan.py",
+    "tools/official_client_capture/tests/test_arm64_driver_recovery_plan_real_scene.py",
+    "tools/official_client_capture/tests/test_arm64_driver_wait.py",
+    "tools/official_client_capture/tests/test_capture_runtime_scripts.py",
+    "tools/official_client_capture/tests/test_chain_rehearsal.py",
+    "tools/official_client_capture/tests/test_chain_rehearsal_catalog.py",
+    "tools/official_client_capture/tests/test_chain_rehearsal_inject.py",
+    "tools/official_client_capture/tests/test_chain_rehearsal_phenomena.py",
+    "tools/official_client_capture/tests/test_ci_backend_dependencies.py",
+    "tools/official_client_capture/tests/test_ci_background_preflight.py",
+    "tools/official_client_capture/tests/test_ci_background_reuse.py",
+    "tools/official_client_capture/tests/test_ci_background_scope.py",
+    "tools/official_client_capture/tests/test_ci_background_validation.py",
+    "tools/official_client_capture/tests/test_ci_background_validation_retry.py",
+    "tools/official_client_capture/tests/test_ci_core_deviation.py",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_entry.py",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_entry_hardening.py",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_executor.py",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_hardening.py",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_hardening_wp1f.py",
+    "tools/official_client_capture/tests/test_ci_declared_sample_passthrough.py",
+    "tools/official_client_capture/tests/test_ci_declared_sampler_glob_linear.py",
+    "tools/official_client_capture/tests/test_ci_entry_dryrun.py",
+    "tools/official_client_capture/tests/test_ci_entry_gates.py",
+    "tools/official_client_capture/tests/test_ci_entry_housekeeping_retry.py",
+    "tools/official_client_capture/tests/test_ci_entry_orchestrator.py",
+    "tools/official_client_capture/tests/test_ci_entry_preflight_skip.py",
+    "tools/official_client_capture/tests/test_ci_gate_scope.py",
+    "tools/official_client_capture/tests/test_ci_go_compile_warmup.py",
+    "tools/official_client_capture/tests/test_ci_go_test_packages.py",
+    "tools/official_client_capture/tests/test_ci_go_test_packages_followup.py",
+    "tools/official_client_capture/tests/test_ci_opening_checks.py",
+    "tools/official_client_capture/tests/test_ci_reservation_preemption.py",
+    "tools/official_client_capture/tests/test_ci_retry_ledger_across_closeouts.py",
+    "tools/official_client_capture/tests/test_ci_time_jitter_stress.py",
+    "tools/official_client_capture/tests/test_ci_time_threshold_lint.py",
+    "tools/official_client_capture/tests/test_ci_unit_executor_retry.py",
+    "tools/official_client_capture/tests/test_ci_unit_ownership.py",
+    "tools/official_client_capture/tests/test_claude_closeout.py",
+    "tools/official_client_capture/tests/test_claude_mac_capture_service.py",
+    "tools/official_client_capture/tests/test_claude_real_delivery_integration.py",
+    "tools/official_client_capture/tests/test_claude_stage_result_read_once.py",
+    "tools/official_client_capture/tests/test_claude_tool_snapshot_memo.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_vc6_batch.py",
+    "tools/official_client_capture/tests/test_client_launch_probe.py",
+    "tools/official_client_capture/tests/test_codex_capture_stop.py",
+    "tools/official_client_capture/tests/test_codex_closeout.py",
+    "tools/official_client_capture/tests/test_codex_runtime_egress.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_supervisor.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_watchdog.py",
+    "tools/official_client_capture/tests/test_driver_client_table_codex_parity.py",
+    "tools/official_client_capture/tests/test_scaling_guard.py",
+    "tools/official_client_capture/tests/test_unit_inherit_codex_parity.py",
+    "tools/official_client_capture/tests/test_vc5_admission.py",
+    "tools/official_client_capture/tests/unit_ownership_world.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
