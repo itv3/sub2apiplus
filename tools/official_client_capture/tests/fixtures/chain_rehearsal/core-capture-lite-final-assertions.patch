@@ -1,0 +1,87 @@
+diff --git a/tools/official_client_capture/run_candidate_core_capture.sh b/tools/official_client_capture/run_candidate_core_capture.sh
+index dd43ad444..04785095d 100755
+--- a/tools/official_client_capture/run_candidate_core_capture.sh
++++ b/tools/official_client_capture/run_candidate_core_capture.sh
+@@ -2539,7 +2539,7 @@ trace_path.write_text(
+ os.chmod(trace_path, 0o600)
+ PY
+ 
+-# 冻结动作和无生产转发门禁。A03 的 zstd 与 A10 的 trigger 直接在 scrubbed raw 中复核。
++# 冻结动作和无生产转发门禁。A03 的 zstd 与 A04 的 Lite 头直接在 scrubbed raw 的头部复核，A10 的 trigger 先还原分块与 zstd 再数。
+ python3 - "$work_dir" "$ws_failure_count" "$codex_version" <<'PY'
+ import json
+ import sys
+@@ -2688,17 +2688,62 @@ if ws_cookie_prime:
+         for path in (root / "scenarios" / scenario / "relay").glob("*.bin"):
+             if b"_cfuvid" in path.read_bytes():
+                 raise SystemExit(f"{scenario} 公开 relay 产物泄漏 _cfuvid Cookie 名或值：{path.name}")
+-a04_bytes = b"".join(
+-    path.read_bytes()
+-    for path in (root / "scenarios/A04/relay").glob("*.client_to_upstream.bin")
+-)
+-if b"\r\ncontent-encoding: zstd\r\n" in a04_bytes.lower():
+-    raise SystemExit("A04 非 Lite 明文场景意外出现 zstd")
+-a10_bytes = b"".join(
+-    path.read_bytes()
++
++
++def _decoded_request_body(data):
++    """还原 relay 抓到的一条请求的正文：先解分块传输，再解 zstd（Lite 轨道的请求体是 zstd 压缩的）。"""
++    head, _, body = data.partition(b"\r\n\r\n")
++    lowered = head.lower()
++    if b"\r\ntransfer-encoding: chunked" in lowered:
++        decoded, rest = b"", body
++        while rest:
++            size_line, _, rest = rest.partition(b"\r\n")
++            size = int(size_line.split(b";", 1)[0], 16)
++            if size == 0:
++                break
++            decoded += rest[:size]
++            rest = rest[size + 2:]
++        body = decoded
++    if b"\r\ncontent-encoding: zstd" in lowered:
++        try:
++            import io
++            import zstandard
++            body = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(body)).read()
++        except ImportError:
++            import subprocess
++            result = subprocess.run(["zstd", "-dc"], input=body, capture_output=True, check=False)
++            if result.returncode != 0:
++                raise SystemExit("relay 请求正文 zstd 解压失败（zstd 命令）")
++            body = result.stdout
++        except Exception as error:
++            raise SystemExit(f"relay 请求正文 zstd 解压失败：{error}") from error
++    return body
++
++
++# 0.163.0 起主线模型是 Lite（gpt-6.1-sol）：候选 A04 的 Responses 请求全部是 zstd 压缩的 Lite 请求——候选在 Lite 主线固定呈现官方默认配置
++# （enable_request_compression 为 Stable 默认开启），不跟随入站关闭压缩；官方 A04 的压缩关闭样本不带 content-encoding，
++# 这一差异由批准画像 SPEC-BODY-002/responses-plain 的 b2 修订覆盖（不得出现 zstd 以外的编码）。不再是“非 Lite 明文”；
++# A10 的 compaction_trigger 在压缩后的原始字节里找不到明文 JSON，要先还原再数。
++a04_posts = [
++    data
++    for data in (
++        path.read_bytes()
++        for path in sorted((root / "scenarios/A04/relay").glob("*.client_to_upstream.bin"))
++    )
++    if data.lower().startswith(b"post /backend-api/codex/responses http/1.1\r\n")
++]
++if not a04_posts:
++    raise SystemExit("A04 没有抓到 Responses 请求")
++for data in a04_posts:
++    header_block = data.lower().partition(b"\r\n\r\n")[0] + b"\r\n"
++    if (
++        b"\r\ncontent-encoding: zstd\r\n" not in header_block
++        or b"\r\nx-openai-internal-codex-responses-lite: true\r\n" not in header_block
++    ):
++        raise SystemExit("A04 主线 Lite 样本应为 zstd 压缩的 Lite 请求")
++a10_triggers = sum(
++    _decoded_request_body(path.read_bytes()).count(b'"type":"compaction_trigger"')
+     for path in (root / "scenarios/A10/relay").glob("*.client_to_upstream.bin")
+ )
+-if a10_bytes.count(b'"type":"compaction_trigger"') < 4:
++if a10_triggers < 4:
+     raise SystemExit("A10 未抓到四个真实 compaction_trigger")
+ PY
+ 

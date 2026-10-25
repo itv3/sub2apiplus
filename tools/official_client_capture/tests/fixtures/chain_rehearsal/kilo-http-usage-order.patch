@@ -1,0 +1,27 @@
+diff --git a/tools/official_client_capture/codex_upgrade_receipt_finalizer.py b/tools/official_client_capture/codex_upgrade_receipt_finalizer.py
+index 094543124..e789e7613 100644
+--- a/tools/official_client_capture/codex_upgrade_receipt_finalizer.py
++++ b/tools/official_client_capture/codex_upgrade_receipt_finalizer.py
+@@ -1633,13 +1633,15 @@ def finalize_kilo_binding(
+         response["completed_at_utc"], "kilo_response.completed_at_utc"
+     )
+     usage_at = _rfc3339(usage["recorded_at_utc"], "usage_audit.recorded_at_utc")
+-    if runtime["transport"] == "websocket":
+-        ordered = (
+-            installed_at <= ingress_at <= runtime_at <= response_at
+-            and ingress_at <= usage_at
+-        )
+-    else:
+-        ordered = installed_at <= ingress_at <= runtime_at <= response_at <= usage_at
++    # 用量记录只要求晚于入站，不要求晚于响应完成：网关在把响应最后几个字节写给客户端之前就可能已经落用量。
++    # WebSocket 一向如此（用量比完成早约 100～180 毫秒）；HTTP 过去是异步落用量、比访问日志的完成时间晚
++    # 1.7～3.6 毫秒，候选网关合入上游后改为请求处理内同步落用量，实测早 0.15 毫秒，原先“完成 ≤ 用量”
++    # 的 HTTP 判据把正常行为判成乱序。用量与这次响应的归属由上面 request_id／response_id／候选／账号
++    # 逐项相等保证，并且四个时间点都必须落在 attempt 窗口内，不依赖用量与完成的先后。
++    ordered = (
++        installed_at <= ingress_at <= runtime_at <= response_at
++        and ingress_at <= usage_at
++    )
+     if not ordered:
+         raise ReceiptFinalizerError("Kilo 五份事实的时间顺序不成立")
+     for label, observed_at in (

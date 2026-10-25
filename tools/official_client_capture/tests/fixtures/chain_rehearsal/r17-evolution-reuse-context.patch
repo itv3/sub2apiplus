@@ -1,0 +1,32 @@
+diff --git a/tools/official_client_capture/codex_upgrade.py b/tools/official_client_capture/codex_upgrade.py
+index 379e49d5f..4731b39c3 100755
+--- a/tools/official_client_capture/codex_upgrade.py
++++ b/tools/official_client_capture/codex_upgrade.py
+@@ -34402,7 +34402,11 @@ def _evolution_reuse_context(
+     attempt_root: Path,
+     current_tool: Mapping[str, Any],
+ ) -> dict[str, Any] | None:
+-    """源 attempt 生产序号之后登记过工具演进时，续跑复用所需的判定上下文；没有则返回 None。
++    """Campaign 登记过工具演进时，续跑复用所需的判定上下文；Campaign 没有登记过演进则返回 None。
++
++    源 attempt 生产序号之后还有新演进时，上下文携带这些演进的累计影响；源 attempt 本身就是最新演进之后产出的
++    （二次及之后的续跑：失败源是演进后跑的 attempt）时，序号之后没有新演进，上下文的影响集合为空——此时 Campaign
++    冻结身份已不是有效口径，仍须按源 attempt 生产身份核对承接结果，不能回落到按冻结身份比对的旧评估 transition 口径。
+ 
+     * ``production_identity``：源 attempt 生产序号对应的完整工具身份（逐文件验真的冻结口径）；
+     * ``affected_job_ids``：序号之后全部演进对本阶段的累计受影响作业；
+@@ -34415,7 +34419,13 @@ def _evolution_reuse_context(
+         campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+     )
+     if not impact["evolution_indexes"]:
+-        return None
++        frozen = manifest.get("tool_identity")
++        if (
++            not isinstance(frozen, Mapping)
++            or not _is_policy_v2_identity(frozen)
++            or not _campaign_tool_evolutions(campaign_dir, manifest)
++        ):
++            return None
+     effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+     drift_labels = _tool_evolution_unregistered_drift(effective["identity"], current_tool)
+     if drift_labels:

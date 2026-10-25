@@ -1,0 +1,199 @@
+diff --git a/tools/official_client_capture/run_candidate_aux_capture.sh b/tools/official_client_capture/run_candidate_aux_capture.sh
+index d1798e5e3..b8982fb15 100755
+--- a/tools/official_client_capture/run_candidate_aux_capture.sh
++++ b/tools/official_client_capture/run_candidate_aux_capture.sh
+@@ -385,7 +385,7 @@ services:
+       SUB2API_LIVE_ATTESTATION_CAPTURE_GROUP_ID: "$group_id"
+       SUB2API_LIVE_ATTESTATION_CAPTURE_ACCOUNT_ID: "$account_id"
+       SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_NAME: "$proxy_name"
+-      SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_HOST: "$capture_container"
++      SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_HOST: "$capture_host"
+       SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_PORT: "$relay_port"
+       SUB2API_LIVE_ATTESTATION_CAPTURE_EXPIRES_AT_UNIX: "$expires_at"
+ YML
+@@ -957,7 +957,23 @@ fi
+ service_base_url=${SERVICE_BASE_URL:-"http://127.0.0.1:$service_port"}
+ admin_base_url="$service_base_url/api/v1/admin"
+ 
+-if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
++# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
++# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
++resolve_capture_host() {
++  local resolved=$capture_container
++  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
++    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
++    resolved=${resolved#/}
++  fi
++  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
++    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
++    exit 1
++  fi
++  capture_host=$resolved
++}
++resolve_capture_host
++
++if ! docker exec "$service_container" getent hosts "$capture_host" >/dev/null; then
+   echo "候选服务容器无法解析受控 capture 容器。" >&2
+   exit 1
+ fi
+@@ -1010,7 +1026,7 @@ chmod 0600 "$tls_dir"/*
+ proxy_name="candidate-aux-${run_id:0:72}"
+ proxy_id=$(db_query "
+ insert into proxies (name,protocol,host,port,status,fallback_mode)
+-values ('$proxy_name','http','$capture_container',$relay_port,'active','none')
++values ('$proxy_name','http','$capture_host',$relay_port,'active','none')
+ returning id")
+ if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
+   echo "创建临时受控代理失败。" >&2
+diff --git a/tools/official_client_capture/run_candidate_core_capture.sh b/tools/official_client_capture/run_candidate_core_capture.sh
+index c250f2138..dd43ad444 100755
+--- a/tools/official_client_capture/run_candidate_core_capture.sh
++++ b/tools/official_client_capture/run_candidate_core_capture.sh
+@@ -690,7 +690,23 @@ if [[ ! $codex_bin_sha256 =~ ^[0-9a-f]{64}$ ]]; then
+   exit 1
+ fi
+ 
+-if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
++# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
++# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
++resolve_capture_host() {
++  local resolved=$capture_container
++  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
++    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
++    resolved=${resolved#/}
++  fi
++  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
++    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
++    exit 1
++  fi
++  capture_host=$resolved
++}
++resolve_capture_host
++
++if ! docker exec "$service_container" getent hosts "$capture_host" >/dev/null; then
+   echo "候选服务容器无法解析受控 capture 容器。" >&2
+   exit 1
+ fi
+@@ -746,7 +762,7 @@ chmod 0600 "$tls_dir"/*
+ proxy_name="candidate-core-${run_id:0:72}"
+ proxy_id=$(db_query "
+ insert into proxies (name,protocol,host,port,status,fallback_mode)
+-values ('$proxy_name','http','$capture_container',$relay_port,'active','none')
++values ('$proxy_name','http','$capture_host',$relay_port,'active','none')
+ returning id")
+ if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
+   echo "创建临时受控代理失败。" >&2
+diff --git a/tools/official_client_capture/run_h1_wire_probe.sh b/tools/official_client_capture/run_h1_wire_probe.sh
+index 4150be482..c0890483a 100755
+--- a/tools/official_client_capture/run_h1_wire_probe.sh
++++ b/tools/official_client_capture/run_h1_wire_probe.sh
+@@ -167,13 +167,29 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+ }
+ chmod 600 "$tls_dir"/*
+ 
++# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
++# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
++resolve_capture_host() {
++  local resolved=$capture_container
++  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
++    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
++    resolved=${resolved#/}
++  fi
++  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
++    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
++    exit 1
++  fi
++  capture_host=$resolved
++}
++resolve_capture_host
++
+ # 探针跑在 capture-cli 容器内：宿主机 443 已被占用，而 capture-cli 与 Sub2API 共享
+ # 业务网络。capture-cli 可能同时加入抓包专网，不能按 Docker map 的迭代顺序取第一个
+ # IP；必须从 Sub2API 容器内解析别名，得到两者真正可达的共享网络地址。
+-probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_container" 2>/dev/null \
++probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_host" 2>/dev/null \
+   | awk 'NR == 1 {print $1}' || true)
+ if [[ ! $probe_ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+-  echo "无法从 $service_container 解析 $capture_container 的共享网络 IPv4 地址。" >&2
++  echo "无法从 $service_container 解析 $capture_host 的共享网络 IPv4 地址。" >&2
+   exit 1
+ fi
+ 
+diff --git a/tools/official_client_capture/run_images_wire_probe.sh b/tools/official_client_capture/run_images_wire_probe.sh
+index 85ad215fe..6571a4889 100755
+--- a/tools/official_client_capture/run_images_wire_probe.sh
++++ b/tools/official_client_capture/run_images_wire_probe.sh
+@@ -215,12 +215,28 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+ }
+ chmod 600 "$tls_dir"/*
+ 
++# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
++# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
++resolve_capture_host() {
++  local resolved=$capture_container
++  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
++    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
++    resolved=${resolved#/}
++  fi
++  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
++    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
++    exit 1
++  fi
++  capture_host=$resolved
++}
++resolve_capture_host
++
+ # capture-cli 可能同时加入抓包专网和 Sub2API 业务网，Docker map 的第一个 IP 不保证
+ # 对 Sub2API 可达。由服务容器解析 capture-cli 别名，固定使用两者共享网络的 IPv4。
+-probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_container" 2>/dev/null \
++probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_host" 2>/dev/null \
+   | awk 'NR == 1 {print $1}' || true)
+ if [[ ! $probe_ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+-  echo "无法从 $service_container 解析 $capture_container 的共享网络 IPv4 地址。" >&2
++  echo "无法从 $service_container 解析 $capture_host 的共享网络 IPv4 地址。" >&2
+   exit 1
+ fi
+ 
+diff --git a/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh b/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh
+index 7ef99d07e..382b3e2e2 100755
+--- a/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh
++++ b/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh
+@@ -407,7 +407,23 @@ if [[ $current_proxy != NULL || $current_fallback != NULL ]]; then
+   echo "账号 #$codex_account_id 已绑定代理或 fallback，拒绝覆盖。" >&2
+   exit 1
+ fi
+-if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
++# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
++# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
++resolve_capture_host() {
++  local resolved=$capture_container
++  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
++    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
++    resolved=${resolved#/}
++  fi
++  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
++    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
++    exit 1
++  fi
++  capture_host=$resolved
++}
++resolve_capture_host
++
++if ! docker exec "$service_container" getent hosts "$capture_host" >/dev/null; then
+   echo "Sub2API 容器无法解析 capture-cli。" >&2
+   exit 1
+ fi
+@@ -425,11 +441,11 @@ if [[ $keeper_was_running == true ]]; then
+ fi
+ 
+ proxy_id=$(
+-  # host 必须用 $capture_container，不能写死容器名：第 135 行的 DNS 可达性检查用的就是
++  # host 必须用 $capture_host（该容器实例的真实名称），不能写死容器名：第 135 行的 DNS 可达性检查用的就是
+   # 它，两处不一致时检查照样通过，而服务真正出站时解析不到写死的名字，报
+   # `connect to proxy: lookup capture-cli: no such host`，账号随即被判 upstream
+   # transport error 而临时熔断——后续 job 全部拿到 503／WS 1013，看起来像时序问题。
+-  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','$capture_container',18080,'active','none') returning id"
++  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','$capture_host',18080,'active','none') returning id"
+ )
+ if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
+   echo "创建临时代理失败。" >&2

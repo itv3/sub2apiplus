@@ -1,0 +1,56 @@
+diff --git a/tools/official_client_capture/codex_upgrade.py b/tools/official_client_capture/codex_upgrade.py
+index dd0ed3ec5..f61a4c311 100755
+--- a/tools/official_client_capture/codex_upgrade.py
++++ b/tools/official_client_capture/codex_upgrade.py
+@@ -35078,6 +35078,33 @@ def _phase_evaluation_pre_job_environment_boundary(
+     return _fingerprint(boundary)
+ 
+ 
++def _is_strict_pre_job_failure(
++    attempt: Mapping[str, Any],
++    *,
++    planned_ids: set[str],
++    result_ids: set[str],
++    carried_ids: Sequence[str],
++    failed_ids: Sequence[str],
++    pending_ids: Sequence[str],
++) -> bool:
++    """是否属于“首个 Job 前失败”的严格形态（结果只有承接作业、其余全 pending，且 before 环境探针都没取到）。
++
++    严格形态由 ``_phase_evaluation_pre_job_environment_boundary`` 按固定的空运行边界校验：运行停在 ``attempt:reserved``
++    或作业前的 ``arm64:`` 环境探针，before 探针、恢复报告、ARM64 收据都不存在。before 探针已经取到的 attempt 是停在其后
++    （例如承接连续性核对）的普通失败 attempt：环境收尾（after 探针与恢复报告）正常写出，走普通失败 attempt 的边界校验，
++    它承接的已完成作业仍按普通规则复用（0.163.0 VC-1 恢复续跑实采：承接 24 个作业后在连续性核对处失败，旧判定把它
++    误当严格形态、边界校验恒拒，恢复批准永远过不了）。before 探针缺失的形态判定不变；``environment`` 不是对象时也保持
++    原判定（交给边界校验报错），不改变任何既有拒绝。
++    """
++
++    if failed_ids or result_ids != set(carried_ids) or list(pending_ids) != sorted(planned_ids - set(carried_ids)):
++        return False
++    environment = attempt.get("environment")
++    if isinstance(environment, Mapping) and environment.get("before_probe") is not None:
++        return False
++    return True
++
++
+ def _phase_evaluation_recovery_scope(
+     campaign_dir: Path,
+     manifest: Mapping[str, Any],
+@@ -35231,10 +35258,13 @@ def _phase_evaluation_recovery_scope(
+         for job_id, result in result_by_id.items()
+         if result.get("disposition") == "reused" and result.get("status") == "complete"
+     )
+-    pre_job_failure = (
+-        not failed_ids
+-        and set(result_by_id) == set(carried_ids)
+-        and pending_ids == sorted(set(planned) - set(carried_ids))
++    pre_job_failure = _is_strict_pre_job_failure(
++        attempt,
++        planned_ids=set(planned),
++        result_ids=set(result_by_id),
++        carried_ids=carried_ids,
++        failed_ids=failed_ids,
++        pending_ids=pending_ids,
+     )
+     if pre_job_failure and carried_ids:
+         # 与无承接的作业前失败同一闭集：全部冻结作业 pending 并执行（transition 校验要求 pending 等于计划、无已完成）。

@@ -1,0 +1,98 @@
+diff --git a/tools/official_client_capture/codex_upgrade_reconciler.py b/tools/official_client_capture/codex_upgrade_reconciler.py
+index 42ec31139..0bb960ddb 100644
+--- a/tools/official_client_capture/codex_upgrade_reconciler.py
++++ b/tools/official_client_capture/codex_upgrade_reconciler.py
+@@ -2420,6 +2420,44 @@ def reused_segment_job_result(campaign_dir: Path, proof: Mapping[str, Any]) -> d
+     return result
+ 
+ 
++def _isolation_window_reusable(
++    campaign_dir: Path,
++    phase: str,
++    candidate_id: str | None,
++    attempt_id: str,
++    complete_job_ids: Sequence[str],
++) -> list[str]:
++    """环境隔离带污染窗口时，窗口起点之前完成且出口时段绑定可核验的已完成作业（与 resume 同一判定）。
++
++    resume 的失败重跑闭集（``codex_upgrade`` 的失败 attempt 范围计算）对被隔离的 attempt 这样处理：隔离收据带
++    ``contamination_started_at_utc`` 时，污染发生时刻之前完成、``runtime_egress`` 绑定可核验的作业保留复用
++    （``reused_before_contamination``），其余并入执行闭集。恢复预览必须给出同一集合：没有隔离、隔离无窗口或没有已完成
++    作业时返回空列表（原口径：被污染 attempt 的结果不复用）。判定函数直接取 resume 的那几个，不另写一份。
++    """
++
++    isolation = codex_upgrade._attempt_isolation_receipt(campaign_dir, phase, candidate_id, attempt_id)
++    if isolation is None or not complete_job_ids:
++        return []
++    window_start = codex_upgrade._contamination_window_start_epoch(isolation)
++    if window_start is None:
++        return []
++    adapter = _adapter()
++    attempt_root = campaign_dir / adapter.orchestrator._capture_attempt_relative(phase, candidate_id) / "attempts" / attempt_id
++    attempt_path = attempt_root / "attempt.json"
++    if not attempt_path.is_file() or attempt_path.is_symlink():
++        return []
++    attempt = _read_json(attempt_path, "恢复预览的源 attempt")
++    results: dict[str, Mapping[str, Any]] = {}
++    for item in attempt.get("results", []):
++        if isinstance(item, Mapping) and isinstance(item.get("id"), str):
++            results[item["id"]] = item
++    return sorted(
++        job_id
++        for job_id in complete_job_ids
++        if job_id in results and codex_upgrade._job_finished_before(results[job_id], window_start)
++    )
++
++
+ def _recovery_preview(
+     campaign_dir: Path,
+     receipt_dir: Path,
+@@ -2454,6 +2492,7 @@ def _recovery_preview(
+     # 第三批 B3-12：只有非段模式且有可复用作业时才做预览期连续性检查；其余情况两者保持空值、预览字节不变。
+     continuity: dict[str, Any] | None = None
+     continuity_invalidated: list[str] = []
++    windowed_isolation_reuse = False
+     if recovery_revision is not None:
+         if recovery_execute_jobs is None:
+             raise ReconcilerError("恢复段预览必须提供权威链取得的 execute_jobs")
+@@ -2467,6 +2506,11 @@ def _recovery_preview(
+         execute = sorted(set(frozen) - set(reusable))
+     else:
+         reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
++        if not reusable and attempt_exists and environment_status == "contaminated":
++            # 环境隔离带污染发生时刻时，resume 保留窗口起点之前完成且出口时段可核验的作业复用（reused_before_contamination）；
++            # 预览必须给出同一集合，否则批准前的 resume 复用核对（R17）判不一致、拒绝批准（0.163.0 VC-1 首批实采）。
++            reusable = _isolation_window_reusable(campaign_dir, phase, candidate_id, attempt_id, groups["complete"])
++            windowed_isolation_reuse = bool(reusable)
+         # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，与 resume 冻结闭集同一口径。
+         # 没有演进时不读预约（_attempt_evolution_impact 在空链时直接返回空影响）。
+         source_root = (
+@@ -2484,7 +2528,7 @@ def _recovery_preview(
+         execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
+         # 第三批 B3-12（第 22 项）：有可复用作业时先采一次只读探针核对环境连续性；漂移（或探针采不到，失败关闭）
+         # 即写下漂移收据（resume 与 R17 复算从同一收据读同一事实），已完成作业全部移入执行集合，预览直接给出复用 0。
+-        if reusable:
++        if reusable and not windowed_isolation_reuse:
+             receipt_path = adapter.orchestrator._recovery_continuity_receipt_path(campaign_dir, attempt_id)
+             try:
+                 recorded = adapter.orchestrator._attempt_continuity_drift_receipt(campaign_dir, attempt_id)
+@@ -2553,6 +2597,8 @@ def _recovery_preview(
+         "reuse_basis": (
+             "失败段不可变；仅复用 result/checkpoint、权限边界与逐文件摘要、执行身份、after 环境四项均通过的 Job"
+             if recovery_revision is not None
++            else "source attempt 环境污染已隔离，污染发生时刻之前完成且出口时段可核验的 Job 只读复用"
++            if reusable and windowed_isolation_reuse
+             else "source attempt 环境已恢复，complete Job 只读复用"
+             if reusable
+             else "source attempt 无 after 探针或环境未恢复，证据前提不成立，不复用"
+@@ -2582,7 +2628,9 @@ def _recovery_preview(
+             "invalidated_job_ids": evolution_invalidated,
+         }
+         preview["reuse_basis"] = (
+-            "source attempt 环境已恢复，complete Job 只读复用；工具演进受影响的已完成 Job 移入执行集合"
++            "source attempt 环境污染已隔离，污染发生时刻之前完成且出口时段可核验的 Job 只读复用；工具演进受影响的已完成 Job 移入执行集合"
++            if windowed_isolation_reuse
++            else "source attempt 环境已恢复，complete Job 只读复用；工具演进受影响的已完成 Job 移入执行集合"
+         )
+     if continuity is not None:
+         # 第三批 B3-12：只在做过连续性检查（有可复用作业）时写入，其余预览字节不变。

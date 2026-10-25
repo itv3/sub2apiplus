@@ -1,0 +1,54 @@
+diff --git a/tools/arm64_capture_driver/driver/phase_context.py b/tools/arm64_capture_driver/driver/phase_context.py
+index dac470f53..93e3a1d7d 100644
+--- a/tools/arm64_capture_driver/driver/phase_context.py
++++ b/tools/arm64_capture_driver/driver/phase_context.py
+@@ -408,13 +408,48 @@ def _claude_vc5_plan(context, plan):
+         context.attempt(next(iter(attempts)))
+ 
+ 
++# VC-6 交付登记批次的动作类型 → 它承载的 execute 项（与 VC-6 交付脚本、编排器 deliver-candidate 的两次用法一致）。
++VC6_DELIVERY_ITEMS = {
++    "VC-6:deliver-candidate-archive-pending": "vc6-delivery-archive-pending",
++    "VC-6:deliver-candidate": "vc6-delivery",
++}
++
++
++def _vc6_delivery_plan(context, plan):
++    """只读核对 VC-6 交付登记批次：只许 deliver-candidate 动作，且每个动作只绑定当前 Campaign、Candidate 与 attempt。
++
++    交付的具体前提（构建收据、私有归档与清理决定收据、canonical checkpoint 状态）仍由正式编排器的 deliver-candidate
++    自己重放校验；这里只挡住“非 canonical 却不是交付登记”和“绑到别的 Campaign／Candidate／attempt”的计划。
++    """
++
++    option = context.cu.codex_upgrade_vc_artifacts._command_option
++    carried = []
++    for action in plan["actions"]:
++        item = VC6_DELIVERY_ITEMS.get(action["operation"])
++        command = action["command"]
++        if item is None or action["item_ids"] != [item] or "deliver-candidate" not in command:
++            raise ValueError("VC-6 非 canonical 批次只允许交付登记（deliver-candidate）动作")
++        if (option(command, "--campaign-dir"), option(command, "--candidate-id"), option(command, "--attempt-id")) != (
++            str(context.campaign), context.candidate, context.parameters["ATT"]
++        ):
++            raise ValueError("VC-6 计划未绑定当前 Campaign、Candidate 和 attempt")
++        carried.append(item)
++    if not carried or sorted(carried) != sorted(plan["execute_item_ids"]):
++        raise ValueError("VC-6 交付批次的 execute 项必须恰由交付动作承载")
++
++
+ def _vc6_receipts(context, plan):
+     """只读核对待派发的 canonical 收据；不调用会推进 checkpoint 的生产入口。"""
+ 
+     cu, campaign = context.cu, context.campaign
+     artifacts = cu.codex_upgrade_vc_artifacts
+     group = artifacts.canonical_batch_binding(plan["actions"], execute_item_ids=plan["execute_item_ids"], phase="VC-6")
+-    if group is None or (group["campaign_dir"], group["candidate_id"], group["attempt_id"]) != (
++    if group is None:
++        # 不含 canonical 项的 VC-6 批次只有交付登记（deliver-candidate 两次）。canonical_batch_binding 按设计对它返回
++        # None，原实现把 None 一律当“未绑定”拒绝，交付批次因此派不出去（10-05 加入该校验后，Codex 升级第一次走到 VC-6 交付批次时暴露）。
++        _vc6_delivery_plan(context, plan)
++        return
++    if (group["campaign_dir"], group["candidate_id"], group["attempt_id"]) != (
+         str(campaign), context.candidate, context.parameters["ATT"]
+     ):
+         raise ValueError("VC-6 计划未绑定当前 Campaign、Candidate 和 attempt")
