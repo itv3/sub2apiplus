@@ -697,7 +697,9 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **源码**：[L1] `core/src/client.rs:934-953`、
   `core/src/client.rs:980-995`、`core/src/client.rs:1077`。0.163.0 源码另有两点：`additional_tools` 项只在 `prompt.tools` 非空时加入；
   项 `id` 为 `at_` 加 UUIDv5（命名空间为 `UUIDv5(NAMESPACE_OID, thread_id)`，名称为该项 `tools` 的 JSON 序列化字节），0.149.1 无 `id`
-  且总是加入。官方 0.163.0 样本对该 `id` 尚无逐字节核对（未核实）。
+  且总是加入。已核实为线上偏差：官方 0.163.0 样本（HTTP 7 条、WS 预热帧 1 条）的 `additional_tools` 项全部带 `at_` id，按上述规则重算逐字节一致，
+  键序为 `type, id, role, tools`；网关没有实现该 id（Codex 入站原样放行但线程身份被网关重派生，非 Codex 入站合成的项没有 id），
+  随 0.164 版本登记修复，核实报告见 `local-analysis/opt-1025/body003/report.md`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（HTTP）、
   `clean-tool-20260728T132346Z`（WS），均为 R。
 - **实现**：由模型 manifest 驱动；不得把 Lite 变换应用到非 Lite 模型。

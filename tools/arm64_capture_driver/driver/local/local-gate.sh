@@ -10,11 +10,11 @@ REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Develo
 OUT=$OUTROOT/local-gates; IMPL=$OUTROOT/impl-logs; T=$GATES_ROOT/wt-D; TC=$GATES_ROOT/wt-C
 rm -rf "$OUT" "$IMPL"; mkdir -p "$OUT" "$IMPL/cross-check"
 : "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
-export CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
+export CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
 TS=$REPO/frontend/node_modules/typescript/lib/typescript.js
 test "$(git -C $T rev-parse HEAD)" = "$DC"; test "$(git -C $TC rev-parse HEAD)" = "$C"
 cd "$T"; START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-make check-egress-spec CODEX_0_149_1_SOURCE_ROOT="${CODEX_0_149_1_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" > "$OUT/check-egress-spec.stdout.log" 2> "$OUT/check-egress-spec.stderr.log"; RC=$?
+make check-egress-spec CODEX_SPEC_SOURCE_ROOT="${CODEX_SPEC_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" > "$OUT/check-egress-spec.stdout.log" 2> "$OUT/check-egress-spec.stderr.log"; RC=$?
 END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 python3 - "$OUT/check-egress-spec.gate.json" "$START" "$END" "$RC" "$T" "$(git -C $T rev-parse HEAD)" <<'PY'
 import json, sys, socket, platform
@@ -27,7 +27,7 @@ PY
   echo "executed_on_commit=${DC}（= 候选 commit + 描述它的冻结承接收据 ${RECEIPT}）"
   echo "reason=冻结承接收据按工具约束不得进入它所描述的提交，而 check-egress-spec 含 Go 冻结承接测试；在候选 commit 上单独执行 check-egress-spec-ci 作交叉核对（见 cross-check/）"
   echo "worktree=${T}"
-  echo "CODEX_0_149_1_SOURCE_ROOT=${CODEX_0_149_1_SOURCE_ROOT}（本机只读源码基线，不在仓库内）"
+  echo "CODEX_SPEC_SOURCE_ROOT=${CODEX_SPEC_SOURCE_ROOT}（本机只读源码基线，不在仓库内）"
   echo "${START}"; echo "host=$(uname -srm)"; echo "go: $(go version)"; echo "python: $(python3 --version)"; echo "node: $(node --version)"
   echo "backend diff candidate..executed: [$(git -C $T diff --stat $C $DC -- backend | tail -1)]"
   echo; echo "## make check-egress-spec"; echo '$ make check-egress-spec'
@@ -41,7 +41,7 @@ cd "$TC"
   echo "# 交叉核对：候选 commit 自身上的 make check-egress-spec-ci（不含承接收据，预期仅冻结承接测试红）"
   echo "commit=${C}"; date -u +%Y-%m-%dT%H:%M:%SZ
   echo "## make check-egress-spec-ci"; echo '$ make check-egress-spec-ci'
-  make check-egress-spec-ci CODEX_0_149_1_SOURCE_ROOT="${CODEX_0_149_1_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" 2>&1; echo "exit_code=${PIPESTATUS[0]}"
+  make check-egress-spec-ci CODEX_SPEC_SOURCE_ROOT="${CODEX_SPEC_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" 2>&1; echo "exit_code=${PIPESTATUS[0]}"
   echo "## 工作树洁净度（含忽略文件）"; echo "git_status=[$(git -C $TC status --porcelain --untracked-files=all)]"
   echo "CROSS_DONE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$IMPL/cross-check/check-egress-spec.C-only.local.log" 2>&1

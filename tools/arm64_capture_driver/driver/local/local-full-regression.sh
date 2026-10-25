@@ -6,12 +6,12 @@ set -u
 DC="$1"; OUTROOT="$2"; OUT=$OUTROOT/local-gates
 REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Developer/.sub2apiplus-gates}; T=$GATES_ROOT/wt-D
 : "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
-export CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
+export CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
 TS=$REPO/frontend/node_modules/typescript/lib/typescript.js
 mkdir -p "$OUT"
 test "$(git -C $T rev-parse HEAD)" = "$DC"; test -z "$(git -C $T status --porcelain --untracked-files=all)"
 cd "$T"; START=$(date -u +%Y-%m-%dT%H:%M:%SZ); S0=$(date +%s)
-make test CODEX_0_149_1_SOURCE_ROOT="${CODEX_0_149_1_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" > "$OUT/full-regression.stdout.log" 2> "$OUT/full-regression.stderr.log"; RC=$?
+make test CODEX_SPEC_SOURCE_ROOT="${CODEX_SPEC_SOURCE_ROOT}" CAPTURE_TYPESCRIPT_MODULE="${TS}" > "$OUT/full-regression.stdout.log" 2> "$OUT/full-regression.stderr.log"; RC=$?
 END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 python3 - "$OUT/full-regression.gate.json" "$START" "$END" "$RC" "$T" "$(git -C $T rev-parse HEAD)" <<'PY'
 import json, sys, socket, platform

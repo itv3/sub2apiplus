@@ -28,7 +28,8 @@ def _default_source_root() -> pathlib.Path:
     """默认的只读 Codex 源码根：环境变量优先，否则取仓库内 local-analysis 下与版本同名的目录。
 
     CODEX_SPEC_SOURCE_ROOT 是与版本无关的名字（Makefile、测试同名）；旧名 CODEX_0_149_1_SOURCE_ROOT
-    在过渡期仍然认，等驱动与 entry_gates 改名后再删除。
+    仍然认并保留（target_platform_gate.py 受 TARGET_VERIFIER_SHA256S 钉住、暂不能改名），
+    等以后的受管批次统一改名后再删除。
     """
 
     for name in ("CODEX_SPEC_SOURCE_ROOT", "CODEX_0_149_1_SOURCE_ROOT"):

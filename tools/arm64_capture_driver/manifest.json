@@ -16,9 +16,9 @@
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
-      "sha256": "d409e511d2c97e1eff7bb9cd34d7e279801bf5f3f2abcaa0546fe8ae5bd4a96b",
+      "sha256": "747be4db69b1fbb663d08918f77151a3eb83a28ab7f5c43cf7536f4c0a613fea",
       "mode": "0700",
-      "bytes": 12966
+      "bytes": 12963
     },
     {
       "path": "driver/backend_dependencies.py",
@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "632db239a95f5d35f619b2ad8283d99261fcfbd1fab4051ecb730067619ac782",
+      "sha256": "81c176d329af13b0d2d5ca8db6ec681465b4e1dfc65e6977d37f189cb7948c03",
       "mode": "0700",
-      "bytes": 57662
+      "bytes": 57659
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -208,9 +208,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "afb6e48c26ec20e7e7db8caa68979e763645110afc967e02a8666ab680b844e3",
+      "sha256": "1bb7c8f59fb18f9cdcbe3b0834d7a64230c449b01d44d5a4871407f60072f1a2",
       "mode": "0700",
-      "bytes": 203324
+      "bytes": 203353
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "e7589c52309ee89a792077ba4d80bf0a238d4780736b7be557a076c05abab6db",
+      "sha256": "348e76fc3e2ec1101e0ea881b33f0c10f53847f1fa598fc21a0069d6b3838fbe",
       "mode": "0700",
-      "bytes": 3641
+      "bytes": 3638
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -334,9 +334,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "41c966559b1fd8cb99cfd23b8033f062e0621dcdb5391591d3f1666697460233",
+      "sha256": "6cd7928a180ed4149921673f7470ae72e1f6ad4f4bf9b7a8215a747628bd7df8",
       "mode": "0700",
-      "bytes": 20586
+      "bytes": 20583
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -352,15 +352,15 @@
     },
     {
       "path": "driver/local/local-full-regression.sh",
-      "sha256": "4c08d22cd6f28576d9a4fcf391654398098ecf32a24b9dbeb0cd09cf12e07bff",
+      "sha256": "47981fe07de01fd75108891ed92b76471ee140a473a18c81451120f092b60b03",
       "mode": "0700",
-      "bytes": 2003
+      "bytes": 1994
     },
     {
       "path": "driver/local/local-gate.sh",
-      "sha256": "b5a2bd8ae3deca08332be9ac55182ec3e2519de951b58a339d975b5a44494695",
+      "sha256": "a1b52ab6cd3eec4f74dae133a8758c706130af612d3adeb23b99745cae87b1c9",
       "mode": "0700",
-      "bytes": 4397
+      "bytes": 4376
     },
     {
       "path": "driver/local/local-upload.sh",
@@ -688,9 +688,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "9b991b8397ea1be59d44b63175d8cb8149d005b540691c5357bcb9e75b8992b3",
+      "sha256": "310387f836cfded54248f851ba4b8d423efff11d32fddaa2b3db9d792e83ce94",
       "mode": "0700",
-      "bytes": 6101
+      "bytes": 6343
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -759,5 +759,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "1bac1c068d10bcd117fb608932235c9142cbdcbc4ed6026b2e7abd6a60cdb7e0"
+  "manifest_sha256": "9d69488e23d5820fbd83929c501f64adf98db9ddf3a72f82414412c19a0d41b1"
 }

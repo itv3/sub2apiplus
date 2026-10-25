@@ -107,7 +107,7 @@ write_gate_json "$GATES/check-egress-spec.gate.json" check-egress-spec "$START" 
   echo "reason=冻结承接收据按工具约束不得进入它所描述的提交，而 check-egress-spec 含 Go 冻结承接测试；在候选 commit 上单独执行 check-egress-spec-ci 作交叉核对（见 cross-check/）"
   echo "worktree=${TD}"
   echo "executed_on=${ISOLATION}"
-  echo "CODEX_0_149_1_SOURCE_ROOT=${HISTORICAL_SOURCE_ROOT}（采集主机只读源码基线，不在仓库内）"
+  echo "CODEX_SPEC_SOURCE_ROOT=${HISTORICAL_SOURCE_ROOT}（采集主机只读源码基线，不在仓库内）"
   echo "${START}"; host_line
   echo "backend diff candidate..executed: [$(git -C "$TD" diff --stat "$C" "$DC" -- backend 2>&1 | tail -1 || true)]"
   echo; echo "## make check-egress-spec"; echo '$ make check-egress-spec'

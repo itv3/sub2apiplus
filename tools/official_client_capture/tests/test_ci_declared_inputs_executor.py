@@ -2763,6 +2763,8 @@ class ControlInvariantTests(unittest.TestCase):
                 '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
             ],
             "tools/ci/entry_gates.py": [
+                # 第 19 项（指南换版）：historical_source_input 的首行文档不再写死 0.149.1 与旧变量名，只改文字，不改逻辑。
+                '    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""',
                 "DECLARED_REQUIRE_OFFLINE = False",
                 # 以下 9 行是步骤 5 WP3b 对独立验收「一般 2（make -n 展开探测并非只读）」的必要改写，逐条登记理由：
                 # ①说明不能再声称「必须只读」——make 自己并不保证 -n 只读，改成「尽量只读、保守扫描挡住已知会执行的写法」。

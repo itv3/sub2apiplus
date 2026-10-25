@@ -33,7 +33,8 @@ UPSTREAM_MERGE_TRANSITION_PREDECESSOR ?=
 UPSTREAM_MERGE_TRANSITION_REASON ?=
 # 本地只读 Codex 源码树（被 .gitignore 排除，只在主工作区有）：版本号与源码根都不再写进变量名，换版时只改下一行。
 # 隔离工作树请传 CODEX_SPEC_SOURCE_ROOT=<主工作区>/local-analysis/sources/codex-cli-<版本>；
-# 旧变量名 CODEX_0_149_1_SOURCE_ROOT 过渡期仍认（驱动与入口门禁改名之后删除这一层兼容）。
+# 旧变量名 CODEX_0_149_1_SOURCE_ROOT 过渡期仍认并保留：tools/ci/target_platform_gate.py（及驱动副本）的摘要被受管文件
+# codex_upgrade_gate_receipt.py 的 TARGET_VERIFIER_SHA256S 钉住，它仍用旧名传源码根；等以后的受管批次统一改名后再删除这一层兼容。
 CODEX_SPEC_SOURCE_VERSION ?= 0.163.0
 CODEX_SPEC_SOURCE_ROOT ?= $(if $(CODEX_0_149_1_SOURCE_ROOT),$(CODEX_0_149_1_SOURCE_ROOT),$(CURDIR)/local-analysis/sources/codex-cli-$(CODEX_SPEC_SOURCE_VERSION))
 CAPTURE_TYPESCRIPT_MODULE ?= $(CURDIR)/frontend/node_modules/typescript/lib/typescript.js

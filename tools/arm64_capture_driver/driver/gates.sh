@@ -22,7 +22,7 @@ if [ "$MODE" = full-regression-isolated ]; then
   # 采集主机上 /root/oauth-capture 是真实受管工具树的 bind 别名，候选测试树按默认
   # --capture-root 会把它当执行副本比对而整批报「执行位置与受管工具树不一致」；
   # 在私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机（无此路径）环境一致。
-  export CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT
+  export CODEX_SPEC_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT
   export CAPTURE_TYPESCRIPT_MODULE=$T/frontend/node_modules/typescript/lib/typescript.js
   # 树外只读字节码缓存（原因同 vc5-gate-target.sh）：先把标准库与测试树 tools 预编译进本次重建的缓存目录
   # （失败即停），make test 期间只读使用，测试树不留 __pycache__。

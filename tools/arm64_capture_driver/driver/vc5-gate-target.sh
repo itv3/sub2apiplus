@@ -6,7 +6,7 @@
 #   预跑目录里，与 VC-5 不共用任何目录（缓存每次清空重建，共用时两边同时跑会互相清掉对方的缓存）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT
+ATT="$1"; GATE="$2"; T="$3"; SRC_SPEC=$HISTORICAL_SOURCE_ROOT
 # B-10 只用同提交且干净的显式来源测试树，不能凭请求指向任意旧树。
 if [ -n "${VC5_TARGET_REQUEST:-}" ] && [ -n "${VC5_TARGET_TREE:-}" ]; then
   test "$(git -C "$T" rev-parse HEAD)" = "$(git -C "$VC5_TARGET_TREE" rev-parse HEAD)"
@@ -29,7 +29,9 @@ else
   env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
 fi
 export PYTHONPYCACHEPREFIX="$PYC"
-export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"
+# 注意：下面调用的 target_platform_gate.py 受 TARGET_VERIFIER_SHA256S 钉住，仍用旧名 CODEX_0_149_1_SOURCE_ROOT 传源码根，
+# Makefile 的旧名兼容层因此必须保留；等以后的受管批次统一改名后再删。
+export CODEX_SPEC_SOURCE_ROOT="$SRC_SPEC"
 export CAPTURE_TYPESCRIPT_MODULE="$T/frontend/node_modules/typescript/lib/typescript.js"
 # 采集主机上 /root/oauth-capture 是受管工具树的 bind 别名，候选测试树会把它当执行副本比对；
 # 私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机环境一致。门禁跑的是测试树：身份记忆化不用 lib.sh 导出的生产
@@ -40,7 +42,7 @@ if [ -n "${VC5_TARGET_REQUEST:-}" ]; then
   set +e
   env -u CODEX_UPGRADE_IDENTITY_MEMO python3 -B "$DRV/target_platform_gate.py" run --tree "$T" --out "$GATE/target-units" \
     --request "$VC5_TARGET_REQUEST" --deployment "$DEPLOY" --record-store "${VC5_TARGET_RECORD_STORE:-$(dirname "$D")/unit-records}" \
-    --pycache "$PYC" --historical-source "$SRC1491" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"
+    --pycache "$PYC" --historical-source "$SRC_SPEC" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"
   RC=$?; set -e; END=$(utc_now)
   if [ "$RC" = 0 ] && [ ! -f "$GATE/target-units/evidence.json" ]; then RC=3; fi
 else

@@ -64,7 +64,7 @@
       "status": "rerun-only"
     },
     "egress-spec:check-egress-spec-local-source": {
-      "reason": "读仓库外且被 .gitignore 忽略的 local-analysis 源码树（CODEX_0_149_1_SOURCE_ROOT），其内容不在仓库摘要里（历史中位 0.9 秒）",
+      "reason": "读仓库外且被 .gitignore 忽略的 local-analysis 源码树（CODEX_SPEC_SOURCE_ROOT），其内容不在仓库摘要里（历史中位 0.9 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-scanner-check": {

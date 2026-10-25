@@ -2098,7 +2098,7 @@ record, *command = sys.argv[1:]
 with open(record, "a", encoding="utf-8") as handle:
     handle.write(json.dumps({"cwd": os.getcwd(), "command": command,
                              "pycache": os.environ.get("PYTHONPYCACHEPREFIX"),
-                             "source_root": os.environ.get("CODEX_0_149_1_SOURCE_ROOT"),
+                             "source_root": os.environ.get("CODEX_SPEC_SOURCE_ROOT"),
                              "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE")}, ensure_ascii=False) + "\\n")
 PY
 echo "gate-stub-stdout $*"
@@ -2153,7 +2153,7 @@ except ImportError:
 with open(config["record"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps({"cwd": os.getcwd(), "head": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
                              "pycache": os.environ.get("PYTHONPYCACHEPREFIX"), "cached": cached, "cached_exists": bool(cached) and os.path.isfile(cached),
-                             "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE"), "source_root": os.environ.get("CODEX_0_149_1_SOURCE_ROOT"),
+                             "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE"), "source_root": os.environ.get("CODEX_SPEC_SOURCE_ROOT"),
                              "identity_memo": os.environ.get("CODEX_UPGRADE_IDENTITY_MEMO"), "env_keys": sorted(os.environ), "args": args,
                              "manifest": manifest}, ensure_ascii=False) + "\\n")
 failing = {item for item in config.get("fail_units", "").split(",") if item}

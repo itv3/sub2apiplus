@@ -596,7 +596,7 @@ README、机器生成证据索引及 JSON 收据只承担操作或审计责任�
 | [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | 官方客户端出站工具索引；Codex 具有受管编排器，Claude 当前仅有取证与门禁工具。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
 | [`docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) | 官方 OAuth 客户端共用的目标、扩展架构、证据生命周期与发布门槛。 |
-| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.149.1。 |
+| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.163.0。 |
 | [`docs/EVIDENCE_INDEX.md`](docs/EVIDENCE_INDEX.md) | Codex 官方规则编号与证据文件的机器生成索引。 |
 | [`docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md) | Claude Code 规则与证据、环境职责、Sub2API 实现和版本演进规范。 |
 | [`docs/COMPOSITE_GROUPS.md`](docs/COMPOSITE_GROUPS.md) | Composite Groups 路由、管理流程和使用边界。 |

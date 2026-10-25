@@ -497,7 +497,7 @@ def environment_facts(tree: Path, typescript_module: str | None) -> list[dict[st
 
 
 def historical_source_input(root: str | None) -> dict[str, Any]:
-    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""
+    """check-egress-spec 子检查另列的输入：历史门禁源码树（CODEX_SPEC_SOURCE_ROOT，当前为 Codex 0.163.0 源码树）的目录摘要（E2-05 同）。"""
 
     steps = _entry_steps_module()
     ctx = steps.Context(params={}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
