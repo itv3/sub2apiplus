@@ -98,6 +98,14 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 （不论通过与否）把它复制进结论目录——``<提交前 12 位>-<部署摘要前 12 位>.core-deviation.json``，与结论文件并排——并在结论里登记 ``core_deviation``
 （路径、摘要、偏差单元数、总比值）。报告只供调优额度参考，不影响任何结论。
 
+固定测试树坐标（Codex 升级工具优化第 10a 项配套决定 D1，仅供 0.164 版本登记并入）：承接要求当前测试树的绝对路径等于来源记录里的 ``read_audit.repo_root``
+（测试树路径进了单元规格、宿主条目名与载荷、字节码镜像路径与 ``co_filename``，换一个路径所有摘要都不同；跨坐标比较“旧树对旧树”还会静默通过，所以不规范化路径，
+而是固定路径）。原来后台验证的工作区按“完整提交＋部署绑定”各放一处，换一次提交就换一次坐标，跨提交承接结构上不可能。现在缺省把工作区放在**每客户端一个**的固定位置
+``<数据根的上一级>/entry-gates-source-work/fixed/<客户端>``（``fixed_work_root``；入口门禁 ``entry-gates-work`` 本来就是固定的，沿用同一种做法），每轮在其中重建内容；
+收尾门禁（``codex_closeout.py`` 的 ``gate.work``）用同一个位置，后台验证留下的记录才可能被收尾逐单元承接。代价：不再保留历史提交的原样树（历史重放只读封存内容，
+不需要）；同一时间只有一棵树靠 ``start`` 先停掉在跑的验证（superseded）加入口门禁对物理 WORK 的互斥锁保证。显式 ``--work`` 仍可指向旧的提交绑定坐标。
+``fixed-work --data-root [--client]`` 子命令打印这个位置。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
@@ -1197,6 +1205,15 @@ def _bound_work_roots(runroot: Path, data_root: Path, commit: str, deployment: M
             Path(data_root).parent / "entry-gates-source-work" / binding)
 
 
+FIXED_WORK_DIRECTORY = "fixed"
+
+
+def fixed_work_root(data_root: Path, client: str = "codex") -> Path:
+    """D1：后台验证与收尾门禁共用的固定工作区（每客户端一个）；测试树是它下面的 ``test-tree``。见模块说明“固定测试树坐标”。"""
+
+    return Path(data_root).parent / "entry-gates-source-work" / FIXED_WORK_DIRECTORY / client
+
+
 def _unit_inherit() -> Any:
     """加载原逐单元合同，后台不另写批准、来源或决策验证规则。"""
     name = "background_unit_inherit_sibling"
@@ -1450,15 +1467,17 @@ def _verify_ancestry(old: str, new: str, *, bundle: Path, branch: str, work: Pat
     return {**base, "status": "verified", "method": method}
 
 
-def _inherit_source_roots(runroot: Path, data_root: Path, source: Mapping[str, Any]) -> tuple[Path, Path]:
-    """来源结论自己的提交与部署绑定的两个 WORK 根（与它启动时 ``_bound_work_roots`` 同一算法）。"""
+def _inherit_source_roots(runroot: Path, data_root: Path, source: Mapping[str, Any]) -> tuple[Path, ...]:
+    """来源结论自己的提交与部署绑定的两个 WORK 根（与它启动时 ``_bound_work_roots`` 同一算法），加上固定坐标根（D1）。"""
 
     commit, deployment, deployments = source.get("commit"), source.get("deployment"), source.get("deployments")
     if (not isinstance(commit, str) or not _COMMIT_PATTERN.fullmatch(commit) or not isinstance(deployment, dict)
             or not deployment.get("sha256") or (deployments is not None and not isinstance(deployments, dict))):
         raise ValidationError("来源后台结论缺少提交或部署绑定，确定不了它的 WORK 坐标")
     try:
-        return _bound_work_roots(Path(runroot), Path(data_root), commit, deployment, deployments)
+        # D1：来源在固定坐标上跑（缺省）时，它的 WORK 就是那个固定根，不是提交绑定的两个根。
+        return (*_bound_work_roots(Path(runroot), Path(data_root), commit, deployment, deployments),
+                fixed_work_root(Path(data_root), str(source.get("client") or "codex")))
     except (KeyError, TypeError, AttributeError) as error:
         raise ValidationError(f"来源后台结论的部署绑定不完整：{error}") from error
 
@@ -1937,6 +1956,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     path = result_path(args.runroot, args.commit, deployment, deployments)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
     bound_roots = _bound_work_roots(args.runroot, args.data_root, args.commit, deployment, deployments)
+    fixed_root = fixed_work_root(Path(args.data_root), client)
+    bound_roots = (*bound_roots, fixed_root)   # D1：固定坐标也是合法的 WORK 根（缺省就用它）；显式 --work 仍可指向旧的提交绑定坐标
     # 跨提交、跨部署后继：物理 WORK 沿用来源后台的那一个（测试树与缓存不重建，与入口线的原位后继同口径），它绑定的是来源自己的
     # 提交与部署，所以校验放宽到「本轮坐标或来源坐标」；是否恰好等于来源的 WORK 由随后的来源校验逐字核对。
     source_option = getattr(args, "unit_inherit_source_result", None)
@@ -1952,7 +1973,7 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
             bound_roots = (*bound_roots, *_work_lineage(Path(args.runroot), Path(args.data_root), source_loaded[0]))
         except (KeyError, TypeError, AttributeError) as error:
             raise ValidationError(f"来源后台结论的内容不合法：{error!r}") from error
-    work = args.work or bound_roots[0]
+    work = args.work or fixed_root
     work = Path(work)
     previous_attempt = _read(path) if source_option is None and args.work else None
     if (previous_attempt is not None and previous_attempt.get("unit_inherit_source") is not None
@@ -2336,6 +2357,7 @@ def run(result: Path) -> int:
                 raise ValidationError("后台筛选参数缺失或发生漂移")
         bound_roots = _bound_work_roots(Path(payload["runroot"]), Path(payload["data_root"]), payload["commit"],
                                        payload["deployment"], payload.get("deployments"))
+        bound_roots = (*bound_roots, fixed_work_root(Path(payload["data_root"]), payload.get("client") or "codex"))   # D1
         # 跨提交后继沿用来源的物理 WORK：它绑定的是来源自己的提交与部署（来源登记在启动时已校验、上面刚复核过）。
         bound_roots = (*bound_roots, *_inherit_source_work_roots(payload))
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
@@ -2763,7 +2785,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--profile", default=DEFAULT_PROFILE)
     p_start.add_argument("--record-store", type=Path, default=None)
     p_start.add_argument("--work", type=Path, default=None,
-                         help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生；带 --unit-inherit-source-result 时须是来源后台的那个 WORK")
+                         help="只允许固定坐标（entry-gates-source-work/fixed/<客户端>）或本轮完整提交及部署摘要目录或其子目录；缺省用固定坐标；"
+                              "带 --unit-inherit-source-result 时须是来源后台的那个 WORK")
     p_start.add_argument("--parallel", type=_positive_parallel, default=None, help="门禁单元并发数；缺省沿用执行器配置")
     p_start.add_argument("--declared-sample", type=_declared_sample_mode, default="off", metavar="off|always|every:N",
                          help="声明级承接命令单元的读集证据来源：off（缺省）用登记表证据，always 每次执行都带 strace 采样，every:N 每 N 次采样一次；"
@@ -2825,6 +2848,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="取哪个客户端的部署收据（缺省 codex）")
     p_status = sub.add_parser("status")
     p_status.add_argument("--runroot", type=Path, required=True)
+    p_fixed = sub.add_parser("fixed-work", help="打印固定测试树坐标的工作区（后台验证缺省使用，收尾门禁的 gate.work 也用它）")
+    p_fixed.add_argument("--data-root", type=Path, required=True)
+    p_fixed.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
     return parser.parse_args(argv)
 
 
@@ -2867,6 +2893,9 @@ def main(argv: list[str] | None = None) -> int:
             return 3 if started.get("action") == "refused" else 0
         if args.command == "run":
             return run(args.result)
+        if args.command == "fixed-work":
+            print(fixed_work_root(args.data_root, args.client))
+            return 0
         if args.command == "stop":
             notes: list[str] = []
             stopped = stop(args.runroot, args.reason, notes=notes)

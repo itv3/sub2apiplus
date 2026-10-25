@@ -354,7 +354,7 @@ class BackgroundValidationTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         roots = cache_record.read_text().splitlines()
         self.assertEqual(roots, [result["cache_roots"][key] for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")])
-        self.assertTrue(all(Path(path).is_relative_to(self.runroot / "background-validation/work") for path in roots))
+        self.assertTrue(all(Path(path).is_relative_to(bv.fixed_work_root(self.data)) for path in roots), "缺省工作区是固定测试树坐标（D1）")
         self.assertEqual(len(set(roots)), 3)
 
     def test_background_refuses_foreground_work_and_changed_bundle(self):

@@ -3,6 +3,18 @@
 
 候选制品只写入隔离目录；正式冻结承接、终态签发与推送必须消费同一份指南批准和门禁结论。
 
+收尾门禁的两个可选配置（Codex 升级工具优化第 10a 项 D1 与第 17 项；``gate`` 里不写这些键时一切与改造前逐字相同）：
+
+* ``gate.work``：固定测试树坐标——与后台验证同一个位置 ``<数据根的上一级>/entry-gates-source-work/fixed/<客户端>``（见
+  ``background_validation.fixed_work_root``）。承接要求当前测试树的绝对路径等于来源记录的 ``read_audit.repo_root``；收尾原先的
+  ``<work_root>/gate-work`` 每次收尾换一个路径，后台验证的记录永远承接不过来。
+* ``gate.unit_inherit``（须同时给 ``gate.work`` 与 ``gate.record_store``）：允许前序后台验证的提交向收尾提交**逐单元**承接——收尾 ``prepare`` 会在候选
+  副本里改指南、写终态收据、生成冻结收据并提交出新的候选提交，所以收尾提交永远不是跑过后台验证的那个提交，复用规则不能写“同提交”。
+  条件是该单元的输入（按第 10a 项的承接视图）、环境和验证规则在两个提交之间一致；只重跑被收尾改动（指南、终态收据、冻结收据及其摘要
+  连锁）影响到的单元。门禁以 ``--mode unit-inherit`` 运行，收尾校验改为：运行清单经 ``unit_inherit.verify_published(purpose="closeout")``
+  重放通过、承接项的 ``inherit_check.repo_root`` 等于固定测试树；收尾收据逐项列出承接单元、来源运行、来源记录摘要、视图摘要，以及被重跑的单元与原因
+  （语义变化：“一次全绿”变成“全绿，允许逐单元承接”）。
+
 Claude 升级共用这一份收尾编排（Claude 升级控制面设计 B5b-06）：配置合同名是 ``claude-upgrade-closeout/v1`` 时（客户端表
 ``closeout_schema``），随客户端变的三件事——指南材料的封存读侧、第二部分摘要连锁、终态收据的生成与校验——转给
 ``tools/claude_closeout.py``，指南文件与第二部分标题、候选分支名、终态收据文件名前缀按客户端表取值；候选隔离、人工批准、
@@ -494,6 +506,53 @@ def check_cleanup_context(plan):
         raise CloseoutError("清理上下文或展开参数已漂移，须重新准备并批准")
 
 
+INHERIT_STAGE = re.compile(r"pre-ledger|post-ledger|formal:[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def validate_gate_inherit(config, repo, work):
+    """``gate`` 里 D1／第 17 项的可选键校验：固定测试树坐标、记录库、逐单元承接请求。三个键都不写时什么也不检查（与改造前相同）。"""
+    gate = config["gate"]
+    fixed = gate.get("work")
+    if fixed is not None:
+        path = safety.plain(fixed)
+        if path.is_relative_to(repo) or path.is_relative_to(work) or work.is_relative_to(path) or repo.is_relative_to(path):
+            raise CloseoutError("固定测试树坐标必须在权威仓库与收尾工作根之外")
+        if path.parts[-3:] != ("entry-gates-source-work", "fixed", client_of(config)):
+            raise CloseoutError("收尾门禁的固定测试树坐标必须是 entry-gates-source-work/fixed/<客户端>（与后台验证同一个位置）")
+    store = gate.get("record_store")
+    if store is not None:
+        safety.plain(store)
+    inherit = gate.get("unit_inherit")
+    if inherit is None:
+        if store is not None:
+            raise CloseoutError("门禁记录库只与逐单元承接同用")
+        return
+    if (not isinstance(inherit, dict) or set(inherit) != {"request", "stage"} or fixed is None or store is None
+            or not isinstance(inherit["stage"], str) or not INHERIT_STAGE.fullmatch(inherit["stage"])):
+        raise CloseoutError("收尾逐单元承接须同时给固定测试树坐标、记录库，以及只含请求和阶段的承接配置")
+    safety.file_binding(inherit["request"])
+
+
+def gate_inherit(config):
+    """收尾门禁是否按逐单元承接运行（配置里有 ``gate.unit_inherit``）。"""
+    return config["gate"].get("unit_inherit")
+
+
+def _unit_inherit():
+    """同仓库 tools/ci 的逐单元承接合同（按路径加载，与后台验证同法）；收尾不另写批准、来源或决策验证规则。"""
+    name = "closeout_unit_inherit_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "ci" / "unit_inherit.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
 def validate_config(config):
     required = {"schema_version", "repo", "work_root", "guide", "material", "terminal_facts", "terminal_relative",
                 "tag", "gate", "cleanup", "push", "deployment_check"}
@@ -508,11 +567,13 @@ def validate_config(config):
         safety.file_binding(config[key])
     inside(repo, config["terminal_relative"])
     gate = config["gate"]
-    if set(gate) != {"driver", "vc_env", "node_modules"}:
+    required_gate, optional_gate = {"driver", "vc_env", "node_modules"}, {"work", "record_store", "unit_inherit"}
+    if not required_gate <= set(gate) or set(gate) - required_gate - optional_gate:
         raise CloseoutError("门禁必须提供受管驱动、参数和锁定前端依赖")
     for key in ("driver", "vc_env"):
         safety.file_binding(gate[key])
     safety.plain(gate["node_modules"])
+    validate_gate_inherit(config, repo, work)
     for name in ("cleanup", "deployment_check"):
         operation = config[name]
         if name == "cleanup" and operation.get("mode") == "defer":
@@ -555,6 +616,8 @@ def config_bindings(config):
     paths = [config[name] for name in ("guide", "material", "terminal_facts")]
     paths += [config["gate"][name] for name in ("driver", "vc_env")]
     paths += [str(Path(config["gate"]["node_modules"]) / "pnpm-lock.yaml")]
+    if gate_inherit(config):
+        paths.append(config["gate"]["unit_inherit"]["request"])
     paths.append(str(Path(__file__).resolve()))
     if client_of(config) != "codex":
         paths += [str(Path(__file__).resolve().parent / name) for name in CLIENT_TOOL_FILES]
@@ -738,14 +801,20 @@ def journal_read(plan, name, phase):
 
 
 def check_gate_result(plan):
-    """完整门禁集合与标准命令逐项核对，不能把某条命令退出零当成全量通过。"""
+    """完整门禁集合与标准命令逐项核对，不能把某条命令退出零当成全量通过。
+
+    配置了 ``gate.unit_inherit`` 时（第 17 项）运行模式是 ``unit-inherit``，允许逐单元承接：承接项必须被运行清单、决策收据与
+    ``unit_inherit.verify_published`` 重放证明，测试树坐标必须是固定坐标；没配置时一字不变地要求 ``re-execute`` 且没有承接单元。"""
     from tools.ci import entry_gates
-    root = Path(plan["basis"]["config"]["work_root"]) / "gates"
+    config = plan["basis"]["config"]
+    inherit = gate_inherit(config)
+    mode = "unit-inherit" if inherit else "re-execute"
+    root = Path(config["work_root"]) / "gates"
     entry = safety.read(root / "entry-gates.json")
     expected = set(entry_gates.profile_gates("full-gates"))
     rows = entry.get("gates", [])
     if (entry.get("schema_version") != entry_gates.ENTRY_SUMMARY_SCHEMA or entry.get("profile") != "full-gates"
-            or entry.get("status") != "passed" or entry.get("mode") != "re-execute"
+            or entry.get("status") != "passed" or entry.get("mode") != mode
             or entry.get("source", {}).get("tree_head") != plan["candidate_commit"]
             or entry.get("source", {}).get("commit") != plan["candidate_commit"]
             or len(rows) != len(expected) or {r.get("gate_id") for r in rows} != expected):
@@ -760,16 +829,18 @@ def check_gate_result(plan):
     if manifest.get("selection") is not None or entry.get("client_selection") is not None:
         raise CloseoutError("收尾全量门禁是按客户端筛选的子集，不是全集：收尾必须全集重跑（不带 --gate-scope）")
     gate_retry_passed = set()
+    gate_inherited = set()
     for row in rows:
         if row.get("status") != "passed" or row.get("exit_code") != 0:
             raise CloseoutError("存在未通过的收尾门禁")
         path = inside(root, row["gate_json"])
         result = safety.read(path)
         gate_retry_passed.update(result.get("retry_passed_units") or [])
+        gate_inherited.update(result.get("inherited_units") or [])
         command, directory = entry_gates.GATE_COMMANDS[row["gate_id"]]
         if (result.get("gate_id") != row["gate_id"] or result.get("status") != "passed"
                 or result.get("exit_code") != 0 or result.get("failed_units")
-                or result.get("inherited_units") or result.get("mode") != "re-execute"
+                or (result.get("inherited_units") and not inherit) or result.get("mode") != mode
                 or result.get("tree_head") != plan["candidate_commit"]
                 or result.get("command") != command or result.get("working_directory") != directory
                 or not result.get("started_at_utc") or not result.get("completed_at_utc")):
@@ -779,15 +850,21 @@ def check_gate_result(plan):
     if not executor.is_relative_to(root):
         raise CloseoutError("执行器结果不在本轮目录")
     summary = safety.read(executor)
+    allowed_dispositions = {"executed", "inherited"} if inherit else {"executed"}
     if (summary.get("schema_version") != entry_gates.GATES_SUMMARY_SCHEMA or summary.get("status") != "passed"
-            or summary.get("mode") != "re-execute" or summary.get("units_not_run") or summary.get("failed_units")
-            or any(row.get("passed") is not True or row.get("disposition", "executed") != "executed"
+            or summary.get("mode") != mode or summary.get("units_not_run") or summary.get("failed_units")
+            or any(row.get("passed") is not True or row.get("disposition", "executed") not in allowed_dispositions
                    or row.get("exit_code") != 0 or row.get("orphans") != 0 or row.get("timed_out")
                    or row.get("missing") for row in summary.get("units", []))
             or not summary.get("units")):
         raise CloseoutError("执行器存在未运行、失败或承接单元")
     if summary.get("client_selection") is not None:
         raise CloseoutError("执行器汇总带按客户端筛选的标记：收尾全量门禁必须全集")
+    inherited_ids = {row["unit_id"] for row in summary["units"] if row.get("disposition", "executed") == "inherited"}
+    if inherit:
+        if gate_inherited - inherited_ids:
+            raise CloseoutError("门禁记录登记的承接单元不在执行器汇总的承接单元里")
+        files.extend(check_inherited_units(plan, root, summary, inherited_ids))
     # 失败单元补跑（优化第 2 项）：补跑通过的单元算通过，但必须带自洽的标注、两次日志都在盘上且摘要相符、汇总与门禁记录一致；
     # 不静默放行——任何一处对不上都按收尾门禁未通过处理。发布汇报从 gate_retry_summary 取单列的补跑通过名单。
     retry_problems = retry_policy.summary_problems(summary, require_files=True)
@@ -826,6 +903,81 @@ def check_gate_result(plan):
                 raise CloseoutError("补跑单元的首次尝试日志不在本轮门禁目录")
             files.append(first)
     return {str(path): safety.file_binding(path)["sha256"] for path in sorted(set(files))}
+
+
+def _inherit_manifest(plan, root, summary):
+    """执行器汇总指向的运行清单：在本轮门禁目录里、摘要与汇总登记的相符、模式是逐单元承接、运行 ID 与汇总一致、记录库就是配置的那一个。"""
+    config = plan["basis"]["config"]
+    reference = summary.get("unit_manifest") or {}
+    path = safety.plain(reference.get("path") or "")
+    if not path.is_relative_to(root):
+        raise CloseoutError("运行清单不在本轮门禁目录")
+    manifest = safety.read(path)
+    store = safety.plain(config["gate"]["record_store"])
+    if (manifest.get("manifest_sha256") != reference.get("manifest_sha256") or manifest.get("mode") != "unit-inherit"
+            or manifest.get("run_id") != summary.get("run_id") or manifest.get("record_store") != str(store)
+            or summary.get("record_store") != str(store)):
+        raise CloseoutError("运行清单与执行器汇总不一致，或不是配置记录库里的逐单元承接运行")
+    return path, manifest, store
+
+
+def check_inherited_units(plan, root, summary, inherited_ids):
+    """收尾逐单元承接的校验（第 17 项）：承接单元与运行清单逐一相符，运行清单经 ``unit_inherit.verify_published(purpose="closeout")`` 历史重放
+    通过（决策收据三个复核点、批准、来源运行、每条承接记录重做 ``check_record``），承接项的测试树坐标是固定坐标。返回要进不可变证据索引的文件。"""
+    config = plan["basis"]["config"]
+    path, manifest, store = _inherit_manifest(plan, root, summary)
+    from_manifest = {entry["unit_id"] for entry in manifest.get("units", []) if entry.get("disposition") == "inherited"}
+    if from_manifest != inherited_ids:
+        raise CloseoutError("运行清单与执行器汇总的承接单元集合不同")
+    module = _unit_inherit()
+    try:
+        module.verify_published(manifest, store, purpose="closeout", historical=True)
+    except module.ContractError as error:
+        raise CloseoutError(f"收尾承接的决策收据或来源核验不通过：{error}") from error
+    tree = str(safety.plain(config["gate"]["work"]) / "test-tree")
+    for entry in manifest["units"]:
+        check = entry.get("inherit_check")
+        if entry.get("disposition") == "inherited" and isinstance(check, dict) and check.get("repo_root") != tree:
+            raise CloseoutError(f"承接单元 {entry['unit_id']} 的测试树坐标不是固定坐标：{check.get('repo_root')}")
+    files = [path]
+    decision = (manifest.get("unit_inherit_decision") or {}).get("path")
+    if decision:
+        files.append(safety.plain(decision))
+    return files
+
+
+def gate_inherit_summary(plan):
+    """收尾收据逐项列出的承接信息（第 17 项）：每个承接单元的来源运行、来源记录摘要与视图摘要，以及被重跑的单元和原因。没有按承接运行时返回 None。"""
+    config = plan["basis"]["config"]
+    if not gate_inherit(config):
+        return None
+    check_gate_result(plan)
+    root = Path(config["work_root"]) / "gates"
+    entry = safety.read(root / "entry-gates.json")
+    _path, manifest, _store = _inherit_manifest(plan, root, safety.read(safety.plain(entry["executor_summary"])))
+    inherited, rerun = [], []
+    for item in manifest["units"]:
+        if item.get("disposition") == "inherited":
+            check = item.get("inherit_check") or {}
+            inherited.append({"unit_id": item["unit_id"], "source_run_id": (item.get("basis") or {}).get("run_id"),
+                              "source_record_sha256": item.get("record_sha256"),
+                              "view_digest": check.get("inherit_inputs_sha256"), "repo_root": check.get("repo_root")})
+        else:
+            rerun.append({"unit_id": item["unit_id"], "reasons": list(item.get("reasons") or [])})
+    return {"inherited": inherited, "rerun": rerun, "decision": manifest.get("unit_inherit_decision")}
+
+
+def consume_inherited(plan):
+    """收尾门禁刚跑完的那一次：按当前时刻做一次真消费（取消费时的校时与撤销快照、批准此刻仍有效、写消费登记）。之后的重放都是历史重放。"""
+    config = plan["basis"]["config"]
+    root = Path(config["work_root"]) / "gates"
+    entry = safety.read(root / "entry-gates.json")
+    _path, manifest, store = _inherit_manifest(plan, root, safety.read(safety.plain(entry["executor_summary"])))
+    module = _unit_inherit()
+    try:
+        return module.verify_published(manifest, store, purpose="closeout")
+    except module.ContractError as error:
+        raise CloseoutError(f"收尾承接的消费核验不通过：{error}") from error
 
 
 def gate_retry_summary(plan):
@@ -868,10 +1020,12 @@ def run_gates(plan_path):
             # 输出完备则确认原运行；不完备保留现场，由新方案新工作根重跑。
             files = check_gate_result(plan)
         else:
-            argv = ["bash", config["gate"]["driver"], "--profile", "full-gates", "--mode", "re-execute",
-                    "--out", str(work / "gates"), "--work", str(work / "gate-work"),
-                    "--record-store", str(work / "gate-records"), plan["bundle"]["path"],
-                    client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
+            inherit = gate_inherit(config)
+            argv = ["bash", config["gate"]["driver"], "--profile", "full-gates", "--mode", "unit-inherit" if inherit else "re-execute",
+                    "--out", str(work / "gates"), "--work", config["gate"].get("work") or str(work / "gate-work"),
+                    "--record-store", config["gate"].get("record_store") or str(work / "gate-records"),
+                    *(["--unit-inherit-request", inherit["request"], "--unit-inherit-stage", inherit["stage"]] if inherit else []),
+                    plan["bundle"]["path"], client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
                     config["gate"]["node_modules"]]
             ledger = gate_retry_ledger(config)
             journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -892,7 +1046,12 @@ def run_gates(plan_path):
         load_plan(plan_path)
         # 补跑通过的单元（优化第 2 项）单列进完成占位，发布汇报据此写明“全绿，允许单次抖动补跑”；没有补跑时占位与改造前逐字相同。
         retried = gate_retry_summary(plan)
-        return journal(plan, "gates", "done", {"status": "passed", "files": files, **({"retry_passed": retried} if retried else {})})
+        # 逐单元承接（第 17 项）：门禁刚跑完，做一次真消费，并把承接单元与被重跑单元逐项列进完成占位；没配置承接时占位与改造前逐字相同。
+        extra = {}
+        if gate_inherit(config):
+            consumed = consume_inherited(plan)
+            extra = {"unit_inherit": {**gate_inherit_summary(plan), "consumption": consumed.get("consumption")}}
+        return journal(plan, "gates", "done", {"status": "passed", "files": files, **({"retry_passed": retried} if retried else {}), **extra})
 
 
 def check_action_result(plan, name):
@@ -1055,12 +1214,15 @@ def publish(plan_path, approvals):
                     for name in ("gates", "deployment_check", "integrate", "cleanup", "push")}
         completed = datetime.now(timezone.utc)
         retried = (journal_read(plan, "gates", "done") or {}).get("retry_passed")
+        inherited = (journal_read(plan, "gates", "done") or {}).get("unit_inherit")
         return journal(plan, "publish", "done", {"status": "passed", "receipts": receipts,
                      "completed_at_utc": completed.isoformat(), "started_at_utc": plan["started_at_utc"],
                      "wall_seconds": (completed - datetime.fromisoformat(plan["started_at_utc"])).total_seconds(),
                      "performance_claim": False,
                      # 全绿但其中有补跑通过的单元（允许单次抖动补跑，优化第 2 项）：发布汇报必须写明，不静默放行。
-                     **({"gate_retry_passed": retried} if retried else {})})
+                     **({"gate_retry_passed": retried} if retried else {}),
+                     # 全绿但其中有逐单元承接的单元（第 17 项）：发布汇报逐项写明来源与被重跑的单元，不静默放行。
+                     **({"gate_unit_inherit": {"inherited": len(inherited["inherited"]), "rerun": len(inherited["rerun"])}} if inherited else {})})
 
 
 def main(argv=None):
