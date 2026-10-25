@@ -10,7 +10,8 @@
   Job 演练、启动探测、发布认证、P0 收据）都在它下面；生产项目总账、正式计时账本与正式认证坐标都不写。演练参数文件按本轮
   参数文件改写产物坐标（RUNROOT、STAMP、项目截止、三份认证与 pre-A3 认证坐标、ENTRY_*）。编排器在演练根里拒绝 VC-0 收口
   （首批是真实官方取证），空跑最远到 ``p0-receipt``。
-* 跑：``env -i`` 干净环境里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连
+* 跑：干净环境（只有 HOME、LANG、PATH、ARM64_VC_ENV，等价 ``env -i``；另外白名单透传开工检查的六个调用环境变量 ``MODEL_PROBE_URL``、``MODEL_PROBE_KEY_FILE``、
+  ``MODEL_PROBE_MINIMAL``、``SECURITY_SCAN_REPO``、``OPENING_CHECKS_SKIP``、``OPENING_CHECKS_SKIP_REASON``，只在调用者当次环境里有值时才带，值不进命令行）里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连
   建账本之后一起）；升级开工的空跑 ``--opening``：重新执行全集并带读集审计（``--reexecute-gates --audit-reads``），默认到
   ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库。入口门禁的范围（第 9 项）：缺省（不带 ``--opening``／``--reexecute``）走入口编排器的缺省 ``--gate-scope auto``——Codex
   只重新执行 Codex 计划的采集工具测试，基点与回退规则见 ``entry_orchestrator.py``（找不到发版 tag 等一律回退全集并写明原因）；``--opening``／``--reexecute``（编排器的
@@ -93,6 +94,23 @@ ALLOWED_TO = ("entry-preflight", "policy-compatibility", "policy-activation", "e
 # 演练参数文件里改写的坐标（其余键原样沿用本轮参数文件）。
 APPROVED_BY = "入口空跑（演练总账）"
 CLEAN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# 开工检查（优化第 14 项，entry-preflight.sh 的 model-availability 与 main-security-scan）读的六个调用环境变量。空跑在干净环境里起编排器，不白名单透传它们，
+# 空跑第一步的这两项必然报“未配置”而失败。只透传这六个、且只在调用者**当次**环境里有非空值时才带：不透传别的变量，跳过（OPENING_CHECKS_SKIP）也只对当次生效，
+# 不写进空跑结论或任何持久配置。值经子进程的 env 参数交给编排器，不进命令行（ps 看得到命令行）；MODEL_PROBE_KEY_FILE 只是 0600 密钥文件的路径，密钥本身不经此处。
+OPENING_CHECK_ENV = ("MODEL_PROBE_URL", "MODEL_PROBE_KEY_FILE", "MODEL_PROBE_MINIMAL", "SECURITY_SCAN_REPO", "OPENING_CHECKS_SKIP",
+                     "OPENING_CHECKS_SKIP_REASON")
+
+
+def _orchestrator_environment(env_file: Path, source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """入口编排器的干净环境（等价于原来的 ``env -i HOME=/root LANG=C.UTF-8 PATH=… ARM64_VC_ENV=…``）加上开工检查的六个变量（见 OPENING_CHECK_ENV）。"""
+
+    source = os.environ if source is None else source
+    environment = {"HOME": "/root", "LANG": "C.UTF-8", "PATH": CLEAN_PATH, "ARM64_VC_ENV": str(env_file)}
+    for name in OPENING_CHECK_ENV:
+        value = source.get(name)
+        if isinstance(value, str) and value != "":
+            environment[name] = value
+    return environment
 # 演练根里的 pre-A3 认证坐标（rehearsal_env 改写的那一份）与场景结果行的前缀（与受管 pre-A3 认证模块的 SCENARIO_RESULT_PREFIX
 # 同一行，测试核对两边一致）。
 PRE_A3_CERTIFICATION_NAME = "pre-a3-path-certification.json"
@@ -630,10 +648,9 @@ def _acquire_serial_lock(lock_path: Path, still_running: Callable[[], bool], *, 
 
 
 def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path) -> tuple[int, Path]:
-    """在干净环境里跑入口编排器（``env -i``，按空跑种类带参数），返回（退出码，日志路径）。调用方持有空跑串行锁。"""
+    """在干净环境里跑入口编排器（环境见 ``_orchestrator_environment``，按空跑种类带参数），返回（退出码，日志路径）。调用方持有空跑串行锁。"""
 
-    argv = ["env", "-i", "HOME=/root", "LANG=C.UTF-8", f"PATH={CLEAN_PATH}", f"ARM64_VC_ENV={env_file}",
-            "bash", str(payload["entry"]), "--to", payload["to"]]
+    argv = ["bash", str(payload["entry"]), "--to", payload["to"]]
     if payload.get("opening"):
         argv += ["--reexecute-gates", "--audit-reads"]
     elif payload.get("reexecute"):
@@ -668,7 +685,8 @@ def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path)
             raise DryRunError(f"空跑结论里的采样方式非法：{error}") from error
     log = runroot / "entry.out"
     with log.open("ab") as handle:
-        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
+        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                                    env=_orchestrator_environment(env_file)).returncode
     return returncode, log
 
 

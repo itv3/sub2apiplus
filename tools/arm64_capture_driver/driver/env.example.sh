@@ -144,3 +144,8 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # - OPENING_CHECKS_SKIP：确需跳过时列出要跳过的项目名（model-availability、main-security-scan），逗号分隔
 # - OPENING_CHECKS_SKIP_REASON：跳过的理由，必填；列了跳过却没写理由，拒绝跳过、这一项按未通过处理
 # 被跳过的项在 results.txt 与 summary.json 里记为 skipped（带理由），不是 passed；入口编排器不把 skipped 当失败，但汇总里一眼看得出。
+# 这六个变量怎么到达 entry-preflight.sh：先在**启动入口的那个 shell 里导出**，再启动——直接 entry.sh、entry-dryrun.sh start、后台验证通过后自动接的入口空跑
+# （background-validate.sh start）都读启动命令所在 shell 的环境。入口空跑在干净环境里起编排器（只有 HOME、LANG、PATH、ARM64_VC_ENV），对这六个变量做显式白名单透传：
+# 只在启动时的环境里有非空值才带，别的变量一律不带；值经子进程的环境交给编排器，不进命令行（ps 看不到），日志里也不打印取值（密钥只在 MODEL_PROBE_KEY_FILE 指的 0600 文件里）。
+# 写法示例：先 export MODEL_PROBE_URL、MODEL_PROBE_KEY_FILE、SECURITY_SCAN_REPO，再 bash entry-dryrun.sh start <bundle> <分支> <完整提交>；确需跳过再多导出
+# OPENING_CHECKS_SKIP 与 OPENING_CHECKS_SKIP_REASON。跳过逐次显式、只对当次启动生效：不写进空跑结论或任何持久配置，下一次启动不导出就没有。

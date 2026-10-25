@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "4fd973cdb604506d531dd7a38d295eb08bb709b84cb31d9d62b0b6c8d327fbd4",
+      "sha256": "5a5c7f1613f78759d17b63fc7e4e08af8ded11d042cd275e807d93a1d834f931",
       "mode": "0600",
-      "bytes": 133627
+      "bytes": 135434
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -202,9 +202,9 @@
     },
     {
       "path": "driver/entry_dryrun.py",
-      "sha256": "0354b483d92b229150a4c57ed3322e41cd1cce9ee02920b426191b6092eced66",
+      "sha256": "c6ea71daaa9b55ebc6c3420fe65211a571e999363d1252d700278e251a242277",
       "mode": "0700",
-      "bytes": 58690
+      "bytes": 60513
     },
     {
       "path": "driver/entry_gates.py",
@@ -232,9 +232,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "4189a5e0d9929b81f985e7c4c9e5c7337e93fc7ddad14f3c3aea55aaaef7da4d",
+      "sha256": "9fb656a16f20b283f5b430517a96d1c84f71b6f9b428b3f61bda27eeb32e36f4",
       "mode": "0700",
-      "bytes": 12424
+      "bytes": 13457
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "93011b89950f49521d42f9934f049cd877d050f9b0778dceb1e4dd729768ecc0"
+  "manifest_sha256": "6cce0c07095c4dee1f53800c1af1c0edc81ace93642e8582b1abff0b9ffb749e"
 }

@@ -51,7 +51,9 @@ for line in open(os.environ["ARM64_VC_ENV"], encoding="utf-8"):
     values[key] = value.strip('"')
 config = json.loads((here / "fake-entry.json").read_text(encoding="utf-8"))
 with open(here / "calls.jsonl", "a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"argv": argv, "environ": sorted(os.environ), "env_file": values, "pid": os.getpid()}) + "\n")
+    opening = {name: os.environ[name] for name in ("MODEL_PROBE_URL", "MODEL_PROBE_KEY_FILE", "MODEL_PROBE_MINIMAL", "SECURITY_SCAN_REPO",
+                                                   "OPENING_CHECKS_SKIP", "OPENING_CHECKS_SKIP_REASON") if name in os.environ}
+    handle.write(json.dumps({"argv": argv, "environ": sorted(os.environ), "env_file": values, "pid": os.getpid(), "opening": opening}) + "\n")
 if config.get("sleep"):
     import time
     time.sleep(config["sleep"])
@@ -135,8 +137,8 @@ class EntryDryRunTests(unittest.TestCase):
         self.configure()
         self.state = self.root / "executor-state"
         # 开跑前的日常维护会清 Go 编译缓存、看根盘：替身环境里关掉（不碰开发机的缓存与磁盘），专门的用例另开。
-        self.environ = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_STATE_DIR": str(self.state),
-                        "ENTRY_DRYRUN_HOUSEKEEPING": "off"}
+        self.environ = {**{key: value for key, value in os.environ.items() if key not in dr.OPENING_CHECK_ENV},
+                        "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_STATE_DIR": str(self.state), "ENTRY_DRYRUN_HOUSEKEEPING": "off"}
 
     def configure(self, **config: object) -> None:
         (self.entry_dir / "fake-entry.json").write_text(json.dumps({"passed": ["entry-preflight", "entry-gates", "pre-a3"], **config}),
@@ -345,6 +347,121 @@ class EntryDryRunTests(unittest.TestCase):
         self.assertTrue(explicit["result"].endswith("-to-p0-receipt.json"))
         self.assertEqual(self.wait(explicit["result"])["status"], "passed")
         self.assertEqual(self.calls()[-1]["argv"], ["--to", "p0-receipt"])
+        bv.stop(self.runroot, "测试收尾")
+
+    # ---- 开工检查的六个调用环境变量（优化第 14 项集成缺口）：编排器在干净环境里启动，必须白名单透传 ----
+
+    SECRET = "sk-secret-key-content-must-never-be-logged-0123456789"
+    REASON = "中转维护中，已人工确认 \"模型在线\" $HOME `date` ; rm -rf / 'x'\t(多空格   保留)"
+
+    def opening_values(self) -> dict[str, str]:
+        key_file = self.root / "relay-key"
+        key_file.write_text(self.SECRET + "\n", encoding="utf-8")
+        key_file.chmod(0o600)
+        return {"MODEL_PROBE_URL": "http://relay.probe.invalid/v1", "MODEL_PROBE_KEY_FILE": str(key_file), "MODEL_PROBE_MINIMAL": "yes-minimal",
+                "SECURITY_SCAN_REPO": "probe-owner/probe-repo", "OPENING_CHECKS_SKIP": "model-availability,main-security-scan",
+                "OPENING_CHECKS_SKIP_REASON": self.REASON}
+
+    NOISE = {"PWD", "SHLVL", "_", "OLDPWD", "__CF_USER_TEXT_ENCODING"}
+
+    def environment_names(self, call: dict) -> list[str]:
+        return sorted(set(call["environ"]) - self.NOISE)
+
+    def everything_written(self, *extra: str) -> bytes:
+        """演练根、运行根与数据根下所有文件的内容，加上调用者拿到的输出：取值不得出现在其中任何一处。"""
+
+        chunks = [text.encode("utf-8") for text in extra]
+        for root in (self.runroot, self.data):
+            for path in sorted(root.rglob("*")):
+                if path.is_file() and not path.is_symlink():
+                    chunks.append(path.read_bytes())
+        return b"\n".join(chunks)
+
+    def test_the_six_opening_check_variables_reach_the_orchestrator_and_nothing_else_does(self) -> None:
+        values = self.opening_values()
+        self.environ = {**self.environ, **values, "FOO": "must-not-pass", "AWS_SECRET_ACCESS_KEY": "must-not-pass-either"}
+        started = self.start()
+        self.assertEqual(started.returncode, 0, started.stderr)
+        payload = self.wait(json.loads(started.stdout.strip().splitlines()[-1])["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        [call] = self.calls()
+        self.assertEqual(call["opening"], values, "六个变量原样到达（含引号、$、反引号、分号、制表符、中文与连续空格的跳过理由）")
+        self.assertEqual(self.environment_names(call), sorted(["ARM64_VC_ENV", "HOME", "LANG", "PATH", *values]), "除这六个以外仍是干净环境")
+        self.assertNotIn("FOO", call["environ"])
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", call["environ"])
+        self.assertEqual(call["argv"], ["--to", "atomic-double"], "取值不在编排器的命令行里")
+        written = self.everything_written(started.stdout, started.stderr)
+        for name, value in values.items():
+            self.assertNotIn(value.encode("utf-8"), written, f"{name} 的取值不应出现在任何落盘文件或输出里")
+        self.assertNotIn(self.SECRET.encode("utf-8"), written, "密钥文件内容不进日志，也不进任何落盘文件")
+
+    def test_without_the_variables_nothing_is_added_and_empty_values_count_as_unset(self) -> None:
+        self.environ = {**self.environ, "FOO": "bar", "MODEL_PROBE_MINIMAL": "", "OPENING_CHECKS_SKIP": ""}
+        self.assertEqual(self.wait(json.loads(self.start().stdout.strip().splitlines()[-1])["result"])["status"], "passed")
+        [call] = self.calls()
+        self.assertEqual(call["opening"], {})
+        self.assertEqual(self.environment_names(call), ["ARM64_VC_ENV", "HOME", "LANG", "PATH"])
+
+    def test_a_skip_only_takes_effect_for_the_run_started_with_it(self) -> None:
+        """跳过逐次显式：调用者当次环境里设了才生效，不写进任何持久配置——下一次不带就没有。"""
+
+        values = self.opening_values()
+        self.environ = {**self.environ, **values}
+        first = json.loads(self.start().stdout.strip().splitlines()[-1])
+        self.assertEqual(self.wait(first["result"])["status"], "passed")
+        self.environ = {key: value for key, value in self.environ.items() if key not in values}
+        second = json.loads(self.start("--to", "p0-receipt").stdout.strip().splitlines()[-1])
+        self.assertEqual(second["action"], "started")
+        self.assertEqual(self.wait(second["result"])["status"], "passed")
+        first_call, second_call = self.calls()
+        self.assertEqual(first_call["opening"], values)
+        self.assertEqual(second_call["opening"], {}, "上一次的变量不会残留到下一次")
+        for result in (first["result"], second["result"]):
+            text = Path(result).read_text(encoding="utf-8")
+            for name in values:
+                self.assertNotIn(name, text, f"空跑结论里不记 {name}")
+
+    def test_the_chained_dry_run_after_a_background_validation_gets_the_variables_too(self) -> None:
+        """后台验证通过后自动接的入口空跑：``_chain_dryrun`` 起 ``entry_dryrun.py start``（继承调用者环境），再起 run、再起编排器（干净环境加白名单透传）。
+        链路上除最后一层，没有任何一层清环境——这里把真实的下游全跑一遍（只给 start 补上 --entry 指向编排器替身）。"""
+
+        values = self.opening_values()
+        payload = {"vc_env": str(self.fixture.env_file), "data_root": str(self.data), "runroot": str(self.runroot), "bundle": str(self.root / "x.bundle"),
+                   "branch": "codex/test", "commit": COMMIT}
+        real_run = subprocess.run
+        chained_argv: list[list[str]] = []
+
+        def with_fake_entry(argv, **kwargs):
+            chained_argv.append(list(argv))
+            return real_run([*argv, "--entry", str(self.entry)], **kwargs)
+
+        environment = {**values, "FOO": "must-not-pass", "ENTRY_DRYRUN_HOUSEKEEPING": "off", "UNIT_EXECUTOR_STATE_DIR": str(self.state)}
+        with mock.patch.dict(os.environ, environment), mock.patch.object(bv.subprocess, "run", side_effect=with_fake_entry):
+            outcome = bv._chain_dryrun(payload)
+        self.assertEqual(outcome.get("action"), "started", outcome)
+        self.assertEqual(self.wait(outcome["result"])["status"], "passed")
+        [call] = self.calls()
+        self.assertEqual(call["opening"], values)
+        self.assertEqual(self.environment_names(call), sorted(["ARM64_VC_ENV", "HOME", "LANG", "PATH", *values]))
+        self.assertNotIn("FOO", call["environ"])
+        for argv in chained_argv:
+            for value in values.values():
+                self.assertNotIn(value, argv, "取值不在链路上任何一层的命令行里")
+        self.assertNotIn(self.SECRET.encode("utf-8"), self.everything_written())
+
+    def test_background_validation_start_hands_the_caller_environment_to_its_run_process(self) -> None:
+        gates = self.root / "entry-gates.sh"
+        gates.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        values = self.opening_values()
+        args = bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                          "--branch", "codex/test", "--commit", COMMIT, "--vc-env", str(self.fixture.env_file), "--entry-gates", str(gates),
+                          "--then-dryrun", "--preflight", "off", "--reuse", "off"])
+        with mock.patch.dict(os.environ, {**values, "FOO": "bar"}), mock.patch.object(bv.subprocess, "Popen", return_value=mock.Mock(pid=-1)) as popen:
+            bv.start(args)
+        [started_run] = [call for call in popen.call_args_list if "--result" in call.args[0]]   # 另有 ps（subprocess.run 底层也是 Popen），不看它
+        environment = started_run.kwargs["env"]
+        for name, value in values.items():
+            self.assertEqual(environment.get(name), value, f"{name} 随调用者环境交给后台验证的 run 进程")
         bv.stop(self.runroot, "测试收尾")
 
     def test_driver_carries_an_identical_copy(self) -> None:

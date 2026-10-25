@@ -21,6 +21,7 @@ import unittest
 from http.server import HTTPServer
 from pathlib import Path
 
+from tools.ci import entry_dryrun as dr
 from tools.official_client_capture.tests import test_ci_opening_checks as base
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -128,6 +129,24 @@ class PreflightSkipBehaviourTests(unittest.TestCase):
         self.assertEqual(results, {"model-availability": "passed", "main-security-scan": "passed"})
         self.assertEqual(summary["skipped"], {})
 
+    def test_the_key_file_content_never_reaches_the_logs_stdout_or_the_summary(self) -> None:
+        """密钥只在文件里：模型探测把它放进请求头，通过、模型已下线、中转不可达三种结局的日志、标准输出、汇总里都不出现密钥内容。"""
+
+        secret = self.key_file.read_text(encoding="utf-8").strip()
+        self.assertTrue(secret)
+        for label, models in (("通过", ["gpt-main", "gpt-lite"]), ("模型已下线", ["gpt-lite"])):
+            with self.subTest(label):
+                base.FakeRelay.models = models
+                _code, _summary, _results = self.run_checks(**self.configured())
+                written = self.completed.stdout + self.completed.stderr + "".join(path.read_text(encoding="utf-8", errors="replace") for path in self.out.iterdir())
+                self.assertNotIn(secret, written)
+        self.server.shutdown()
+        self.server.server_close()
+        _code, _summary, results = self.run_checks(**self.configured())   # 中转已关：连接被拒绝
+        self.assertEqual(results["model-availability"], "failed")
+        written = self.completed.stdout + self.completed.stderr + "".join(path.read_text(encoding="utf-8", errors="replace") for path in self.out.iterdir())
+        self.assertNotIn(secret, written)
+
     def test_a_reason_without_a_skip_list_skips_nothing(self) -> None:
         code, _summary, results = self.run_checks(OPENING_CHECKS_SKIP_REASON="只写理由不列项目")
         self.assertEqual((code, results["model-availability"]), (1, "failed"))
@@ -148,6 +167,16 @@ class ParameterTemplateTests(unittest.TestCase):
         for name in ("MODEL_PROBE_URL", "MODEL_PROBE_KEY_FILE", "MODEL_PROBE_MINIMAL", "SECURITY_SCAN_REPO", "OPENING_CHECKS_SKIP", "OPENING_CHECKS_SKIP_REASON"):
             with self.subTest(name):
                 self.assertIn(name, text)
+        # 入口空跑在干净环境里起编排器、对这六个变量做显式白名单透传：模板与 README 都要把这件事和导出方式写明，且与代码里的白名单是同一份。
+        readme = (DRIVER.parent / "README.md").read_text(encoding="utf-8")
+        for name in dr.OPENING_CHECK_ENV:
+            with self.subTest(name=name):
+                self.assertIn(name, text)
+                self.assertIn(name, readme)
+        for document in (text, readme):
+            self.assertIn("白名单", document)
+            self.assertIn("导出", document)
+            self.assertIn("只对当次启动生效", document)
         # 这几项是调用环境变量，不是参数文件键：模板里只能以注释出现，参数文件解析不应接受它们当赋值。
         self.assertFalse([line for line in text.splitlines() if re.match(r"(MODEL_PROBE|SECURITY_SCAN|OPENING_CHECKS)\w*=", line)])
 

@@ -148,6 +148,15 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   客户端摘要、版本等于登记值；`official-package`：官方包摘要与两份源码树；`plan-audit`：`codex_upgrade plan
   --audit-only`（参数与官方包、源码、规则与场景清单、作业 covers 与覆盖计划、基线证据、执行副本、工具身份；
   不读账本、不写文件）；`environment-probe`：ARM64 环境收据在临时目录试采并封存，结束即删除。
+* 开工检查补的两项（优化第 14 项）：`model-availability`（向中转拉模型列表，本轮的 `MAIN_MODEL`／`LITE_MODEL` 必须都在，模型被下线当场拦下）与
+  `main-security-scan`（main 当前头对应的 Security Scan 必须已跑完、success、不超过 36 小时）。它们读六个**调用环境变量**，不是参数文件的键：
+  `MODEL_PROBE_URL`（中转基地址，含 `/v1`）、`MODEL_PROBE_KEY_FILE`（只含密钥的 0600 文件，密钥不进命令行与日志）、`MODEL_PROBE_MINIMAL`（可选，非空另发最小请求）、
+  `SECURITY_SCAN_REPO`（`owner/name`，要有登录好的 `gh`）、`OPENING_CHECKS_SKIP`（确需跳过的项目名，逗号分隔）、`OPENING_CHECKS_SKIP_REASON`（跳过理由，列了跳过就必填）。
+  没配置也算未通过（fail-closed）；被跳过的项在 `results.txt` 与 `summary.json` 里记为 `skipped`（带理由），不是 `passed`。
+  **怎么传进去**：先在启动入口的那个 shell 里导出，再启动。直接 `entry.sh`、`entry-dryrun.sh start`、后台验证通过后自动接的入口空跑都读启动命令所在 shell 的环境；
+  入口空跑在干净环境里起编排器（只有 `HOME`、`LANG`、`PATH`、`ARM64_VC_ENV`），对这**六个变量做显式白名单透传**：只在启动时的环境里有非空值才带，别的变量一律不带；
+  值经子进程环境交给编排器，不进命令行，日志里不打印取值。跳过逐次显式、只对当次启动生效，不写进空跑结论或任何持久配置，下一次启动不导出就没有。
+  例：`export MODEL_PROBE_URL=… MODEL_PROBE_KEY_FILE=/root/secrets/relay-key SECURITY_SCAN_REPO=itv3/sub2apiplus` 之后再 `bash driver/entry-dryrun.sh start <bundle> <分支> <完整提交>`。
 * 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
   由 stage1 建预检 Campaign 时的 plan 照旧校验。
 * Claude（B5a-09，`CLIENT=claude`，取值见客户端表）：`required-parameters` 另要 `UPSTREAM_IP`（场景清单的必需 Campaign

@@ -900,9 +900,15 @@ CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runr
         '    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")',
         '            print(json.dumps({"stopped": stop(args.runroot, args.reason)}, ensure_ascii=False))']}
 CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '0354b483d92b229150a4c57ed3322e41cd1cce9ee02920b426191b6092eced66'}
-CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': ['  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库；默认重新执行全集（B-09），只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同',
-        '  逐单元承接。']}
+CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': 'c6ea71daaa9b55ebc6c3420fe65211a571e999363d1252d700278e251a242277'}
+CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': ['* 跑：``env -i`` 干净环境里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连',
+        '  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库；默认重新执行全集（B-09），只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同',
+        '  逐单元承接。',
+        '    """在干净环境里跑入口编排器（``env -i``，按空跑种类带参数），返回（退出码，日志路径）。调用方持有空跑串行锁。"""',
+        '',
+        '    argv = ["env", "-i", "HOME=/root", "LANG=C.UTF-8", f"PATH={CLEAN_PATH}", f"ARM64_VC_ENV={env_file}",',
+        '            "bash", str(payload["entry"]), "--to", payload["to"]]',
+        '        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode']}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
 CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'afb6e48c26ec20e7e7db8caa68979e763645110afc967e02a8666ab680b844e3'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}

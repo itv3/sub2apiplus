@@ -1239,7 +1239,7 @@ CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"
         '+           "checks": checks, "failed": failed, "skipped": skipped}',
         '+  if grep -q \' skipped$\' "$OUT/results.txt"; then echo "注意：有被显式跳过的检查项（未做检查，不是通过）：$(grep \' skipped$\' "$OUT/results.txt" | cut -d\' \' -f1 | tr \'\\n\' \' \')"; fi']}
 CLOSEOUT_SH_3_BASELINE = 'c14cba3cd62d7ea6bcd02b4abf43e0b19f460ad7'
-CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '4189a5e0d9929b81f985e7c4c9e5c7337e93fc7ddad14f3c3aea55aaaef7da4d'}
+CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '9fb656a16f20b283f5b430517a96d1c84f71b6f9b428b3f61bda27eeb32e36f4'}
 CLOSEOUT_SH_3_RESIDUALS = {'env.example.sh': []}
 CLOSEOUT_SH_4_BASELINE = '3ab5afea9da94d68efdeebafbd7a6542e21ea3e4'
 CLOSEOUT_SH_4_DIGESTS = {'vc0-gate-target.sh': 'b1d173a477b03009cfa6abde600bc81953817ebf1d72a7038b2fe1675a2fb94d'}
