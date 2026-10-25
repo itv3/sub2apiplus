@@ -103,6 +103,10 @@ func newScannerHistoryFixture(t *testing.T, options scannerHistoryOptions) scann
 	git("config", "user.email", "freeze-proof@example.invalid")
 	git("config", "commit.gpgsign", "false")
 	git("config", "core.hooksPath", "/dev/null")
+	// CI 运行器的新版 git 会在提交后于后台做自动维护并写 .git/objects，与 t.TempDir 的清理竞争，
+	// 报 “directory not empty”；临时仓库一律关闭自动维护与自动 gc。
+	git("config", "maintenance.auto", "false")
+	git("config", "gc.auto", "0")
 
 	path := "src/retired.go"
 	previous := "package retired\n"
