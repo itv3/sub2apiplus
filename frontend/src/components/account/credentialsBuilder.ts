@@ -545,6 +545,16 @@ export function isCustomPlatform(platform: string | null | undefined): boolean {
   return platform === CUSTOM_PLATFORM_ID
 }
 
+/**
+ * 账号列表「用量窗口」列是否走多协议供应商的额度／余额分支（国产厂商订阅额度、余额探测等）。
+ * 自定义多协议平台（custom）虽然登记成了多协议供应商，但它没有任何额度或余额查询接口，
+ * 走这个分支只会显示一个「-」，今日统计和额度进度条都不出现；所以排除 custom，
+ * 让它改走普通 API Key 账号的显示分支（今日统计 + 额度进度条）。其他多协议平台不变。
+ */
+export function showsProviderUsageWindow(platform: string): boolean {
+  return isMultiProtocolApiKeyPlatform(platform) && platform !== CUSTOM_PLATFORM_ID
+}
+
 /** 自定义多协议平台表单的三个地址框（创建与编辑弹窗共用）；labelKey / hintKey 是 admin.accounts.customPlatform.* 子键。 */
 export const CUSTOM_ENDPOINT_FIELDS: ReadonlyArray<{
   protocol: CnNativeApiProtocol

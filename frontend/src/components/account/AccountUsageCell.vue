@@ -719,7 +719,8 @@ import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import {
   cnQuotaCellVisible as cnQuotaCellVisibleFn,
   cnBalanceCellVisible as cnBalanceCellVisibleFn,
-  isMultiProtocolApiKeyPlatform
+  isMultiProtocolApiKeyPlatform,
+  showsProviderUsageWindow
 } from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
@@ -797,7 +798,7 @@ const showUsageWindows = computed(() => {
   if (props.account.platform === 'gemini') return !isGeminiThirdPartyApiKey.value
   // 多协议 API Key 供应商：apikey 账号也有滚动用量窗口（coding plan / 订阅）或余额，
   // 由 CNProviderQuotaCell / CNProviderBalanceCell 自行探测与展示。
-  if (isMultiProtocolApiKeyPlatform(props.account.platform)) {
+  if (showsProviderUsageWindow(props.account.platform)) {
     return true
   }
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
