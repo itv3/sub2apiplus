@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -218,6 +219,9 @@ class Outcome:
     # 用例根本加载不了（模块导入失败、类／方法不存在）。干净树上这是目录写错（探针出错）；注入了历史缺陷的副本上，
     # 回归用例按修复后的接口写，缺陷回来时它们可能连导入都过不了，这本身就是缺陷被报出，见 ``replay_history``。
     load_error: bool = False
+    # 加载失败时各用例的导入错误正文（``ImportError: cannot import name 'x' …``），不含被请求的用例名；历史重放的缺陷签名
+    # 在加载失败路径上只匹配这些正文——否则探针引用的用例名本身就能让任何加载失败“命中”。
+    load_errors: list[str] | None = None
 
 
 class Runner:
@@ -309,7 +313,6 @@ class UnittestRunner(Runner):
             )
         except subprocess.TimeoutExpired as error:
             return Outcome("error", f"超时（{self.timeout_seconds:g} 秒）", _tail(_decode(error.stdout) + _decode(error.stderr)))
-        output = completed.stdout + completed.stderr
         payload = None
         for line in completed.stdout.splitlines():
             if line.startswith(UNITTEST_RESULT_MARKER):
@@ -317,17 +320,21 @@ class UnittestRunner(Runner):
                     payload = json.loads(line[len(UNITTEST_RESULT_MARKER):])
                 except json.JSONDecodeError:
                     payload = None
+        # 结果标记行里有全部用例 id 与报错，不能留在“输出”里（输出会参与缺陷签名匹配）。
+        output = "\n".join(line for line in (completed.stdout + completed.stderr).splitlines()
+                           if not line.startswith(UNITTEST_RESULT_MARKER))
         if not isinstance(payload, dict) or not isinstance(payload.get("tests"), list):
             return Outcome("error", f"运行器没有给出结果（退出码 {completed.returncode}）", _tail(output))
-        return classify_tests(payload["tests"], payload.get("missing") or [], output)
+        return classify_tests(payload["tests"], payload.get("missing") or [], output, payload.get("load_errors") or [])
 
 
-def classify_tests(tests: list[dict[str, str]], missing: Sequence[str], output: str = "") -> Outcome:
+def classify_tests(tests: list[dict[str, str]], missing: Sequence[str], output: str = "",
+                   load_errors: Sequence[str] = ()) -> Outcome:
     """把逐用例结论翻译成一个 ``Outcome``（独立成函数，方便单测）。"""
 
     if missing:
         return Outcome("error", "探针引用的用例不存在或无法导入：" + "；".join(str(item) for item in missing[:5]), _tail(output), tests,
-                       load_error=True)
+                       load_error=True, load_errors=[str(item) for item in load_errors])
     failed = [item for item in tests if item.get("outcome") in {"fail", "error"}]
     skipped = [item for item in tests if item.get("outcome") == "skip"]
     if failed:
@@ -451,6 +458,7 @@ class ProbeResult:
     baseline_status: str | None = None
     history: tuple[str, ...] = ()
     output_tail: str = ""
+    failures: list[dict[str, str]] = dataclasses.field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -458,6 +466,7 @@ class ProbeResult:
             "status": self.status, "label": STATUS_LABELS[self.status], "detail": self.detail,
             "seconds": round(self.seconds, 3), "blocked_by": self.blocked_by, "signature_hit": self.signature_hit,
             "baseline_status": self.baseline_status, "history": list(self.history), "output_tail": self.output_tail,
+            "failures": self.failures,
         }
 
 
@@ -592,6 +601,7 @@ def run_probe(probe: Probe, *, tree: Path, work: Path, capabilities: Mapping[str
         result.status = PASSED
     elif outcome.verdict == "fail":
         result.status = FAILED
+        result.failures = failure_excerpts(outcome)
         if probe.signature:
             result.signature_hit = _signature_hit(probe, outcome)
     elif outcome.verdict == "skip":
@@ -603,17 +613,58 @@ def run_probe(probe: Probe, *, tree: Path, work: Path, capabilities: Mapping[str
     return result
 
 
-def _signature_hit(probe: Probe, outcome: Outcome) -> bool:
-    """失败信息里是否出现缺陷签名。除摘要和输出尾部外，还逐个检查**失败用例**的 id 与完整报错：整轮输出很长时，
-    先失败的用例可能被截断在输出尾部之外，但它们的 id 和报错都在结构化结果里。"""
+_TRACEBACK_FRAME = re.compile(r'^\s*File ".*", line \d+(, in .*)?$')
+_IMPORT_HEADER = re.compile(r"^ImportError: Failed to import test module: .*$")
 
-    parts = [outcome.detail, outcome.output]
-    for item in outcome.tests or []:
-        if item.get("outcome") in {"fail", "error"}:
-            parts.append(str(item.get("id", "")))
-            parts.append(str(item.get("detail", "")))
-    haystack = "\n".join(parts)
+
+def exception_text(detail: str) -> str:
+    """去掉 traceback 里的 ``File "…", line N, in 函数`` 行、``Traceback`` 头与 unittest 的“Failed to import test module: 请求的
+    模块名”头，保留异常类型、异常消息和调用栈帧里的源码行。
+
+    ``in 函数`` 里是测试方法名，导入头里是探针请求的模块名——它们都由探针自己的引用决定，任何失败（甚至注入了无关的
+    语法错误）都会带上，拿来当缺陷签名等于“探针失败就命中”。留下的是缺陷现象本身：断言消息、缺失的符号名、被改坏的值，
+    以及抛错的那一行源码（例如 ``start = source.index("def _decoded_request_body")`` 说明脚本里该函数不见了）。
+    """
+
+    kept: list[str] = []
+    for line in detail.splitlines():
+        if _TRACEBACK_FRAME.match(line) or line.startswith("Traceback (most recent call last)") or _IMPORT_HEADER.match(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def signature_haystack(outcome: Outcome) -> str:
+    """缺陷签名只在这里面找：
+
+    * 加载失败（回归用例连导入都过不了）：只看导入错误正文，不看被请求的用例名；
+    * 单元用例失败：只看各失败用例的异常消息与源码行（已去掉 ``in 测试方法名`` 的栈帧行）和进程输出，不看用例 id；
+    * 命令／函数探针：看摘要与输出。
+    """
+
+    if outcome.load_error:
+        return "\n".join(exception_text(item) for item in (outcome.load_errors or []))
+    if outcome.tests is not None:
+        # 进程输出（stdout／stderr）也算现象：有的缺陷让工具把拒绝原因打到标准错误，断言消息里只剩 “2 != 0”。结果标记行
+        # （含全部用例 id 与报错）在 UnittestRunner 里已经剔除。
+        failing = "\n".join(exception_text(str(item.get("detail", ""))) for item in outcome.tests
+                            if item.get("outcome") in {"fail", "error"})
+        return failing + "\n" + outcome.output
+    return outcome.detail + "\n" + outcome.output
+
+
+def _signature_hit(probe: Probe, outcome: Outcome) -> bool:
+    haystack = signature_haystack(outcome)
     return any(fragment in haystack for fragment in probe.signature)
+
+
+def failure_excerpts(outcome: Outcome, limit: int = 5, width: int = 500) -> list[dict[str, str]]:
+    """失败现象摘录（汇总里留痕，也是挑缺陷签名的依据）：失败用例的 id 与异常消息，或加载错误正文。"""
+
+    if outcome.load_error:
+        return [{"id": "（加载失败）", "message": exception_text(item)[:width]} for item in (outcome.load_errors or [])[:limit]]
+    return [{"id": str(item.get("id", "")), "message": exception_text(str(item.get("detail", "")))[:width]}
+            for item in (outcome.tests or []) if item.get("outcome") in {"fail", "error"}][:limit]
 
 
 def run_round(probes: Sequence[Probe], *, tree: Path, work: Path, checkpoints: Mapping[str, Checkpoint] | None = None,
@@ -664,76 +715,103 @@ def replay_history(probes: Sequence[Probe], *, tree: Path, work: Path, copy_tree
                    progress: Callable[[ProbeResult], None] | None = None) -> list[ProbeResult]:
     """把每个历史缺陷重新引入受管树副本，要求对应探针在**一轮**里各自报出。
 
-    每个探针的判定：
-    1. 先在干净树上跑基线，必须 ``passed``——否则它不是“只因这个缺陷才失败”的独立探针（基线失败记 ``failed``，
-       被阻断记 ``not_run``）；
-    2. 为它单独复制一棵树、打上它自己的注入器（探针之间互不污染），再跑；失败且命中缺陷签名 → ``reproduced``；
-       通过 → ``missed``；失败但签名不符 → ``missed``（报出的不是这个缺陷）；跳过 → ``not_run``。
-    没有注入器的探针不参加历史重放（不出现在结果里）。
+    每个探针单独复制一棵树，在这棵副本上依次做两件事：
+    1. **未注入的基线**：先在刚复制出来、还没打任何补丁的副本上跑一遍，必须通过。副本是被测环境的一部分——复制漏掉
+       探针依赖的文件（驱动目录、docs 收据……）会让注入后的失败看起来像“缺陷复现”，其实只是副本不完整；基线在副本上
+       通过，才证明注入前后的唯一差别就是这个缺陷。基线失败记 ``failed``，被跳过记 ``not_run``，出错记 ``error``；
+    2. **注入后重跑**：打上它自己的注入器（探针之间互不污染）再跑；失败且失败现象命中缺陷签名 → ``reproduced``；
+       通过 → ``missed``；失败但现象不含签名 → ``missed``（报出的不是这个缺陷）；跳过 → ``not_run``。
+    能力与检查点的阻断检查仍针对原始树做（它们描述的是环境，不是副本）。没有注入器的探针不参加历史重放。
     """
 
     candidates = [probe for probe in probes if probe.injections]
     validate_probes(candidates, checkpoints)
+    for probe in candidates:
+        if not probe.signature:
+            raise RehearsalError(f"{probe.probe_id}：带注入器的探针必须有缺陷签名，否则无法确认报出的是这个缺陷")
     capabilities = dict(capabilities) if capabilities is not None else detect_capabilities()
     work.mkdir(parents=True, exist_ok=True)
     store = _CheckpointStore(checkpoints or {}, work)
     results: list[ProbeResult] = []
-    for probe in candidates:
-        baseline = run_probe(dataclasses.replace(probe, requires_probes=()), tree=tree, work=work / "baseline",
-                             capabilities=capabilities, store=store)
-        if baseline.status != PASSED:
-            baseline.baseline_status = baseline.status
-            baseline.detail = f"基线（干净树）未通过，无法判断独立性：{baseline.detail}"
-            if baseline.status == FAILED:
-                baseline.status = FAILED
-            results.append(baseline)
-            if progress is not None:
-                progress(baseline)
-            continue
-        started = time.monotonic()
-        try:
-            injected_tree = copy_tree(work / "trees" / probe.probe_id, probe.copy_extra)
-            for injection in probe.injections:
-                inject(injected_tree, injection)
-        except Exception as error:  # noqa: BLE001 - 注入器应用不上（上下文漂移等）：这个缺陷无法重放，标未执行
-            result = _blocked(probe, "injection", probe.probe_id, f"历史缺陷无法重新引入：{type(error).__name__}: {error}")
-            result.baseline_status = PASSED
-            results.append(result)
-            if progress is not None:
-                progress(result)
-            continue
-        scratch = work / "probes" / probe.probe_id
-        scratch.mkdir(parents=True, exist_ok=True)
-        context = RunContext(tree=injected_tree, work=scratch, capabilities=capabilities,
-                             checkpoints=dict(store.built), injected=True, origin_tree=tree)
-        outcome, run_seconds = _execute(probe, context)
-        if outcome.verdict == "error" and outcome.load_error:
-            # 基线（干净树）上同一批用例能加载、能通过，注入缺陷之后连加载都失败：修复时新增的接口被改回去了。
-            # 这是缺陷被报出，不是探针出错；详情里保留导入错误，签名照常核对。
-            outcome = Outcome("fail", "回归用例在注入缺陷后无法加载（修复时新增的接口缺失）：" + outcome.detail, outcome.output, outcome.tests)
-        result = ProbeResult(probe.probe_id, probe.title, probe.phase, probe.step, probe.kind, ERROR, detail=outcome.detail,
-                             seconds=(time.monotonic() - started), baseline_status=PASSED, history=probe.history,
-                             output_tail=outcome.output)
-        if outcome.verdict == "fail":
-            hit = _signature_hit(probe, outcome) if probe.signature else True
-            result.signature_hit = hit
-            if hit:
-                result.status = REPRODUCED
-            else:
-                result.status = MISSED
-                result.detail = f"失败了，但失败信息不含缺陷签名 {list(probe.signature)}：{outcome.detail}"
-        elif outcome.verdict == "pass":
-            result.status = MISSED
-            result.detail = "注入了历史缺陷，探针却通过了：探针有盲区"
-        elif outcome.verdict == "skip":
-            result.status = NOT_RUN
-            result.blocked_by = {"type": "skipped", "id": probe.probe_id, "reason": outcome.detail}
-            result.detail = f"未执行：{outcome.detail}"
+
+    def finish(result: ProbeResult) -> None:
         results.append(result)
-        # 每个探针用完立刻删掉自己的树副本（约 70 MB），整轮不会同时留着十几棵副本把根盘填满。
-        shutil.rmtree(injected_tree, ignore_errors=True)
         if progress is not None:
             progress(result)
+
+    for probe in candidates:
+        blocked = _prepare(dataclasses.replace(probe, requires_probes=()), capabilities=capabilities, store=store,
+                           tree=tree, results=None)
+        if blocked is not None:
+            finish(blocked)
+            continue
+        started = time.monotonic()
+        injected_tree: Path | None = None
+        try:
+            try:
+                injected_tree = copy_tree(work / "trees" / probe.probe_id, probe.copy_extra)
+            except Exception as error:  # noqa: BLE001 - 副本都复制不出来，无法重放
+                finish(_blocked(probe, "copy", probe.probe_id, f"无法复制被测树：{type(error).__name__}: {error}"))
+                continue
+            scratch = work / "probes" / probe.probe_id
+            scratch.mkdir(parents=True, exist_ok=True)
+            # 1) 未注入副本上的基线。
+            base_context = RunContext(tree=injected_tree, work=scratch / "baseline", capabilities=capabilities,
+                                      checkpoints=dict(store.built), injected=False, origin_tree=tree)
+            base_context.work.mkdir(parents=True, exist_ok=True)
+            base_outcome, _ = _execute(probe, base_context)
+            if base_outcome.verdict != "pass":
+                status = {"fail": FAILED, "skip": NOT_RUN}.get(base_outcome.verdict, ERROR)
+                failed = ProbeResult(probe.probe_id, probe.title, probe.phase, probe.step, probe.kind, status,
+                                     detail=f"未注入的副本基线未通过（副本可能漏复制了依赖，或探针本身有问题）：{base_outcome.detail}",
+                                     seconds=time.monotonic() - started, baseline_status=status, history=probe.history,
+                                     output_tail=base_outcome.output, failures=failure_excerpts(base_outcome))
+                if status == NOT_RUN:
+                    failed.blocked_by = {"type": "skipped", "id": probe.probe_id, "reason": base_outcome.detail}
+                finish(failed)
+                continue
+            # 2) 注入缺陷后重跑。
+            try:
+                for injection in probe.injections:
+                    inject(injected_tree, injection)
+            except Exception as error:  # noqa: BLE001 - 注入器应用不上（上下文漂移等）：这个缺陷无法重放，标未执行
+                result = _blocked(probe, "injection", probe.probe_id, f"历史缺陷无法重新引入：{type(error).__name__}: {error}")
+                result.baseline_status = PASSED
+                finish(result)
+                continue
+            context = RunContext(tree=injected_tree, work=scratch / "injected", capabilities=capabilities,
+                                 checkpoints=dict(store.built), injected=True, origin_tree=tree)
+            context.work.mkdir(parents=True, exist_ok=True)
+            outcome, _ = _execute(probe, context)
+            if outcome.verdict == "error" and outcome.load_error:
+                # 基线（未注入副本）上同一批用例能加载、能通过，注入缺陷之后连加载都失败：修复时新增的接口被改回去了。
+                # 这是缺陷被报出，不是探针出错；签名只在导入错误正文里找（不看请求的用例名）。
+                outcome = Outcome("fail", "回归用例在注入缺陷后无法加载（修复时新增的接口缺失）：" + "；".join(outcome.load_errors or [outcome.detail]),
+                                  outcome.output, outcome.tests, load_error=True, load_errors=outcome.load_errors)
+            result = ProbeResult(probe.probe_id, probe.title, probe.phase, probe.step, probe.kind, ERROR, detail=outcome.detail,
+                                 seconds=(time.monotonic() - started), baseline_status=PASSED, history=probe.history,
+                                 output_tail=outcome.output)
+            if outcome.verdict == "fail":
+                result.failures = failure_excerpts(outcome)
+                hit = _signature_hit(probe, outcome)
+                result.signature_hit = hit
+                if hit:
+                    result.status = REPRODUCED
+                else:
+                    result.status = MISSED
+                    result.detail = f"失败了，但失败现象不含缺陷签名 {list(probe.signature)}（可能是无关原因）：{outcome.detail}"
+            elif outcome.verdict == "pass":
+                result.status = MISSED
+                result.detail = "注入了历史缺陷，探针却通过了：探针有盲区"
+            elif outcome.verdict == "skip":
+                result.status = NOT_RUN
+                result.blocked_by = {"type": "skipped", "id": probe.probe_id, "reason": outcome.detail}
+                result.detail = f"未执行：{outcome.detail}"
+            finish(result)
+        finally:
+            # 每个探针用完立刻删掉自己的树副本（约 70 MB），整轮不会同时留着十几棵副本把根盘填满。
+            if injected_tree is not None:
+                shutil.rmtree(injected_tree, ignore_errors=True)
     return results
 
 
@@ -823,6 +901,8 @@ def render_table(summary: Mapping[str, Any]) -> str:
 
     rows = summary["rows"]
     lines = [f"模式 {summary['mode']}；被测树 {summary['tree']}；结论 {summary['verdict']}"]
+    if summary.get("scope_note"):
+        lines.append(f"范围：{summary['scope_note']}")
     header = ("编号", "阶段", "缺陷／步骤", "结果", "说明")
     table = [header]
     for row in rows:
@@ -870,8 +950,14 @@ class _RecordingResult(unittest.TestResult):
         super().__init__()
         self.records: list[dict[str, str]] = []
 
+    @staticmethod
+    def _clip(text: str, head: int = 2500, tail: int = 1500) -> str:
+        """超长报错（断言消息里常带整份脚本）保留开头和结尾：开头有异常类型与断言消息，结尾有最后一帧。"""
+
+        return text if len(text) <= head + tail else text[:head] + "\n…（中间省略）…\n" + text[-tail:]
+
     def _add(self, test: unittest.TestCase, outcome: str, detail: str = "") -> None:
-        self.records.append({"id": test.id(), "outcome": outcome, "detail": detail})
+        self.records.append({"id": test.id(), "outcome": outcome, "detail": self._clip(detail)})
 
     def addSuccess(self, test):  # noqa: N802
         super().addSuccess(test)
@@ -879,11 +965,11 @@ class _RecordingResult(unittest.TestResult):
 
     def addFailure(self, test, err):  # noqa: N802
         super().addFailure(test, err)
-        self._add(test, "fail", self.failures[-1][1][-1500:])
+        self._add(test, "fail", self.failures[-1][1])
 
     def addError(self, test, err):  # noqa: N802
         super().addError(test, err)
-        self._add(test, "error", self.errors[-1][1][-1500:])
+        self._add(test, "error", self.errors[-1][1])
 
     def addSkip(self, test, reason):  # noqa: N802
         super().addSkip(test, reason)
@@ -893,7 +979,7 @@ class _RecordingResult(unittest.TestResult):
         super().addSubTest(test, subtest, err)
         if err is not None:
             text = self.failures[-1][1] if self.failures and self.failures[-1][0] is subtest else (self.errors[-1][1] if self.errors else "")
-            self._add(test, "fail", text[-1500:])
+            self._add(test, "fail", text)
 
 
 def run_unittest_ids(test_ids: Sequence[str]) -> dict[str, Any]:
@@ -906,24 +992,34 @@ def run_unittest_ids(test_ids: Sequence[str]) -> dict[str, Any]:
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     missing: list[str] = []
+    load_errors: list[str] = []
     for name in test_ids:
-        loaded = loader.loadTestsFromName(name)
+        try:
+            loaded = loader.loadTestsFromName(name)
+        except Exception as error:  # noqa: BLE001 - 导入时抛的 SyntaxError 等不是 ImportError，unittest 不会替我们包成占位用例
+            reason = "".join(traceback.format_exception_only(type(error), error)).strip()
+            missing.append(f"{name}（{reason}）")
+            load_errors.append(reason)
+            continue
         stack = [loaded]
         while stack:
             item = stack.pop()
             if isinstance(item, unittest.TestSuite):
                 stack.extend(item)
             elif item.__class__.__name__ == "_FailedTest":
-                reason = repr(getattr(item, "_exception", "")) or item.id()
+                exception = getattr(item, "_exception", None)
+                reason = "".join(traceback.format_exception_only(type(exception), exception)).strip() if exception else item.id()
                 missing.append(f"{name}（{reason}）")
+                load_errors.append(reason)
         if loaded.countTestCases() == 0:
             missing.append(f"{name}（没有匹配到任何用例）")
+            load_errors.append("没有匹配到任何用例")
         suite.addTest(loaded)
     if missing:
-        return {"tests": [], "missing": missing}
+        return {"tests": [], "missing": missing, "load_errors": load_errors}
     result = _RecordingResult()
     suite.run(result)
-    return {"tests": result.records, "missing": []}
+    return {"tests": result.records, "missing": [], "load_errors": []}
 
 
 def _unittest_main(test_ids: Sequence[str]) -> int:
@@ -955,6 +1051,8 @@ class Registry:
     checkpoints: Mapping[str, Checkpoint]
     copy_tree: TreeCopier
     inject: Injector
+    # 完整链的范围说明，原样写进完整链汇总（``scope_note``）并打印在表头，避免把它误读成覆盖了整条 VC-0～VC-6。
+    chain_note: str = ""
 
 
 def _select(probes: Sequence[Probe], ids: Sequence[str] | None, phases: Sequence[str] | None) -> list[Probe]:
@@ -995,6 +1093,8 @@ def describe(registry: Registry) -> str:
         needs = ",".join(probe.needs) or "-"
         lines.append(f"  {probe.probe_id:<34} {probe.phase:<5} {probe.kind:<8} {flags}  需要:{needs}  {probe.title}")
     lines.append("完整链（有序，遇首个失败即停）：")
+    if registry.chain_note:
+        lines.append(f"  范围：{registry.chain_note}")
     for probe in registry.chain:
         needs = ",".join(probe.needs) or "-"
         lines.append(f"  {probe.probe_id:<34} {probe.phase:<5} 需要:{needs}  {probe.title}")
@@ -1007,6 +1107,13 @@ def describe(registry: Registry) -> str:
 def _default_work_root() -> Path:
     base = Path("/var/tmp") if sys.platform.startswith("linux") else Path(tempfile.gettempdir())
     return Path(tempfile.mkdtemp(prefix="chain-rehearsal-", dir=str(base)))
+
+
+def default_summary_dir() -> Path:
+    """默认汇总目录：不放在会被清理的工作目录里（工作目录默认跑完即删，汇总是要留给人看的），按 UTC 时间戳分目录常驻。"""
+
+    base = Path("/var/tmp") if sys.platform.startswith("linux") else Path(tempfile.gettempdir())
+    return base / "chain-rehearsal-summaries" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _prepare_work(arguments: argparse.Namespace) -> Path:
@@ -1058,7 +1165,8 @@ def run_chain_command(registry: Registry, arguments: argparse.Namespace, work: P
         results = run_round(steps, tree=arguments.tree, work=work / "chain", checkpoints=registry.checkpoints,
                             capabilities=capabilities, stop_on_first_failure=True, progress=_print_progress)
     summary = build_summary(results, mode=MODE_CHAIN, tree=arguments.tree, capabilities=capabilities,
-                            started_at=started, finished_at=utc_now())
+                            started_at=started, finished_at=utc_now(),
+                            extra={"scope_note": registry.chain_note} if registry.chain_note else None)
     write_summary(summary, out, "full-chain")
     return summary
 
@@ -1097,7 +1205,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--tree", type=Path, default=REPO_ROOT, help="被测仓库根（默认本仓库根）")
-    common.add_argument("--out", type=Path, help="汇总输出目录（默认 <工作目录>/summary）")
+    common.add_argument("--out", type=Path, help="汇总输出目录（默认 /var/tmp/chain-rehearsal-summaries/<UTC>，不随工作目录清理）")
     common.add_argument("--work", type=Path, help="工作目录（默认临时目录；历史重放会在里面复制多棵受管树）")
     common.add_argument("--keep", action="store_true", help="结束后保留工作目录")
     common.add_argument("--probe", action="append", help="只跑指定探针（可重复）")
@@ -1126,7 +1234,7 @@ def main(argv: Sequence[str] | None = None, *, registry: Registry | None = None)
         return 0
     arguments.tree = Path(arguments.tree).resolve()
     work = _prepare_work(arguments)
-    out = arguments.out or (work / "summary")
+    out = arguments.out or default_summary_dir()
     try:
         runner = {"round": run_round_command, "replay-history": run_replay_command,
                   "full-chain": run_chain_command, "rehearse": run_rehearse_command}[arguments.command]

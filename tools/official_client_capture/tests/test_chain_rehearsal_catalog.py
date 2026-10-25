@@ -156,18 +156,36 @@ class CatalogInjectionTest(unittest.TestCase):
                         self.assertNotEqual((root / relative).read_bytes(), (REPO_ROOT / relative).read_bytes(),
                                             f"{relative} 注入后没有任何变化")
 
-    def test_every_injectable_probe_has_a_signature_that_exists_in_its_tests(self) -> None:
+    def test_signatures_are_defect_phenomena_not_test_names(self) -> None:
+        """M2：签名必须是只在缺陷现象里出现的片段（断言消息、缺失符号、被改坏的函数名、被拒绝的错误文本），
+        不能是探针引用的用例／类／模块名——否则探针因任何原因失败都会“命中”，历史重放就成了摆设。
+        实际能否命中由 ``replay-history`` 在真实注入上验证；这里守住“不得退回成测试名”。"""
+
+        import unittest as _unittest
+
         for probe in _registry().probes:
             if not probe.injections:
                 continue
             with self.subTest(probe=probe.probe_id):
-                self.assertTrue(probe.signature, "带注入器的探针必须有缺陷签名，否则无法确认报出的是这个缺陷")
+                self.assertTrue(probe.signature, "带注入器的探针必须有缺陷签名")
                 ids = list(probe.runner.test_ids) if isinstance(probe.runner, engine.UnittestRunner) else []
-                sources = "\n".join((REPO_ROOT / (_module_of(test_id).replace(".", "/") + ".py")).read_text(encoding="utf-8")
-                                    for test_id in ids)
+                names: set[str] = set()
+                for test_id in ids:
+                    names.update(test_id.split("."))
+                    stack = [_unittest.defaultTestLoader.loadTestsFromName(test_id)]
+                    while stack:
+                        item = stack.pop()
+                        if hasattr(item, "__iter__"):
+                            stack.extend(item)
+                        else:
+                            names.add(item.id().split(".")[-1])
+                            names.add(item.__class__.__name__)
                 for fragment in probe.signature:
-                    self.assertTrue(any(fragment in test_id for test_id in ids) or fragment in sources,
-                                    f"签名 {fragment!r} 在探针引用的用例里找不到")
+                    self.assertGreaterEqual(len(fragment), 6, f"签名 {fragment!r} 太短，容易误中")
+                    for name in names:
+                        self.assertNotIn(fragment, name, f"签名 {fragment!r} 是测试／类／模块名 {name!r} 的一部分")
+                        if name.startswith("test_") or name.endswith(("Test", "Tests")):
+                            self.assertNotIn(name, fragment, f"签名 {fragment!r} 含测试名 {name!r}")
 
     def test_replayed_defects_never_edit_test_files(self) -> None:
         for probe in _registry().probes:

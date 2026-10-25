@@ -345,9 +345,10 @@ class ReplayHistoryTest(unittest.TestCase):
         def loader(context: RunContext) -> Outcome:
             if (context.tree / "value.txt").read_text(encoding="utf-8").strip() == "good":
                 return Outcome("pass")
-            return Outcome("error", "探针引用的用例不存在或无法导入：ImportError(cannot import name 'new_api')", load_error=True)
+            return Outcome("error", "探针引用的用例不存在或无法导入：…", load_error=True,
+                           load_errors=["ImportError: cannot import name 'new_api' from 'pkg.tool'"])
 
-        probe = _probe("a", CallableRunner(loader), injections=("break",), signature=("new_api",))
+        probe = _probe("a", CallableRunner(loader), injections=("break",), signature=("cannot import name 'new_api'",))
         result = self.replay([probe])["a"]
         self.assertEqual(result.status, engine.REPRODUCED)
         self.assertIn("无法加载", result.detail)
@@ -356,8 +357,50 @@ class ReplayHistoryTest(unittest.TestCase):
         def loader(_context: RunContext) -> Outcome:
             return Outcome("error", "探针引用的用例不存在或无法导入", load_error=True)
 
-        result = self.replay([_probe("a", CallableRunner(loader), injections=("break",))])["a"]
+        result = self.replay([_probe("a", CallableRunner(loader), injections=("break",), signature=("x",))])["a"]
         self.assertEqual(result.status, engine.ERROR)
+
+    def test_baseline_runs_on_the_uninjected_copy_before_the_injection(self) -> None:
+        """L1：基线在刚复制出来、还没注入的副本上跑；顺序必须是 复制 → 基线 → 注入 → 重跑。"""
+
+        events: list[str] = []
+
+        def copy_tree(destination: Path, _extras=()) -> Path:
+            events.append("copy")
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "value.txt").write_text("good\n", encoding="utf-8")
+            return destination
+
+        def inject(root: Path, _injection) -> None:
+            events.append("inject")
+            (root / "value.txt").write_text("bad\n", encoding="utf-8")
+
+        def runner(context: RunContext) -> Outcome:
+            events.append(f"run:{'injected' if context.injected else 'baseline'}:{context.tree != self.tree}")
+            return self.check_value(context)
+
+        result = self.replay([_probe("a", CallableRunner(runner), injections=("x",), signature=("SIG-VALUE",))],
+                             copy_tree=copy_tree, inject=inject)["a"]
+        self.assertEqual(events, ["copy", "run:baseline:True", "inject", "run:injected:True"])
+        self.assertEqual(result.status, engine.REPRODUCED)
+
+    def test_incomplete_copy_is_a_baseline_failure_not_a_false_reproduction(self) -> None:
+        """L1：副本漏复制了探针依赖的文件时，注入后的失败不能算“复现”；基线（未注入副本）当场就失败。"""
+
+        injected = []
+
+        def lossy_copy(destination: Path, _extras=()) -> Path:
+            destination.mkdir(parents=True, exist_ok=True)  # 故意不复制 value.txt
+            return destination
+
+        result = self.replay([self.probe("a", "break")], copy_tree=lossy_copy, inject=lambda *_: injected.append(1))["a"]
+        self.assertEqual((result.status, result.baseline_status), (engine.FAILED, engine.FAILED))
+        self.assertIn("未注入的副本基线未通过", result.detail)
+        self.assertEqual(injected, [], "基线没过就不该继续注入")
+
+    def test_probe_with_injection_but_no_signature_is_rejected(self) -> None:
+        with self.assertRaises(engine.RehearsalError):
+            self.replay([_probe("a", injections=("break",))])
 
     def test_copy_extra_is_passed_to_the_tree_copier(self) -> None:
         seen = []
@@ -399,6 +442,131 @@ class ReplayHistoryTest(unittest.TestCase):
     def test_origin_tree_is_never_modified(self) -> None:
         self.replay([self.probe("a", "break")])
         self.assertEqual((self.tree / "value.txt").read_text(encoding="utf-8"), "good\n")
+
+
+class SignatureMatchingTest(unittest.TestCase):
+    """M2：缺陷签名只能命中缺陷现象，不能命中探针自己的引用（用例名、请求的模块名）或无关故障。"""
+
+    TRACEBACK = (
+        'Traceback (most recent call last):\n'
+        '  File "/x/tests/test_sig.py", line 12, in test_the_method_name\n'
+        '    self.assertEqual(compute(), 3)\n'
+        '                     ~~~~~~~^^\n'
+        '  File "/x/tool.py", line 7, in compute\n'
+        '    return helper_name()\n'
+        "AssertionError: 4 != 3 : 缺陷现象\n"
+    )
+
+    def test_exception_text_drops_frame_lines_but_keeps_message_and_source(self) -> None:
+        text = engine.exception_text(self.TRACEBACK)
+        self.assertNotIn("test_the_method_name", text)
+        self.assertNotIn('File "', text)
+        self.assertIn("4 != 3 : 缺陷现象", text)
+        self.assertIn("self.assertEqual(compute(), 3)", text)
+
+    def test_exception_text_drops_the_requested_module_name_header(self) -> None:
+        text = engine.exception_text("ImportError: Failed to import test module: test_requested_module\nTraceback (most recent call last):\n"
+                                     "  File \"/l.py\", line 1, in x\n    from pkg import sym\nImportError: cannot import name 'sym' from 'pkg'")
+        self.assertNotIn("test_requested_module", text)
+        self.assertIn("cannot import name 'sym'", text)
+
+    def _probe(self, *signature: str) -> Probe:
+        return Probe("p", "t", "VC-1", "s", CallableRunner(_passing), signature=signature)
+
+    def test_test_method_name_alone_never_matches(self) -> None:
+        outcome = Outcome("fail", "1 个用例失败", "", [{"id": "pkg.mod.Cls.test_the_method_name", "outcome": "fail", "detail": self.TRACEBACK}])
+        self.assertFalse(engine._signature_hit(self._probe("test_the_method_name"), outcome))
+        self.assertFalse(engine._signature_hit(self._probe("Cls"), outcome))
+        self.assertTrue(engine._signature_hit(self._probe("4 != 3 : 缺陷现象"), outcome))
+
+    def test_load_failure_matches_only_the_import_error_body_not_the_requested_names(self) -> None:
+        outcome = Outcome("fail", "回归用例在注入缺陷后无法加载：test_requested_module", "", [], load_error=True,
+                          load_errors=["ImportError: Failed to import test module: test_requested_module\nTraceback (most recent call last):\n"
+                                       "  File \"/l.py\", line 1, in x\n    from pkg import sym\nImportError: cannot import name 'sym' from 'pkg'"])
+        self.assertFalse(engine._signature_hit(self._probe("test_requested_module"), outcome))
+        self.assertFalse(engine._signature_hit(self._probe("Failed to import test module"), outcome))
+        self.assertTrue(engine._signature_hit(self._probe("cannot import name 'sym'"), outcome))
+
+    def test_process_output_counts_as_phenomenon_for_unit_cases(self) -> None:
+        outcome = Outcome("fail", "x", "stderr: 拒绝原因 ABC", [{"id": "t", "outcome": "fail", "detail": "AssertionError: 2 != 0"}])
+        self.assertTrue(engine._signature_hit(self._probe("拒绝原因 ABC"), outcome))
+
+    def test_failure_excerpts_carry_the_message_for_the_summary(self) -> None:
+        outcome = Outcome("fail", "x", "", [{"id": "pkg.Cls.test_a", "outcome": "fail", "detail": self.TRACEBACK},
+                                            {"id": "pkg.Cls.test_b", "outcome": "ok", "detail": ""}])
+        excerpts = engine.failure_excerpts(outcome)
+        self.assertEqual([item["id"] for item in excerpts], ["pkg.Cls.test_a"])
+        self.assertIn("4 != 3", excerpts[0]["message"])
+
+
+class MiniTreeReplayTest(unittest.TestCase):
+    """用真实子进程与真实 unittest 运行器，在一棵最小的树上验证：无关故障（语法错误）不能被判成复现。"""
+
+    TOOL_OK = "def tiny_fn():\n    return 'ok'\n"
+    CASES = (
+        "import unittest\n"
+        "from tools.official_client_capture.tiny_tool import tiny_fn\n\n\n"
+        "class SampleCases(unittest.TestCase):\n"
+        "    def test_value(self):\n"
+        "        self.assertEqual(tiny_fn(), 'ok', 'TINY-FN-DEFECT')\n"
+    )
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="mini-tree-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root, ignore_errors=True))
+        self.origin = self.root / "origin"
+        package = self.origin / "tools" / "official_client_capture"
+        tests = package / "tests"
+        tests.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (tests / "__init__.py").write_text("", encoding="utf-8")
+        (package / "tiny_tool.py").write_text(self.TOOL_OK, encoding="utf-8")
+        (tests / "sample_cases.py").write_text(self.CASES, encoding="utf-8")
+        (tests / "chain_rehearsal.py").write_text(Path(engine.__file__).read_text(encoding="utf-8"), encoding="utf-8")
+        self.test_id = "tools.official_client_capture.tests.sample_cases.SampleCases"
+
+    def copy_tree(self, destination: Path, _extras=()) -> Path:
+        import shutil
+
+        shutil.copytree(self.origin, destination)
+        return destination
+
+    @staticmethod
+    def break_with(new_tool_source: str):
+        def inject(root: Path, _injection) -> None:
+            (root / "tools" / "official_client_capture" / "tiny_tool.py").write_text(new_tool_source, encoding="utf-8")
+        return inject
+
+    def replay(self, tool_source: str, *signature: str):
+        probe = Probe("tiny", "最小树上的探针", "VC-1", "s", UnittestRunner([self.test_id], timeout_seconds=120),
+                      signature=signature, injections=("x",))
+        results = engine.replay_history([probe], tree=self.origin, work=self.root / "w", copy_tree=self.copy_tree,
+                                        inject=self.break_with(tool_source), capabilities={})
+        return results[0]
+
+    def test_real_defect_by_assertion_message_is_reproduced(self) -> None:
+        result = self.replay("def tiny_fn():\n    return 'broken'\n", "TINY-FN-DEFECT")
+        self.assertEqual(result.status, engine.REPRODUCED, result.detail)
+
+    def test_missing_symbol_defect_is_reproduced_through_the_import_error_body(self) -> None:
+        result = self.replay("def other_fn():\n    return 1\n", "cannot import name 'tiny_fn'")
+        self.assertEqual(result.status, engine.REPRODUCED, result.detail)
+
+    def test_unrelated_syntax_error_is_not_a_reproduction(self) -> None:
+        """M2 反例：注入后探针因无关原因（语法错误）失败，哪怕签名恰好是被测符号名，也不得判为复现。"""
+
+        result = self.replay("def tiny_fn(:\n    return\n", "cannot import name 'tiny_fn'", "TINY-FN-DEFECT")
+        self.assertEqual(result.status, engine.MISSED, result.detail)
+        self.assertFalse(result.signature_hit)
+        self.assertTrue(any("SyntaxError" in item["message"] for item in result.failures), result.failures)
+
+    def test_signature_equal_to_the_class_or_module_name_does_not_make_an_unrelated_failure_a_reproduction(self) -> None:
+        result = self.replay("def tiny_fn(:\n    return\n", "SampleCases", "sample_cases", "test_value")
+        self.assertEqual(result.status, engine.MISSED, result.detail)
+
+    def test_unrelated_runtime_error_is_not_a_reproduction(self) -> None:
+        result = self.replay("raise RuntimeError('磁盘满了')\n", "TINY-FN-DEFECT")
+        self.assertEqual(result.status, engine.MISSED, result.detail)
 
 
 class SummaryTest(unittest.TestCase):
@@ -521,6 +689,37 @@ class CommandLineTest(unittest.TestCase):
         chain = json.loads((self.out / "full-chain.json").read_text(encoding="utf-8"))
         self.assertEqual(code, 1)
         self.assertEqual([row["status"] for row in chain["rows"]], ["passed", "passed", "passed"])
+
+    def test_default_summary_directory_is_outside_the_work_directory_and_survives_cleanup(self) -> None:
+        """L3：不给 --out 时汇总放在不随工作目录清理的位置。"""
+
+        from unittest import mock
+
+        kept = self.out / "kept-summaries"
+        work = self.out / "work"
+        buffer = io.StringIO()
+        with mock.patch.object(engine, "default_summary_dir", return_value=kept / "20260101T000000Z"), \
+                redirect_stdout(buffer), redirect_stderr(io.StringIO()):
+            code = engine.main(["round", "--work", str(work)], registry=self.registry())
+        self.assertEqual(code, 0)
+        self.assertTrue((kept / "20260101T000000Z" / "round.json").is_file())
+        self.assertNotIn(work, (kept / "20260101T000000Z").parents)
+
+    def test_default_summary_directory_is_not_under_the_default_work_root(self) -> None:
+        summary = engine.default_summary_dir()
+        self.assertEqual(summary.parent.name, "chain-rehearsal-summaries")
+        self.assertFalse(summary.name.startswith("chain-rehearsal-"))
+
+    def test_chain_scope_note_is_written_into_the_summary_and_printed(self) -> None:
+        import dataclasses
+
+        registry = dataclasses.replace(self.registry(), chain_note="范围说明：只含 6 个真实链模块")
+        _code, output = self.run_cli("full-chain", registry=registry)
+        data = json.loads((self.out / "full-chain.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["scope_note"], "范围说明：只含 6 个真实链模块")
+        self.assertIn("范围：范围说明：只含 6 个真实链模块", output)
+        round_code, _ = self.run_cli("round", registry=registry)
+        self.assertNotIn("scope_note", json.loads((self.out / "round.json").read_text(encoding="utf-8")))
 
     def test_list_prints_probes_and_capabilities(self) -> None:
         buffer = io.StringIO()

@@ -17,13 +17,14 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from tools.official_client_capture.tests import chain_rehearsal as engine
 from tools.official_client_capture.tests import chain_rehearsal_inject as inject_module
 from tools.official_client_capture.tests.chain_rehearsal import (
-    Checkpoint, Probe, Registry, UnittestRunner,
+    Checkpoint, CommandRunner, Probe, Registry, UnittestRunner,
 )
 from tools.official_client_capture.tests.chain_rehearsal_inject import ExactReplacement, ReversePatch
 
@@ -81,7 +82,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "官方取证：压缩场景模型目录（build_compaction_model_catalog）",
         UnittestRunner([f"{TESTS}.test_compaction_scenario_models.CompactionScenarioModelTest"], timeout_seconds=300),
         history=("709b71f18", "记忆 codex-0163-gpt55-offline-main-track-1020", "VC-1 首批：gpt-5.5 下线、主线改 Lite"),
-        signature=("CompactionScenarioModelTest",),
+        signature=("unexpected keyword argument 'first_use_responses_lite'",),
         injections=(ReversePatch("compaction-first-model-lite-flag.patch", "709b71f18"),),
     ),
     Probe(
@@ -96,8 +97,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
             f"{TESTS}.test_official_directed_samples.StreamFaultWebSocketTest.test_every_answer_follows_the_model_of_its_own_response_create",
         ], timeout_seconds=300),
         history=("6c02609c2", "记忆 codex-0163-gpt55-offline-main-track-1020", "VC-1 首批：主线改 Lite"),
-        signature=("SyntheticModelFollowsRequestFlowTest", "test_response_model_follows_the_request_model_in_every_constructor",
-                   "test_every_answer_follows_the_model_of_its_own_response_create"),
+        signature=("cannot import name '_request_model'",),
         injections=(ReversePatch("official-directed-response-model.patch", "6c02609c2"),),
     ),
     Probe(
@@ -107,7 +107,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         UnittestRunner([f"{TESTS}.test_main_track_models.MainTrackModelTests.test_lite_main_compaction_jobs_use_the_lite_threshold"],
                        timeout_seconds=300),
         history=("5f8f4431e", "记忆 codex-0163-gpt55-offline-main-track-1020", "VC-1 首批：主线改 Lite"),
-        signature=("test_lite_main_compaction_jobs_use_the_lite_threshold",),
+        signature=("4000 not less than or equal to 2000",),
         injections=(ReversePatch("main-track-lite-compact-limit.patch", "5f8f4431e"),),
     ),
     Probe(
@@ -117,7 +117,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         UnittestRunner([f"{TESTS}.test_main_track_models.MainTrackModelTests.test_embedded_lite_expectations_in_commands_follow_the_declaration"],
                        timeout_seconds=300),
         history=("c60b6d135", "记忆 codex-0163-gpt55-offline-main-track-1020", "VC-1 首批：主线改 Lite"),
-        signature=("test_embedded_lite_expectations_in_commands_follow_the_declaration",),
+        signature=("'false' != 'true'",),
         injections=(ReversePatch("official-core-models-expectation-lite.patch", "c60b6d135"),),
     ),
     Probe(
@@ -126,8 +126,8 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-5", "候选采集 candidate-core-mitm 首检（getent hosts 恒返回 2）",
         UnittestRunner([f"{TESTS}.test_account_gate_restoration.CaptureHostResolutionTest"], timeout_seconds=180),
         history=("3709a4964", "记忆 capture-container-id-pin-hostname-defect-1022", "VC-5 批次 22、27"),
-        signature=("test_container_value_is_never_used_as_a_hostname", "test_all_scripts_share_one_resolution_function",
-                   "test_pinned_id_resolves_to_the_real_container_name"),
+        signature=('getent hosts "$capture_container"', 'getent ahostsv4 "$capture_container"',
+                   'source.index("resolve_capture_host() {")'),
         injections=(ReversePatch("capture-host-container-id.patch", "3709a4964"),),
     ),
     Probe(
@@ -136,19 +136,19 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-5", "候选采集 candidate-frozen-core 收尾断言",
         UnittestRunner([f"{TESTS}.test_candidate_core_capture.CoreCaptureLiteMainTrackChecksTest"], timeout_seconds=180),
         history=("144b60340", "记忆 codex-0163-gpt55-offline-main-track-1020", "VC-5 批次 29"),
-        signature=("CoreCaptureLiteMainTrackChecksTest",),
+        signature=('source.index("def _decoded_request_body(data):")',),
         injections=(ReversePatch("core-capture-lite-final-assertions.patch", "144b60340"),),
     ),
     Probe(
         "kilo-http-usage-order",
         "Kilo 收据把 HTTP 用量早于响应完成 0.15 毫秒判成时间乱序",
         "VC-5", "seal 链：Kilo 收据生成（codex_upgrade_receipt_finalizer）",
-        UnittestRunner([
-            f"{TESTS}.test_codex_upgrade_receipt_finalizer.ReceiptFinalizerTests.test_kilo_compatible_accepts_usage_recorded_before_http_completion",
-            f"{TESTS}.test_codex_upgrade_receipt_finalizer.ReceiptFinalizerTests.test_kilo_compatible_rejects_usage_before_http_ingress",
-        ], timeout_seconds=240),
+        # 原回归用例把终结器的拒绝原因吞进 StringIO，缺陷回来时只剩 “2 != 0”；这里跑同一个用例，但把被吞掉的标准错误
+        # 还原出来（chain_rehearsal_phenomena），签名才能是工具真实的拒绝原因。
+        CommandRunner([sys.executable, "-B", "-m", f"{TESTS}.chain_rehearsal_phenomena", "kilo-http-usage-order"],
+                      timeout_seconds=240),
         history=("044c71143", "记忆 kilo-receipt-http-usage-order-defect-1022", "VC-5 seal 链"),
-        signature=("test_kilo_compatible_accepts_usage_recorded_before_http_completion",),
+        signature=("Kilo 五份事实的时间顺序不成立",),
         injections=(ReversePatch("kilo-http-usage-order.patch", "044c71143"),),
     ),
     Probe(
@@ -160,7 +160,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         ], timeout_seconds=600, extra_env={"GIT_DIR": "{origin_git_dir}"}),
         needs=("git_history",), copy_extra=("docs/egress/maintenance",),
         history=("199683aab", "记忆 kilo-receipt-http-usage-order-defect-1022 连带教训", "后台验证 #15"),
-        signature=("test_every_deployment_boundary_is_registered_for_replay",),
+        signature=("未登记的旧摘要：02bc3d7e4d7b",),
         injections=(ReversePatch("producer-replay-registration.patch", "199683aab"),),
     ),
     Probe(
@@ -171,7 +171,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
             f"{TESTS}.test_codex_upgrade.CodexUpgradeTest.test_b0_zero_request_preview_adopts_authorized_orphan_preview",
         ], timeout_seconds=600),
         history=("ca25c9936", "记忆 vc5-orphan-candidate-preview-gap-1021", "VC-5 批次 23"),
-        signature=("test_b0_zero_request_preview_adopts_authorized_orphan_preview",),
+        signature=("尚未被授权消费",),
         injections=(ReversePatch("orphan-candidate-recovery-preview.patch", "ca25c9936"),),
     ),
     Probe(
@@ -182,7 +182,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
             f"{TESTS}.test_codex_upgrade.CodexUpgradeTest.test_b0_isolated_attempt_without_any_job_result_is_rerun_source",
         ], timeout_seconds=600),
         history=("ee61713ab", "记忆 vc5-orphan-candidate-preview-gap-1021 第三轮", "VC-5 批次 25"),
-        signature=("test_b0_isolated_attempt_without_any_job_result_is_rerun_source",),
+        signature=("失败 attempt 缺少可重放 Job checkpoint",),
         injections=(ReversePatch("zero-result-isolation-source.patch", "ee61713ab"),),
     ),
     Probe(
@@ -191,7 +191,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "恢复预览（带环境隔离窗口）",
         UnittestRunner([f"{TESTS}.test_reconciler_isolation_window_reuse.IsolationWindowReuseTests"], timeout_seconds=300),
         history=("8f0835bca", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
-        signature=("IsolationWindowReuseTests",),
+        signature=("has no attribute '_isolation_window_reusable'",),
         injections=(ReversePatch("r17-preview-isolation-window.patch", "8f0835bca"),),
     ),
     Probe(
@@ -200,7 +200,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "续跑承接：环境连续性",
         UnittestRunner([f"{TESTS}.test_reconciler_isolation_window_reuse.IsolatedAttemptContinuityTests"], timeout_seconds=600),
         history=("2cf62a735", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
-        signature=("IsolatedAttemptContinuityTests",),
+        signature=("被承接 attempt 缺少 after 环境探针，无法证明连续性",),
         injections=(ReversePatch("r17-isolated-attempt-continuity.patch", "2cf62a735"),),
     ),
     Probe(
@@ -209,7 +209,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "续跑承接：失败 attempt 形态判定",
         UnittestRunner([f"{TESTS}.test_reconciler_isolation_window_reuse.StrictPreJobFailureShapeTests"], timeout_seconds=600),
         history=("6cef03d79", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
-        signature=("StrictPreJobFailureShapeTests",),
+        signature=("has no attribute '_is_strict_pre_job_failure'",),
         injections=(ReversePatch("r17-strict-pre-job-failure.patch", "6cef03d79"),),
     ),
     Probe(
@@ -218,7 +218,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "续跑承接：演进口径复用上下文",
         UnittestRunner([f"{TESTS}.test_codex_upgrade_tool_evolution.EvolutionReuseContextTests"], timeout_seconds=600),
         history=("524de4522", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021 第 7 处"),
-        signature=("EvolutionReuseContextTests",),
+        signature=("ToolEvolutionRequired not raised",),
         injections=(ReversePatch("r17-evolution-reuse-context.patch", "524de4522"),),
     ),
     Probe(
@@ -227,7 +227,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-1", "官方取证：extract_compaction_reason 判据",
         UnittestRunner([f"{TESTS}.test_extract_compaction_reason.UnexpectedReasonTests"], timeout_seconds=180),
         history=("063571f0c", "VC-1 第 25 个作业 official-relay-model-downshift"),
-        signature=("UnexpectedReasonTests", "extract_compaction_reason"),
+        signature=("cannot import name 'unexpected_reason_matches'",),
         injections=(ReversePatch("compaction-reason-downshift.patch", "063571f0c"),),
     ),
     Probe(
@@ -240,8 +240,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         ], timeout_seconds=300),
         history=("2bc56dd77", "记忆 vc2-offline-gate-dual-wire-only-1021"),
         needs=("driver_sources",),
-        signature=("test_official_side_executes_dual_wire_rules_only_by_default",
-                   "test_default_modes_never_fail_candidate_profile_checks_on_official_evidence"),
+        signature=("does not have the attribute 'OFFICIAL_EXECUTED_MODES'",),
         injections=(ReversePatch("vc2-offline-gate-dual-wire.patch", "2bc56dd77"),),
     ),
     Probe(
@@ -254,8 +253,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         ], timeout_seconds=300),
         needs=("driver_sources",),
         history=("49492ad3f", "86cf6bf8c（补测试）", "VC-6 第 44 批"),
-        signature=("test_vc6_delivery_batches_bind_current_campaign_without_canonical_receipts",
-                   "test_vc6_delivery_batch_rejects_wrong_binding_and_foreign_actions"),
+        signature=("VC-6 计划未绑定当前 Campaign、Candidate 和 attempt",),
         injections=(ReversePatch("vc6-delivery-batch-phase-resolution.patch", "49492ad3f"),),
     ),
 )
@@ -288,7 +286,10 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_vc1_recorded_chain.VC1RecordedRecoveryChainTests"], timeout_seconds=3600),
         kind="recovery", needs=("linux_root_unshare", "recorded_vc1_campaign"),
         history=("cad6e7955", "6edb82a76", "记忆 vc1-recorded-replay-chain", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
-        signature=("VC1RecordedRecoveryChainTests",),
+        # 签名取“二次承接对账（reconcile-attempt-3）”这一步的断言源码行：二次承接被判不可复用时，失败就落在这一步对
+        # third_reconciled 的断言上。**未经 ARM64 实跑验证**——失败现象的消息文本我没见过，首次实跑后应改成该步骤抛出的
+        # 具体错误消息（例如 R17 核对的“预览复用…resume 复用…”）。
+        signature=('third_reconciled["status"]', 'third_reconciled["reuse_job_ids"]'),
         injections=(R17_SECOND_REUSE_FALLBACK,),
     ),
     Probe(
@@ -383,6 +384,12 @@ CHAIN_STEPS: tuple[Probe, ...] = (
     ),
 )
 
+# 完整链的范围声明（写进汇总与 README）：它是 6 个真实链模块串联，不是整条 VC-0～VC-6 的端到端回放。
+CHAIN_SCOPE_NOTE = (
+    "本完整链是 6 个真实链模块的串联（VC-1 取证、VC-2～VC-5 连续链、评估、构建修订、段复用、VC-6 canonical），"
+    "不含候选侧 seal、compare、accept 链；接入 rehearse-candidate-seal 需要上一版候选证据，放在 ARM64 阶段。"
+)
+
 CHECKPOINTS: Mapping[str, Checkpoint] = {}
 
 
@@ -395,6 +402,7 @@ def registry() -> Registry:
         checkpoints=CHECKPOINTS,
         copy_tree=copy_repo_subset,
         inject=inject_module.inject,
+        chain_note=CHAIN_SCOPE_NOTE,
     )
 
 
