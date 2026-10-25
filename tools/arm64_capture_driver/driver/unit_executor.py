@@ -3398,6 +3398,71 @@ def _manifest_with_retries(records: Any, manifest: dict[str, Any], attempts: lis
     return records.seal({**{key: value for key, value in manifest.items() if key != "manifest_sha256"}, "retries": retries}, "manifest_sha256")
 
 
+# ---------------------------------------------------------------------------
+# 按客户端筛选测试单元（Codex 升级工具优化第 9 项）
+# ---------------------------------------------------------------------------
+
+CLIENT_SELECTION_SCHEMA = "unit-executor-gates-selection/v1"
+
+
+def _client_selection_checked(manifest: dict[str, Any], args: argparse.Namespace, records: Any, *, request_path: Any,
+                              unit_inherit_mode: bool) -> dict[str, Any] | None:
+    """门禁清单带 ``selection`` 块（``tools/ci/unit_ownership.py select`` 算出，``entry_gates.py plan`` 写入）时先做自检并核对运行条件；没有则返回 None，
+    执行器行为与改造前逐字相同。筛选后的运行只是"全集的一个子集"，所以只许重新执行全集模式：承接、B-09／B-10 全集请求、逐单元承接、读集合同、
+    收窄提案都拒绝（子集不能冒充全集，也不能拿子集去承接别人的结论）。"""
+
+    selection = manifest.get("selection")
+    if selection is None:
+        return None
+    if not isinstance(selection, dict) or selection.get("schema_version") != CLIENT_SELECTION_SCHEMA:
+        raise ExecutorError("门禁清单的 selection 格式非法")
+    body = {key: value for key, value in selection.items() if key != "selection_sha256"}
+    if selection.get("selection_sha256") != _sha256(body):
+        raise ExecutorError("门禁清单的 selection 自摘要不符（被改过）")
+    modules = selection.get("modules")
+    if (not isinstance(modules, dict) or not modules or set(modules.values()) - {"run", "skip"}
+            or selection.get("scope") not in ("client-plan", "full")):
+        raise ExecutorError("门禁清单的 selection 模块表或范围非法")
+    if args.mode != records.RE_EXECUTE or request_path or unit_inherit_mode or args.unit_inherit_propose is not None:
+        raise ExecutorError("按客户端筛选的清单只许 --mode re-execute：子集不能承接，也不能用来承接别人的结论")
+    if (manifest.get("audit_policy") is not None or manifest.get("test_input_scopes")
+            or any("input_scope" in item for item in manifest.get("units", []))):
+        raise ExecutorError("按客户端筛选的清单不能同时带读集合同或收窄提案")
+    return selection
+
+
+def _apply_client_selection(selection: dict[str, Any], grouped: dict[str, list[str]], planned: list[Unit]) -> tuple[dict[str, list[str]], list[Unit]]:
+    """在 ``plan_units`` 之后过滤：保留 selection 标 run 的模块。必须放在规划之后（规划要校验拆块、独占名单、超时登记的模块都存在），
+    且 selection 的模块集合必须恰好等于 discover 出的全集（去掉 ``+pkg`` 后缀）——新增测试模块没登记、测试被删而表陈旧，都当场拦下。
+    单元 ID、规格、额度不变，所以记录与全集运行的记录逐字相通。"""
+
+    def base(name: str) -> str:
+        return name.removesuffix("+pkg")
+
+    modules = selection["modules"]
+    discovered = {base(name) for name in grouped}
+    if set(modules) != discovered:
+        raise ExecutorError("selection 的模块集合与测试树的全集身份不匹配：多 "
+                            f"{sorted(set(modules) - discovered)[:5]}，少 {sorted(discovered - set(modules))[:5]}")
+    keep = {name for name, state in modules.items() if state == "run"}
+    if not keep:
+        raise ExecutorError("selection 一个模块都不保留")
+    return ({name: ids for name, ids in grouped.items() if base(name) in keep},
+            [unit for unit in planned if base(unit.module) in keep])
+
+
+def _client_selection_summary(selection: dict[str, Any]) -> dict[str, Any]:
+    """汇总里回显的筛选摘要（完整的 selection 在运行清单里）。"""
+
+    modules = selection["modules"]
+    return {"client": selection.get("client"), "scope": selection.get("scope"), "base_commit": selection.get("base_commit"),
+            "head_commit": selection.get("head_commit"), "selection_sha256": selection.get("selection_sha256"),
+            "ownership_sha256": selection.get("ownership_sha256"), "include_claude": selection.get("include_claude"),
+            "modules_total": len(modules), "modules_run": sum(1 for state in modules.values() if state == "run"),
+            "modules_skipped": sum(1 for state in modules.values() if state == "skip"),
+            "modules_pulled": len(selection.get("pulled") or []), "advisories": len(selection.get("advisories") or [])}
+
+
 def _record_round_in_ledger(final: list[Outcome], *, store: Any, run_id: str, already: set[str]) -> None:
     """整轮结束：把其余真正执行过的单元的结局（通过／失败）也记进账本，窗口里的“轮”才数得准（承接的单元这一轮没有执行，不记）。"""
 
@@ -3860,6 +3925,10 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
     for item in summary["diagnostic"]:
         verdict = "单独重跑通过" if item["passed"] else "单独重跑仍失败"
         print(f"诊断重跑（不改结论）：{item['unit_id']} {verdict}（日志 {item['log']}）", file=sys.stderr)
+    chosen = summary.get("client_selection")
+    if chosen:
+        print(f"按客户端筛选（{chosen['client']} 计划，{chosen['scope']}）：测试模块 {chosen['modules_total']} 个，运行 {chosen['modules_run']}、跳过 {chosen['modules_skipped']}"
+              f"（其中改动并入 {chosen['modules_pulled']} 个）；枢纽提示 {chosen['advisories']} 条；筛选摘要 {str(chosen['selection_sha256'])[:12]}", file=sys.stderr)
     retry = summary.get("retry") or {}
     for unit_id in retry.get("retry_passed", []):
         marker = retry["units"][unit_id]
@@ -4140,6 +4209,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
     groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
+    # 按客户端筛选（优化第 9 项）：清单带 selection 块才有值；缺省 None，下面所有筛选分支都不进，行为与改造前相同。
+    client_selection = _client_selection_checked(manifest, args, records, request_path=request_path, unit_inherit_mode=unit_inherit_mode)
     # 只从当前entry的固定加载器取得四control适配器；证据不提供模块路径。
     spec = importlib.util.spec_from_file_location("_executor_control_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
     entry = importlib.util.module_from_spec(spec)
@@ -4174,6 +4245,10 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         full_set = group.start.resolve() == DEFAULT_START.resolve() and group.pattern == DEFAULT_PATTERN
         grouped = discover_test_ids(group.start, group.pattern)
         planned = plan_units(grouped, config, weights, durations, machine_cores=cores, full_set=full_set)
+        if client_selection is not None:
+            if not full_set:
+                raise ExecutorError("按客户端筛选只支持默认起点与模式的测试组全集")
+            grouped, planned = _apply_client_selection(client_selection, grouped, planned)
         group_units[group.group_id] = [replace(unit, env=group.env, launcher=group.launcher) for unit in planned]
         expected[group.group_id] = {test_id for ids in grouped.values() for test_id in ids}
     test_units = [unit for units in group_units.values() for unit in units]
@@ -4508,6 +4583,10 @@ def _run_gates_current(args: argparse.Namespace) -> int:
                                        outcomes=outcomes, diagnostic=diagnostic)
         if retry_attempts is not None:
             unit_manifest = _manifest_with_retries(records, unit_manifest, retry_attempts)
+        if client_selection is not None:
+            # 筛选的运行：完整的 selection 封进运行清单（收尾校验与差集核对据此现算比对），重新封存清单自摘要。
+            unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
+                                          "client_selection": client_selection}, "manifest_sha256")
         if full_set_verdict is not None:
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
                                           decision_key: full_set_verdict}, "manifest_sha256")
@@ -4572,6 +4651,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         })
         if inherit_verdict is not None:
             summary["unit_inherit_decision"] = inherit_verdict
+        if client_selection is not None:
+            summary["client_selection"] = _client_selection_summary(client_selection)
         if declared_run is not None:
             # 声明级承接的四个数（登记、审计通过、消费者接受、实际承接）与每个被重跑单元的原因和耗时；清单已发布，所以刚写下的记录能按承接用的同一个核验检查。
             summary["declared_inputs"] = _declared_run_summary(records, run=declared_run, outcomes=outcomes, decisions=decisions,

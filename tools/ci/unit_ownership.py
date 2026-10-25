@@ -74,8 +74,8 @@ _STRING_SCRIPT = re.compile(r"[\"'/ ]([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.py\b")
 _DYNAMIC_CALLS = frozenset({"import_module", "__import__", "spec_from_file_location", "run_path", "run_module"})
 
 
-class OwnershipError(RuntimeError):
-    """归属数据、基点或测试树不满足要求（调用方当作配置／用法错误，不降级成全集）。"""
+class OwnershipError(ValueError):
+    """归属数据、基点或测试树不满足要求（调用方当作配置／用法错误，不降级成全集）。继承 ValueError：入口门禁的命令行把它和别的配置错误一样报成退出码 2。"""
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +972,7 @@ def diff_report(full_manifest: Mapping[str, Any], plan_manifest: Mapping[str, An
 
     full = {unit["unit_id"]: unit for unit in full_manifest.get("units", [])}
     plan = {unit["unit_id"]: unit for unit in plan_manifest.get("units", [])}
-    selection = plan_manifest.get("selection") or {}
+    selection = plan_manifest.get("client_selection") or plan_manifest.get("selection") or {}
     modules = selection.get("modules") or {}
     dropped = sorted(set(full) - set(plan))
     added = sorted(set(plan) - set(full))

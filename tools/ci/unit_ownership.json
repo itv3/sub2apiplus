@@ -629,6 +629,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_gate_scope": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_go_compile_warmup": {
    "claude_plan": "run",
    "codex_plan": "run",

@@ -58,6 +58,24 @@ def _client_table() -> Any:
     return sys.modules[name]
 
 
+def _ownership() -> Any:
+    """同目录的归属表与选择器 unit_ownership.py（优化第 9 项）：按路径加载；归属数据 unit_ownership.json 随测试树走，选择器随驱动走。"""
+
+    name = "unit_ownership_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "unit_ownership.py")
+        if spec is None or spec.loader is None:
+            raise ValueError(f"找不到同目录的 unit_ownership.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
 # check-egress-spec 子检查的额度与预计秒数。只做 Python 静态检查的子检查占 1 核、1 GB；其余要编译 Go（go run／test／
 # vet／build、扫描器）的占 2 核、3～4 GB（GOMAXPROCS 随额度下发，编译并行度跟着它）。没登记的子检查按 Go 类保守估计。
 LIGHT_CHECKS = frozenset({
@@ -709,6 +727,10 @@ def plan_gates(
     audit_policy: dict[str, Any] | None = None,
     recorded_bridge: dict[str, Any] | None = None,
     declared_registry: Path | None = None,
+    gate_scope: str = "full",
+    select_base: str | None = None,
+    select_client: str = "codex",
+    include_claude: bool = False,
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -869,7 +891,37 @@ def plan_gates(
                 unit["inputs"] = audit_policy["units"][unit["unit_id"]]
     apply_declared_inputs(manifest, tree, launcher=launcher, input_scopes=input_scopes, registry_path=declared_registry)
     apply_input_scopes(manifest, input_scopes)
+    apply_gate_scope(manifest, tree, gates_wanted=gates_wanted, gate_scope=gate_scope, select_base=select_base, select_client=select_client,
+                     include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes, recorded_bridge=recorded_bridge)
     return manifest
+
+
+GATE_SCOPE_FULL = "full"
+GATE_SCOPE_CLIENT_PLAN = "client-plan"
+GATE_SCOPES = (GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN)
+
+
+def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], gate_scope: str, select_base: str | None,
+                     select_client: str, include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any) -> None:
+    """按客户端筛选测试单元（优化第 9 项）：``gate_scope=client-plan`` 时往清单加 ``selection`` 块（谁跑、谁跳过、为什么并入；
+    由归属表选择器按基点..候选提交的改动算出），执行器据此只保留标 run 的测试模块；命令单元与 pre-A3 场景单元不受影响。
+
+    缺省 ``full`` 不筛选，清单与改造前逐字相同。筛选只作用于采集工具测试组，所以组合里必须有 ``test-capture-tools``；基点必须显式给出
+    （最近一次发版的提交，由调用方决定）；与读集合同、收窄提案、固定79接线互斥（这些走全集，由后续的承接批次再接）。"""
+
+    if gate_scope not in GATE_SCOPES:
+        raise ValueError(f"未知的门禁范围：{gate_scope}（只有 {', '.join(GATE_SCOPES)}）")
+    if gate_scope == GATE_SCOPE_FULL:
+        if select_base is not None or include_claude:
+            raise ValueError("--select-base、--include-claude 只在 --gate-scope client-plan 下有意义")
+        return
+    if "test-capture-tools" not in gates_wanted:
+        raise ValueError("按客户端筛选只作用于采集工具测试组：门禁组合里没有 test-capture-tools")
+    if not select_base:
+        raise ValueError("--gate-scope client-plan 必须同时给 --select-base（最近一次发版的 40 位提交；工具不自动猜基点）")
+    if audit_policy is not None or input_scopes or recorded_bridge is not None:
+        raise ValueError("按客户端筛选不能与读集合同、收窄提案、固定79接线同用（这些走全集）")
+    manifest["selection"] = _ownership().select(tree, client=select_client, base=select_base, include_claude=include_claude)
 
 
 def verify_scope_workspace(tree: Path, bytecode_cache: Path, *, commit: str, bundle: Path, branch: str) -> dict[str, Any]:
@@ -2609,6 +2661,23 @@ def export_records(
                      "completed_at_utc": regression["completed_at_utc"], "gate_json": "logs/full-regression.gate.json",
                      "executor_summary": str(summary_path), "test_tree": tree, "bytecode_cache": bytecode_cache},
         })
+    chosen = manifest.get("selection")
+    if isinstance(chosen, dict):
+        # 按客户端筛选（优化第 9 项）：这次运行是某个客户端计划的子集，不是全集——总摘要、全量门禁记录与预跑记录都回显筛选摘要（完整的
+        # selection 在 gates-manifest.json 与执行器运行清单里）。读这些记录的人（后台验证准入、收尾校验）据此区分"全集通过"与"计划通过"。
+        modules = chosen.get("modules") or {}
+        scope_info = {"gate_scope": chosen.get("scope"), "client": chosen.get("client"), "base_commit": chosen.get("base_commit"),
+                      "head_commit": chosen.get("head_commit"), "selection_sha256": chosen.get("selection_sha256"),
+                      "ownership_sha256": chosen.get("ownership_sha256"), "include_claude": chosen.get("include_claude"),
+                      "modules_total": len(modules), "modules_skipped": sum(1 for state in modules.values() if state == "skip"),
+                      "modules_pulled": len(chosen.get("pulled") or []), "advisories": len(chosen.get("advisories") or [])}
+        entry["client_selection"] = scope_info
+        for key in ("full_gates_summary", "preflight"):
+            if entry.get(key):
+                echoed = Path(entry[key])
+                payload = json.loads(echoed.read_text(encoding="utf-8"))
+                payload["client_selection"] = scope_info
+                _write(echoed, payload)
     _write(out / "entry-gates.json", entry)
     return entry
 
@@ -2637,6 +2706,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--recorded-full79-spec-sha256", help="上述原字节的外持SHA；不能自行刷新")
     plan.add_argument("--declared-registry", type=Path, default=None,
                       help="命令单元声明级承接登记表（缺省取测试树的 tools/ci/command_input_scopes.json，缺失即不启用；测试用）")
+    plan.add_argument("--gate-scope", choices=GATE_SCOPES, default=GATE_SCOPE_FULL,
+                      help="采集工具测试组怎么选：full（缺省，全集）或 client-plan（按客户端归属筛选，改动涉及的重模块自动并入；优化第 9 项）")
+    plan.add_argument("--select-base", default=None, help="client-plan 的基点：最近一次发版的 40 位提交（候选提交取测试树 HEAD；工具不自动猜）")
+    plan.add_argument("--client", dest="select_client", default="codex", help="client-plan 的客户端计划（本版只启用 codex）")
+    plan.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
     recorded = sub.add_parser("recorded-full79-inputs", help="只读核固定79接线及真实夹具、预算来源")
     recorded.add_argument("--spec", type=Path, required=True)
     recorded.add_argument("--sha256", required=True)
@@ -2728,6 +2802,8 @@ def main(argv: list[str] | None = None) -> int:
                                   audit_policy=json.loads(args.audit_policy.read_text()) if args.audit_policy else None,
                                   recorded_bridge=bridge,
                                   declared_registry=args.declared_registry,
+                                  gate_scope=args.gate_scope, select_base=args.select_base, select_client=args.select_client,
+                                  include_claude=args.include_claude,
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=pre_a3_env,
                                   pre_a3_data_inputs=data_inputs,
@@ -2737,6 +2813,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"profile": args.profile, "gates": [g["gate_id"] for g in manifest["gates"]], "units": len(manifest["units"]),
                               "test_groups": [g["group_id"] for g in manifest["test_groups"]],
                               "not_executed": [n for g in manifest["gates"] for n in g.get("not_executed", [])]}, ensure_ascii=False))
+            if "selection" in manifest:
+                chosen = manifest["selection"]
+                print(json.dumps({"selection": {
+                    "client": chosen["client"], "scope": chosen["scope"], "base_commit": chosen["base_commit"], "head_commit": chosen["head_commit"],
+                    "selection_sha256": chosen["selection_sha256"], "modules": len(chosen["modules"]),
+                    "skipped": sum(1 for state in chosen["modules"].values() if state == "skip"), "pulled": len(chosen["pulled"]),
+                    "advisories": len(chosen["advisories"]), "fail_closed": len(chosen["fail_closed"]),
+                    "fallback_reasons": chosen["fallback_reasons"]}}, ensure_ascii=False))
             return 0
         if args.command == "export":
             entry = export_records(args.manifest, args.summary, args.out, source=_pairs(args.source, "--source"), subject=args.subject,
