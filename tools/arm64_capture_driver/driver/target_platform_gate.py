@@ -64,6 +64,25 @@ def target_check(request, binding):
     return subject
 
 
+def _inputs_differ(records, row, current):
+    """目标单元的输入和来源是否不同（不同＝这个单元作为差异重跑）。
+
+    旧口径记录：整份输入摘要不相等。窄化记录（第 10a 项）：承接视图摘要不相等——当前侧摘要由清单承接项给出（消费端），或由来源的访问集合在当前输入上现算；
+    取不到当前测试树坐标（也不是自己和自己比）、视图构造不了，一律按“不同”处理，只降级这个单元，不让整轮变成全集重跑。"""
+
+    record = fs.read(row["record_path"])
+    if not records._narrowed_source(record):
+        return row["inputs_sha256"] != current.inputs_sha256
+    audit = record["read_audit"]
+    try:
+        if current.inherit_repo_root is None and (current.inherit_inputs_sha256 is not None or current.inputs != record["inputs"]):
+            return True
+        digest = current.inherit_inputs_sha256 or records._audit_module().inherit_current_digest(record, current.inputs)
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return True
+    return digest != audit["inherit_inputs_sha256"]
+
+
 def _assess(request, currents, facts, *, gate_ids, now, historical=False):
     """来源或共享条件失败全拒；仅规格／输入不同及新增单元作为差异重跑。"""
     records = fs.records_module()
@@ -116,10 +135,9 @@ def _assess(request, currents, facts, *, gate_ids, now, historical=False):
                 decision = records.Decision(reasons=["目标新增单元：完整执行"])
             elif not current.inheritable:
                 raise fs.ContractError(f"当前单元 {unit_id} 输入覆盖未闭合")
-            elif row["spec_sha256"] != current.spec_sha256 or (
-                    row["inputs_sha256"] != current.inputs_sha256 and not records._narrowed_source(fs.read(row["record_path"]))):
-                # 来源是窄化记录（第 10a 项）时不在这里比整份输入摘要：整份摘要含来源没访问过的条目，本来就可能不同；
-                # 下面的 check_record 按承接视图（只含来源被访问过的条目）比较。旧口径记录仍要求整份相等。
+            elif row["spec_sha256"] != current.spec_sha256 or _inputs_differ(records, row, current):
+                # 规格或输入不同：只这个单元作为差异重跑（不是整体全集重跑）。来源是窄化记录（第 10a 项）时输入是否不同看承接视图摘要而不是整份
+                # 摘要：整份摘要含来源没访问过的条目，本来就可能不同；旧口径记录仍要求整份相等。
                 decision = records.Decision(reasons=["目标单元规格或输入不同：完整执行"])
             else:
                 record = fs.read(row["record_path"])
@@ -234,6 +252,7 @@ def verify_evidence(evidence, *, subject=None, current_request=None, deployment=
                 raise fs.ContractError(f"单元 {row['unit_id']}：{shape}")
             currents[row["unit_id"]].inherit_repo_root = row["inherit_check"]["repo_root"]
             currents[row["unit_id"]].inherit_inputs_sha256 = row["inherit_check"]["inherit_inputs_sha256"]
+            currents[row["unit_id"]].inherit_data_root = row["inherit_check"]["data_root"]
     facts = records.RunFacts(manifest["policy_sha256"], manifest["environment"], manifest["environment_sha256"],
                              manifest["executor"], 24, reference_time)
     verdict, decisions = _assess(request, currents, facts, gate_ids=sorted(GATE_IDS), now=reference_time, historical=historical)

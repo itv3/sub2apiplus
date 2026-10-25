@@ -1111,6 +1111,9 @@ class HostSnapshotExecutorTests(unittest.TestCase):
             def inherit_problems() -> list[str]:
                 fresh = ur._unique([ra.host_snapshot_like(entry) if entry["name"].startswith("host:") else entry for entry in record["inputs"]])
                 current = ur.Current("cmd:a", "command", record["spec"], record["spec_sha256"], fresh, ur.entries_sha256(fresh), True)
+                # 窄化承接要求当前侧带测试树坐标与数据根（执行器的活构造点都会填；缺失一律不承接）：这里是同一棵树、同一数据根。
+                current.inherit_repo_root = record["read_audit"]["repo_root"]
+                current.inherit_data_root = record["read_audit"].get("data_root")
                 facts = ur.RunFacts(record["policy_sha256"], record["environment"], record["environment_sha256"], record["executor"],
                                     1.0, ur.parse_utc(record["completed_at_utc"]), require_read_audit=True)
                 return ur.check_record(store, path, record, current, facts)

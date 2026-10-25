@@ -1037,6 +1037,7 @@ def _verify_published_current(manifest: Mapping[str, Any], store_root: Path | st
                 raise ContractError(f"{unit_id}：{shape}")
             current.inherit_repo_root = entry["inherit_check"]["repo_root"]
             current.inherit_inputs_sha256 = entry["inherit_check"]["inherit_inputs_sha256"]
+            current.inherit_data_root = entry["inherit_check"]["data_root"]
         reasons = R.check_record(store, path, record, current, facts)
         if reasons:
             raise ContractError(f"{unit_id}：按决策收据登记的上下文重做承接核对不通过：{'；'.join(reasons)}")

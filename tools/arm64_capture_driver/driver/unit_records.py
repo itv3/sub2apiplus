@@ -900,6 +900,8 @@ class Current:
     # （消费端不能重新快照，靠清单登记的摘要把“当前≈来源”绑回来）。两者都带缺省值，既有的位置参数构造不受影响。
     inherit_repo_root: str | None = None
     inherit_inputs_sha256: str | None = None
+    # 与测试树坐标一起比的数据根（来源记录 ``read_audit.data_root``）：只在 ``inherit_repo_root`` 给了的时候才比，没有数据根就是 None。
+    inherit_data_root: str | None = None
 
 
 @dataclass
@@ -1017,8 +1019,15 @@ def _narrowed_problems(store: RecordStore, record: Mapping[str, Any], current: C
         sealed = False
     if not sealed:
         return ["记录的输入明细与登记的输入摘要不符，不能承接"]
-    if current.inherit_repo_root is not None and current.inherit_repo_root != audit.get("repo_root"):
+    if current.inherit_repo_root is None:
+        # 取不到当前测试树坐标就不承接，不能静默跳过守卫（否则新增的构造点漏填坐标时会拿旧树当新树）。唯一的例外是“当前”就是记录自己的输入、
+        # 也没有清单摘要要核对（B-09 来源核验、目标门禁重放这类自推导的自检：自己和自己比，没有第二棵树）。
+        if current.inherit_inputs_sha256 is not None or (current.inputs is not recorded and current.inputs != recorded):
+            return ["取不到当前测试树坐标：窄化承接要在同一绝对路径上比较，坐标缺失一律不承接"]
+    elif current.inherit_repo_root != audit.get("repo_root"):
         return [f"测试树坐标与来源不同（来源 {audit.get('repo_root')}，当前 {current.inherit_repo_root}）：窄化承接要求在同一绝对路径上比较"]
+    elif current.inherit_data_root != audit.get("data_root"):
+        return [f"数据根与来源不同（来源 {audit.get('data_root')}，当前 {current.inherit_data_root}）：窄化承接要求在同一数据根上比较"]
     trace = audit.get("trace") or {}
     digest = str(trace.get("sha256") or "")
     stored_trace = store.log_path(digest) if re.fullmatch(r"[0-9a-f]{64}", digest) else None
@@ -1253,6 +1262,7 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
                 if narrowed_entry and shape is None:
                     check = entry["inherit_check"]
                     current.inherit_repo_root, current.inherit_inputs_sha256 = check["repo_root"], check["inherit_inputs_sha256"]
+                    current.inherit_data_root = check["data_root"]
                 reasons = [shape] if shape else check_record(store, record_path, record, current, facts)
                 if run.get("run_id") == manifest.get("run_id"):
                     reasons.append("承接项的记录来自本次运行")
@@ -1284,11 +1294,12 @@ def _inherit_check_problem(entry: Mapping[str, Any], record: Mapping[str, Any]) 
 
     check = entry.get("inherit_check")
     audit = record.get("read_audit") or {}
-    if (not isinstance(check, Mapping) or set(check) != {"schema_version", "inherit_inputs_sha256", "repo_root"}
+    if (not isinstance(check, Mapping) or set(check) != {"schema_version", "inherit_inputs_sha256", "repo_root", "data_root"}
             or check.get("schema_version") != audit.get("inherit_view_schema")
             or not isinstance(check.get("inherit_inputs_sha256"), str)
             or re.fullmatch(r"[0-9a-f]{64}", check["inherit_inputs_sha256"]) is None
-            or not isinstance(check.get("repo_root"), str) or not check["repo_root"]):
+            or not isinstance(check.get("repo_root"), str) or not check["repo_root"]
+            or not (check["data_root"] is None or (isinstance(check["data_root"], str) and check["data_root"]))):
         return "窄化承接项缺少 inherit_check，或它的版本、摘要、测试树坐标格式不对"
     return None
 

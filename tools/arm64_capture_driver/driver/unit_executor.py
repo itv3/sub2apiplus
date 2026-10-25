@@ -147,6 +147,9 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 _CONTROL_READ_AUDIT: ContextVar[Any] = ContextVar("unit_executor_control_read_audit", default=None)
+# 本次运行的读集审计数据根（``--audit-data-root`` 解析后的绝对路径，没给是 None）：窄化承接的坐标守卫除了测试树还要比数据根，
+# ``_gate_currents`` 返回前把它补到每个 Current 上（第 10a 项）。
+_AUDIT_DATA_ROOT: ContextVar[Any] = ContextVar("unit_executor_audit_data_root", default=None)
 # 声明级承接（declared-inputs/v1，步骤 5 工作包 WP3）的两个上下文变量，用法与 _CONTROL_READ_AUDIT 相同：只在一次 run-gates 调用内有值，
 # 调用结束由 _run_gates 复位。
 # * _DECLARED_PROBE：合同探测会话工厂（entry_gates.declared_probe）。_gate_currents 每次被调用都用它建会话、对含 declared_scope 的声明取
@@ -4122,6 +4125,7 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     # （测试固定“这里产出的每个 Current 都带坐标”）。统一在返回前补上，不改上面任何构造语句。
     for value in currents.values():
         value.inherit_repo_root = str(Path.cwd().resolve())
+        value.inherit_data_root = _AUDIT_DATA_ROOT.get()
     return currents
 
 
@@ -4175,7 +4179,7 @@ def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, stor
                 # 靠它把“当前≈来源”绑回清单。``now`` 是做出承接决策时用的当前事实（输入已含沿用的宿主快照）。
                 entry["inherit_check"] = {"schema_version": record["read_audit"]["inherit_view_schema"],
                                           "inherit_inputs_sha256": _audit_module().inherit_current_digest(record, now.inputs),
-                                          "repo_root": now.inherit_repo_root}
+                                          "repo_root": now.inherit_repo_root, "data_root": now.inherit_data_root}
         else:
             entry["reasons"] = list(decisions[unit.unit_id].reasons)
         if outcome is not None and outcome.extra.get("retry"):
@@ -4218,9 +4222,13 @@ def _run_gates(args: argparse.Namespace) -> int:
     # 声明级承接的两个上下文变量同样只活在本次调用里：探测工厂复位成调用前的值（测试可以预先设成带假 runner 的工厂），运行上下文清空。
     declared_tokens = (_DECLARED_PROBE.set(_DECLARED_PROBE.get()), _DECLARED_RUN.set(None))
     retry_token = _RETRY_ACTIVE.set(False)   # 补跑开关同样只活在本次调用里（调度配置打开补跑时由 _run_gates_current 置位）
+    # 窄化承接的坐标守卫要比数据根（第 10a 项）：与 ReadAuditor 同一个解析口径，同样只活在本次调用里。
+    data_root_token = _AUDIT_DATA_ROOT.set(
+        str(Path(args.audit_data_root).resolve()) if getattr(args, "audit_data_root", None) is not None else None)
     try:
         return _run_gates_current(args)
     finally:
+        _AUDIT_DATA_ROOT.reset(data_root_token)
         _RETRY_ACTIVE.reset(retry_token)
         _CONTROL_READ_AUDIT.reset(token)
         _DECLARED_RUN.reset(declared_tokens[1])

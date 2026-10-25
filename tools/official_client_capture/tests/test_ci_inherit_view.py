@@ -183,12 +183,13 @@ class NarrowedWorld(unittest.TestCase):
         self.world.publish_run(run_id, "re-execute", {self.UNIT: (record, "executed")}, decided=fixture.T0 - 3600)
         return record
 
-    def check(self, record: dict, *, nonhost: list[dict] | None = None, repo_root: str | None = "auto", before=None,
-              **facts) -> tuple[list[str], ur.Current]:
+    def check(self, record: dict, *, nonhost: list[dict] | None = None, repo_root: str | None = "auto", data_root: str | None = None,
+              before=None, **facts) -> tuple[list[str], ur.Current]:
         """与真实承接相同的流程：沿用来源登记的宿主路径并现场快照，再 check_record。``before`` 在快照之后、核对之前调用（制造漂移）。"""
         current = self.world.current(self.UNIT, inputs=list(nonhost if nonhost is not None else self.nonhost()))
         ui._carry_host_inputs(current, record)
         current.inherit_repo_root = str(self.tree) if repo_root == "auto" else repo_root
+        current.inherit_data_root = data_root      # 来源的数据根是 None（审计块 data_root），默认同值；单独的用例改它验证守卫
         if before is not None:
             before(current)
         path = self.world.store.record_path(self.UNIT, record["record_sha256"])
@@ -386,7 +387,36 @@ class NarrowedCheckTests(NarrowedWorld):
         self.assertFalse([problem for problem in problems if "文件内容变了" in problem or "宿主" in problem], problems)
         same_size_change(self.read)
         self.assertAccepted(self.check(record, repo_root=str(self.tree))[0])
-        self.assertAccepted(self.check(record, repo_root=None)[0], )
+
+    def test_t14_missing_coordinate_is_refused_unless_the_current_side_is_the_record_itself(self) -> None:
+        """取不到当前测试树坐标不能静默跳过守卫（否则新增的构造点漏填坐标时会拿旧树当新树）：坐标缺失且当前输入不是记录自己的输入就拒绝；
+        “当前”就是记录自己的输入、也没有清单摘要要核对（B-09 来源核验这类自检）时才放行。"""
+        record = self.publish()
+        self.unused.write_text("来源登记了但没访问的文件变了：当前输入不再等于记录的输入", encoding="utf-8")
+        problems, _ = self.check(record, repo_root=None)
+        self.assertRejected(problems, "取不到当前测试树坐标")
+        self.unused.write_text("unused-12345678", encoding="utf-8")
+        with self.subTest(case="当前输入就是记录自己的输入（自己和自己比）"):
+            current = self.world.current(self.UNIT, inputs=list(record["inputs"]))
+            path = self.world.store.record_path(self.UNIT, record["record_sha256"])
+            self.assertAccepted(ur.check_record(self.world.store, path, record, current, self.world.facts(fixture.T0)))
+        with self.subTest(case="带清单摘要却没有坐标"):
+            current = self.world.current(self.UNIT, inputs=list(record["inputs"]))
+            current.inherit_inputs_sha256 = record["read_audit"]["inherit_inputs_sha256"]
+            self.assertRejected(ur.check_record(self.world.store, path, record, current, self.world.facts(fixture.T0)), "取不到当前测试树坐标")
+
+    def test_t14_the_data_root_is_compared_together_with_the_tree_coordinate(self) -> None:
+        record = self.publish()
+        self.assertAccepted(self.check(record, data_root=None)[0])
+        problems, _ = self.check(record, data_root="/other/audit-data")
+        self.assertRejected(problems, "数据根")
+        self.assertFalse([problem for problem in problems if "文件内容变了" in problem or "宿主" in problem], problems)
+        with self.subTest(case="来源有数据根、当前没有"):
+            inputs = self.record_inputs()
+            document, digest = self.put_trace(self.trace_lines())
+            with_root = self.publish(run_id="with-data-root", inputs=inputs, block=self.audit_block(inputs, document, digest, data_root="/audit/data"))
+            self.assertRejected(self.check(with_root, data_root=None)[0], "数据根")
+            self.assertEqual([problem for problem in self.check(with_root, data_root="/audit/data")[0] if "数据根" in problem], [])
 
     def test_t14b_every_current_produced_by_gate_currents_carries_the_coordinate(self) -> None:
         """防止以后新增构造点漏填而静默绕过守卫（失败关闭）：_gate_currents 产出的每个 Current 都带 inherit_repo_root。"""
@@ -412,6 +442,7 @@ class NarrowedCheckTests(NarrowedWorld):
         for unit_id, current in currents.items():
             with self.subTest(unit=unit_id):
                 self.assertEqual(current.inherit_repo_root, expected)
+                self.assertIsNone(current.inherit_data_root, "没给审计数据根时是 None")
 
     # -- T15、T16、T17：旧记录与篡改 -------------------------------------------------------------------------------
 
@@ -577,39 +608,129 @@ class NarrowedCheckTests(NarrowedWorld):
         self.assertEqual(decision.record["record_sha256"], old["record_sha256"])
 
 
-class WalkExemptionTests(NarrowedWorld):
-    """B2 比对侧豁免：整树遍历签名下，受管根测试目录里只被 stat 的文件，视图忽略它的 ``core.size``（其余照比）。
-
-    签名＝来源记录里该测试目录被枚举，且目录下“只 stat”的直接子文件不少于 50 个、占目录项 80% 以上（工具身份遍历 ``rglob`` 整棵受管树的形状）。
-    零星 stat 个别测试文件的单元不满足签名，不豁免；用例用 60 个测试文件造出两种形状。"""
-
-    FILES = 60
-    STAT_ONLY = 60
+class SiblingBytecodeTests(NarrowedWorld):
+    """G-P 也认没设镜像前缀时的字节码位置：``<目录>/__pycache__/<名>.cpython-3NN.pyc`` 被读，就提升同目录的 ``<名>.py``。"""
 
     def setUp(self) -> None:
         super().setUp()
-        self.tests_dir = make_dir(self.tree / "tools" / "official_client_capture" / "tests")
-        self.test_files = [write_file(self.tests_dir / f"test_{index:03d}.py", f"# 测试文件 {index:03d}\n") for index in range(self.FILES)]
+        self.sibling = write_file(self.tree / "pkg" / "__pycache__" / "nopyc.cpython-312.pyc", "pyc-sibling-1234567")
 
     def host_paths(self) -> list[Path]:
-        return [*super().host_paths(), self.tests_dir, *self.test_files]
+        return [*super().host_paths(), self.sibling]
+
+    def trace_lines(self) -> list[str]:
+        return [*super().trace_lines(), f'1 openat(AT_FDCWD<{self.tree}>, "{self.sibling}", O_RDONLY) = 3<{self.sibling}>']
+
+    def test_the_sibling_pycache_bytecode_promotes_its_source(self) -> None:
+        record = self.publish()
+        modes = record["read_audit"]["host_path_modes"]
+        promoted = ra._pyc_promotions(modes, (str(self.tree), None))
+        self.assertEqual(promoted, frozenset({str(self.mod), str(self.nopyc)}), "镜像前缀的 mod.py 与同级 __pycache__ 的 nopyc.py 都被提升")
+        self.assertEqual(modes[str(self.nopyc)], ["stat"])
+        same_size_change(self.nopyc)
+        problems = self.check(record)[0]
+        self.assertTrue(any("文件内容变了" in problem and "字节码" in problem for problem in problems), problems)
+        same_size_change(self.nopyc)
+        self.assertAccepted(self.check(record)[0])
+
+    def test_only_the_matching_name_and_only_under_the_roots_are_promoted(self) -> None:
+        tree = str(self.tree)
+        other_name = {f"{tree}/pkg/nopyc.py": ["stat"], f"{tree}/pkg/__pycache__/mod.cpython-312.pyc": ["read"]}
+        self.assertEqual(ra._pyc_promotions(other_name, (tree, None)), frozenset(), "字节码名字对不上")
+        outside = {"/usr/lib/python3/lib.py": ["stat"], "/usr/lib/python3/__pycache__/lib.cpython-312.pyc": ["read"]}
+        self.assertEqual(ra._pyc_promotions(outside, (tree, None)), frozenset(), "测试树之外（标准库）不提升")
+        read_too = {f"{tree}/pkg/nopyc.py": ["read", "stat"], f"{tree}/pkg/__pycache__/nopyc.cpython-312.pyc": ["read"]}
+        self.assertEqual(ra._pyc_promotions(read_too, (tree, None)), frozenset(), "本来就按内容比的文件不需要提升")
+
+
+class ManifestHelpers:
+    """窄化承接项的清单构造帮手（``self.record`` 是来源窄化记录，由子类的 ``setUp`` 发布）。"""
+
+    def inherited_manifest(self, *, check: dict | None = "auto", entry_inputs_sha256: str | None = None) -> tuple[dict, ur.RecordStore]:
+        """一份只含一个窄化承接项的 unit-inherit 清单（不走决策收据，直接调 verify_manifest 的承接项分支）。"""
+        current = self.check(self.record)[1]
+        row = self.world.entry(self.record, "inherited")
+        row["inputs_sha256"] = entry_inputs_sha256 or current.inputs_sha256
+        if check == "auto":
+            check = {"schema_version": ra.INHERIT_VIEW_SCHEMA, "data_root": None,
+                     "inherit_inputs_sha256": ra.inherit_current_digest(self.record, current.inputs), "repo_root": str(self.tree)}
+        if check is not None:
+            row["inherit_check"] = check
+        manifest = ur.build_manifest(
+            run_id="manifest-consumer", mode=ur.UNIT_INHERIT, inheritance_max_age_hours=168.0, record_store=str(self.world.store.root),
+            out_dir="/out", decided_at_utc=fixture.stamp(fixture.T0), completed_at_utc=fixture.stamp(fixture.T0),
+            policy_sha256=self.world.policy, environment=self.world.environment,
+            environment_sha256=ur.entries_sha256(self.world.environment), executor=self.world.executor,
+            planned_units=[self.UNIT], units=[row], diagnostic=[], test_groups={}, counts={})
+        return manifest, self.world.store
+
+    def narrowed_problems(self, manifest: dict, store, historical: bool = True) -> list[str]:
+        """verify_manifest 里只看承接项核验与输入摘要两类问题（决策收据等不在本测试范围）。"""
+        return [problem for problem in ur.verify_manifest(manifest, store=store, historical=historical)
+                if "决策收据" not in problem and "测试组" not in problem]
+
+
+class WalkExemptionTests(NarrowedWorld):
+    """B2 比对侧豁免：整树遍历签名下，受管根测试目录（含嵌套子目录）里只被 stat 的文件，视图忽略它的 ``core.size``（其余照比）。
+
+    签名（``read_audit.walk_stat_directories``）＝来源记录里同时满足：受管根与测试目录都被枚举；测试目录下“只 stat”的直接子文件不少于 50 个、
+    占目录项 80% 以上；受管根与测试目录里凡是绑了快照的子目录都被枚举（工具身份遍历 ``rglob`` 整棵受管树的形状）。零星 stat 个别测试文件的单元
+    不满足签名，不豁免。
+
+    世界里的测试目录除了若干普通测试文件，另有：嵌套子目录 ``fixtures``（枚举，里面 3 个只 stat 的数据文件）、
+    ``test_zzz_promoted.py``（只 stat，但镜像字节码被读：G-P 提升）、``test_zzz_read.py``（既读又 stat）。
+    目录项数 ``ENTRIES = 普通文件数 + 3``，只 stat 的直接子文件数 ``STAT_ONLY_TOTAL = 普通被 stat 数 + 1``（被提升的那个也只 stat）。"""
+
+    ENTRIES = 63
+    STAT_ONLY_TOTAL = 61
+    LIST_ROOT = True          # 受管根是否被枚举
+    LIST_HELPERS = True       # 受管根的另一个子目录 helpers（绑了快照）是否被枚举
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.files = self.ENTRIES - 3
+        self.stat_count = self.STAT_ONLY_TOTAL - 1
+        self.capture_root = make_dir(self.tree / "tools" / "official_client_capture")
+        self.tests_dir = make_dir(self.capture_root / "tests")
+        self.helpers = make_dir(self.capture_root / "helpers")
+        write_file(self.helpers / "h.py", "# 帮手\n")
+        self.nested_dir = make_dir(self.tests_dir / "fixtures")
+        self.nested_files = [write_file(self.nested_dir / f"data_{index}.json", f'{{"i": {index}}}\n') for index in range(3)]
+        self.test_files = [write_file(self.tests_dir / f"test_{index:03d}.py", f"# 测试文件 {index:03d}\n") for index in range(self.files)]
+        self.promoted = write_file(self.tests_dir / "test_zzz_promoted.py", "# 被提升的测试文件\n")
+        self.promoted_pyc = write_file(self.pyc_file(self.promoted), "pyc-of-promoted-1234")
+        self.read_and_stat = write_file(self.tests_dir / "test_zzz_read.py", "# 既读又 stat 的测试文件\n")
+
+    def host_paths(self) -> list[Path]:
+        return [*super().host_paths(), self.capture_root, self.tests_dir, self.helpers, self.nested_dir, *self.nested_files,
+                *self.test_files, self.promoted, self.promoted_pyc, self.read_and_stat]
 
     def trace_lines(self) -> list[str]:
         cwd = f"AT_FDCWD<{self.tree}>"
+        stat = lambda path: f'1 newfstatat({cwd}, "{path}", 0x1, 0) = 0'
+        read = lambda path: f'1 openat({cwd}, "{path}", O_RDONLY) = 3<{path}>'
+        walk = lambda path, count: [stat(path), f'1 getdents64(3<{path}>, 0x1 /* {count} entries */, 32768) = 80']
         lines = super().trace_lines()
-        lines.append(f'1 newfstatat({cwd}, "{self.tests_dir}", 0x1, 0) = 0')
-        lines.append(f'1 getdents64(3<{self.tests_dir}>, 0x1 /* {self.FILES} entries */, 32768) = 80')
-        lines += [f'1 newfstatat({cwd}, "{path}", 0x1, 0) = 0' for path in self.test_files[:self.STAT_ONLY]]
+        lines += walk(self.capture_root, 3) if self.LIST_ROOT else [stat(self.capture_root)]
+        lines += walk(self.helpers, 1) if self.LIST_HELPERS else [stat(self.helpers)]
+        lines += walk(self.tests_dir, self.ENTRIES)
+        lines += walk(self.nested_dir, 3)
+        lines += [stat(path) for path in self.nested_files]
+        lines += [stat(path) for path in self.test_files[:self.stat_count]]
+        lines += [stat(self.promoted), read(self.promoted_pyc), stat(self.read_and_stat), read(self.read_and_stat)]
         return lines
 
     def signature(self, record: dict) -> frozenset:
         return ra.walk_stat_directories(record["inputs"], record["read_audit"]["host_path_modes"], (str(self.tree), None))
 
+    def assertRejectedAny(self, problems: list[str], *fragments: str) -> None:
+        self.assertTrue(any(fragment in problem for problem in problems for fragment in fragments), problems)
+
 
 class WalkSignatureTests(WalkExemptionTests):
     def test_b2_whole_directory_walk_exempts_the_size_of_stat_only_test_files(self) -> None:
         record = self.publish()
-        self.assertEqual(self.signature(record), frozenset({str(self.tests_dir)}))
+        self.assertEqual(self.signature(record), frozenset({str(self.tests_dir), str(self.nested_dir)}))
         self.assertAccepted(self.check(record)[0])
         self.test_files[7].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
         problems, current = self.check(record)
@@ -618,6 +739,23 @@ class WalkSignatureTests(WalkExemptionTests):
         consumer, _ = self.check(record, historical_read_audit=True, before=lambda value: setattr(
             value, "inherit_inputs_sha256", ra.inherit_current_digest(record, value.inputs)))
         self.assertAccepted(consumer)
+
+    def test_b2_the_exemption_covers_every_descendant_directory_that_the_walk_listed(self) -> None:
+        """P2：``rglob`` 会进每个子目录，嵌套目录里只被 stat 的文件（``tests/fixtures/…``）同样不比大小；规则是“被遍历目录及其被枚举的全部后代”。"""
+        record = self.publish()
+        self.nested_files[1].write_text('{"i": 1, "plenty": "more bytes than before"}\n', encoding="utf-8")
+        self.assertAccepted(self.check(record)[0])
+        with self.subTest(case="嵌套目录里其余照比：权限"):
+            os.chmod(self.nested_files[2], 0o600)
+            self.assertRejected(self.check(record)[0], "权限")
+            os.chmod(self.nested_files[2], FILE_MODE)
+        with self.subTest(case="嵌套目录里新增文件（目录被枚举）"):
+            extra = write_file(self.nested_dir / "data_new.json", "{}\n")
+            self.assertRejected(self.check(record)[0], "目录的直接条目")
+            extra.unlink()
+        with self.subTest(case="遍历目录之外的文件不享受豁免"):
+            self.stat.write_text("大小变了的、不在遍历目录里的 stat 文件", encoding="utf-8")
+            self.assertRejected(self.check(record)[0], "大小")
 
     def test_b2_everything_else_about_those_files_is_still_compared(self) -> None:
         record = self.publish()
@@ -648,17 +786,166 @@ class WalkSignatureTests(WalkExemptionTests):
         forged = self.reseal(record, lambda body: body["read_audit"].__setitem__("inherit_inputs_sha256", "d" * 64), run_id="forged-walk")
         self.assertRejected(self.check(forged)[0], "承接视图摘要")
 
+    def test_b2_a_promoted_python_file_is_not_exempt_whatever_the_directory(self) -> None:
+        """P3：G-P 先判提升再判豁免——只 stat、但镜像字节码被读的 ``.py`` 在遍历目录里同样按内容比（解释器读字节码就等于依赖源文件内容）。"""
+        record = self.publish()
+        modes = record["read_audit"]["host_path_modes"]
+        promoted = ra._pyc_promotions(modes, (str(self.tree), None))
+        self.assertIn(str(self.promoted), promoted)
+        self.assertEqual(modes[str(self.promoted)], ["stat"], "（对照）它自己只有 stat 级访问")
+        self.assertFalse(ra._size_exempt(str(self.promoted), {"kind": "file"}, frozenset({"stat"}), self.signature(record), promoted))
+        self.assertTrue(ra._size_exempt(str(self.promoted), {"kind": "file"}, frozenset({"stat"}), self.signature(record)),
+                        "（对照）不传提升集合时，同一个条目会被当成可豁免——先判提升就是为了堵这一条")
+        self.promoted.write_text("# 被提升的测试文件，大小变了\n" * 2, encoding="utf-8")
+        self.assertRejected(self.check(record)[0], "大小")
+        self.promoted.write_text("# 被提升的测试文件\n", encoding="utf-8")
+        same_size_change(self.promoted)
+        self.assertRejectedAny(self.check(record)[0], "镜像字节码", "文件内容变了")
+
+    def test_b2_a_file_that_is_read_as_well_as_stat_compares_its_content_and_size(self) -> None:
+        """P6 变异用例：遍历目录里既被 read 又被 stat 的文件，访问方式含 stat 不等于只 stat——必须按内容比。
+        若把豁免条件写成“访问方式含 stat”（变异），下面“大小变了”的两步会被放过而这个用例变红。"""
+        record = self.publish()
+        modes = record["read_audit"]["host_path_modes"][str(self.read_and_stat)]
+        self.assertEqual(sorted(modes), ["read", "stat"])
+        self.read_and_stat.write_text("# 既读又 stat 的测试文件，大小变了\n" * 3, encoding="utf-8")
+        self.assertRejected(self.check(record)[0], "大小")
+        self.read_and_stat.write_text("# 既读又 stat 的测试文件\n", encoding="utf-8")
+        same_size_change(self.read_and_stat)
+        self.assertRejected(self.check(record)[0], "文件内容变了")
+        same_size_change(self.read_and_stat)
+        self.assertAccepted(self.check(record)[0])
+
+
+class WalkManifestTests(ManifestHelpers, WalkExemptionTests):
+    """P1：清单自检（``verify_manifest``）的现场分支也要接受 B2 豁免条目——历史重放（``historical=True``）与现场（``False``）都一样；
+    非豁免文件的大小变化两条路径都照样报错。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.record = self.publish(run_id="manifest-source", completed=fixture.T0 - 60)
+
+    def test_exempt_size_change_passes_verify_manifest_live_and_historical(self) -> None:
+        self.test_files[7].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
+        self.nested_files[0].write_text('{"i": 0, "more": "bytes"}\n', encoding="utf-8")
+        manifest, store = self.inherited_manifest()
+        for historical in (True, False):
+            with self.subTest(historical=historical):
+                self.assertEqual(self.narrowed_problems(manifest, store, historical), [])
+
+    def test_non_exempt_size_change_still_fails_verify_manifest_live_and_historical(self) -> None:
+        self.stat.write_text("长度变了的、不在遍历目录里的 stat 文件内容", encoding="utf-8")
+        manifest, store = self.inherited_manifest()
+        for historical in (True, False):
+            with self.subTest(historical=historical):
+                self.assertRejectedAny(self.narrowed_problems(manifest, store, historical), "清单登记的当前承接视图摘要", "宿主输入快照漂移", "大小")
+        with self.subTest(case="伪造的 inherit_check（声称视图相等）：现场自检仍然发现漂移"):
+            forged, store = self.inherited_manifest(check={
+                "schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": self.record["read_audit"]["inherit_inputs_sha256"],
+                "repo_root": str(self.tree), "data_root": None})
+            self.assertRejectedAny(self.narrowed_problems(forged, store, False), "宿主输入快照漂移", "大小")
+
+    def test_exempt_entries_still_fail_the_live_check_on_everything_but_the_size(self) -> None:
+        os.chmod(self.test_files[3], 0o600)
+        forged, store = self.inherited_manifest(check={
+            "schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": self.record["read_audit"]["inherit_inputs_sha256"],
+            "repo_root": str(self.tree), "data_root": None})
+        self.assertRejectedAny(self.narrowed_problems(forged, store, False), "宿主输入快照漂移", "权限")
+
 
 class SparseStatTests(WalkExemptionTests):
-    """零星 stat 个别测试文件（20 个，不到 80%，也不到 50 个）：不满足签名，大小照比。"""
+    """零星 stat 个别测试文件（20 个，不到 80%，也不到 50 个）：不满足签名，大小照比——真依赖测试文件大小的单元不会被误豁免。"""
 
-    STAT_ONLY = 20
+    ENTRIES = 63
+    STAT_ONLY_TOTAL = 21
 
     def test_b2_sparse_stat_only_units_get_no_exemption(self) -> None:
         record = self.publish()
         self.assertEqual(self.signature(record), frozenset())
         self.test_files[7].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
         self.assertRejected(self.check(record)[0], "大小")
+
+
+class SignatureBoundaryMixin:
+    """签名阈值的边界：只 stat 的直接子文件 ≥50 个且 ≥80%（目录项总数 × 0.8）才满足；差一个就不满足。"""
+
+    SATISFIES = False
+
+    def test_signature_boundary(self) -> None:
+        record = self.publish()
+        walked = self.signature(record)
+        self.assertEqual(bool(walked), self.SATISFIES, f"目录项 {self.ENTRIES}、只 stat {self.STAT_ONLY_TOTAL}：{walked}")
+        self.test_files[0].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
+        problems = self.check(record)[0]
+        if self.SATISFIES:
+            self.assertAccepted(problems)
+        else:
+            self.assertRejected(problems, "大小")
+
+
+class SignatureAtTheMinimumTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """50/62：刚好满足（≥50 且 ≥ 0.8 × 62 = 49.6）。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 62, 50, True
+
+
+class SignatureBelowTheMinimumTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """49/62：差一个文件，不满足。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 62, 49, False
+
+
+class SignatureAtTheFractionTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """56/70：刚好 80%。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 70, 56, True
+
+
+class SignatureBelowTheFractionTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """55/69：占比 79.7%，不到 80%（够 50 个也不满足）。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 69, 55, False
+
+
+class SignatureAtFiftyOfAFewerEntriesTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """50/55：占比 91%，刚好 50 个：满足（数量门槛与占比门槛各自独立起作用）。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 55, 50, True
+
+
+class SignatureBelowFiftyDespiteTheFractionTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """49/55：占比 89% 够，但只有 49 个：不满足。"""
+
+    ENTRIES, STAT_ONLY_TOTAL, SATISFIES = 55, 49, False
+
+
+class ManagedRootNotListedTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """受管根没有被枚举（只 stat）：即便测试目录里的形状满足，也不是整树遍历——真正的遍历必然枚举受管根。"""
+
+    LIST_ROOT = False
+
+
+class ManagedSubdirectoryNotListedTests(SignatureBoundaryMixin, WalkExemptionTests):
+    """受管根里绑了快照的另一个子目录（helpers）没有被枚举：遍历不会漏掉子目录，所以不是整树遍历。"""
+
+    LIST_HELPERS = False
+
+
+class SyntheticSizeDependentUnitTests(WalkExemptionTests):
+    """合成的“真依赖测试文件大小”的单元：只 stat 并比对 30 个测试文件的大小（例如统计部分文件体量），不满足新签名，文件变大小必须拒绝。"""
+
+    ENTRIES = 63
+    STAT_ONLY_TOTAL = 31
+
+    def test_a_unit_that_truly_depends_on_the_sizes_is_not_exempted(self) -> None:
+        record = self.publish()
+        self.assertEqual(self.signature(record), frozenset())
+        for index in (0, 29):
+            with self.subTest(index=index):
+                original = self.test_files[index].read_text(encoding="utf-8")
+                self.test_files[index].write_text(original * 4, encoding="utf-8")
+                self.assertRejected(self.check(record)[0], "大小")
+                self.test_files[index].write_text(original, encoding="utf-8")
 
 
 class ViewPropertyTests(NarrowedWorld):
@@ -730,7 +1017,8 @@ class ViewPropertyTests(NarrowedWorld):
 
     def test_t32_driver_copies_are_byte_identical_for_the_touched_files(self) -> None:
         repo = Path(ra.__file__).resolve().parents[2]
-        for name in ("read_audit.py", "unit_records.py", "unit_executor.py", "unit_inherit.py", "target_platform_gate.py"):
+        for name in ("read_audit.py", "unit_records.py", "unit_executor.py", "unit_inherit.py", "target_platform_gate.py",
+                     "inherit_predict.py", "background_validation.py"):
             with self.subTest(name=name):
                 self.assertEqual((repo / "tools/ci" / name).read_bytes(), (repo / "tools/arm64_capture_driver/driver" / name).read_bytes())
 
@@ -774,7 +1062,7 @@ class ExecutorManifestTests(NarrowedWorld):
         self.assertAccepted(problems)
         entry = self.manifest_entry(record, current)
         self.assertEqual(entry["disposition"], "inherited")
-        self.assertEqual(entry["inherit_check"], {"schema_version": ra.INHERIT_VIEW_SCHEMA, "repo_root": str(self.tree),
+        self.assertEqual(entry["inherit_check"], {"schema_version": ra.INHERIT_VIEW_SCHEMA, "repo_root": str(self.tree), "data_root": None,
                                                   "inherit_inputs_sha256": ra.inherit_current_digest(record, current.inputs)})
         self.assertEqual(entry["inherit_check"]["inherit_inputs_sha256"], record["read_audit"]["inherit_inputs_sha256"])
 
@@ -824,50 +1112,33 @@ class ExecutorWritesTests(NarrowedWorld):
         self.assertFalse(ur._narrowed_source({"read_audit": {"coverage_complete": True, "host_path_modes": {}}}))
 
 
-class ManifestAndConsumerTests(NarrowedWorld):
-    """T20、T21、T29、T30：清单承接项的 inherit_check、消费端不碰宿主、propose 不改 Current、目标门禁跳过分支。"""
+class ManifestAndConsumerTests(ManifestHelpers, NarrowedWorld):
+    """T20、T21、T29、T30：清单承接项的 inherit_check、消费端不碰宿主、propose 不改 Current、目标门禁的承接视图摘要比较。"""
 
     def setUp(self) -> None:
         super().setUp()
         self.record = self.publish(run_id="manifest-source", completed=fixture.T0 - 60)       # 比 World 自带的旧口径记录新
-
-    def inherited_manifest(self, *, check: dict | None = "auto", entry_inputs_sha256: str | None = None) -> tuple[dict, ur.RecordStore]:
-        """一份只含一个窄化承接项的 unit-inherit 清单（不走决策收据，直接调 verify_manifest 的承接项分支）。"""
-        current = self.check(self.record)[1]
-        row = self.world.entry(self.record, "inherited")
-        row["inputs_sha256"] = entry_inputs_sha256 or current.inputs_sha256
-        if check == "auto":
-            check = {"schema_version": ra.INHERIT_VIEW_SCHEMA,
-                     "inherit_inputs_sha256": ra.inherit_current_digest(self.record, current.inputs), "repo_root": str(self.tree)}
-        if check is not None:
-            row["inherit_check"] = check
-        manifest = ur.build_manifest(
-            run_id="manifest-consumer", mode=ur.UNIT_INHERIT, inheritance_max_age_hours=168.0, record_store=str(self.world.store.root),
-            out_dir="/out", decided_at_utc=fixture.stamp(fixture.T0), completed_at_utc=fixture.stamp(fixture.T0),
-            policy_sha256=self.world.policy, environment=self.world.environment,
-            environment_sha256=ur.entries_sha256(self.world.environment), executor=self.world.executor,
-            planned_units=[self.UNIT], units=[row], diagnostic=[], test_groups={}, counts={})
-        return manifest, self.world.store
-
-    def narrowed_problems(self, manifest: dict, store, historical: bool = True) -> list[str]:
-        """verify_manifest 里只看承接项核验与输入摘要两类问题（决策收据等不在本测试范围）。"""
-        return [problem for problem in ur.verify_manifest(manifest, store=store, historical=historical)
-                if "决策收据" not in problem and "测试组" not in problem]
 
     def test_t20_verify_manifest_binds_current_to_source_through_inherit_check(self) -> None:
         self.unused.write_text("来源没访问过的文件变了：当前侧整份输入摘要因此不再等于记录的", encoding="utf-8")
         manifest, store = self.inherited_manifest()
         self.assertEqual(self.narrowed_problems(manifest, store), [], "正确的 inherit_check：没有问题，且整份输入摘要不等也不报警")
         self.assertNotEqual(manifest["units"][0]["inputs_sha256"], self.record["inputs_sha256"])
+        good = self.record["read_audit"]["inherit_inputs_sha256"]
         for label, check, fragment in (
                 ("缺 inherit_check", None, "inherit_check"),
-                ("摘要不符", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": "c" * 64, "repo_root": str(self.tree)}, "清单登记的当前承接视图摘要"),
-                ("坐标不符", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": self.record["read_audit"]["inherit_inputs_sha256"],
-                              "repo_root": "/other/tree"}, "测试树坐标"),
-                ("版本串不符", {"schema_version": "unit-inherit-view/v9", "inherit_inputs_sha256": self.record["read_audit"]["inherit_inputs_sha256"],
-                               "repo_root": str(self.tree)}, "inherit_check"),
-                ("多余键", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": self.record["read_audit"]["inherit_inputs_sha256"],
-                           "repo_root": str(self.tree), "extra": 1}, "inherit_check")):
+                ("摘要不符", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": "c" * 64, "repo_root": str(self.tree),
+                              "data_root": None}, "清单登记的当前承接视图摘要"),
+                ("坐标不符", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": good, "repo_root": "/other/tree",
+                              "data_root": None}, "测试树坐标"),
+                ("数据根不符", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": good, "repo_root": str(self.tree),
+                                "data_root": "/other/data"}, "数据根"),
+                ("缺数据根键", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": good, "repo_root": str(self.tree)},
+                 "inherit_check"),
+                ("版本串不符", {"schema_version": "unit-inherit-view/v9", "inherit_inputs_sha256": good, "repo_root": str(self.tree),
+                               "data_root": None}, "inherit_check"),
+                ("多余键", {"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": good, "repo_root": str(self.tree),
+                           "data_root": None, "extra": 1}, "inherit_check")):
             with self.subTest(case=label):
                 bad, store = self.inherited_manifest(check=check)
                 self.assertRejected(self.narrowed_problems(bad, store), fragment)
@@ -890,7 +1161,7 @@ class ManifestAndConsumerTests(NarrowedWorld):
         """历史重放的消费端不能重新快照：把现场取快照的函数换成抛异常的桩，窄化承接项仍通过；清单里的摘要被改则拒绝。"""
         manifest, store = self.inherited_manifest()
         bad, _ = self.inherited_manifest(check={"schema_version": ra.INHERIT_VIEW_SCHEMA, "inherit_inputs_sha256": "e" * 64,
-                                                "repo_root": str(self.tree)})
+                                                "repo_root": str(self.tree), "data_root": None})
         audit = ur._audit_module()
 
         def forbidden(*args, **kwargs):
@@ -909,20 +1180,57 @@ class ManifestAndConsumerTests(NarrowedWorld):
         self.assertEqual((current.inputs, current.inputs_sha256), before)
         self.assertEqual(proposal["units"], {self.UNIT: {"run_id": "manifest-source", "record_sha256": self.record["record_sha256"]}})
 
-    def test_t30_target_platform_gate_skips_the_whole_digest_comparison_only_for_narrowed_records(self) -> None:
+    def row_for(self, record: dict) -> dict:
+        """目标门禁对照的来源行：记录路径与登记的整份输入摘要（真实记录，不桩）。"""
+        return {"record_path": str(self.world.store.record_path(self.UNIT, record["record_sha256"])), "inputs_sha256": record["inputs_sha256"]}
+
+    def test_t30_target_platform_gate_compares_view_digests_for_narrowed_records_without_stubs(self) -> None:
+        """P7：窄化来源的“输入是否不同”看承接视图摘要而不是整份摘要，且只降级这个单元；旧口径记录仍比整份摘要。全程真实记录，不桩 ``check_record``。"""
+        records = target.fs.records_module()
+        record = self.record
+        row = self.row_for(record)
+        with self.subTest(case="来源没访问过的文件变了：整份摘要不同、视图相同 → 不算差异，真实 check_record 也承接"):
+            self.unused.write_text("来源没访问过的文件变了", encoding="utf-8")
+            problems, current = self.check(record)
+            self.assertAccepted(problems)
+            self.assertNotEqual(current.inputs_sha256, record["inputs_sha256"])
+            self.assertFalse(target._inputs_differ(records, row, current))
+            self.unused.write_text("unused-12345678", encoding="utf-8")
+        with self.subTest(case="来源读过的文件变了：视图摘要不同 → 差异，真实 check_record 也拒绝"):
+            same_size_change(self.read)
+            problems, current = self.check(record)
+            self.assertRejected(problems, "文件内容变了")
+            self.assertTrue(target._inputs_differ(records, row, current))
+            same_size_change(self.read)
+        with self.subTest(case="清单给了当前侧视图摘要（消费端）：用它比，不碰宿主"):
+            current = self.check(record)[1]
+            current.inherit_inputs_sha256 = "f" * 64
+            self.assertTrue(target._inputs_differ(records, row, current))
+            current.inherit_inputs_sha256 = record["read_audit"]["inherit_inputs_sha256"]
+            self.assertFalse(target._inputs_differ(records, row, current))
+        with self.subTest(case="取不到当前测试树坐标又不是自己和自己比 → 差异（降级这个单元，不整轮全集重跑）"):
+            self.unused.write_text("来源没访问过的文件又变了", encoding="utf-8")
+            current = self.check(record, repo_root=None)[1]
+            self.assertTrue(target._inputs_differ(records, row, current))
+        with self.subTest(case="旧口径记录：仍比整份输入摘要"):
+            legacy = self.world.records[self.UNIT]
+            legacy_row = self.row_for(legacy)
+            current = self.world.current(self.UNIT)
+            current.inputs_sha256 = legacy["inputs_sha256"]
+            self.assertFalse(target._inputs_differ(records, legacy_row, current))
+            current.inputs_sha256 = "0" * 64
+            self.assertTrue(target._inputs_differ(records, legacy_row, current))
+
+    def test_t30_the_whole_digest_difference_of_a_legacy_source_still_reexecutes_in_the_gate(self) -> None:
         from tools.official_client_capture.tests import test_ci_target_platform_gate as gate_tests
 
         case = gate_tests.TargetPlatformGateTests("test_spec_input_and_new_units_are_differences_not_reused")
         case.setUp()
         try:
-            records = target.fs.records_module()
             case.currents["b"].inputs_sha256 = "0" * 64
             verdict, decisions = case.assess()
             self.assertFalse(decisions["b"].inherit, "旧口径记录：整份输入摘要不同仍然完整执行")
-            with mock.patch.object(records, "_narrowed_source", return_value=True), \
-                    mock.patch.object(records, "check_record", return_value=[]):
-                verdict, decisions = case.assess()
-                self.assertTrue(decisions["b"].inherit, verdict)
+            self.assertTrue(decisions["a"].inherit, verdict)
         finally:
             case.doCleanups()
 

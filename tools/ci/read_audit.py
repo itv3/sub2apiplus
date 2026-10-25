@@ -1895,35 +1895,65 @@ def _under_any(path: str, roots: Iterable[Any]) -> bool:
 
 # B2 比对侧豁免（承接输入收窄的配套，替代“把 _tool_tree_entries 改成按目录剪枝”——那条要改受管树 codex_upgrade.py，会破身份守恒）：
 # 工具身份计算（codex_upgrade._tool_tree_entries／_managed_tree_digests）用 rglob 遍历整棵受管树，会对 ``tests/`` 下的每个测试文件各
-# stat 一次，却因为过滤条件排除了 tests 而不读内容、不影响身份的值；这些 stat 把“测试文件大小”（v3 无条件集的 core.size）带进每个调用了
-# 身份计算的单元的承接依赖，于是任何一次修改测试文件都让这批单元（10-17 轮 53 个）无谓失效。
-# 豁免只认遍历的访问签名，不按路径一刀切：一个单元的来源记录里，受管根测试目录被枚举（list），且该目录下“只被 stat”的直接子文件
-# 不少于 WALK_MIN_FILES 个、占目录项的 WALK_MIN_FRACTION 以上——这才是整树遍历的形状（实测 10-17 轮 53 个单元各 stat 了目录 431 项里的
-# 445 个、其余 154 个单元一个都不 stat，没有零星的中间态）；零星 stat 个别测试文件的单元（例如 test_capture_test_layering 的 20 个）不满足
-# 签名，不豁免。满足签名的目录里“只 stat”的文件，视图只忽略它的 ``core.size``：kind／target／links／ancestors／mode／uid／gid 仍照比；
-# 内容本来就不比（只 stat）；目录项增删由被枚举的目录自己的目录项比较发现。残余：没有拿到这些 stat 的调用栈，签名是间接证据。
+# stat 一次（含 ``tests/fixtures``、``tests/real_chains`` 这样的嵌套目录里的文件），却因为过滤条件排除了 tests 而不读内容、不影响身份的值；
+# 这些 stat 把“测试文件大小”（v3 无条件集的 core.size）带进每个调用了身份计算的单元的承接依赖，于是任何一次修改测试文件都让这批单元
+# （10-17 轮 53 个）无谓失效。
+#
+# 豁免只认遍历的访问签名，不按路径一刀切。来源记录里同时满足下面四条才算“整树遍历”（对每个受管根 ``tools/official_client_{capture,control}``
+# 的测试目录 D 判一次，R 是它的受管根）：
+#   1. R 与 D 都被枚举（list）——rglob 每进一个目录都要列举它；
+#   2. D 下“只被 stat”的直接子文件不少于 WALK_MIN_FILES 个、且占 D 目录项的 WALK_MIN_FRACTION 以上；
+#   3. R 的、D 的直接子目录里凡是输入里绑了快照的（访问过的），都被枚举——遍历不会漏进某个子目录；
+#   4. 没有零星的中间态：满足 1～3 的单元只可能是遍历（实测 10-17 轮 53 个单元各 stat 了 D 的 431 项里的 445 个文件，且 R 的 9 个子目录、D 的
+#      2 个子目录全被枚举；其余 154 个单元一个都不 stat；唯一的孤例 test_capture_test_layering 只 stat 了 20 个，且 R 没被枚举）。
+# 满足时，遍历覆盖的目录集合是 D 以及 D 下被枚举且父目录也在集合里的全部后代目录（``walk_stat_directories`` 返回它）；这些目录里**只被 stat**
+# 的文件（含 ``tests/fixtures/…``、``tests/real_chains/…`` 下的嵌套文件）视图只忽略它的 ``core.size``：kind／target／links／ancestors／mode／
+# uid／gid 仍照比；内容本来就不比（只 stat）；目录项增删由被枚举目录自己的目录项比较发现。被 G-P 提升（镜像字节码被读）的文件不享受豁免。
+# 残余：没有拿到这些 stat 的调用栈，签名是间接证据；真依赖测试文件大小的单元若恰好满足四条会被误豁免（概率极低，边界用例固定了阈值）。
 WALK_TESTS_DIRECTORY = re.compile(r"/tools/official_client_(?:capture|control)/tests$")
 WALK_MIN_FILES = 50
 WALK_MIN_FRACTION = 0.8
 
 
 def walk_stat_directories(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) -> frozenset[str]:
-    """B2：来源记录里满足整树遍历签名的受管根测试目录（见上面的说明）。必须由**来源**的输入与访问类型算出，当前侧沿用这个集合。"""
+    """B2：来源记录里整树遍历覆盖的目录集合（签名见上面的说明）。必须由**来源**的输入与访问类型算出，当前侧沿用这个集合。"""
+
+    snapshots: dict[str, Mapping[str, Any]] = {}
+    for entry in inputs or []:
+        if is_host_entry_v3(entry):
+            snapshots[entry["detail"]["path"]] = entry["detail"]["snapshot"]
+    roots = tuple(roots)
+
+    def listed(path: str) -> bool:
+        return "list" in (modes.get(path) or ())
+
+    def known_subdirectories_listed(directory: str) -> bool:
+        names = snapshots[directory].get("entries") or []
+        return all(listed(child) for child in (f"{directory}/{name}" for name in names)
+                   if child in snapshots and snapshots[child].get("kind") == "directory")
 
     found: set[str] = set()
-    roots = tuple(roots)
-    for entry in inputs or []:
-        if not is_host_entry_v3(entry):
+    for path, snapshot in snapshots.items():
+        if (snapshot.get("kind") != "directory" or not listed(path) or not WALK_TESTS_DIRECTORY.search(path) or not _under_any(path, roots)):
             continue
-        path = entry["detail"]["path"]
-        snapshot = entry["detail"]["snapshot"]
-        if (snapshot.get("kind") != "directory" or "list" not in (modes.get(path) or ()) or not WALK_TESTS_DIRECTORY.search(path)
-                or not _under_any(path, roots)):
+        managed_root = path.rsplit("/", 1)[0]
+        if managed_root not in snapshots or snapshots[managed_root].get("kind") != "directory" or not listed(managed_root):
             continue
         names = snapshot.get("entries") or []
         stat_only = sum(1 for name in names if list(modes.get(f"{path}/{name}") or ()) == ["stat"])
-        if stat_only >= WALK_MIN_FILES and stat_only >= WALK_MIN_FRACTION * len(names):
-            found.add(path)
+        if stat_only < WALK_MIN_FILES or stat_only < WALK_MIN_FRACTION * len(names):
+            continue
+        if not known_subdirectories_listed(path) or not known_subdirectories_listed(managed_root):
+            continue
+        found.add(path)
+        pending = [path]
+        while pending:
+            directory = pending.pop()
+            for name in snapshots[directory].get("entries") or []:
+                child = f"{directory}/{name}"
+                if child in snapshots and snapshots[child].get("kind") == "directory" and listed(child) and child not in found:
+                    found.add(child)
+                    pending.append(child)
     return frozenset(found)
 
 
@@ -1936,23 +1966,32 @@ def _without_size(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return copy
 
 
-def _size_exempt(path: str, snapshot: Mapping[str, Any], kinds: frozenset[str], walk: frozenset[str]) -> bool:
-    return bool(walk) and snapshot.get("kind") == "file" and kinds == {"stat"} and path.rsplit("/", 1)[0] in walk
+def _size_exempt(path: str, snapshot: Mapping[str, Any], kinds: frozenset[str], walk: frozenset[str], promoted: frozenset[str] = frozenset()) -> bool:
+    """这个被访问的条目是否享受 B2 的大小豁免：文件、只被 stat、父目录在遍历覆盖的目录集合里，且没有被 G-P 提升（先判提升，已提升的条目按读取处理）。"""
+
+    return (bool(walk) and path not in promoted and snapshot.get("kind") == "file" and kinds == {"stat"}
+            and path.rsplit("/", 1)[0] in walk)
 
 
 def _pyc_promotions(modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) -> frozenset[str]:
-    """G-P 守卫：只被 stat 的 ``.py`` 若其镜像字节码被读取，视同被读取。
+    """G-P 守卫：只被 stat 的 ``.py`` 若其字节码被读取，视同被读取。
 
     时间戳模式的 pyc 解释器只 stat 源文件、不读它，内容靠 pyc 可见；今天仓库自己的源码是 CHECKED_HASH（解释器会读源文件），
     所以没有洞，但只要有人把字节码改成时间戳模式或换成持久共享层就会出洞，这里零成本地补上：位于测试树或数据根下的 ``.py``
-    若只有 stat 级访问、而某个以“该源文件绝对路径去掉 .py”结尾的 pyc 被 read，就把它提升为按内容比较。前缀目录不进记录，
-    所以按后缀匹配而不去猜前缀；标准库路径不在 ``roots`` 之下，不提升（它们的内容由环境指纹里的 Python 构建与 dpkg 清单兜住）。"""
+    若只有 stat 级访问、而它的字节码被 read，就把它提升为按内容比较。字节码有两种位置，都认：
+    * 镜像前缀（``PYTHONPYCACHEPREFIX``）：以“该源文件绝对路径去掉 .py”结尾的 pyc。前缀目录不进记录，所以按后缀匹配而不去猜前缀；
+    * 同级 ``__pycache__``（没设前缀时的默认位置）：``<目录>/__pycache__/<名>.cpython-3NN.pyc`` 对应 ``<目录>/<名>.py``。
+    标准库路径不在 ``roots`` 之下，不提升（它们的内容由环境指纹里的 Python 构建与 dpkg 清单兜住）。"""
 
     by_base: dict[str, list[str]] = {}
+    sibling_sources: set[str] = set()
     for path, kinds in modes.items():
         if "read" in kinds and _PYC_TAIL.search(path):
             stem = _PYC_TAIL.sub("", path)
             by_base.setdefault(stem.rsplit("/", 1)[-1], []).append(stem)
+            parent, _, name = stem.rpartition("/")
+            if parent.endswith("/__pycache__"):
+                sibling_sources.add(parent[: -len("/__pycache__")] + "/" + name + ".py")
     if not by_base:
         return frozenset()
     promoted: set[str] = set()
@@ -1960,7 +1999,7 @@ def _pyc_promotions(modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) ->
         if not path.endswith(".py") or not kinds or CONTENT_ACCESS_KINDS & set(kinds) or not _under_any(path, roots):
             continue
         stem = path[:-3]
-        if any(candidate.endswith(stem) for candidate in by_base.get(stem.rsplit("/", 1)[-1], ())):
+        if path in sibling_sources or any(candidate.endswith(stem) for candidate in by_base.get(stem.rsplit("/", 1)[-1], ())):
             promoted.add(path)
     return frozenset(promoted)
 
@@ -1997,7 +2036,7 @@ def inherit_view(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str,
             if not kinds:
                 continue
             snapshot = entry["detail"]["snapshot"]
-            if _size_exempt(path, snapshot, kinds, walk):
+            if _size_exempt(path, snapshot, kinds, walk, promoted):
                 dependency = entry["detail"].get("metadata_dependency")
                 view[name] = ("host-nosize", _canonical_digest(_v3_binding(_without_size(snapshot), dependency)), None, None)
                 continue
@@ -2041,7 +2080,7 @@ def _narrowed_entry_reason(name: str, old: Mapping[str, Any], new: Mapping[str, 
     if old["detail"].get("metadata_dependency") != new["detail"].get("metadata_dependency"):
         return f"{name}：元数据依赖声明与来源记录不同"
     path = old["detail"]["path"]
-    if _size_exempt(path, planned, frozenset(modes.get(path) or ()), walk):
+    if _size_exempt(path, planned, frozenset(modes.get(path) or ()), walk, promoted):
         planned, current = _without_size(planned), _without_size(current)      # B2：整树遍历签名下只 stat 的测试文件，忽略大小
     ok, reason = host_snapshot_matches(planned, current, modes.get(path, ()), entry_declared_fields(old))
     if not ok:
@@ -2130,7 +2169,10 @@ def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs
                 continue
             path = entry["detail"]["path"]
             try:
-                _verify_host_entry_v3(entry, modes, historical=False)
+                if source[name][0] == "host-nosize":
+                    _verify_host_entry_v3_nosize(entry, modes)      # P1：B2 豁免条目的现场检查同样忽略大小，否则豁免场景下发布前自检必红
+                else:
+                    _verify_host_entry_v3(entry, modes, historical=False)
             except (OSError, ValueError, TypeError, AuditError) as error:
                 problems.append(f"{name}：{error}")
                 continue
@@ -2143,6 +2185,18 @@ def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs
                     if links != 1:
                         problems.append(f"{name}：硬链接数不是 1（nlink／inode 相等性不在快照里，按保守口径拒绝）")
     return problems
+
+
+def _verify_host_entry_v3_nosize(entry: Mapping[str, Any], modes: Mapping[str, Sequence[str]]) -> Mapping[str, Any]:
+    """B2 豁免条目的现场漂移检查：与 ``_verify_host_entry_v3(historical=False)`` 同一套比较，只是两边都去掉 ``core.size``。"""
+
+    planned = check_host_entry_v3(entry)
+    path = entry["detail"]["path"]
+    live = host_snapshot_v3(path)["detail"]["snapshot"]
+    ok, reason = host_snapshot_matches(_without_size(planned), _without_size(live), modes.get(path, ()), entry_declared_fields(entry))
+    if not ok:
+        raise AuditError("宿主输入快照漂移：" + reason)
+    return planned
 
 
 def _verify_host_entry_v3(entry: Mapping[str, Any], modes: Mapping[str, Sequence[str]] | None, *, historical: bool) -> Mapping[str, Any]:
