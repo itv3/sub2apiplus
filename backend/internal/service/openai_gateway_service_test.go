@@ -615,7 +615,7 @@ func TestOpenAIGatewayService_BindHTTPResponseAccount_DetachesCanceledRequestCon
 	require.Len(t, cache.setDeadlines, 3)
 	for _, deadline := range cache.setDeadlines {
 		require.True(t, deadline.After(startedAt))
-		require.LessOrEqual(t, deadline.Sub(startedAt), openAIWSStateStoreRedisTimeout+100*time.Millisecond)
+		require.LessOrEqual(t, deadline.Sub(startedAt), openAIWSStateStoreRedisTimeout+time.Second) // time-threshold: allow 比较的是被测代码按 3s Redis 超时算出的 context 截止时间与调用起点之差，不是实测耗时；余量放大到 1s（原 100ms 要求调用到取截止时间之间的调度间隔不超过 100ms）
 	}
 	require.Len(t, cache.sessionBindings, 3)
 	require.Contains(t, cache.sessionBindings, openAIWSResponseAccountCacheKey("resp_http_canceled_001"))

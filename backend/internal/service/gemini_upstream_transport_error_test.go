@@ -61,7 +61,7 @@ func TestGeminiForwardNative_TransientTransportErrorFailsOverWithoutRetry(t *tes
 	require.Nil(t, result)
 	_ = requireGeminiTransportFailover(t, err)
 	require.Equal(t, 1, httpStub.calls, "不应在同账号上重试")
-	require.Less(t, time.Since(start), geminiRetryBaseDelay, "不应进入退避等待")
+	require.Less(t, time.Since(start), geminiRetryBaseDelay, "不应进入退避等待") // time-threshold: allow 上界就是被保护的 1s 退避时长本身；正常耗时是毫秒级，余量约 1000 倍；防护还有 httpStub.calls==1 的计数断言
 	require.Zero(t, repo.calls, "瞬时故障不摘号")
 	require.False(t, c.Writer.Written(), "换号场景不应写客户端响应")
 	require.Zero(t, rec.Body.Len())

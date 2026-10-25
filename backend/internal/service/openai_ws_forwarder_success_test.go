@@ -1579,7 +1579,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		"model": "gpt-5.4",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // time-threshold: allow 被测对象是“预热读取受父 context 取消控制”；截止时间必须晚于写入完成、读取开始（断言错误里含 prewarm_read_event），放大到 100ms；时间上界另有 1500ms 的相对断言
 	defer cancel()
 	start := time.Now()
 	err := svc.performOpenAIWSGeneratePrewarm(

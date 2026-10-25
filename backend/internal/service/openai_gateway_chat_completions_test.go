@@ -356,7 +356,7 @@ func TestForwardAsChatCompletions_RawFallbackPreservesResponsesTiming(t *testing
 				require.Len(t, upstream.requests, 2)
 				require.Equal(t, "/v1/responses", upstream.requests[0].URL.Path)
 				require.Equal(t, "/v1/chat/completions", upstream.requests[1].URL.Path)
-				require.GreaterOrEqual(t, result.Duration, initialBody.elapsed)
+				require.GreaterOrEqual(t, result.Duration, initialBody.elapsed) // time-threshold: allow 两个实测值之间的一致性比较（结果里记录的耗时不得小于实测下限），不是时间阈值
 				if stream {
 					require.NotNil(t, result.FirstTokenMs)
 					require.GreaterOrEqual(t, *result.FirstTokenMs, int(initialBody.elapsed.Milliseconds()))

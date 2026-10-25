@@ -101,7 +101,7 @@ func TestOpenAIWSIngressSessionPreemptionCancelsAfterCloseGrace(t *testing.T) {
 	)
 	require.True(t, armed)
 	defer secondCleanup()
-	require.Less(t, time.Since(started), openAIWSSessionPreemptCloseGrace, "新连接不得等待旧客户端的关闭握手")
+	require.Less(t, time.Since(started), openAIWSSessionPreemptCloseGrace, "新连接不得等待旧客户端的关闭握手") // time-threshold: allow 上界就是被保护的 1s 关闭宽限本身；新连接不等关闭握手时正常耗时是毫秒级，余量约 1000 倍
 
 	select {
 	case <-firstCtx.Done():

@@ -100,7 +100,7 @@ func TestExecutorExecutionPolicyErrorsUseStableRuntimeCodeAtRealBoundary(t *test
 			t.Fatal(err)
 		}
 		defer release()
-		deadlineContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
+		deadlineContext, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond) // time-threshold: allow 被测对象是“并发等待遇截止时间的错误形态”；截止时间必须晚于执行器走到并发等待这一步（太早会在别处报错，错误形态就不是 execution policy 了），放大到 200ms
 		defer cancel()
 		_, err = executeSingleExecutorTestAttempt(deadlineContext, executor, freshExecutorInvocationRequest(t, request))
 		assertExecutionPolicyRuntimeError(t, err)
