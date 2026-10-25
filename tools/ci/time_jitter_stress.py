@@ -13,7 +13,7 @@
 
 怎么跑
 ======
-* Go 用例按（目录, 构建标签）分组，一次 ``go test -count=N -run '^(A|B|C)$' ./目录``，编译只付一次；
+* Go 用例按（目录, 构建标签）分组，每遍一个新测试进程 ``go test -count=1 -run '^(A|B|C)$' ./目录``（不用 -count=N：同进程重复会撞包级全局状态而误报），编译结果有缓存；
   带 ``integration`` 标签的需要 Docker，**跳过并在报告里列出**。
 * Python 用例逐个 ``python3 -B -m unittest 用例ID``，重复 N 遍。
 * 烧核进程用 ``nice`` 不降级（和被测用例同优先级，才能真正挤占），负载以 ``os.getloadavg()`` 记录开始与结束值；
@@ -150,21 +150,29 @@ class Burners:
 # ---------------------------------------------------------------------------
 
 
-def run_go_group(root: Path, directory: str, tags: str, names: list[str], repeat: int, timeout: int) -> dict[str, dict]:
+def run_go_group_once(root: Path, directory: str, tags: str, names: list[str], timeout: int) -> dict[str, dict]:
+    """一遍：``go test -count=1`` 起一个全新的测试进程。
+
+    不用 ``-count=N``：同一进程里重复跑会撞上包级全局状态（限流节流表、最短间隔登记等），第二遍起的失败是重复运行造成的
+    假象，不是负载抖动。每遍一个新进程，编译结果有缓存，只付一次。
+    """
+
     pattern = "^(" + "|".join(sorted(set(names))) + ")$"
-    command = ["go", "test", "-json", "-count", str(repeat), "-run", pattern, "-p", "1"]
+    command = ["go", "test", "-json", "-count", "1", "-run", pattern, "-p", "1"]
     if tags:
         command += [f"-tags={tags}"]
     command.append("./" + str(Path(directory).relative_to("backend")) if directory.startswith("backend/") else "./" + directory)
     workdir = root / "backend" if directory.startswith("backend/") else root
+    results: dict[str, dict] = {name: {"runs": 0, "failures": 0, "status": "未执行"} for name in names}
     try:
         completed = subprocess.run(command, cwd=workdir, text=True, capture_output=True, timeout=timeout, check=False)
-        output, build_failed = completed.stdout, False
-        if completed.returncode != 0 and not output.strip():
-            output, build_failed = completed.stderr, True
-    except subprocess.TimeoutExpired as error:
-        return {name: {"runs": 0, "failures": 0, "status": f"超时（{timeout} 秒）"} for name in names} | {"__error__": {"detail": str(error)[:200]}}
-    results: dict[str, dict] = {name: {"runs": 0, "failures": 0, "status": "未执行"} for name in names}
+    except subprocess.TimeoutExpired:
+        for name in names:
+            results[name]["status"] = f"超时（{timeout} 秒）"
+        return results
+    output, build_failed = completed.stdout, False
+    if completed.returncode != 0 and not output.strip():
+        output, build_failed = completed.stderr, True
     messages: dict[str, list[str]] = defaultdict(list)
     for line in output.splitlines():
         try:
@@ -189,10 +197,26 @@ def run_go_group(root: Path, directory: str, tags: str, names: list[str], repeat
             results[name]["status"] = "编译或启动失败：" + output.strip()[:200]
     for name, notes in messages.items():
         if results[name]["failures"]:
-            # 失败用例的输出里挑出带 FAIL／Error 的行，没有就取最后几行
             interesting = [line for line in notes if "FAIL" in line or "Error" in line or "_test.go" in line]
             results[name]["messages"] = (interesting or notes)[-6:]
     return results
+
+
+def run_go_group(root: Path, directory: str, tags: str, names: list[str], repeat: int, timeout: int) -> dict[str, dict]:
+    """重复 ``repeat`` 遍（每遍一个新进程）并合并计数。"""
+
+    merged: dict[str, dict] = {}
+    for _ in range(repeat):
+        for name, outcome in run_go_group_once(root, directory, tags, names, timeout).items():
+            total = merged.setdefault(name, {"runs": 0, "failures": 0, "status": outcome["status"]})
+            total["runs"] += outcome["runs"]
+            total["failures"] += outcome["failures"]
+            if outcome["status"] != "已执行":
+                total["status"] = outcome["status"]
+            if outcome.get("messages"):
+                total.setdefault("messages", []).extend(outcome["messages"])
+                total["messages"] = total["messages"][-6:]
+    return merged
 
 
 def run_python_case(root: Path, case: Case, repeat: int, timeout: int) -> dict:
