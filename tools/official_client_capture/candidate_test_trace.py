@@ -262,8 +262,10 @@ FROZEN_MAPPING_SHA256 = (
 # 验收契约 706df763… 不变（approval-revision 第一类判据要求契约逐字相同）。
 # 2026-10-23（0.163.0 收尾，同日第二次）：指南第二部分按 0.163.0 改写，第二章摘要由 476f9d55… 变为 b6fa9dcc…，期望清单的
 # source_spec_sha256 随之重绑，摘要由 c66552c6… 换为 a8b0ed45…；载荷除该一行外逐字不变。
+# 2026-10-25（第 19 项，指南源码引用换到 0.163.0）：指南第二部分按 0.163.0 复核改写，第二章摘要由 b6fa9dcc… 变为 ee92ff27…，期望清单的
+# source_spec_sha256 随之重绑，摘要由 a8b0ed45… 换为 b9ce3322…；载荷除该一行外逐字不变。
 FROZEN_PROFILE_SHA256 = (
-    "a8b0ed45c63eb89a99363f6749182ed2b6b167907a96188153d71ffc79e1df51"
+    "b9ce3322a089f261ef3c5534a00bddb35b05af72136ead02155de913339a195f"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

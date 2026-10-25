@@ -83,8 +83,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # selector 与验收判据载荷逐字不变（diff 仅该一行）。
 # 2026-10-23（0.163.0 收尾）：指南第二部分按 0.163.0 改写，第二章摘要由 476f9d55… 变为 b6fa9dcc…，十四份场景／期望清单的
 # source_spec 摘要随之重绑；0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
+# 2026-10-25（第 19 项，指南源码引用换到 0.163.0）：指南第二部分的源码字段与相关说明按 0.163.0 复核改写，第二章摘要由 b6fa9dcc… 变为
+# ee92ff27…，十四份场景／期望清单的 source_spec 摘要随之重绑；0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "1e5019184764592ddbb9606a89cad30b8884e4c1a0f469e1e647bde11a68ca6c"
+    "b6eda2977dcc295f1442dd8c8408f95ec7cb569119d710f1f833ce007ff9be1e"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
