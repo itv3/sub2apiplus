@@ -23,7 +23,7 @@ class SpecRefGateTests(unittest.TestCase):
 
     指南改写源码字段后要同步这里的目标文字，否则 replace_once 先失败，负例根本没有执行。
     源码树默认取仓库内 local-analysis；隔离工作树可用与 Makefile 同名的环境变量
-    CODEX_0_149_1_SOURCE_ROOT 指向另一处只读 0.149.1 源码树。
+    CODEX_SPEC_SOURCE_ROOT 指向另一处只读 0.163.0 源码树（旧名 CODEX_0_149_1_SOURCE_ROOT 过渡期仍认）。
     """
 
     @classmethod
@@ -52,7 +52,9 @@ class SpecRefGateTests(unittest.TestCase):
             ]
             if dependency_manifest is not None:
                 command.extend(["--dependency-manifest", str(dependency_manifest)])
-            source_root = os.environ.get("CODEX_0_149_1_SOURCE_ROOT")
+            source_root = os.environ.get("CODEX_SPEC_SOURCE_ROOT") or os.environ.get(
+                "CODEX_0_149_1_SOURCE_ROOT"
+            )
             if source_root:
                 command.extend([
                     "--source-root",
@@ -86,37 +88,37 @@ class SpecRefGateTests(unittest.TestCase):
 
     def test_wrong_line_fails_rule_anchor(self) -> None:
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:929`。",
-            "- **源码**：[L1] `codex-api/src/common.rs:260`、`core/src/client.rs:929`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:289`、`core/src/client.rs:1076`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:290`、`core/src/client.rs:1076`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "SPEC-BODY-005 的源码引用与锚点清单不一致")
 
     def test_bare_filename_ambiguity_fails(self) -> None:
-        # SPEC-PROTO-002 的源码字段；client.rs 在 0.149.1 源码树中有多个同名文件。
+        # SPEC-PROTO-002 的源码字段；client.rs 在 0.163.0 源码树中有多个同名文件。
         mutated = self.replace_once(
-            "`core/src/client.rs:524`、`core/src/client.rs:955`",
-            "`client.rs:524`、`core/src/client.rs:955`",
+            "`core/src/client.rs:719`、`core/src/client.rs:1106`",
+            "`client.rs:719`、`core/src/client.rs:1106`",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "裸文件名有")
         self.assert_failed_with(result, "个候选")
 
     def test_cfg_test_reference_fails(self) -> None:
-        # 0.149.1 的 responses_websocket.rs 在第 908-1227 行是 #[cfg(test)] 模块，第 920 行落在其中。
+        # 0.163.0 的 responses_websocket.rs 在第 1034-1421 行是 #[cfg(test)] 模块，第 1100 行落在其中。
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:929`。",
-            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:920`、`core/src/client.rs:929`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:289`、`core/src/client.rs:1076`。",
+            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:1100`、`core/src/client.rs:1076`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "测试代码引用")
-        self.assert_failed_with(result, "responses_websocket.rs:920")
+        self.assert_failed_with(result, "responses_websocket.rs:1100")
 
     def test_l2_without_exact_line_fails(self) -> None:
         mutated = self.replace_once(
-            "- **源码**：[L2] `tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs:1572-1578`\n"
+            "- **源码**：[L2] `tools/spec_source_deps/hyper-1.11.1/src/proto/h1/role.rs:1608-1614`\n"
             "  的 `write_headers` 默认分支；官方未启用保留大小写选项。",
-            "- **源码**：[L2] hyper 1.8.1 的 `write_headers` 默认分支；"
+            "- **源码**：[L2] hyper 1.11.1 的 `write_headers` 默认分支；"
             "官方未启用保留大小写选项。",
         )
         result = self.run_gate(mutated)
@@ -127,7 +129,7 @@ class SpecRefGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="spec-dependency-gate-") as temp_dir:
             copied = pathlib.Path(temp_dir) / "spec_source_deps"
             shutil.copytree(DEPENDENCIES, copied)
-            source = copied / "hyper-1.8.1" / "src" / "proto" / "h1" / "role.rs"
+            source = copied / "hyper-1.11.1" / "src" / "proto" / "h1" / "role.rs"
             source.write_text(
                 source.read_text(encoding="utf-8") + "\n// 篡改测试\n",
                 encoding="utf-8",

@@ -11,9 +11,9 @@ python3 tools/check_spec_refs.py --symbol --cfg-test
 
 python3 tools/check_spec_refs.py \
   --spec docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md \
-  --source-root local-analysis/sources/codex-cli-0.149.1 \
-  --source-version 0.149.1 \
-  --cargo-lock local-analysis/sources/codex-cli-0.149.1/codex-rs/Cargo.lock \
+  --source-root local-analysis/sources/codex-cli-0.163.0 \
+  --source-version 0.163.0 \
+  --cargo-lock local-analysis/sources/codex-cli-0.163.0/codex-rs/Cargo.lock \
   --anchor-manifest tools/spec_ref_anchors.json \
   --dependency-manifest tools/spec_source_deps/manifest.json \
   --symbol --cfg-test

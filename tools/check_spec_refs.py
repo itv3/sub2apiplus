@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -19,8 +20,25 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 DEFAULT_ANCHOR_MANIFEST = ROOT / "tools" / "spec_ref_anchors.json"
 DEFAULT_DEPENDENCY_MANIFEST = ROOT / "tools" / "spec_source_deps" / "manifest.json"
-CODEX_SOURCE_ROOT = ROOT / "local-analysis" / "sources" / "codex-cli-0.149.1"
-CODEX_SOURCE_VERSION = "0.149.1"
+# 换版时只需改这个版本号（并重建 tools/spec_ref_anchors.json、tools/spec_source_deps/manifest.json）。
+CODEX_SOURCE_VERSION = "0.163.0"
+
+
+def _default_source_root() -> pathlib.Path:
+    """默认的只读 Codex 源码根：环境变量优先，否则取仓库内 local-analysis 下与版本同名的目录。
+
+    CODEX_SPEC_SOURCE_ROOT 是与版本无关的名字（Makefile、测试同名）；旧名 CODEX_0_149_1_SOURCE_ROOT
+    在过渡期仍然认，等驱动与 entry_gates 改名后再删除。
+    """
+
+    for name in ("CODEX_SPEC_SOURCE_ROOT", "CODEX_0_149_1_SOURCE_ROOT"):
+        value = os.environ.get(name)
+        if value:
+            return pathlib.Path(value)
+    return ROOT / "local-analysis" / "sources" / f"codex-cli-{CODEX_SOURCE_VERSION}"
+
+
+CODEX_SOURCE_ROOT = _default_source_root()
 DEPENDENCY_SOURCE_ROOT = ROOT / "tools" / "spec_source_deps"
 SEARCH_ROOTS = [CODEX_SOURCE_ROOT, ROOT / "backend", DEPENDENCY_SOURCE_ROOT]
 
@@ -32,7 +50,7 @@ SOURCE_FIELD_RE = re.compile(
     re.M | re.S,
 )
 
-# 这些 Go 标准库或外部模块引用不属于 Codex 0.149.1 与已固化的 Rust 依赖。
+# 这些 Go 标准库或外部模块引用不属于 Codex 源码树（CODEX_SOURCE_VERSION）与已固化的 Rust 依赖。
 EXTERNAL_PREFIXES = (
     "x/net/",
     "internal/httpcommon/",

@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
-  "cargo_lock": "local-analysis/sources/codex-cli-0.149.1/codex-rs/Cargo.lock",
+  "cargo_lock": "local-analysis/sources/codex-cli-0.163.0/codex-rs/Cargo.lock",
   "dependencies": [
     {
       "name": "hyper",
-      "version": "1.8.1",
+      "version": "1.11.1",
       "upstream": "https://github.com/hyperium/hyper",
-      "commit": "166c6cacc74b215674937e782b3ab2cbd8b69883",
+      "commit": "6371cd425017155f7fbecef0e57b218edbe6a93a",
       "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
-      "lock_checksum": "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11",
+      "lock_checksum": "27b501faa50e7a26c3d3560ca625132f4078a17771f4810baf70475ae48cbe43",
       "files": {
-        "hyper-1.8.1/Cargo.toml": "8ef7ebe4b1d923d9764f8004e72198059ce123261164be77de7378df1704d406",
-        "hyper-1.8.1/LICENSE": "8f2eee700f56dd8b381d92dc5b136befe09f90e186f2c1c8414a70c4c7534550",
-        "hyper-1.8.1/src/proto/h1/role.rs": "210ad28ef2e3c35f2268e3dac979e519c02193b4ba6f895de86442b26b802fad",
-        "hyper-1.8.1/src/proto/h2/client.rs": "5fa59359de28a055ab7e05c79f8046394602aeeb4427c5af48b3acec8e438202"
+        "hyper-1.11.1/Cargo.toml": "2dc09a6ffbb995c75837fd0e2bcf0bf08e81f1f4623f97ac740698b6a7759013",
+        "hyper-1.11.1/LICENSE": "2d01890414494742ba4a509fcec8efa40f6d8be22cbd72be7cff08d6fda4ec89",
+        "hyper-1.11.1/src/proto/h1/role.rs": "4741a413b947a72da0f58a2ef73bc9b209e1dfebe1a110e6ed5752745db93b07",
+        "hyper-1.11.1/src/proto/h2/client.rs": "56d715d09cdeddb91606dd0a9cfaa3de360ef31c07179ab9df6d24d9da0868af"
       }
     },
     {
@@ -45,17 +45,17 @@
     },
     {
       "name": "h2",
-      "version": "0.4.16",
+      "version": "0.4.19",
       "upstream": "https://github.com/hyperium/h2",
-      "commit": "b84b96cdcb15fb5190c151aaf7273c7986e22976",
+      "commit": "d57d1b852fec9dda6d42d3454502006d52104da8",
       "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
-      "lock_checksum": "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27",
+      "lock_checksum": "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16",
       "files": {
-        "h2-0.4.16/Cargo.toml": "da03a1b0bf2ace0356d5edc4b11c55897dc10909fbbaf764f0472121ac3318d8",
-        "h2-0.4.16/LICENSE": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
-        "h2-0.4.16/src/frame/headers.rs": "a7630564280006b29488c2fb399d52a70d8d7ccc6d1276fd291410b329d038c5",
-        "h2-0.4.16/src/frame/settings.rs": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
-        "h2-0.4.16/src/hpack/encoder.rs": "b41373f9fe02022a30e669a780c97399af964d338dc671ec12a79592157b5a46"
+        "h2-0.4.19/Cargo.toml": "33a920942741aae5d0e746f64fde6acfbeba037c9bb0da436063c728193b0a8f",
+        "h2-0.4.19/LICENSE": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
+        "h2-0.4.19/src/frame/headers.rs": "a7630564280006b29488c2fb399d52a70d8d7ccc6d1276fd291410b329d038c5",
+        "h2-0.4.19/src/frame/settings.rs": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
+        "h2-0.4.19/src/hpack/encoder.rs": "85b02c0eaa35c353857f2d53fc49c4da059ae60edb0812e75342196202f10f21"
       }
     },
     {
