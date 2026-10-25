@@ -409,274 +409,231 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 
 ## 5.2 合并 Sub2API 上游更新
 
-上游更新与官方客户端换版必须分开。七个阶段的目的都保留；源码修复在同一 Plan 追加 revision，可确定的
-重复执行交给工具。上游合并不得改变客户端目标版本，也不得冒充生产部署；需要上线时继续 §5.6。三条总则：
+上游更新与官方客户端换版必须分开。上游合并不得改变客户端目标版本，也不得冒充生产部署。已知的阻断必须先处置，
+不得带进下一步，更不得靠重跑全量试错。三条总则：
 
 1. 合并期间不得修改 §5.2.4 第 3 条定义的工具闭集，也不得新增或修改流程规则。流程与工具的修复，以及基线
    暴露的历史证据漂移和扫描器分类缺口，一律在 `plan-create` 之前提交到主仓库并重新封存基线，不得在候选
-   分支上完成。
+   分支上完成。闭集任一字节变化，进行中的 Plan 必须停线，按本条修复、重新预检后新建 Plan。
 2. 冻结摘要台账的 successor 只在最终 revision 由工具一次性生成，中间 revision 禁止生成，也禁止逐套人工
    登记（§5.2.4 第 2 条）。
-3. U-4 的出口只有 §5.2.3 决策表里的三条；无论走哪条，候选分支上的提交、受维护分支的快进、远端推送
-   和生产部署都只能由受管工具按阶段执行，人工不得插手。CI 结果不能代替 U-4 收据。
+3. U-4 的出口只有 §5.2.3 “U-4 出口”表里的三条。候选分支上的提交、受维护分支的快进、临时 CI 分支的推送，
+   只能由受管工具按阶段执行，人工不得插手；`apply` 只快进、不推送，受维护分支的远端推送和生产部署不属于
+   U-0～U-6，在 U-6 收据齐全后按 §5.6 另行执行。CI 结果不能代替 U-4 收据。
 
-上游合并的本机私有资料推荐统一放在 `<主仓库>/local-analysis/upstream/`，每次 Plan 使用
-`<tag>-<yyyymmdd>-<三位序号>/`，其下 `inputs/`、`evidence/` 与 `worktree/` 分开存放；基线和预检报告
-也可放在该私有根内。工具仍支持仓库外目录，仓库内仅开放这一处，且必须整体被 Git 忽略、无已跟踪文件；
-`/local-analysis/` 同时从 Docker 构建上下文排除。路径按实际解析位置校验，worktree 与 evidence 不得嵌套。
-迁移历史资料时保留原始文件与摘要，登记旧、新容器根和逐文件校验结果；新资料使用真实新路径。
-旧容器根可保留供历史绑定读取的兼容入口，入口本身不作为新 evidence 根，也不复制或改写封存证据。
+本机私有资料推荐放在 `<主仓库>/local-analysis/upstream/<tag>-<yyyymmdd>-<三位序号>/`，其下 `inputs/`、`evidence/`、
+`worktree/` 分开存放（worktree 与 evidence 不得嵌套）。该根必须整体被 Git 忽略、无已跟踪文件，并从 Docker 构建上下文
+排除；工具仍支持仓库外目录，仓库内只开放这一处。历史资料迁入时保留原始文件与摘要；旧容器根只留作历史绑定的只读
+兼容入口，不作为新 evidence 根，也不复制或改写封存证据。
+
+### 流程总表
+
+下表是从开工到 U-6 的唯一顺序，上一步通过才进入下一步。命令参数以 `python3 -m tools.upstream_merge <子命令>
+--help` 为准，各步细则见后文。`gates-run` 与 `make upstream-gate-fast` 耗时长，脱离会话运行。
+
+| 步 | 阶段 | 命令 | 通过条件 | 失败去向 |
+|---|---|---|---|---|
+| 1 | 开工检查 | `start-check`（联网只读，已含基线 `toolchain-check`） | `result=ready` | `blocked`（退出码 5）：在主干处置后重跑 |
+| 2 | 基线封存 | 跑基线两组检查并写输入草稿 → `baseline-seal`；`baseline-validate` 可提前核对 | 功能门禁全过；证据门禁只有登记过来源的 `known_drift`（§5.2.1） | 功能失败一律阻断；问题按总则 1 在主干修复后重新封存 |
+| 3 | 输入准备 | `request-render` | 渲染成功（`plan-create` 之后不得重渲染） | 拒绝（退出码 2）：缺陷按总则 1 修复后重渲染 |
+| 4 | 预检 | `preflight`；有未登记发送点时 `sink-registration-draft` | `report` 七项无阻断，冲突本身不算（§5.2.2） | 阻断项在 `plan-create` 前于主干处置；主干提交使 HEAD 变化，回到第 2 步重封基线，再重渲染、重预检 |
+| 5 | 试验区（冲突解决先在试验 worktree 做时） | `targeted-regression-plan` → `make upstream-gate-fast UPSTREAM_GATE_TARGETED=<清单>` | `FAST-RESULT` 为 `passed` 或 `passed_pending_ledger` | `failed`：试验区修复后重跑；`passed_with_gaps`：补足验证并在汇报里写明之前不建 Plan |
+| 6 | U-0 冻结目标、计划、预算和证据目录 | `plan-create` | 基线复核通过，创建唯一的权威 Plan | 拒绝：按原因处理；Plan 作废超过一次停线复盘 |
+| 7 | U-1 解决冲突，形成可重放的双父 merge commit | `merge-start` →（试验区结果：`plan-replay`）→ `merge-seal` | 冲突台账与双父 merge commit 封存 | 停在人工输入（退出码 4）：补取舍理由后续跑；重放被拒则重做试验区或人工处置 |
+| 8 | U-2 闭合 Codex／Claude 入口、出站发送面和 Inventory | 首轮 `source-seal` → `surface-scan` →（零差异时 `inventory-carry-forward`）→ `surface-seal`；之后每个 revision 用 `revision-advance` | 发送面闭集封存，Inventory 绑定当前 revision | 发送面差异变化时停在人工输入；源码缺陷在同一 Plan 追加 revision 修复 |
+| 9 | U-3 形成文件与调用边的影响闭集 | 首轮 `impact-generate` → `impact-suggest` → `impact-seal`；之后同上；每轮进 U-4 前 `revision-preflight` | 逐文件与调用边都有处置，无未决项 | 未决项 fail-close，补完续跑 |
+| 10 | 台账 revision | 全部源码 revision 完成后：`freeze-successor-generate` 与 `source-transition`，收据单独提交，再追加为新 revision | 冻结台账闭合（第 11 步启动前由定向冻结检查确认） | 见“U-4 出口” |
+| 11 | U-4 证明候选树满足全部必要门禁 | `gates-run`；监视 `gates-status`；失败后 `failure-disposition`；本机无 Docker 时 `ci-push` → `gates-import-ci` | `U4-RESULT` 为 `passed`：12 类门禁、3 个物理执行组，`skipped_gate_count` 为 0 | 见“U-4 出口” |
+| 12 | U-5 封存 candidate、Campaign 和回退处置 | `disposition-draft` → `identity-seal` → `disposition-seal` | CandidateDisposition 闭合 | 拒绝：按原因补齐收据 |
+| 13 | U-6 快进受维护分支并能独立重放 | `apply` → `finalize` → `replay`；之后 `ci-cleanup` | ff-only 快进到 SourceCandidate；`finalize`／`replay` 收据齐全 | 受维护分支被第三方推进：见 §5.2.3“受维护分支在合并期间被第三方推进” |
+
+退出码（`python3 -m tools.upstream_merge`）：0 成功；2 工具拒绝；3 系统错误（时间账本写入失败时，成功的命令也按此返回）；
+4 停在人工输入；5 `start-check`、`toolchain-check`、`candidate-secret-scan`、`gates-run`、`gates-status` 的结论为 `blocked`；
+6 `gates-status` 读到未结束的 attempt。4、5、6 都照常输出结果。`gates-run` 结论为 `awaiting_ci` 时退出码是 0，但 U-5 仍拒绝，
+须继续补齐 CI 证据；`preflight` 等其余命令成功即 0，结论读输出里的 `result`。监视一律读结论（`U4-RESULT`、`FAST-RESULT`、
+报告的 `result`），不能只看退出码或进度行。快线脚本的退出码是独立的一套，见 §5.2.2。
 
 ### 5.2.1 升级前基线验收（权威）
 
-基线验收回答“升级前这棵树的功能事实和证据事实分别是什么”。它在主仓库干净工作树上执行，收据写入
-仓库外或上述 Git 忽略目录内的私有 evidence，绑定当前 `HEAD`、tree 和 tool bundle 摘要。合并前在干净 `HEAD` 上封存；
-`HEAD`、tree 或工具闭集变化（含发版回写与合并前的准备提交）后必须重新封存。基线暴露的问题按总则 1 处理。
-
-基线检查拆成两组：
+基线验收回答“升级前这棵树的功能事实和证据事实分别是什么”。它在主仓库干净工作树上执行，收据不可覆盖，写入仓库外
+或 Git 忽略的私有 evidence，绑定当前 `HEAD`、tree 和 tool bundle 摘要。`HEAD`、tree 或工具闭集变化（含发版回写与合并
+前的准备提交）后必须重新封存；基线暴露的问题按总则 1 处理。基线输入草稿只读，收据不得手改。
 
 | 组别 | 内容 | 失败处理 |
 |---|---|---|
 | 功能门禁 | `go build`、`go vet`、lint、普通业务测试、官方 egress 关键回归 | 任一失败都阻断；禁止登记为 known drift |
 | 证据门禁 | frozen/transition/receipt 摘要、历史台账和可复算性检查 | 只有明确属于历史收据的摘要漂移，且有前后摘要、来源收据和原因，才可登记为 known drift |
 
-`known_drift` 只表示“该条历史证据不能按当前摘要直接复算”，不表示功能通过。后续差异比较使用以下
-闭集规则：候选功能失败始终阻断；候选证据失败只有在其唯一 `failure_id` 已被基线 `known_drift` 明确
-覆盖时才记为继承漂移；其余失败按候选新增失败处理，必须先归因和修复。
+`known_drift` 只表示“该条历史证据不能按当前摘要直接复算”，不表示功能通过。差异比较的闭集规则：候选功能失败始终
+阻断；候选证据失败只有其唯一 `failure_id` 已被基线 `known_drift` 明确覆盖才记为继承漂移；其余按候选新增失败处理，
+必须先归因和修复。`plan-create` 自动复核基线（干净工作树、`HEAD` 与 tree、工具闭集摘要、功能门禁全部通过），并要求
+它绑定计划的 fork HEAD/tree，不通过即拒绝建 Plan。
 
-先准备只读的基线输入草稿（不得手改收据），再执行 `baseline-seal`，收据不可覆盖写入；参数以 `--help`
-为准，本节只规定语义与失败处理。`request-render` 把基线收据写进请求；`plan-create` 自动复核基线（干净
-工作树、`HEAD` 与 tree、工具闭集摘要、功能门禁全部通过），并要求它绑定计划的 fork HEAD/tree，不通过即
-拒绝建 Plan；`baseline-validate` 只用于提前单独核对。
+### 5.2.2 开工检查、预检与试验区（非权威）
 
-### 5.2.2 计划外预检（非权威）
+本节的产物都是非权威的：不是 U-0 收据，也不替代 U-4。
 
-正式 `plan-create` 前先做开工检查，再运行一次离线预检，顺序是“开工检查 → 基线封存 → 输入准备 → 预检 → U-0”。
+**开工检查**（`start-check`）：联网查询只放在这里，预检保持离线；所有查询只读（不 fetch、不 push）。要求主仓库工作树
+干净、在受维护分支上，HEAD 就是 origin 上该分支的当前提交；`backend-ci.yml` 在 HEAD 上最新一次运行已完成且成功，必需
+作业齐全且逐个成功（状态缺失或仍在运行都不算通过）；基线工具链与主干声明一致。报告绑定 HEAD 的提交与 tree。
 
-开工检查由 `start-check` 执行，联网查询只放在这里，预检保持离线，所有查询只读（不 fetch、不 push）：
+**工具链核对**（`toolchain-check`，开工检查已含 `--role baseline`）：期望值取该树自己的声明（`backend/go.mod`、CI 的 Go
+校验版本、`GOLANGCI_LINT_VERSION`），实际值取本机在 `backend/` 下真正会用到的 Go 与 lint（lint 可由
+`UPSTREAM_GATE_GOLANGCI_LINT` 指定绝对路径，门禁的 lint 步骤用同一份）。版本不等，或 lint 的编译 Go 主次版本低于期望
+Go，都阻断。基线用主干声明的版本，不得沿用升级后的全局工具；候选在试验区快线开头和 `gates-run` 启动前，按候选树自己的
+声明再核对一次。
 
-- 主仓库工作树干净、在受维护分支上，且 HEAD 就是 origin 上该分支的当前提交（HEAD 没推上去，CI 结果就无从谈起）。
-- `backend-ci.yml` 在 HEAD 上最新一次运行（push 或 `workflow_dispatch` 事件；发版回写提交由令牌推送、不触发 push，
-  只有后者）已完成且成功，必需作业齐全且逐个成功。报告记录 HEAD 提交与 tree、run id 与 attempt、各作业结论与
-  完成时间；状态缺失或仍在运行都不算通过。Security Scan 只作信息记录，不作硬前置。
-- 基线工具链核对（`toolchain-check --role baseline`，也可单独运行）：期望值取主干自己的声明——`backend/go.mod`
-  的 `go`／`toolchain` 指令、CI 的 Go 校验版本、`GOLANGCI_LINT_VERSION`；实际值取 `backend/` 下的 `go env
-  GOVERSION`（遵循当前 `GOTOOLCHAIN`）与 lint 二进制（PATH 里的 `golangci-lint`，或 `UPSTREAM_GATE_GOLANGCI_LINT`
-  指定的绝对路径，门禁的 lint 步骤用同一份）。Go 或 lint 版本不等、lint 的编译 Go 主次版本低于期望 Go 都阻断，
-  输出期望值、实际值、不匹配项与修正提示。基线用主干声明的版本，不得沿用升级后的全局工具；候选在 `gates-run`
-  启动前按候选树自己的声明再核对一次。
-- CI 的 lint 版本只有一个来源：`GOLANGCI_LINT_VERSION` 在 golangci-lint 作业的 env 里恰好定义一次，默认、unit、
-  integration 三个 lint 步骤都引用它，标签恰为这三种，CI 的 Go 校验版本与 `backend/go.mod` 一致，由
-  `test-upstream-merge-tools` 的用例守护。上游改 lint 版本时，合并解决冲突改的是 `GOLANGCI_LINT_VERSION` 这一行。
+**输入准备**：request 一律由 `request-render` 从标准模板生成，不手写，并写出绑定当前 HEAD 的运行态与回退点。门禁里的
+`{repository}` 执行时指向候选 worktree，只用于检查候选本身。候选 worktree 按锁文件装好前端依赖、版本与 CI 一致，
+`gates-run` 核对不一致即拒绝开跑；`replay --rerun-gates` 的临时执行树由工具离线安装，装不上即停。
 
-输入准备：
-
-- request 一律由 `request-render` 从标准模板生成：Active/Rollback 路径与版本取自当前 release catalog（Codex
-  以发布图的 active／previous 节点为准），covered_tags 由 Git 复算，只读源码根渲染为主仓库路径，并写出绑定
-  当前 HEAD 的运行态与回退点；`plan-create` 之后不得重渲染。门禁里的 `{repository}` 执行时指向候选
-  worktree，只用于检查候选本身。
-- 候选 worktree 按锁文件装好前端依赖、版本与 CI 一致，`gates-run` 核对不一致即拒绝开跑；`replay
-  --rerun-gates` 的临时执行树由工具离线安装，装不上即停。
-- 冲突解决与源码适配先在试验 worktree 完成、再由正式 Plan 机械重放时，试验 worktree 定型（已提交、树干净）后、
-  `plan-create` 前走快线，不再跑与 U-4 相同的全量：先在 Plan 之外运行 `targeted-regression-plan`（`--repository`
-  试验树、`--fork` 主干提交、`--upstream` 上游 tag，离线）生成定向回归清单，再执行
-  `make upstream-gate-fast UPSTREAM_GATE_TARGETED=<清单>`。快线检查线按实测耗时由短到长：候选 `toolchain-check`、
-  `candidate-secret-scan`（规则与精确摘要白名单就是 request 里 U-4 的那份 `secret_scan` 门禁，`UPSTREAM_GATE_REQUEST`
-  指向 request 或标准模板）——试验区在任何全量或快线的重检查之前都要先过这两项——然后是三种标签的 lint、前端检查、清单里
-  的定向回归，最后是出站规格（试验区没有台账时冻结测试失败，约 17 分钟，最长）。快线跳过采集工具线和整套 go test
-  （v0.2.17 试验区这两条线共 48 分钟，查出的失败全是冻结摘要类，没有一条功能问题），功能问题由定向回归发现、正式 U-4
-  全量兜底。
-- 定向回归清单按冲突文件（两侧都改过）、实际修改（候选相对 fork 与相对上游都不同）和调用依赖列出，每一项写明选择理由，
-  不需要测试的文件写明理由：
-  - Go：涉及文件所在的包、直接导入它们的包（必选），再沿反向依赖扩到模块内的传递导入者，按距离由近到远在耗时预算内
-    尽量纳入；放不下的传递导入者在清单与快线输出里明确列为“传递导入者未纳入（预算），由正式 U-4 兜底”，不静默丢弃。
-    只有上游单侧改动且与上游相同的文件不算实际修改，其 Go 包仍按依赖规则纳入。默认与 unit 标签各一组 `go test`，出站规格线
-    已跑过的包不重复，integration 标签交给 U-4／CI。覆盖说不清（`go`／`toolchain` 指令或 go.sum 单独变化、归不了类的
-    `backend` 文件、必选部分估算超预算）就退回全量 go test。
-  - 前端：按 import 依赖图选出引用改动文件的用例（`vitest related` 在本仓库遍历 .vue 文件时崩溃，不可用）。局限：只对
-    冲突文件与实际修改选用例，上游单侧改动且与上游相同的前端文件不选（与 Go 不对称），这类文件由 lint、typecheck、
-    关键用例覆盖，U-4 与 CI 的前端线同样只有这三项；清单与输出写明数量。
-  - `deploy/` 改动执行 CI shell 作业里的部署脚本检查，其中真正调用 docker 的在本机没有 Docker 时记未执行，由 U-4／CI 补齐。
-  - 归不了类的文件列入 `unresolved`，要求补足验证。
-- 快线把冻结摘要类失败与功能失败分开归因，归因不清的一律按功能失败。冻结摘要类（试验区尚未生成台账，冻结测试本来就红）
-  只认显式白名单：失败信息指向的测试源文件与失败信息标记同时登记在 `frozen_test_sources.py` 里才算，登记的只是那些
-  “只把台账登记摘要与仓库文件当前摘要比对”的测试（逐个读过源码，用例守卫重新核对）；用例名或信息里带“漂移”“Frozen”
-  不构成证据。误判为冻结类必须不可能，冻结类被误判为功能失败可以接受。
-- 快线结论四种，优先级 failed > passed_with_gaps > passed_pending_ledger > passed：
-  - `failed`（退出码 1）：有功能失败，不得建正式 Plan；
-  - `passed_with_gaps`（退出码 3）：没有功能失败，但清单有 `unresolved`，输出逐项列出须补足的验证，补足并在汇报里写明之前
-    不要建 Plan；
-  - `passed_pending_ledger`：失败项只有冻结摘要类，记“待台账闭合”，不阻断，可建 Plan，台账在正式 Plan 的最终 revision 由
-    工具一次性生成（§5.2.4 第 2 条）；
-  - `passed`：全部通过。
-  `make` 会把配方的非 0 退出码统一成 2，所以监视读输出末尾固定的 `FAST-RESULT` 一行或状态文件的 `result`，不能只看退出码。
-  快线记录用独立 schema，不是 U-4 收据，工具读 U-4 收据时拒绝它；正式 U-4 保留完整的 12 类门禁，不因快线通过而缺项。
-  对比耗时用的全量状态文件由 `UPSTREAM_GATE_COMPARE_WITH` 给出，记录其 sha256；全量状态文件不带候选提交号时标明
-  “候选身份未经机器核对”。
-
-预检报告写到仓库外或上述 Git 忽略的私有目录。预检在临时隔离 worktree 中试合并，试合并无冲突时再执行 egressscan 快照、
-`go build`、`go vet` 与官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描），
-先离线 `go mod tidy` 修正拼合后的 `backend/go.mod`（失败如实记入报告），再运行 `make egress-scanner-check`。
-预检不修改受版本控制的源码、不 fetch、不 push、不产生权威阶段制品，报告中
-`non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含七项，任何一项被跳过或失败都标为阻断；
-七项都不依赖试合并结果，因冲突而 blocked 时照常输出：
+**预检**（`preflight`）：离线，报告写到仓库外或 Git 忽略的私有目录。它在临时隔离 worktree 中试合并，另建一棵 `-X ours`
+试扫描树（冲突块取 fork 侧，只供扫描）判断发送点登记；不修改受版本控制的源码、不 fetch、不 push、不产生权威阶段制品，
+报告中 `non_authoritative` 必须为 `true`。`report` 固定包含七项，任何一项被跳过或失败都标为阻断；七项都不依赖试合并
+结果，因冲突而 blocked 时照常输出：
 
 | 项 | 内容 |
 |---|---|
 | 冲突闭集 | 冲突文件数与路径、上游变化文件总数，供建 Plan 前评估；正式冲突由 U-1 按实际合并重新登记 |
 | 模板有效性 | 与标准模板比对 schema 版本、门禁定义、执行组模式、Persona，以及 Active/Rollback 在当前 release catalog 中的绑定 |
 | 闭集受扰清单 | 上游对 §5.2.4 第 3 条闭集文件的改动，U-1 前决定处置 |
-| 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作；命中 Campaign fact map 规则的文件，在 `plan-create` 前把上游 diff 一次汇总给老板确认，确认后按注册表规则处理，不等到台账阶段才停下 |
-| 扫描器覆盖 | 上游新增、尚未在主干预先登记的发送点（含缺分类规则的），须在 `plan-create` 前预先登记并重封基线；报告旁附可直接应用的登记补丁，改说明文字只改 notes 后重新生成，不在应用后手改；范围内发送点须人工登记，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树的发送点差异 |
+| 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作；命中 Campaign fact map 规则的文件，在 `plan-create` 前把上游 diff 一次汇总给老板确认，确认后按注册表规则处理 |
+| 扫描器覆盖 | 上游新增、尚未在主干预先登记的发送点（含缺分类规则的），须在 `plan-create` 前预先登记并重封基线；补丁由 `sink-registration-draft` 写出，改说明文字只改 notes 后重新生成，不在应用后手改。范围内发送点须人工登记，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增预检看不到，由试验区快线的出站规格线与 U-2 `surface-scan` 兜底 |
 | CI 作业覆盖 | 上游新增、删除或改动的 CI 作业逐个对照 `tools/upstream_merge/ci_job_coverage.json`：纳入本机检查线或登记为只在 CI 跑；候选 CI 会运行却未登记的作业（含 fork 自身的）阻断；只在 CI 跑的作业在试验 worktree 先执行一次 |
-| 主干密钥扫描 | 在受维护分支 HEAD 的只读检出上执行 request 中与 U-4 同一份 `secret_scan` 门禁（含精确摘要白名单）；命中须在 `plan-create` 前于主干处置并重封基线，不留到 U-4 才暴露 |
+| 主干密钥扫描 | 在受维护分支 HEAD 的只读检出上执行 request 中与 U-4 同一份 `secret_scan` 门禁（含精确摘要白名单）；命中须在 `plan-create` 前于主干处置并重封基线 |
 
 预检通过后仍必须重新执行 U-0，不能把预检报告当作 U-0 收据。
 
-### 5.2.3 七阶段及增量执行合同
+**试验区快线**：冲突解决与源码适配先在试验 worktree 完成、再由正式 Plan 机械重放时，试验 worktree 定型（已提交、树干净）
+后、`plan-create` 前走快线，不跑与 U-4 相同的全量。先在 Plan 之外运行 `targeted-regression-plan`（离线）生成定向回归清单，
+再执行 `make upstream-gate-fast UPSTREAM_GATE_TARGETED=<清单>`。快线按耗时由短到长执行各检查线（顺序以 `fast_lane.py` 为准），
+开头先跑候选 `toolchain-check` 与 `candidate-secret-scan`（与 U-4 同一份 `secret_scan` 门禁，`UPSTREAM_GATE_REQUEST` 指向
+request 或标准模板），最后核对候选树仍干净。它跳过采集工具线和整套 go test：这两条线在试验区只会报冻结摘要类失败，
+功能问题由定向回归发现，正式 U-4 全量兜底。
 
-| 阶段 | 必要目的 | 执行合同 |
+清单按冲突文件（两侧都改过）、实际修改（候选相对 fork 与相对上游都不同）和调用依赖列出，每一项写明选择理由，不需要
+测试的文件写明理由。边界如下：Go 的传递导入者在耗时预算内尽量纳入，放不下的在清单与快线输出里明确列为“传递导入者未纳入
+（预算），由正式 U-4 兜底”，不静默丢弃；覆盖说不清（`go`／`toolchain` 指令或 go.sum 单独变化、归不了类的 `backend` 文件、
+必选部分估算超预算）就退回全量 go test；integration 标签交给 U-4／CI。前端只对冲突文件与实际修改选用例，上游单侧改动且
+与上游相同的前端文件不选（与 Go 不对称），这类文件由 lint、typecheck、关键用例覆盖，清单与输出写明数量。`deploy/` 改动
+执行 CI shell 作业里的部署脚本检查，真正调用 docker 的在本机没有 Docker 时记未执行，由 U-4／CI 补齐。归不了类的文件列入
+`unresolved`，要求补足验证。
+
+快线把冻结摘要类失败与功能失败分开归因，归因不清的一律按功能失败；冻结摘要类只认显式白名单（`frozen_test_sources.py`：
+测试源文件与失败信息标记同时登记，用例名或信息里带“漂移”“Frozen”不构成证据）。误判为冻结类必须不可能，冻结类被误判为
+功能失败可以接受。结论按优先级 failed > passed_with_gaps > passed_pending_ledger > passed：
+
+| 结论 | 含义 | 脚本退出码 |
 |---|---|---|
-| U-0 | 冻结目标、计划、预算和证据目录 | 先通过 §5.2.1；`plan-create` 只创建一次权威 Plan，冻结 fork HEAD、上游 tag/commit、基线收据、工具闭集和受保护对象。 |
-| U-1 | 解决冲突并形成可重放的双父 merge commit | `merge-start`／`merge-seal` 在隔离 worktree 中完成；冲突台账和双父关系不可省略；试验区结果用 `plan-replay` 与 `merge-seal --replay-from` 机械重放。 |
-| U-2 | 闭合 Codex／Claude 入口、出站发送面和 Inventory | 首轮 `source-seal` 生成 revision 001，源码修复后在同一 Plan 用 `revision-advance` 追加 revision，旧制品只读保留。 |
-| U-3 | 按文件和调用边形成影响闭集 | `impact-generate` 与当前 revision 绑定；`impact-suggest` 对已知低风险条目自动分类、对 Git 事实可定性的条目写成机械决定，其余交人工，`impact-seal` 对未决项 fail-close。 |
-| U-4 | 证明候选树满足全部必要门禁 | 每个收据固定 12 类逻辑门禁、3 个物理执行组，`skipped_gate_count` 为 0。 |
-| U-5 | 封存 candidate、Campaign 和回退处置 | `disposition-draft` 由验收收据派生输入，`disposition-seal` 校验并绑定验证收据、原业务回归和受影响 Persona 的后继动作。 |
-| U-6 | 快进受维护分支并能独立重放 | U-4 通过后仅由 `apply` 执行 ff-only 快进，随后 `finalize`／`replay`；人工不得合并、推送或部署。 |
+| `failed` | 有功能失败，不得建正式 Plan | 1 |
+| `passed_with_gaps` | 没有功能失败，但清单有 `unresolved`；输出逐项列出须补足的验证，补足并在汇报里写明之前不建 Plan | 3 |
+| `passed_pending_ledger` | 失败项只有冻结摘要类，记“待台账闭合”，不阻断，可建 Plan | 0 |
+| `passed` | 全部通过 | 0 |
 
-补充约束（各命令参数以 `--help` 为准；停在人工输入的命令照常输出结果，并以退出码 4 返回；`start-check`、
-`toolchain-check`、`candidate-secret-scan`、`gates-run`、`gates-status` 的结论为 blocked 时以退出码 5 返回，
-`gates-status` 读到未结束的 attempt 以 6 返回，结果同样照常输出）：
+`make` 会把配方的非 0 退出码统一成 2，所以监视读输出末尾固定的 `FAST-RESULT` 一行或状态文件的 `result`。快线记录用独立
+schema，不是 U-4 收据，工具读 U-4 收据时拒绝它；正式 U-4 保留完整的 12 类门禁，不因快线通过而缺项。
 
-- U-1：上游对闭集外文件的改动按普通冲突处置；对闭集内文件的改动按预检既定决定恢复受保护版本并在冲突
-  台账登记。冲突决策可在后继 Plan 机械重放（`plan-replay`、`merge-seal --replay-from`）：试验区基点须与本 Plan
-  同一 merge-base，上游或试验区改动了主干新增路径即拒绝；三方 stage 对象与解决结果都与前序冲突台账一致才
-  复用前序理由并标注来源 Plan，其余交人工。人只写取舍理由，处置类型由工具按 index 事实推断（整文件取我方
-  为 fork、取上游为 upstream，其余为 manual）。
-- U-2：每个源码 revision 都由 `revision-advance` 按序重做 `surface-scan`、Inventory 绑定与 `surface-seal`，
-  推进到 `revision-preflight`，本轮输入只需写路径与理由；发送面差异与上一轮相同则四份 Inventory 与
-  SurfaceDecision 原样续用，变化时停下交人工（单独的 `inventory-carry-forward` 只用于零差异）。新增路由的
-  Inventory 条目建议由工具写出，SurfaceDecision 仍由人工决定。
-- U-3：同 diff 的文件复用本 Plan 或前序 Plan 已封存的决定（diff_sha256 相同的文件、delta_id 相同的发送面
-  差异），人工改判优先；本轮新增或 diff 变化的条目停下写草稿，补完后续跑，已完成的步骤不重做。工具按 Git
-  事实把“上游单侧改动”“两侧自动合并未改”（候选分别与上游、与 Git 自动合并结果逐字节相同）写成机械决定、
-  人可改判，`impact-seal` 现算复核；冲突、合并后又改、只有我方改动的文件交人工。
-- U-4 启动：`gates-run` 在创建 attempt 目录、启动任何执行组之前先做检查，全部阻断原因一次列出，任一项不过
-  都不建 attempt——上一轮权威收据的失败项已逐项处置（下文“U-4 出口”）、候选工作树的 Go 与 lint 版本与它自己的
-  声明一致、候选密钥扫描通过（同一份 `secret_scan` 门禁），以及本次将执行 full-regression 组时的**定向冻结检查**：
-  先按冻结台账精确复算“已登记冻结路径的当前摘要是否都有收据承接”（秒级），通过再对候选 worktree 执行冻结类 Go
-  测试（officialegress 与 service 两个包，约半分钟）。执行组便宜的在前（secret-scan、inventory-closure，最后
-  full-regression），仍完整执行 12 类门禁，`skipped_gate_count` 为 0。
-- U-4 前台账：正常路径是全部源码 revision 完成后、首次 U-4 之前，由工具一次性生成台账 revision（冻结后继收据与
-  source-transition，§5.2.4 第 2 条），再由上述定向冻结检查确认台账闭合，通过才启动首次 U-4，不把已知的台账待办留到
-  全量里才暴露。定向冻结检查不通过时先分类再处理：功能失败走源码 revision；冻结摘要类且尚未生成台账 revision 的，
-  一次性生成台账 revision 并单独提交，再重新启动；台账 revision 之后仍不闭合，或同一根因连续第二次失败，停线复盘
-  （下文 U-4 出口表），不默认循环补台账。阻断信息里写明分类与当前处于哪个阶段。
-- U-4：同一 `execution_group` 的相同命令只执行一次，六类客户端门禁收据由工具生成。`upstream-gate-full` 的
-  各检查线遇错不停、快线在前、逐线输出，采集工具全量须通过分片闭合自检与全集核对；go test（`./...`、
-  `-count=1`）与 golangci-lint 覆盖默认、unit、integration 三种标签，默认组是唯一按生产编译形态运行的一组，
-  CI 没有它。门禁输出边跑边写进 attempt 目录，长门禁脱离会话运行。本机没有 Docker 时 integration 记为未执行、
-  收据为 `awaiting_ci`、U-5 拒绝，须用 `ci-push` 与 `gates-import-ci` 导入同一候选提交、作业全部成功且日志
-  证明 integration 真实执行的 CI 运行；只补齐未执行项，本机失败不能被 CI 覆盖。
-- U-5：`disposition-draft` 由验收收据派生原业务回归收据、处置输入，以及共享控制合同受影响时的后继收据草稿
-  （`change_kind` 按路径预填，其余人工填写后 `identity-seal`）。`disposition-seal` 校验三类收据：Campaign 须是
-  该 Persona 已登记格式的生产批准／激活收据，new_candidate 还须正是计划冻结的 Active 版本；原业务回归收据须
-  由本次验收派生；共享合同后继收据须逐个登记最新 ChangeDecision 的共享控制面路径并绑定本次验收。
-- U-6：`finalize` 与 `replay` 收据是发版前置条件；U-4 未通过时禁止执行；`ci-cleanup` 删除临时 CI 分支。
+### 5.2.3 U-0～U-6 执行合同
 
-#### U-4 出口与冻结台账修复模式
+各阶段的命令、通过条件与失败去向见“流程总表”，本节只写总表放不下的合同。
 
-U-4 的结果只有三种出口：
+- U-0：`plan-create` 只创建一次权威 Plan，冻结 fork HEAD、上游 tag/commit、基线收据、工具闭集和受保护对象。
+- U-1：上游对闭集外文件的改动按普通冲突处置；对闭集内文件的改动按预检既定决定恢复受保护版本并在冲突台账登记。上游改
+  lint 版本时，解决冲突改的是 `backend-ci.yml` 的 `GOLANGCI_LINT_VERSION` 这一行（它恰好定义一次，三个 lint 步骤都引用它，
+  CI 的 Go 校验版本与 `backend/go.mod` 一致，由 `test-upstream-merge-tools` 守护）。`plan-replay` 只在试验区基点与本 Plan
+  同一 merge-base、上游和试验区都没改主干新增路径时合成；`merge-seal --replay-from` 只在三方 stage 对象与解决结果都与前序
+  冲突台账一致时复用前序理由，其余交人工。人只写取舍理由，处置类型由工具按 index 事实推断。
+- U-2：每个源码 revision 都由 `revision-advance` 按序重做 `surface-scan`、Inventory 绑定与 `surface-seal`，推进到
+  `revision-preflight`；发送面差异与上一轮相同则 Inventory 与 SurfaceDecision 原样续用，变化时停下交人工（单独的
+  `inventory-carry-forward` 只用于零差异）。新增路由的 Inventory 条目建议由工具写出，SurfaceDecision 仍由人工决定。
+- U-3：同 diff 的文件复用本 Plan 或前序 Plan 已封存的决定（diff_sha256 相同的文件、delta_id 相同的发送面差异），人工改判
+  优先；本轮新增或 diff 变化的条目停下写草稿，补完续跑。工具把 Git 事实可定性的条目（上游单侧改动、两侧自动合并未改）写成
+  机械决定，人可改判，`impact-seal` 现算复核；冲突、合并后又改、只有我方改动的文件交人工。
+- U-4 启动：`gates-run` 在创建 attempt、启动任何执行组之前先做检查，阻断原因一次列出，任一项不过都不建 attempt：上一轮
+  权威收据的失败项已逐项处置；候选树的 Go 与 lint 版本与它自己的声明一致；候选密钥扫描通过；本次执行 full-regression 组
+  时，**定向冻结检查**通过——先复算每个已登记冻结路径的当前摘要是否都有收据承接，再对候选 worktree 跑冻结类 Go 测试
+  （officialegress 与 service 两包）。目的是不把已知的台账待办留到全量里才暴露。
+- U-4 执行：同一 `execution_group` 的相同命令只执行一次，六类客户端门禁收据由工具生成；执行组便宜的在前（secret-scan、
+  inventory-closure，最后 full-regression），仍完整执行 12 类门禁。各检查线按预计耗时由短到长、遇错不停；采集工具全量须
+  通过分片闭合自检与全集核对；go test（`./...`、`-count=1`）与 golangci-lint 覆盖默认、unit、integration 三种标签，默认组
+  是唯一按生产编译形态运行的一组，CI 没有它。本机没有 Docker 时 integration 记为未执行、收据为 `awaiting_ci`、U-5 拒绝，须用
+  `ci-push` 与 `gates-import-ci` 导入同一候选提交的 CI 运行（作业全部成功、日志证明 integration 真实执行）；只补齐未执行项，
+  本机失败不能被 CI 覆盖。
+- U-5：`disposition-seal` 校验三类收据：Campaign 须是该 Persona 已登记格式的生产批准／激活收据，new_candidate 还须正是计划
+  冻结的 Active 版本；原业务回归收据须由本次验收派生；共享合同后继收据须逐个登记最新 ChangeDecision 的共享控制面路径并
+  绑定本次验收。
+- U-6：`apply` 只在 U-4 通过、U-5 闭合且受维护分支 HEAD 等于计划 fork HEAD 时快进，人工不得自行合并。发版前应确认 `finalize` 与
+  `replay` 收据齐全（发版流水线不检查这两份收据）；`ci-cleanup` 删除临时 CI 分支。
 
-| attempt 结果 | 出口 |
+#### U-4 出口
+
+| 触发 | 出口 |
 |---|---|
 | 存在功能失败（编译、业务测试、lint、前端） | 在同一 Plan 追加源码 revision 修复，重跑受影响执行组 |
-| 失败项全部是冻结摘要类且功能门禁已通过 | 由工具一次性生成台账 successor，作为台账 revision 追加后重跑 |
-| 同一根因连续失败两次，或台账 revision 后仍不闭合 | 停线复盘，把缺项回流到注册表与本节 |
+| 失败项全部是冻结摘要类且功能门禁已通过；或启动前定向冻结检查报冻结摘要类且尚未生成台账 revision | 由工具一次性生成台账 successor，单独提交并作为台账 revision 追加后（重新）启动 |
+| 同一根因连续失败两次；或台账 revision 后仍不闭合；或 Plan 作废超过一次 | 停线复盘，把缺项回流到注册表与本节；不默认循环补台账 |
 
-冻结摘要类指 transition／successor 冻结测试、受管工具树摘要和 `check-egress-spec-ci` 中的摘要门禁，按
-§5.2.4 第 2 条处理。Plan 作废超过一次同样要停线复盘。
+冻结摘要类指 transition／successor 冻结测试、受管工具树摘要和 `check-egress-spec` 中的摘要门禁，按 §5.2.4 第 2 条处理。
 
-重跑之前先读上一轮权威收据（`receipt.json` 的 result 与失败项，不看进度行），已知失败没处置不得启动下一轮全量。
-result 为 `blocked` 时，每个失败项——失败的执行组；runner-status 记录了失败步骤的细化到步骤，如
-`full-regression/egress-spec/check-egress-spec`；执行后污染候选树另算一项——都由 `failure-disposition` 写一份
-处置记录（Plan evidence 的 `u4/dispositions/`，只写一次、不可覆盖）：失败原因、修复动作、处置类别和定向复验。
-类别与要求：
+#### 重跑前的失败处置
+
+重跑之前先读上一轮权威收据（result 与失败项，不看进度行），已知失败没处置不得启动下一轮全量。result 为 `blocked` 时，
+每个失败项（失败的执行组，runner-status 有步骤信息的细化到步骤；执行后污染候选树另算一项）都由 `failure-disposition`
+写一份处置记录（Plan evidence 的 `u4/dispositions/`，不可覆盖）：原因、修复动作、类别和定向复验。
 
 | 类别 | 要求 |
 |---|---|
 | 功能失败（归因不清的按它处理） | 当前 SourceCandidate 提交已在失败 attempt 之后推进 |
-| 冻结摘要类失败 | 按上文 successor 流程闭合：两提交之间新增或改动的承接收据须自摘要校验通过、`transitions` 非空、后继摘要等于当前候选里该路径的内容（被后来的改动取代的不算台账 revision），且复验覆盖冻结包 |
+| 冻结摘要类失败 | 按 U-4 出口表闭合（工具核对承接收据的自摘要与后继摘要，被后来的改动取代的不算台账 revision），且复验覆盖冻结包（`make check-egress-spec`／`check-egress-spec-ci`，或 `backend` 下对 officialegress 与 service 两包跑 `-run` 含 `Frozen` 的 go test） |
 | 环境／工具类失败 | 当前版本检查通过 |
 
-定向复验只写命令（argv、cwd），由工具在当前候选 worktree 里真实执行，记录退出码、耗时、stdout／stderr 摘要与日志
-绑定，非 0 或超时即处置不成立，不接受手填的“已通过”。复验必须属于该失败项自己的复验族，由工具按失败项 id 推导，
-不接受自报：lint／go test 须与失败步骤同一组标签（默认组不带标签）并在 `backend` 下执行，出站规格须是
-`check-egress-spec` 系列（含 `egress-spec-*` 目标）或覆盖 officialegress 与 service 两包的冻结测试，前端与采集工具线
-用各自对应的脚本，非执行组门禁须是门禁自己的展开命令，`worktree-status` 由工具自己核对候选树干净；冻结摘要类的
-复验另须覆盖冻结包（`make check-egress-spec`／`check-egress-spec-ci`，或 `backend` 下对这两个包跑 `-run` 含 `Frozen` 的
-go test）。处置记录绑定写下它时的 SourceCandidate 提交，候选再推进即失效。`gates-run`（含 `--from-attempt` 部分重跑）
-发现上一轮 attempt 为 blocked 且存在未处置的失败项即拒绝启动并逐项列出。“上一轮”按内容判定：沿收据的
-`from_attempt` 链，被后来的 attempt 引用过的不是最近的；链上互不引用的并列者比较 attempt 目录里运行标记
-`gates-run.pid.json` 的启动时间，取不到时间或并列即拒绝并要求人工确认，不按文件修改时间猜。`awaiting_ci` 的未执行项
-不是失败，不需要处置，继续 `ci-push` 与 `gates-import-ci`；只有目录、没有收据的 attempt（被杀或崩溃）不算已知失败，
-只在输出里提示。
+定向复验只写命令，由工具在当前候选 worktree 里真实执行并记录退出码、耗时和日志绑定，非 0 或超时即不成立，不接受手填的
+“已通过”；复验必须属于该失败项自己的复验族（按失败项 id 由工具推导，不接受自报）。处置记录绑定写下它时的
+SourceCandidate 提交，候选再推进即失效。`gates-run`（含 `--from-attempt`）发现上一轮 blocked 且有未处置失败项即拒绝启动并
+逐项列出；“上一轮”按收据的 `from_attempt` 链与运行标记的启动时间判定，判不出就拒绝，不按文件修改时间猜。`awaiting_ci`
+的未执行项不是失败，继续 `ci-push` 与 `gates-import-ci`；只有目录、没有收据的 attempt 不算已知失败，只在输出里提示。
 
-监视以收据结论为准：`gates-run` 结束时向 stderr 输出固定一行 `U4-RESULT attempt=<id>
-result=<passed|blocked|awaiting_ci> failed=<失败项逗号分隔，无则 -> receipt=<收据路径>`；只读的 `gates-status`
-输出同一行，没有收据时报 `running`（运行标记显示进程仍在）或 `incomplete`。收据、日志与退出状态三者一致。
-监视必须读这一行或 `gates-status`，不能只看退出码：`gates-run` 结论为 `awaiting_ci` 时退出码是 0，但 U-5 仍拒绝，
-须继续补齐 CI 证据。
+监视以收据结论为准：`gates-run` 结束时向 stderr 输出固定一行 `U4-RESULT attempt=<id> result=<passed|blocked|awaiting_ci>
+failed=<失败项，无则 -> receipt=<收据路径>`，只读的 `gates-status` 输出同一行（没有收据时报 `running` 或 `incomplete`）。
 
 #### 受维护分支在合并期间被第三方推进
 
-`apply` 要求受维护分支 HEAD 精确等于计划 fork HEAD，多一个提交即拒绝。最常见的来源是发版后的 VERSION
-回写：发版流水线的 `release-version-sync` 会把 VERSION 回写与它的冻结承接收据作为两个提交一起推到主干。
-处置顺序固定：
+`apply` 要求受维护分支 HEAD 精确等于计划 fork HEAD，多一个提交即拒绝。最常见的来源是发版后的 VERSION 回写：
+`release-version-sync` 会把回写与它的冻结承接收据作为两个提交一起推到主干。处置顺序固定：
 
 1. 停止当前 Plan 的 U-6，不要尝试快进，也不要回退已推送的主干；
-2. 等新提交及其冻结承接收据都已落到主干（VERSION 回写由流水线自动带收据；其他来源的提交须先在主干
-   补齐收据并推送），再重新封存基线；
-3. 新建 Plan，把上一 Plan 的冲突解决与本地修复整体重放到新 worktree；两次候选树应当只差台账部分，
-   以此验证重放准确；
+2. 等新提交及其冻结承接收据都已落到主干（其他来源的提交须先在主干补齐收据并推送），再重新封存基线；
+3. 新建 Plan，把上一 Plan 的冲突解决与本地修复整体重放到新 worktree；两次候选树应当只差台账部分，以此验证重放准确；
 4. 冲突决策可沿用上一 Plan 的理由并追加重放说明，但处置类型必须按新 index 对象重新判定。
 
-预防：开工前确认最近一次发版的 VERSION 回写已落到主干；`plan-create` 到 U-6 期间不打发版 tag，其他非紧急
-操作也不推进受维护分支。紧急客户端修复例外：先把当前 Plan 推进到 U-6 再发修复，来不及时停线，修复落
-主干后按上面第 3 步新建 Plan 重放。U-4 通过后尽快执行 U-6，不要跨夜留置。
+预防：开工前确认最近一次发版的 VERSION 回写已落到主干；`plan-create` 到 U-6 期间不打发版 tag，其他非紧急操作也不推进
+受维护分支。紧急客户端修复例外：先把当前 Plan 推进到 U-6 再发修复，来不及时停线，修复落主干后按第 3 步新建 Plan 重放。
+U-4 通过后尽快执行 U-6，不要跨夜留置。
 
 ### 5.2.4 revision、工具闭集和长期台账
 
-1. U-2/U-3 的 revision 文件只能追加，编号从 001 连续递增，`predecessor` 绑定上一轮；禁止覆盖、软链接冒充或跳
-   号，Inventory revision 同样按 Persona/kind 连续追加。source、surface、impact 三条 revision 同轮推进，跳轮
-   无法补跑，只能回退候选提交重做；每轮进 U-4 前先用 `revision-preflight` 只读复核。attempt 只写一次，重跑一
-   律新开，并生成完整的逻辑门禁结果、客户端收据与执行、复用计数：同一 revision 内可引用上一 attempt、只重跑
-   其失败的执行组（所选门禁须覆盖上一 attempt 的全部失败项，并自动扩展为完整执行组）；源码 revision 变化，或
-   ChangeDecision／SurfaceDecision 重签后，旧收据的绑定已经漂移、不能再引用，必须全量重跑。
-2. 冻结摘要台账的 successor 与 `source-transition` 只在最终 revision 生成一次：全部源码修复、lint 与前端
-   检查通过、候选树不再变化之后；收据不进入它描述的提交，也不引用本区间内变化的收据（`source-transition`
-   会拒绝），以此消除自引用循环。`freeze-successor-generate` 按与 Go 门禁相同的规则只承接已登记摘要到当前
-   摘要的边，前序未登记即链断裂、fail-close。注册表 `docs/egress/maintenance/freeze-registry.json` 只登记
-   通用图之外仍需额外动作的台账（ARM64 受监督部署脚本的两个文件摘要常量、scanner-algorithm-successor 单跳
-   文件、Campaign fact map），命中时写入待办；Campaign fact map 固定须老板确认（§5.2.2 预检集中确认一次），
-   路径随 `candidate_test_trace` 当前指向的 fact map 解析；改注册表须重新 `identity-seal`，不属于闭集变化。
-   `source-transition` 节点只追加，路径、状态与两端摘要由 Git 复算，删除和重命名保留前后路径，
-   `source-transition-validate` 校验链尾；前序链不连续时本轮独立成节。新节点为 schema v3、写签发时间，v2
-   历史节点只读，两包通用冻结测试同时接受两者，新节点无需再写测试。
-3. 受管 tool bundle 的权威定义是 `tools/upstream_merge/gitops.py` 的 `_tool_source_paths`（合并工具的
-   Python 源、三个 schema、`tools/check_ledger_completeness.py`、`Makefile` 与 `backend/cmd/egressscan/` 的
-   Go 源），文档不复制清单，以该函数与 Plan 中冻结的 `tool_bundle` 为准。标准 request 模板不在闭集内，改它后
-   按 §5.2.2 重新渲染校验即可。上游改 Makefile 与扫描器补分类这类变化，靠闭集受扰清单与基线提前处置。闭集任一
-   字节变化，进行中的 Plan 必须停线，按总则 1 修复、重新预检后新建 Plan。
-4. 同一 minor 内一次合到最新 tag：request 与 Plan 的 `upstream.covered_tags` 按祖先顺序登记
-   merge-base 之后到目标的全部上游版本 tag，`plan-create` 与 `load_plan` 用 Git 逐项复算，缺登记、
-   不一致、非线性历史或跨 minor 一律拒绝；跨 minor 仍分 Plan。覆盖区间随 Plan 进入 finalize 收据。
-5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`：命令、参数、起止时间、
-   耗时、结果与错误。路径位于某个 Plan 目录（含其 evidence、inputs 与 Plan 工作树）之下时一律写该
-   Plan 根的账本；不在 Plan 之下时写输出所在目录。仓库内仅自动写入整体被 Git 忽略的
-   `local-analysis/upstream/`，其他 Git 工作树内位置不写并提示（可显式指定账本）；
-   账本写入失败时成功的命令也按系统错误返回。账本无缺口是发版前置条件之一，不得在合并结束后补写。
+1. U-2/U-3 的 revision 文件只能追加，编号从 001 连续递增，`predecessor` 绑定上一轮；禁止覆盖、软链接冒充或跳号，
+   Inventory revision 同样按 Persona/kind 连续追加。source、surface、impact 三条 revision 同轮推进，跳轮无法补跑，只能回退候选提交重做；每轮进 U-4 前先用
+   `revision-preflight` 只读复核。attempt 只写一次，重跑一律新开：同一 revision 内可引用上一 attempt、只重跑其失败的
+   执行组（所选门禁须覆盖上一 attempt 的全部失败项，并自动扩展为完整执行组）；源码 revision 变化，或 ChangeDecision／
+   SurfaceDecision 重签后，旧收据的绑定已经漂移、不能再引用，必须全量重跑。
+2. 冻结摘要台账的 successor 与 `source-transition` 只在最终 revision 生成一次：全部源码修复、lint 与前端检查通过、候选树
+   不再变化之后；收据不进入它描述的提交，也不引用本区间内变化的收据（`source-transition` 会拒绝），所以源码提交与承接
+   收据必须分开提交。`freeze-successor-generate` 只承接已登记摘要到当前摘要的边，前序未登记即链断裂、fail-close。注册表
+   `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账，命中时写入待办；Campaign fact map 固定
+   须老板确认（§5.2.2 冻结覆盖）。`scanner-algorithm-successor` 单跳文件只表达最新一跳，每次改动扫描器的非测试 Go 源（含合并
+   前预先登记发送点）都会推进它；推进后按注册表登记的验证收口。带删除证明的历史承接收据，由 `backend/internal/testsupport/freezeproof`
+   按 Git 历史核对删除当时的单跳，单跳之后再推进不会使这类收据失效；该核对要读旧提交，浅克隆或缺失历史提交时判不接受。`source-transition` 节点只追加，内容由 Git 复算，`source-transition-validate` 校验
+   链尾，前序链不连续时本轮独立成节；v2 历史节点只读，新节点无需再写测试。
+3. 受管 tool bundle 的权威定义是 `tools/upstream_merge/gitops.py` 的 `_tool_source_paths`，文档不复制清单，以该函数与 Plan
+   中冻结的 `tool_bundle` 为准。标准 request 模板不在闭集内，改它后按 §5.2.2 重新渲染校验即可。上游改 Makefile 与扫描器
+   补分类这类变化，靠闭集受扰清单与基线提前处置。
+4. 同一 minor 内一次合到最新 tag：request 与 Plan 的 `upstream.covered_tags` 按祖先顺序登记 merge-base 之后到目标的全部
+   上游版本 tag，`plan-create` 与 `load_plan` 用 Git 逐项复算，缺登记、不一致、非线性历史或跨 minor 一律拒绝；跨 minor
+   仍分 Plan。覆盖区间随 Plan 进入 finalize 收据。
+5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`（落点规则见 `--timing-ledger` 的 `--help`；仓库内只
+   自动写入整体被 Git 忽略的 `local-analysis/upstream/`）。账本写入失败时成功的命令也按系统错误返回；发版前应确认账本无缺口
+   （发版流水线不检查账本），缺口不得在合并结束后补写。
 6. 废弃 Plan 的 worktree／evidence 只在完成留档和审计确认后清理，不得用清理动作替代收据。
 
 ## 5.3 官方客户端升级
