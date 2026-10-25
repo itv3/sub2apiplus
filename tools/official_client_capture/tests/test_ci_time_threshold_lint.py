@@ -111,6 +111,28 @@ class TimeThresholdLintTests(unittest.TestCase):
         self.assertIsNotNone(findings[24].exempt_reason)
         self.assertEqual({item.test for item in findings.values()}, {"TestA"})
 
+    def test_positive_wait_rule_is_opt_in(self) -> None:
+        source = (
+            "package x\n"
+            "func TestW(t *testing.T) {\n"
+            "\tselect {\n"
+            "\tcase <-done:\n"
+            "\tcase <-time.After(2 * time.Second):\n"      # 5 正向等待，超时即失败
+            "\t\tt.Fatal(\"等待超时\")\n"
+            "\t}\n"
+            "\tselect {\n"
+            "\tcase <-done:\n"
+            "\tcase <-time.After(2 * time.Second):\n"      # 10 反向窗口，不失败
+            "\t}\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sample_test.go").write_text(source, encoding="utf-8")
+            self.assertEqual(lint.scan([root], root), [])
+            found = lint.scan([root], root, positive_wait=3.0)
+        self.assertEqual([(item.line, item.rule) for item in found], [(5, "positive-wait")])
+
     def test_baseline_and_exit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -413,7 +413,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ExhaustedSnapshotDoesNotS
 	select {
 	case updates := <-repo.updateExtraCh:
 		require.Equal(t, 100.0, updates["codex_7d_used_percent"])
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("等待 codex 快照落库超时")
 	}
 
@@ -442,7 +442,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_NonExhaustedSnapshotDoesN
 
 	select {
 	case <-repo.updateExtraCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("等待 codex 快照落库超时")
 	}
 
@@ -475,7 +475,7 @@ func TestOpenAIGatewayService_UpdateCodexUsageSnapshot_ThrottlesExtraWrites(t *t
 
 	select {
 	case <-repo.updateExtraCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("等待第一次 codex 快照落库超时")
 	}
 

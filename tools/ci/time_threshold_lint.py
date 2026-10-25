@@ -78,6 +78,7 @@ RULES = {
     "short-timeout": "小于 1 秒的超时、截止或等待上限",
     "alloc-bound": "分配次数或内存上限贴着非零常数",
     "clock-deadline": "时钟加不足 1 秒常数的截止时间",
+    "positive-wait": "正向等待（超时即失败）的上限不超过 --positive-wait-seconds（缺省关闭）",
 }
 
 
@@ -382,7 +383,7 @@ def _call_arguments(text: str, start: int) -> list[str]:
     return arguments
 
 
-def scan_go(relative: str, text: str, loose: float) -> list[Finding]:
+def scan_go(relative: str, text: str, loose: float, positive_wait: float = 0.0) -> list[Finding]:
     lines = text.splitlines()
     file_reason = _file_allow(lines)
     scopes: list[int | None] = []
@@ -473,6 +474,12 @@ def scan_go(relative: str, text: str, loose: float) -> list[Finding]:
                     if greater or (is_loop and measured_on_left and op in {"<", "<="}):
                         add(index, "elapsed-bound", f"比较：已用时间上界 {sum(durations):g} 秒")
                         break
+        if positive_wait > 0:
+            waited = re.match(r"case\s+<-time\.After\((.*)\):", code)
+            if waited and any(re.search(r"\bt\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow)\b", following) for following in lines[index + 1:index + 3]):
+                durations = _go_durations(waited.group(1))
+                if durations and 0 < min(durations) <= positive_wait:
+                    add(index, "positive-wait", f"超时即失败的等待上限 {min(durations):g} 秒")
         allocs = re.search(r"(\w+)\s*:?=\s*testing\.AllocsPerRun\(", code)
         if allocs:
             variable = re.escape(allocs.group(1))
@@ -518,7 +525,7 @@ def iter_files(roots: Iterable[Path]) -> Iterator[Path]:
                     yield path
 
 
-def scan(paths: Iterable[Path], repository_root: Path, loose: float = DEFAULT_LOOSE_SECONDS) -> list[Finding]:
+def scan(paths: Iterable[Path], repository_root: Path, loose: float = DEFAULT_LOOSE_SECONDS, positive_wait: float = 0.0) -> list[Finding]:
     findings: list[Finding] = []
     for path in iter_files(paths):
         try:
@@ -532,7 +539,7 @@ def scan(paths: Iterable[Path], repository_root: Path, loose: float = DEFAULT_LO
         if path.suffix == ".py":
             findings.extend(scan_python(relative, text, loose))
         elif path.suffix == ".go":
-            findings.extend(scan_go(relative, text, loose))
+            findings.extend(scan_go(relative, text, loose, positive_wait))
     return findings
 
 
@@ -622,6 +629,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-all", action="store_true", help="连已豁免、基线内的命中一起列出")
     parser.add_argument("--rule", action="append", choices=sorted(RULES), help="只看指定规则，可重复")
     parser.add_argument("--loose-seconds", type=float, default=DEFAULT_LOOSE_SECONDS, help="耗时上界不小于这个秒数的不报（缺省 5）")
+    parser.add_argument("--positive-wait-seconds", type=float, default=0.0,
+                        help="开启 Go 的 positive-wait 规则：``case <-time.After(N)`` 后紧跟 t.Fatal 且 N 不超过该秒数（缺省 0＝关闭；建议 3）")
     parser.add_argument("--baseline", type=Path, help="基线文件；基线内的命中不算新增")
     parser.add_argument("--write-baseline", type=Path, help="把当前未豁免命中写成基线后退出 0")
     parser.add_argument("--self-test", action="store_true", help="跑内置样例自检")
@@ -630,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     root = (arguments.root or _repository_root()).resolve()
     targets = arguments.paths or [root / name for name in DEFAULT_ROOTS if (root / name).exists()]
-    findings = scan(targets, root, arguments.loose_seconds)
+    findings = scan(targets, root, arguments.loose_seconds, arguments.positive_wait_seconds)
     if arguments.rule:
         findings = [item for item in findings if item.rule in set(arguments.rule)]
     baseline: set[str] = set()

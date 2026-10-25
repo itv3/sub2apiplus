@@ -175,8 +175,8 @@ def run_go_group(root: Path, directory: str, tags: str, names: list[str], repeat
         if not test or "/" in test or test not in results:
             continue
         action = event.get("Action")
-        if action == "output" and event.get("Output") and ("--- FAIL" in event["Output"] or "Error" in event["Output"] or "elapsed" in event["Output"].lower()):
-            messages[test].append(event["Output"].strip()[:300])
+        if action == "output" and event.get("Output") and event["Output"].strip():
+            messages[test].append(event["Output"].rstrip()[:300])
         if action in {"pass", "fail", "skip"}:
             results[test]["runs"] += 1
             if action == "fail":
@@ -189,7 +189,9 @@ def run_go_group(root: Path, directory: str, tags: str, names: list[str], repeat
             results[name]["status"] = "编译或启动失败：" + output.strip()[:200]
     for name, notes in messages.items():
         if results[name]["failures"]:
-            results[name]["messages"] = notes[:3]
+            # 失败用例的输出里挑出带 FAIL／Error 的行，没有就取最后几行
+            interesting = [line for line in notes if "FAIL" in line or "Error" in line or "_test.go" in line]
+            results[name]["messages"] = (interesting or notes)[-6:]
     return results
 
 
