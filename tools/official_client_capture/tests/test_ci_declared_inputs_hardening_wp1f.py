@@ -26,6 +26,7 @@ import unittest
 from pathlib import Path
 
 from tools.ci import unit_records as ur
+from tools.official_client_capture.tests import scaling_guard
 from tools.official_client_capture.tests import test_ci_declared_inputs_hardening as first
 from tools.official_client_capture.tests import test_ci_declared_inputs_probe_rules as probe
 from tools.official_client_capture.tests import test_ci_declared_inputs_records as base
@@ -360,31 +361,30 @@ class GlobLinearTests(unittest.TestCase):
         """WP1e 的回溯正则：``out/*a*a*a*b`` 对 400 字符 0.85 秒、600 字符 4.1 秒、1000 字符超过 25 秒；线性匹配对 5000 字符也是毫秒级。"""
 
         patterns = ("out/*a*a*a*b", "out/*a*a*a*a", "out/?*a*a*b", "out/*a?a*a*b", "out/a*a*a*a*", "out/*?*?*?", "out/?a*?a*a*b")
-        # 故意不用 subTest：长度从小到大，第一个超时就让整个用例失败（回溯实现遇到 5000 字符会算上几个小时，不能让后面的长度继续跑）。
-        for length in (120, 600, 1000, 5000):
-            path = "a" * length
-            for pattern in patterns:
-                start = time.perf_counter()
-                matched = ur._declared_glob(pattern).fullmatch(f"out/{path}")
-                elapsed = time.perf_counter() - start
-                self.assertLess(elapsed, 0.5, f"{pattern} 对 {length} 字符耗时 {elapsed:.3f} 秒")
-                self.assertIn(matched, (True, None))
+        # 不用绝对阈值（满载下会抖红）：每个模式按长度加倍做相对比较，第一次越界就失败，更长的长度不会继续跑
+        # （回溯实现遇到 5000 字符会算上几个小时）；见 scaling_guard 的说明。最长 3840 字符。
+        for pattern in patterns:
+            glob = ur._declared_glob(pattern)
+            scaling_guard.assert_growth_is_bounded(
+                self, lambda length, glob=glob: (lambda: glob.fullmatch(f"out/{'a' * length}")), (120, 240, 480, 960, 1920, 3840), label=pattern)
+            for length in (120, 3840):
+                self.assertIn(glob.fullmatch(f"out/{'a' * length}"), (True, None))
 
     def test_declared_coverage_with_a_worst_case_glob_and_long_paths_is_fast(self) -> None:
-        for length in (600, 1000, 5000):
-            for pattern in ("out/*a*a*a*b", "out/*a*a*a*a"):
-                scope = probe.bare_scope(repo_ignored=[pattern])
+        for pattern in ("out/*a*a*a*b", "out/*a*a*a*a"):
+            scope = probe.bare_scope(repo_ignored=[pattern])
+
+            def prepare(length: int, scope=scope):
                 sample = base.make_sample()
                 sample["repo_accesses"] = [["{TREE}/backend/a.go", ["read"], True], [f"{{TREE}}/out/{'a' * length}", ["write"], False],
                                            [f"{{TREE}}/out/{'a' * length}b", ["write"], False]]
                 sample["outside_accesses"], sample["git_commands"], sample["network"] = [], [], []
-                start = time.perf_counter()
-                result = ur.declared_coverage(sample, scope)
-                elapsed = time.perf_counter() - start
-                # 同样不用 subTest：第一个超时就失败，不让更长的路径继续跑。
-                self.assertLess(elapsed, 0.5, f"整个覆盖检查耗时 {elapsed:.3f} 秒（{pattern}，{length} 字符）")
-                # *a*a*a*b 匹配第二条（以 b 结尾的 a 串）：它被当作输出区，只剩第一个模式下的另一条违规或全部通过。
-                self.assertIsInstance(result["ok"], bool)
+                return lambda: ur.declared_coverage(sample, scope)
+
+            # 同样用长度加倍的相对比较（第一个越界就失败，不让更长的路径继续跑），不用绝对阈值。
+            scaling_guard.assert_growth_is_bounded(self, prepare, (500, 1000, 2000, 4000), label=f"覆盖检查 {pattern}")
+            # *a*a*a*b 匹配第二条（以 b 结尾的 a 串）：它被当作输出区，只剩第一个模式下的另一条违规或全部通过。
+            self.assertIsInstance(prepare(600)()["ok"], bool)
 
     def test_the_wildcard_limit_is_kept_as_hygiene(self) -> None:
         ur.validate_declared_scope(probe.bare_scope(repo_ignored=["out/*a*a*a*b"]))

@@ -201,13 +201,14 @@ class EntryDryRunTests(unittest.TestCase):
             self.assertIsNone(dr._acquire_serial_lock(lock, lambda: False, timeout=5, poll=0.05),
                               "排队期间结论被 stop 标为 superseded 就放弃")
             with self.assertRaisesRegex(dr.DryRunError, "超过"):
-                dr._acquire_serial_lock(lock, lambda: True, timeout=0.2, poll=0.05)
+                dr._acquire_serial_lock(lock, lambda: True, timeout=0.2, poll=0.05)  # time-threshold: allow 被测对象就是排队超时语义，0.2 秒是输入；锁被占住时无论机器多慢都必然超时
         finally:
             os.close(holder)
         held = dr._acquire_serial_lock(lock, lambda: True, timeout=5, poll=0.05)
         self.assertIsNotNone(held, "前一份释放后拿得到")
         fd, waited = held
-        self.assertLess(waited, 1)
+        # 锁已释放，第一次非阻塞尝试就拿到；上界取 5 秒（等于上面用的排队超时）即可区分“没有排队”和“排到超时”，不再贴着 1 秒。
+        self.assertLess(waited, 5)
         os.close(fd)
 
     def test_opening_dry_run_reexecutes_with_audit_up_to_p0_receipt(self) -> None:

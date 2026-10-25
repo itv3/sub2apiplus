@@ -28,6 +28,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.ci import unit_records as ur
+from tools.official_client_capture.tests import scaling_guard
 from tools.official_client_capture.tests import test_ci_declared_inputs_probe_rules as probe
 from tools.official_client_capture.tests import test_ci_declared_inputs_records as base
 
@@ -807,19 +808,21 @@ class GlobWildcardLimitTests(unittest.TestCase):
     def test_matching_stays_fast_for_the_worst_allowed_patterns(self) -> None:
         """5 个通配符对 120 字符的路径已要约 0.2 秒、7 个要一分钟以上；上限 4 个把最坏情形压在毫秒级。"""
 
-        path = "a" * 120
+        # 不再用“120 字符 < 0.2 秒”的绝对阈值（满载机器上会抖红）：改成长度加倍的相对比较，只守住“耗时随长度增长的阶数”，
+        # 回溯实现在第一次加倍（120→240）就会越界；见 scaling_guard 的说明。
         for pattern in ("*a*a*a*b", "*a*a*a*a", "?*a*a*b", "*a?a*a*b", "a*a*a*a*"):
             with self.subTest(pattern=pattern):
                 scope = self.scope(f"out/{pattern}")
-                sample = base.make_sample()
-                sample["repo_accesses"] = [["{TREE}/backend/a.go", ["read"], True], [f"{{TREE}}/out/{path}", ["write"], False]]
-                sample["outside_accesses"], sample["git_commands"], sample["network"] = [], [], []
                 scope["repo"]["ranges"] = [{"name": "backend", "include": ["backend/"], "exclude": []}]
-                start = time.perf_counter()
-                result = ur.declared_coverage(sample, scope)
-                elapsed = time.perf_counter() - start
-                self.assertLess(elapsed, 0.2, f"{pattern} 在 120 个 a 上耗时 {elapsed:.3f} 秒")
-                self.assertIsInstance(result["ok"], bool)
+
+                def prepare(length: int, scope=scope):
+                    sample = base.make_sample()
+                    sample["repo_accesses"] = [["{TREE}/backend/a.go", ["read"], True], [f"{{TREE}}/out/{'a' * length}", ["write"], False]]
+                    sample["outside_accesses"], sample["git_commands"], sample["network"] = [], [], []
+                    return lambda: ur.declared_coverage(sample, scope)
+
+                scaling_guard.assert_growth_is_bounded(self, prepare, (120, 240, 480, 960), label=pattern)
+                self.assertIsInstance(prepare(120)()["ok"], bool)
 
 
 # ---------------------------------------------------------------------------

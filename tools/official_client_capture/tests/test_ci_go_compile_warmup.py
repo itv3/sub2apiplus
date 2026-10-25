@@ -122,7 +122,7 @@ class GoCompileWarmupTests(unittest.TestCase):
     def test_timeout_keeps_failure_evidence(self):
         self.fake_go('time.sleep(10)\n')
         with self.assertRaises(subprocess.TimeoutExpired):
-            self.run_prepare(timeout=.2)
+            self.run_prepare(timeout=.2)  # time-threshold: allow 被测对象就是 prepare 的超时语义，0.2 秒是输入；替身 go 睡 10 秒，机器越慢越必然超时
         report = json.loads(self.output.read_text())
         self.assertEqual(report['error_type'], 'TimeoutExpired')
         self.assertIn('log', report)

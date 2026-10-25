@@ -27,6 +27,7 @@ class ReservationPreemptionTests(unittest.TestCase):
         self.state = self.root / 'state'
         self.process = None
         self.addCleanup(self.cleanup_process)
+        # time-threshold: allow 被测对象就是预约让路的宽限与停止窗口，数值本身是输入；用例里所有等待都是 20 秒上限的状态轮询，不依赖这两个窗口的绝对长度
         self.config = _config(self.root, reservation_grace_seconds=.15, reservation_stop_seconds=.15,
                               orphan_grace_seconds=0)
 

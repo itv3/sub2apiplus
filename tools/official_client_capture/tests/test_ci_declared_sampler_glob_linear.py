@@ -8,7 +8,7 @@
 
 1. 与旧正则实现对拍（随机 ≥6000 组模式×文本，加手写用例）0 差异；与登记侧的实现也一致（测试可同时 import 两边，被测模块互相不 import）；
 2. ``*``／``?`` 不跨 ``/``、段数必须相同、返回值是 ``bool``、目录前缀语义（含目录自身）、属性与构造期校验不变；
-3. 最坏情形的耗时：``out/*a*a*a*b`` 等模式对 120／600／1000／5000 字符的路径（匹配与不匹配两种）都在 0.5 秒内；
+3. 最坏情形的耗时：``out/*a*a*a*b`` 等模式对 120 到 3840 字符的路径（匹配与不匹配两种）耗时随长度加倍的增长比不超过二次方（相对比较，见 scaling_guard）；
 4. ``merge_raws`` 链路上同样不慢：1000 字符的写后读回路径过 ``out/*a*a*a*b`` 的 transient 模式。
 """
 
@@ -21,6 +21,7 @@ import unittest
 
 from tools.ci import declared_sampler as ds
 from tools.ci import unit_records as ur
+from tools.official_client_capture.tests import scaling_guard
 from tools.official_client_capture.tests.test_ci_declared_sampler_followup import FollowupBase
 from tools.official_client_capture.tests.test_ci_declared_sampler import open_line, write_line
 
@@ -134,31 +135,28 @@ class WorstCaseTimingTests(unittest.TestCase):
     def test_the_worst_allowed_patterns_stay_fast_for_long_paths(self) -> None:
         """旧实现：``out/*a*a*a*b`` 对 120 字符 0.2 秒量级、600 字符 4.1 秒、1000 字符超过 25 秒。线性匹配对 5000 字符也是毫秒级。"""
 
-        # 故意不用 subTest：长度从小到大，第一个超时就让整个用例失败（回溯实现遇到 5000 字符会算上几个小时，不能让后面的长度继续跑）。
-        for length in (120, 600, 1000, 5000):
-            for pattern in self.PATTERNS:
-                matcher = ds.PathMatcher(pattern)
-                prefix = "out/" if pattern.startswith("out/") else ""
-                for label, text in (("不匹配", prefix + "a" * length), ("匹配", prefix + "a" * length + "b")):
-                    start = time.perf_counter()
-                    matched = matcher.matches(text)
-                    elapsed = time.perf_counter() - start
-                    self.assertLess(elapsed, 0.5, f"{pattern} 对 {length} 字符（{label}）耗时 {elapsed:.3f} 秒")
-                    self.assertIsInstance(matched, bool)
+        # 不用绝对阈值（满载下会抖红）：每个（模式，匹配与否）按长度加倍做相对比较，第一次越界就失败，更长的长度不会继续跑
+        # （回溯实现遇到 5000 字符会算上几个小时）；见 scaling_guard 的说明。最长 3840 字符。
+        for pattern in self.PATTERNS:
+            matcher = ds.PathMatcher(pattern)
+            prefix = "out/" if pattern.startswith("out/") else ""
+            for label, suffix in (("不匹配", ""), ("匹配", "b")):
+                scaling_guard.assert_growth_is_bounded(
+                    self, lambda length, matcher=matcher, prefix=prefix, suffix=suffix: (lambda: matcher.matches(prefix + "a" * length + suffix)),
+                    (120, 240, 480, 960, 1920, 3840), label=f"{pattern}（{label}）")
+                self.assertIsInstance(matcher.matches(prefix + "a" * 120 + suffix), bool)
 
     def test_many_long_paths_through_one_matcher_stay_fast(self) -> None:
         matcher = ds.PathMatcher("out/*a*a*a*b")
         paths = [f"out/{'a' * 1000}{index}" for index in range(200)] + [f"out/{'a' * 1000}b"]
-        start = time.perf_counter()
-        results = []
-        for path in paths:
-            call_start = time.perf_counter()
-            results.append(matcher.matches(path))
-            # 单次就检查：回溯实现一次要二十多秒，不能让 200 条全跑完。
-            self.assertLess(time.perf_counter() - call_start, 0.5, f"一条 1000 字符的路径就要 {time.perf_counter() - call_start:.3f} 秒")
-        elapsed = time.perf_counter() - start
-        self.assertEqual(results.count(True), 1)
-        self.assertLess(elapsed, 2.0, f"200 条 1000 字符的路径耗时 {elapsed:.3f} 秒")
+        self.assertEqual([matcher.matches(path) for path in paths].count(True), 1)
+
+        # 一批路径的总耗时随路径长度加倍的相对比较（每批 50 条）；不用“单条 < 0.5 秒、200 条 < 2 秒”的绝对阈值。
+        def prepare(length: int):
+            batch = [f"out/{'a' * length}{index}" for index in range(50)] + [f"out/{'a' * length}b"]
+            return lambda: [matcher.matches(path) for path in batch]
+
+        scaling_guard.assert_growth_is_bounded(self, prepare, (250, 500, 1000, 2000), label="一批长路径")
 
 
 class MergeReachabilityTests(FollowupBase):
@@ -170,10 +168,15 @@ class MergeReachabilityTests(FollowupBase):
         long_path = "out/" + "a" * 1000 + "b"
         lines = self.good() + [write_line(t, f"{t}/{long_path}"), open_line(t, f"{t}/{long_path}")]
         raw = self.raw(lines)
-        start = time.perf_counter()
         sample = self.merge(raw, transient=["out/*a*a*a*b"])
-        elapsed = time.perf_counter() - start
-        self.assertLess(elapsed, 2.0, f"merge 耗时 {elapsed:.3f} 秒")
+        # 不用 merge < 2 秒的绝对阈值：路径长度加倍的相对比较（500/1000/2000 字符）。
+
+        def prepare(length: int):
+            path = "out/" + "a" * length + "b"
+            return (lambda raw=self.raw(self.good() + [write_line(t, f"{t}/{path}"), open_line(t, f"{t}/{path}")]):
+                    self.merge(raw, transient=["out/*a*a*a*b"]))
+
+        scaling_guard.assert_growth_is_bounded(self, prepare, (500, 1000, 2000), label="merge 长路径")
         row = sample["review"]["allowances"]["transient"][0]
         self.assertEqual((row["pattern"], row["paths"], row["read_back"], row["unused"]), ("out/*a*a*a*b", 1, 1, False))
 

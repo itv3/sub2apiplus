@@ -56,17 +56,6 @@
   "backend/internal/service/plugin_runtime_integration_test.go\telapsed-bound\tassert.Less(t, time.Since(started), 2*time.Second)",
   "backend/internal/service/pricing_service_hot_reload_test.go\tshort-timeout\tcase <-time.After(50 * time.Millisecond):",
   "backend/internal/service/pricing_service_test.go\tshort-timeout\tcase <-time.After(100 * time.Millisecond):",
-  "backend/internal/service/upstream_billing_probe_test.go\tshort-timeout\tcase <-time.After(100 * time.Millisecond):",
-  "tools/official_client_capture/tests/test_ci_declared_inputs_hardening.py\telapsed-bound\tself.assertLess(elapsed, 0.2, f\"{pattern} 在 120 个 a 上耗时 {elapsed:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_declared_inputs_hardening_wp1f.py\telapsed-bound\tself.assertLess(elapsed, 0.5, f\"{pattern} 对 {length} 字符耗时 {elapsed:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_declared_inputs_hardening_wp1f.py\telapsed-bound\tself.assertLess(elapsed, 0.5, f\"整个覆盖检查耗时 {elapsed:.3f} 秒（{pattern}，{length} 字符）\")",
-  "tools/official_client_capture/tests/test_ci_declared_sampler_glob_linear.py\telapsed-bound\tself.assertLess(elapsed, 0.5, f\"{pattern} 对 {length} 字符（{label}）耗时 {elapsed:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_declared_sampler_glob_linear.py\telapsed-bound\tself.assertLess(elapsed, 2.0, f\"200 条 1000 字符的路径耗时 {elapsed:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_declared_sampler_glob_linear.py\telapsed-bound\tself.assertLess(elapsed, 2.0, f\"merge 耗时 {elapsed:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_declared_sampler_glob_linear.py\telapsed-bound\tself.assertLess(time.perf_counter() - call_start, 0.5, f\"一条 1000 字符的路径就要 {time.perf_counter() - call_start:.3f} 秒\")",
-  "tools/official_client_capture/tests/test_ci_entry_dryrun.py\telapsed-bound\tself.assertLess(waited, 1)",
-  "tools/official_client_capture/tests/test_ci_entry_dryrun.py\tshort-timeout\tdr._acquire_serial_lock(lock, lambda: True, timeout=0.2, poll=0.05)",
-  "tools/official_client_capture/tests/test_ci_go_compile_warmup.py\tshort-timeout\tself.run_prepare(timeout=.2)",
-  "tools/official_client_capture/tests/test_ci_reservation_preemption.py\tshort-timeout\tself.config = _config(self.root, reservation_grace_seconds=.15, reservation_stop_seconds=.15,"
+  "backend/internal/service/upstream_billing_probe_test.go\tshort-timeout\tcase <-time.After(100 * time.Millisecond):"
  ]
 }
