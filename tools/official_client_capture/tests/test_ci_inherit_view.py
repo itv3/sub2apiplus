@@ -194,6 +194,16 @@ class NarrowedWorld(unittest.TestCase):
         path = self.world.store.record_path(self.UNIT, record["record_sha256"])
         return ur.check_record(self.world.store, path, record, current, self.world.facts(fixture.T0, **facts)), current
 
+    def reseal(self, record: dict, mutate, *, run_id: str) -> dict:
+        """改写记录、重算自摘要、另存为一条新记录并发布它所在的运行清单。"""
+        body = {key: value for key, value in copy.deepcopy(record).items() if key != "record_sha256"}
+        body["run"] = {**body["run"], "run_id": run_id}
+        mutate(body)
+        forged = ur.seal_record(body)
+        self.world.store.put_record(forged)
+        self.world.publish_run(run_id, "re-execute", {self.UNIT: (forged, "executed")}, decided=fixture.T0 - 3600)
+        return forged
+
     def assertAccepted(self, problems: list[str]) -> None:
         self.assertEqual(problems, [])
 
@@ -405,16 +415,6 @@ class NarrowedCheckTests(NarrowedWorld):
 
     # -- T15、T16、T17：旧记录与篡改 -------------------------------------------------------------------------------
 
-    def reseal(self, record: dict, mutate, *, run_id: str) -> dict:
-        """改写记录、重算自摘要、另存为一条新记录并发布它所在的运行清单。"""
-        body = {key: value for key, value in copy.deepcopy(record).items() if key != "record_sha256"}
-        body["run"] = {**body["run"], "run_id": run_id}
-        mutate(body)
-        forged = ur.seal_record(body)
-        self.world.store.put_record(forged)
-        self.world.publish_run(run_id, "re-execute", {self.UNIT: (forged, "executed")}, decided=fixture.T0 - 3600)
-        return forged
-
     def test_t15_old_records_without_the_new_fields_keep_whole_digest_semantics(self) -> None:
         record = self.publish()
         stripped = self.reseal(record, lambda body: [body["read_audit"].pop(key) for key in ("inherit_view_schema", "inherit_inputs_sha256")],
@@ -575,6 +575,90 @@ class NarrowedCheckTests(NarrowedWorld):
         self.world.publish_run("mix-legacy", "re-execute", {self.UNIT: (legacy, "executed")}, decided=fixture.T0 - 3600)
         decision = ur.evaluate(self.world.store, current, facts)
         self.assertEqual(decision.record["record_sha256"], old["record_sha256"])
+
+
+class WalkExemptionTests(NarrowedWorld):
+    """B2 比对侧豁免：整树遍历签名下，受管根测试目录里只被 stat 的文件，视图忽略它的 ``core.size``（其余照比）。
+
+    签名＝来源记录里该测试目录被枚举，且目录下“只 stat”的直接子文件不少于 50 个、占目录项 80% 以上（工具身份遍历 ``rglob`` 整棵受管树的形状）。
+    零星 stat 个别测试文件的单元不满足签名，不豁免；用例用 60 个测试文件造出两种形状。"""
+
+    FILES = 60
+    STAT_ONLY = 60
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tests_dir = make_dir(self.tree / "tools" / "official_client_capture" / "tests")
+        self.test_files = [write_file(self.tests_dir / f"test_{index:03d}.py", f"# 测试文件 {index:03d}\n") for index in range(self.FILES)]
+
+    def host_paths(self) -> list[Path]:
+        return [*super().host_paths(), self.tests_dir, *self.test_files]
+
+    def trace_lines(self) -> list[str]:
+        cwd = f"AT_FDCWD<{self.tree}>"
+        lines = super().trace_lines()
+        lines.append(f'1 newfstatat({cwd}, "{self.tests_dir}", 0x1, 0) = 0')
+        lines.append(f'1 getdents64(3<{self.tests_dir}>, 0x1 /* {self.FILES} entries */, 32768) = 80')
+        lines += [f'1 newfstatat({cwd}, "{path}", 0x1, 0) = 0' for path in self.test_files[:self.STAT_ONLY]]
+        return lines
+
+    def signature(self, record: dict) -> frozenset:
+        return ra.walk_stat_directories(record["inputs"], record["read_audit"]["host_path_modes"], (str(self.tree), None))
+
+
+class WalkSignatureTests(WalkExemptionTests):
+    def test_b2_whole_directory_walk_exempts_the_size_of_stat_only_test_files(self) -> None:
+        record = self.publish()
+        self.assertEqual(self.signature(record), frozenset({str(self.tests_dir)}))
+        self.assertAccepted(self.check(record)[0])
+        self.test_files[7].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
+        problems, current = self.check(record)
+        self.assertAccepted(problems)
+        self.assertNotEqual(current.inputs_sha256, record["inputs_sha256"], "整份摘要早就不同——旧口径会因此拒绝")
+        consumer, _ = self.check(record, historical_read_audit=True, before=lambda value: setattr(
+            value, "inherit_inputs_sha256", ra.inherit_current_digest(record, value.inputs)))
+        self.assertAccepted(consumer)
+
+    def test_b2_everything_else_about_those_files_is_still_compared(self) -> None:
+        record = self.publish()
+        with self.subTest(case="权限变了"):
+            os.chmod(self.test_files[3], 0o600)
+            self.assertRejected(self.check(record)[0], "权限")
+            os.chmod(self.test_files[3], FILE_MODE)
+        with self.subTest(case="被删除（目录项变了）"):
+            self.test_files[4].unlink()
+            self.assertRejected(self.check(record)[0], "目录的直接条目")
+            write_file(self.test_files[4], "# 测试文件 004\n")
+        with self.subTest(case="新增文件（目录被枚举）"):
+            extra = write_file(self.tests_dir / "test_new.py", "# 新增\n")
+            self.assertRejected(self.check(record)[0], "目录的直接条目")
+            extra.unlink()
+        with self.subTest(case="文件换成符号链接"):
+            self.test_files[5].unlink()
+            self.test_files[5].symlink_to(self.other)
+            self.assertRejected(self.check(record)[0], "符号链接")
+
+    def test_b2_the_exemption_does_not_leak_to_other_files(self) -> None:
+        record = self.publish()
+        self.stat.write_text("大小变了的、不在测试目录里的 stat 文件", encoding="utf-8")
+        self.assertRejected(self.check(record)[0], "大小")
+
+    def test_b2_the_tampered_exempt_digest_is_caught(self) -> None:
+        record = self.publish()
+        forged = self.reseal(record, lambda body: body["read_audit"].__setitem__("inherit_inputs_sha256", "d" * 64), run_id="forged-walk")
+        self.assertRejected(self.check(forged)[0], "承接视图摘要")
+
+
+class SparseStatTests(WalkExemptionTests):
+    """零星 stat 个别测试文件（20 个，不到 80%，也不到 50 个）：不满足签名，大小照比。"""
+
+    STAT_ONLY = 20
+
+    def test_b2_sparse_stat_only_units_get_no_exemption(self) -> None:
+        record = self.publish()
+        self.assertEqual(self.signature(record), frozenset())
+        self.test_files[7].write_text("# 大小变了的测试文件，内容也不同\n" * 3, encoding="utf-8")
+        self.assertRejected(self.check(record)[0], "大小")
 
 
 class ViewPropertyTests(NarrowedWorld):

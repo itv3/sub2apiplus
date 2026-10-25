@@ -1893,6 +1893,53 @@ def _under_any(path: str, roots: Iterable[Any]) -> bool:
     return any(isinstance(root, str) and bool(root) and _under(path, root) for root in roots)
 
 
+# B2 比对侧豁免（承接输入收窄的配套，替代“把 _tool_tree_entries 改成按目录剪枝”——那条要改受管树 codex_upgrade.py，会破身份守恒）：
+# 工具身份计算（codex_upgrade._tool_tree_entries／_managed_tree_digests）用 rglob 遍历整棵受管树，会对 ``tests/`` 下的每个测试文件各
+# stat 一次，却因为过滤条件排除了 tests 而不读内容、不影响身份的值；这些 stat 把“测试文件大小”（v3 无条件集的 core.size）带进每个调用了
+# 身份计算的单元的承接依赖，于是任何一次修改测试文件都让这批单元（10-17 轮 53 个）无谓失效。
+# 豁免只认遍历的访问签名，不按路径一刀切：一个单元的来源记录里，受管根测试目录被枚举（list），且该目录下“只被 stat”的直接子文件
+# 不少于 WALK_MIN_FILES 个、占目录项的 WALK_MIN_FRACTION 以上——这才是整树遍历的形状（实测 10-17 轮 53 个单元各 stat 了目录 431 项里的
+# 445 个、其余 154 个单元一个都不 stat，没有零星的中间态）；零星 stat 个别测试文件的单元（例如 test_capture_test_layering 的 20 个）不满足
+# 签名，不豁免。满足签名的目录里“只 stat”的文件，视图只忽略它的 ``core.size``：kind／target／links／ancestors／mode／uid／gid 仍照比；
+# 内容本来就不比（只 stat）；目录项增删由被枚举的目录自己的目录项比较发现。残余：没有拿到这些 stat 的调用栈，签名是间接证据。
+WALK_TESTS_DIRECTORY = re.compile(r"/tools/official_client_(?:capture|control)/tests$")
+WALK_MIN_FILES = 50
+WALK_MIN_FRACTION = 0.8
+
+
+def walk_stat_directories(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) -> frozenset[str]:
+    """B2：来源记录里满足整树遍历签名的受管根测试目录（见上面的说明）。必须由**来源**的输入与访问类型算出，当前侧沿用这个集合。"""
+
+    found: set[str] = set()
+    roots = tuple(roots)
+    for entry in inputs or []:
+        if not is_host_entry_v3(entry):
+            continue
+        path = entry["detail"]["path"]
+        snapshot = entry["detail"]["snapshot"]
+        if (snapshot.get("kind") != "directory" or "list" not in (modes.get(path) or ()) or not WALK_TESTS_DIRECTORY.search(path)
+                or not _under_any(path, roots)):
+            continue
+        names = snapshot.get("entries") or []
+        stat_only = sum(1 for name in names if list(modes.get(f"{path}/{name}") or ()) == ["stat"])
+        if stat_only >= WALK_MIN_FILES and stat_only >= WALK_MIN_FRACTION * len(names):
+            found.add(path)
+    return frozenset(found)
+
+
+def _without_size(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """文件载荷去掉 ``core.size`` 的副本（B2 豁免比较用）。"""
+
+    copy = dict(snapshot)
+    if isinstance(copy.get("core"), Mapping):
+        copy["core"] = {key: value for key, value in copy["core"].items() if key != "size"}
+    return copy
+
+
+def _size_exempt(path: str, snapshot: Mapping[str, Any], kinds: frozenset[str], walk: frozenset[str]) -> bool:
+    return bool(walk) and snapshot.get("kind") == "file" and kinds == {"stat"} and path.rsplit("/", 1)[0] in walk
+
+
 def _pyc_promotions(modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) -> frozenset[str]:
     """G-P 守卫：只被 stat 的 ``.py`` 若其镜像字节码被读取，视同被读取。
 
@@ -1919,7 +1966,7 @@ def _pyc_promotions(modes: Mapping[str, Sequence[str]], roots: Iterable[Any]) ->
 
 
 def inherit_view(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str, Sequence[str]], *, roots: Iterable[Any] = (),
-                 only: Iterable[str] | None = None) -> dict[str, tuple]:
+                 only: Iterable[str] | None = None, walk: frozenset[str] | None = None) -> dict[str, tuple]:
     """一份输入明细的承接视图：``{条目名: 比较面}``，比较面是不可变的小元组。
 
     ``modes`` 是来源记录封存的 ``host_path_modes``（路径 → 访问类型），必须已与轨迹交叉核对；``roots`` 是（测试树, 数据根），
@@ -1930,10 +1977,15 @@ def inherit_view(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str,
       比较集（kind／target／links／ancestors／core）和被声明的易变字段值；内容摘要只在“文件且被 read／exec”（或 G-P 提升）时取，
       目录项只在“目录且被 list”时取。**调用方必须保证条目已过 ``check_host_entry_v3`` 自洽复核**，否则条目摘要不可信。
     * v2 宿主条目：不应出现在严格闭合记录里；出现就整份纳入。
-    * 非宿主条目：``repo:*``、``file:*``、``head`` 不进视图（F3）；其余一律整份纳入。"""
+    * 非宿主条目：``repo:*``、``file:*``、``head`` 不进视图（F3）；其余一律整份纳入。
+
+    ``walk``（B2）：满足整树遍历签名的测试目录集合。来源侧不给（由 ``inputs`` 自己算）；当前侧必须传来源算出的那一个，当前输入里没有
+    访问类型也没有来源的目录项，算不出同一个集合。这些目录下只被 stat 的文件，比较面是 ``("host-nosize", 忽略 core.size 的条目摘要, None, None)``。"""
 
     names = None if only is None else frozenset(only)
     promoted = _pyc_promotions(modes, roots)
+    if walk is None:
+        walk = walk_stat_directories(inputs, modes, roots)
     view: dict[str, tuple] = {}
     for entry in inputs or []:
         name = entry["name"]
@@ -1945,6 +1997,10 @@ def inherit_view(inputs: Sequence[Mapping[str, Any]] | None, modes: Mapping[str,
             if not kinds:
                 continue
             snapshot = entry["detail"]["snapshot"]
+            if _size_exempt(path, snapshot, kinds, walk):
+                dependency = entry["detail"].get("metadata_dependency")
+                view[name] = ("host-nosize", _canonical_digest(_v3_binding(_without_size(snapshot), dependency)), None, None)
+                continue
             content = snapshot["content_sha256"] if snapshot["kind"] == "file" and (kinds & CONTENT_ACCESS_KINDS or path in promoted) else None
             listing = tuple(snapshot["entries"]) if snapshot["kind"] == "directory" and kinds & LIST_ACCESS_KINDS else None
             view[name] = ("host", entry["sha256"], content, listing)
@@ -1969,12 +2025,13 @@ def inherit_current_digest(record: Mapping[str, Any], current_inputs: Sequence[M
     audit = record["read_audit"]
     modes = audit["host_path_modes"]
     roots = (audit.get("repo_root"), audit.get("data_root"))
-    source = inherit_view(record["inputs"], modes, roots=roots)
-    return inherit_view_digest(inherit_view(current_inputs, modes, roots=roots, only=source))
+    walk = walk_stat_directories(record["inputs"], modes, roots)
+    source = inherit_view(record["inputs"], modes, roots=roots, walk=walk)
+    return inherit_view_digest(inherit_view(current_inputs, modes, roots=roots, only=source, walk=walk))
 
 
 def _narrowed_entry_reason(name: str, old: Mapping[str, Any], new: Mapping[str, Any], modes: Mapping[str, Sequence[str]],
-                           promoted: frozenset[str]) -> str | None:
+                           promoted: frozenset[str], walk: frozenset[str] = frozenset()) -> str | None:
     """一个被访问的宿主条目在来源与当前之间的差异原因（没有差异返回 None）：与视图比较面逐项对应。"""
 
     try:
@@ -1984,6 +2041,8 @@ def _narrowed_entry_reason(name: str, old: Mapping[str, Any], new: Mapping[str, 
     if old["detail"].get("metadata_dependency") != new["detail"].get("metadata_dependency"):
         return f"{name}：元数据依赖声明与来源记录不同"
     path = old["detail"]["path"]
+    if _size_exempt(path, planned, frozenset(modes.get(path) or ()), walk):
+        planned, current = _without_size(planned), _without_size(current)      # B2：整树遍历签名下只 stat 的测试文件，忽略大小
     ok, reason = host_snapshot_matches(planned, current, modes.get(path, ()), entry_declared_fields(old))
     if not ok:
         return f"{name}：{reason}"
@@ -2030,7 +2089,8 @@ def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs
     if audit.get("host_path_modes") != modes:
         problems.append("记录封存的宿主访问类型缺失，或与完整轨迹重算的结果不符")
     try:
-        source = inherit_view(recorded_inputs, modes, roots=roots)
+        walk = walk_stat_directories(recorded_inputs, modes, roots)
+        source = inherit_view(recorded_inputs, modes, roots=roots, walk=walk)
         source_digest = inherit_view_digest(source)
         names = frozenset(source)
         promoted = _pyc_promotions(modes, roots)
@@ -2040,18 +2100,18 @@ def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs
             if current_digest != source_digest:
                 problems.append("清单登记的当前承接视图摘要与来源记录的不同（承接依赖变了，或清单被改过）")
         else:
-            now_view = inherit_view(current_inputs, modes, roots=roots, only=names)
+            now_view = inherit_view(current_inputs, modes, roots=roots, only=names, walk=walk)
             if inherit_view_digest(now_view) != source_digest:
                 before = len(problems)
                 for name in sorted(names):
                     if source[name] == now_view.get(name):
                         continue
-                    if name.startswith("host:") and source[name][0] == "host":
+                    if name.startswith("host:") and source[name][0] in ("host", "host-nosize"):
                         new = current.get(name)
                         if new is None:
                             problems.append(f"{name}：当前输入没有这个被访问过的宿主条目")
                             continue
-                        reason = _narrowed_entry_reason(name, recorded[name], new, modes, promoted)
+                        reason = _narrowed_entry_reason(name, recorded[name], new, modes, promoted, walk)
                         problems.append(reason or f"{name}：承接视图的比较面不同（逐项比较未发现具体原因，按失败处理）")
                     elif name not in now_view:
                         problems.append(f"{name}：当前输入没有这个条目")
@@ -2066,7 +2126,7 @@ def narrowed_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs
         pool = current if current_digest is None else recorded
         for name in sorted(names):
             entry = pool.get(name)
-            if source[name][0] != "host" or entry is None:
+            if source[name][0] not in ("host", "host-nosize") or entry is None:
                 continue
             path = entry["detail"]["path"]
             try:
