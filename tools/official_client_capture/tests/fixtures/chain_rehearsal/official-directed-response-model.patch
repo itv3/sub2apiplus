@@ -1,0 +1,222 @@
+diff --git a/tools/official_client_capture/upstream_byte_relay.py b/tools/official_client_capture/upstream_byte_relay.py
+index 5be766f1d..a3c62b2c4 100644
+--- a/tools/official_client_capture/upstream_byte_relay.py
++++ b/tools/official_client_capture/upstream_byte_relay.py
+@@ -1366,7 +1366,17 @@ async def _read_websocket_frame(reader: asyncio.StreamReader) -> bytes:
+ # [160]）改为 ApiError::ResponseIncomplete（codex-api/src/sse/responses.rs:432-451、657-665 [163]），映射成
+ # CodexErr::ResponseIncomplete，retry_delay 恒为 None（protocol/src/error.rs:421 [163]）：终止本轮、不重试、不降级，
+ # codex exec 以非零退出码结束。WS 路径走同一个 process_responses_event（responses_websocket.rs:866 [163]）。
++# 受控应答里 response.model 的历史默认值：只在无法确定请求模型时使用（旧调用方不传 model、请求体解不开）。
++# 0.163.0 起主线模型换了（gpt-5.5 已下线），受控应答改为跟随请求体里的 model，见 _request_model。
++#
++# 这个字段只是让合成应答更像真实服务端的形状，客户端不据此判断“服务端是否换了模型”：0.163.0 的
++# ResponsesStreamEvent::response_model 只读 response.headers／事件 headers 里的 openai-model、x-openai-model，
++# HTTP 侧另读响应头 openai-model、WS 侧读握手响应头 openai-model（codex-api/src/sse/responses.rs:50-54、195-209、
++# 269-279，endpoint/responses_websocket.rs:555-557 [163]），从不读 response.model。ModelReroute 警告
++# （core/src/session/mod.rs:4091 maybe_warn_on_server_model_mismatch）只由这个 ServerModel 事件触发，所以受控应答
++# 只要不带 openai-model 头（见 test_official_directed_samples 的锁定测试），无论 model 字段写什么都不会出现警告。
+ _OFFICIAL_SYNTHETIC_MODEL = "gpt-5.5"
++_MODEL_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ _OFFICIAL_STREAM_FAULT_KINDS = ("flex-unavailable", "interrupted", "incomplete-terminal")
+ _OFFICIAL_STREAM_FAULT_TRANSPORTS = ("http", "ws")
+ # 1×1 透明 PNG：file_id 编辑链的 images/edits 合成结果，客户端只解码并按需落盘。
+@@ -1389,25 +1399,40 @@ def _official_usage(output_tokens: int = 1) -> dict:
+     }
+ 
+ 
+-def _official_response(response_id: str, status: str, **fields) -> dict:
++def _request_model(payload: Any) -> str | None:
++    """请求 JSON 顶层的 model（HTTP 解码后的正文，或 WS 的 response.create 消息）；不是合法 slug 返回 None，不猜测。"""
++
++    model = payload.get("model") if isinstance(payload, dict) else None
++    if isinstance(model, str) and _MODEL_SLUG_RE.fullmatch(model):
++        return model
++    return None
++
++
++def _official_response(
++    response_id: str, status: str, *, model: str | None = None, **fields
++) -> dict:
++    """受控应答的 response 对象；model 跟随请求（见 _request_model），缺省退回历史默认值。"""
++
+     return {
+         "id": response_id,
+         "object": "response",
+         "created_at": int(time.time()),
+         "status": status,
+-        "model": _OFFICIAL_SYNTHETIC_MODEL,
++        "model": model or _OFFICIAL_SYNTHETIC_MODEL,
+         **fields,
+     }
+ 
+ 
+-def _official_created_event(response_id: str) -> dict:
++def _official_created_event(response_id: str, model: str | None = None) -> dict:
+     return {
+         "type": "response.created",
+-        "response": _official_response(response_id, "in_progress", output=[]),
++        "response": _official_response(response_id, "in_progress", model=model, output=[]),
+     }
+ 
+ 
+-def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
++def _official_stream_fault_events(
++    kind: str, response_id: str, model: str | None = None
++) -> list[dict]:
+     """受控流内故障：created 之后以 failed（flex_unavailable）或 incomplete（interrupted／max_output_tokens）结束。"""
+ 
+     if kind == "flex-unavailable":
+@@ -1416,6 +1441,7 @@ def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
+             "response": _official_response(
+                 response_id,
+                 "failed",
++                model=model,
+                 output=[],
+                 error={
+                     "code": "flex_unavailable",
+@@ -1431,6 +1457,7 @@ def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
+             "response": _official_response(
+                 response_id,
+                 "incomplete",
++                model=model,
+                 output=[],
+                 incomplete_details={"reason": "interrupted"},
+                 usage=_official_usage(0),
+@@ -1444,6 +1471,7 @@ def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
+             "response": _official_response(
+                 response_id,
+                 "incomplete",
++                model=model,
+                 output=[],
+                 incomplete_details={"reason": "max_output_tokens"},
+                 usage=_official_usage(16),
+@@ -1451,7 +1479,7 @@ def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
+         }
+     else:
+         raise ValueError(f"未知流内故障：{kind}")
+-    return [_official_created_event(response_id), terminal]
++    return [_official_created_event(response_id, model), terminal]
+ 
+ 
+ def _post_terminal_request_kind(
+@@ -1554,7 +1582,9 @@ def _ws_upgrade_429_fallback_post(
+     }
+ 
+ 
+-def _official_message_events(response_id: str, text: str) -> list[dict]:
++def _official_message_events(
++    response_id: str, text: str, model: str | None = None
++) -> list[dict]:
+     """受控正常完成：一条 assistant 消息加 completed。"""
+ 
+     message = {
+@@ -1565,12 +1595,12 @@ def _official_message_events(response_id: str, text: str) -> list[dict]:
+         "content": [{"type": "output_text", "text": text, "annotations": []}],
+     }
+     return [
+-        _official_created_event(response_id),
++        _official_created_event(response_id, model),
+         {"type": "response.output_item.done", "output_index": 0, "item": message},
+         {
+             "type": "response.completed",
+             "response": _official_response(
+-                response_id, "completed", output=[message], usage=_official_usage()
++                response_id, "completed", model=model, output=[message], usage=_official_usage()
+             ),
+         },
+     ]
+@@ -1632,7 +1662,7 @@ def _image_edit_chain_decision(payload: Any, file_id: str, call_issued: bool) ->
+     return "other_completed"
+ 
+ 
+-def _official_imagegen_call_events(response_id: str) -> list[dict]:
++def _official_imagegen_call_events(response_id: str, model: str | None = None) -> list[dict]:
+     """受控工具调用：让官方客户端对会话里最近一张图片执行 imagegen 编辑（num_last_images_to_include=1）。"""
+ 
+     call = {
+@@ -1649,12 +1679,12 @@ def _official_imagegen_call_events(response_id: str) -> list[dict]:
+         "status": "completed",
+     }
+     return [
+-        _official_created_event(response_id),
++        _official_created_event(response_id, model),
+         {"type": "response.output_item.done", "output_index": 0, "item": call},
+         {
+             "type": "response.completed",
+             "response": _official_response(
+-                response_id, "completed", output=[call], usage=_official_usage()
++                response_id, "completed", model=model, output=[call], usage=_official_usage()
+             ),
+         },
+     ]
+@@ -2218,23 +2248,25 @@ class Relay:
+                 break
+             ordinal += 1
+             response_id = f"resp_official_fault_ws_{ordinal:04d}"
++            # 受控应答的 response.model 跟随这条 response.create 自己的 model（主线换成 Lite 模型后不能再写死 gpt-5.5）。
++            model = _request_model(message)
+             if message.get("generate") is False:
+                 events = [
+-                    _official_created_event(response_id),
++                    _official_created_event(response_id, model),
+                     {
+                         "type": "response.completed",
+                         "response": _official_response(
+-                            response_id, "completed", output=[], usage=_official_usage(0)
++                            response_id, "completed", model=model, output=[], usage=_official_usage(0)
+                         ),
+                     },
+                 ]
+                 action = "warmup_completed"
+             elif not faulted:
+                 faulted = True
+-                events = _official_stream_fault_events(kind, response_id)
++                events = _official_stream_fault_events(kind, response_id, model)
+                 action = f"stream_fault_{kind}"
+             else:
+-                events = _official_message_events(response_id, "OK")
++                events = _official_message_events(response_id, "OK", model)
+                 action = "continuation_completed"
+                 # 终止型故障（incomplete-terminal）之后还有生成请求：客户端把它当成可重试或可续发，行为偏离终止语义，
+                 # 在连接元数据里留标记（请求仍照常合成完成，字节完整记录），采集脚本据此失败关闭。
+@@ -3596,8 +3628,12 @@ class Relay:
+                     if fault_body:
+                         rec.write("client_to_upstream", fault_body)
+                     response_id = "resp_official_fault_http_0001"
++                    # response.model 跟随请求体里的 model；请求体解不开（zstd 依赖缺失等）时退回历史默认值。
++                    fault_model = _request_model(
++                        _decoded_request_json(initial_head, fault_body or b"")
++                    )
+                     response = _official_sse_response(
+-                        _official_stream_fault_events(self.args.stream_fault, response_id)
++                        _official_stream_fault_events(self.args.stream_fault, response_id, fault_model)
+                     )
+                     rec.write("upstream_to_client", response)
+                     writer.write(response)
+@@ -3638,8 +3674,10 @@ class Relay:
+                     if edit_body:
+                         rec.write("client_to_upstream", edit_body)
+                     if request_line.startswith("POST /backend-api/codex/responses "):
++                        edit_payload = _decoded_request_json(initial_head, edit_body or b"")
++                        edit_model = _request_model(edit_payload)
+                         decision = _image_edit_chain_decision(
+-                            _decoded_request_json(initial_head, edit_body or b""),
++                            edit_payload,
+                             self.args.synthesize_image_edit_file_id,
+                             self._image_edit_call_issued,
+                         )
+@@ -3656,11 +3694,11 @@ class Relay:
+                                 self._image_edit_call_issued = True
+                         response_id = f"resp_official_image_edit_{ordinal:04d}"
+                         if decision == "imagegen_edit_call":
+-                            events = _official_imagegen_call_events(response_id)
++                            events = _official_imagegen_call_events(response_id, edit_model)
+                         elif decision == "final_message":
+-                            events = _official_message_events(response_id, "EDIT-OK")
++                            events = _official_message_events(response_id, "EDIT-OK", edit_model)
+                         else:
+-                            events = _official_message_events(response_id, "OK")
++                            events = _official_message_events(response_id, "OK", edit_model)
+                         action = decision
+                         response = _official_sse_response(events)
+                     else:

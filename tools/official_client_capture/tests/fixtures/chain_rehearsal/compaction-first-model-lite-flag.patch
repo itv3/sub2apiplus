@@ -1,0 +1,106 @@
+diff --git a/tools/official_client_capture/build_compaction_model_catalog.py b/tools/official_client_capture/build_compaction_model_catalog.py
+index c6a01b9b6..fa4c4da8a 100644
+--- a/tools/official_client_capture/build_compaction_model_catalog.py
++++ b/tools/official_client_capture/build_compaction_model_catalog.py
+@@ -42,8 +42,16 @@ def build_catalog(
+     second_model: str,
+     second_track: str,
+     reason: str,
++    first_use_responses_lite: bool = False,
+ ) -> dict[str, Any]:
+-    """校验两个模型的真实轨道，并只改写压缩触发字段。"""
++    """校验两个模型的真实轨道，并只改写压缩触发字段。
++
++    ``first_use_responses_lite`` 是首模型（主线模型）应有的 use_responses_lite，取目标版本
++    在 capturelib.model 里的主线 Lite 声明：0.160.0 及更早的主线是非 Lite 模型（默认 False，
++    历史 Job 没有该参数时语义不变），0.163.0 起主线换成 Lite 模型（True）。触发 comp_hash_changed
++    与 model_downshift 的是下面改写的 comp_hash／窗口字段，与 Lite 标志无关，所以这里只核对
++    目录里的真实标志与冻结声明一致，不放宽成“两种都接受”。
++    """
+ 
+     if (
+         not MODEL_RE.fullmatch(first_model)
+@@ -69,8 +77,12 @@ def build_catalog(
+     if set(matches) != {first_model, second_model}:
+         missing = sorted({first_model, second_model} - set(matches))
+         raise CatalogError("压缩场景模型目录缺少唯一模型：" + "、".join(missing))
+-    if matches[first_model].get("use_responses_lite") is not False:
+-        raise CatalogError("压缩场景首模型必须是 use_responses_lite=false 的 Main 模型。")
++    if matches[first_model].get("use_responses_lite") is not first_use_responses_lite:
++        raise CatalogError(
++            "压缩场景首模型必须是 "
++            f"use_responses_lite={str(first_use_responses_lite).lower()} 的 Main 模型"
++            "（与目标版本的主线 Lite 声明一致）。"
++        )
+     expected_second_lite = second_track == "lite"
+     if matches[second_model].get("use_responses_lite") is not expected_second_lite:
+         raise CatalogError(
+@@ -126,6 +138,13 @@ def _parser() -> argparse.ArgumentParser:
+     parser.add_argument("--first-model", required=True)
+     parser.add_argument("--second-model", required=True)
+     parser.add_argument("--second-track", choices=("main", "lite"), required=True)
++    # 首模型（主线模型）应有的 use_responses_lite；缺省 false 保持 0.160.0 及更早 Job 的语义，
++    # 0.163.0 起的场景清单显式传 true（主线是 Lite 模型）。
++    parser.add_argument(
++        "--first-use-responses-lite",
++        choices=("true", "false"),
++        default="false",
++    )
+     parser.add_argument(
+         "--reason",
+         choices=("comp_hash_changed", "model_downshift"),
+@@ -143,6 +162,7 @@ def main() -> int:
+             second_model=arguments.second_model,
+             second_track=arguments.second_track,
+             reason=arguments.reason,
++            first_use_responses_lite=arguments.first_use_responses_lite == "true",
+         )
+         _write_catalog(arguments.output, payload)
+     except (CatalogError, OSError) as error:
+diff --git a/tools/official_client_capture/run_official_relay_scenario.sh b/tools/official_client_capture/run_official_relay_scenario.sh
+index 903d7cb3f..248d2c180 100755
+--- a/tools/official_client_capture/run_official_relay_scenario.sh
++++ b/tools/official_client_capture/run_official_relay_scenario.sh
+@@ -48,6 +48,7 @@ compaction_reason=""
+ compaction_first_model=""
+ compaction_second_model=""
+ compaction_second_track=""
++compaction_first_lite=""
+ compaction_catalog=""
+ 
+ configure_compaction_models() {
+@@ -74,9 +75,18 @@ configure_compaction_models() {
+     echo "压缩场景的首模型与第二模型必须不同。" >&2
+     exit 2
+   fi
++  # 首模型（主线模型）应有的 use_responses_lite：0.160.0 及更早的主线是非 Lite 模型，缺省 false
++  # 保持历史 Job 语义；0.163.0 起主线是 Lite 模型，场景清单显式注入 true（取自 capturelib.model
++  # 的主线 Lite 声明，清单加载时与声明交叉校验）。comp_hash／窗口由受控目录改写，与该标志无关。
++  local first_lite=${COMPACTION_FIRST_USE_RESPONSES_LITE:-false}
++  if [[ $first_lite != true && $first_lite != false ]]; then
++    echo "COMPACTION_FIRST_USE_RESPONSES_LITE 必须是 true 或 false。" >&2
++    exit 2
++  fi
+   compaction_first_model=$model
+   compaction_second_model=$secondary
+   compaction_second_track=$secondary_track
++  compaction_first_lite=$first_lite
+ }
+ 
+ # **必须关掉的非必要流量**（§1.5.4）。不关的后果是实测的：一次三轮对话 58 个请求里
+@@ -1182,6 +1192,7 @@ case "$scenario" in
+       --first-model "$compaction_first_model" \
+       --second-model "$compaction_second_model" \
+       --second-track "$compaction_second_track" \
++      --first-use-responses-lite "$compaction_first_lite" \
+       --reason "$compaction_reason"
+     chmod 600 "$work_dir/comp-hash-catalog.json" ;;
+   model-downshift)
+@@ -1204,6 +1215,7 @@ case "$scenario" in
+       --first-model "$compaction_first_model" \
+       --second-model "$compaction_second_model" \
+       --second-track "$compaction_second_track" \
++      --first-use-responses-lite "$compaction_first_lite" \
+       --reason "$compaction_reason"
+     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
+   oauth-refresh)

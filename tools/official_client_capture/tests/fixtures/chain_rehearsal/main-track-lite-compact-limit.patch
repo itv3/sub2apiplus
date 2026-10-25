@@ -1,0 +1,52 @@
+diff --git a/tools/official_client_capture/codex_upgrade_scenarios_0_163_0.json b/tools/official_client_capture/codex_upgrade_scenarios_0_163_0.json
+index 6495aa16f..5bfaf0d5c 100644
+--- a/tools/official_client_capture/codex_upgrade_scenarios_0_163_0.json
++++ b/tools/official_client_capture/codex_upgrade_scenarios_0_163_0.json
+@@ -2802,7 +2802,7 @@
+         "A09",
+         "A10"
+       ],
+-      "description": "legacy compact 不可达正场景（turn-state 维度）：沿用 0.154 原触发参数（--disable remote_compaction_v2、model_auto_compact_token_limit=4000、中继在 WS response.metadata 边界注入 turn-state）。0.156.1 起忽略该特性键，自动压缩必须仍走 /responses + compaction_trigger（reason=context_limit、implementation=responses_compaction_v2），全量上行字节不得出现 POST /backend-api/codex/responses/compact",
++      "description": "legacy compact 不可达正场景（turn-state 维度）：沿用 0.154 原触发参数（--disable remote_compaction_v2、model_auto_compact_token_limit=2000（0.163.0 起主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000）、中继在 WS response.metadata 边界注入 turn-state）。0.156.1 起忽略该特性键，自动压缩必须仍走 /responses + compaction_trigger（reason=context_limit、implementation=responses_compaction_v2），全量上行字节不得出现 POST /backend-api/codex/responses/compact",
+       "required": true,
+       "steps": [
+         {
+@@ -2820,7 +2820,8 @@
+             "SCENARIO": "turnstate-compact",
+             "RELAY_INJECT_WS_TURN_STATE": "upgrade-turn-state",
+             "FORBID_REQUEST_PATHS": "/backend-api/codex/responses/compact",
+-            "EXPECT_COMPACTION_REASON": "context_limit"
++            "EXPECT_COMPACTION_REASON": "context_limit",
++            "COMPACT_TOKEN_LIMIT": "2000"
+           },
+           "timeout_seconds": 1800
+         }
+@@ -2867,7 +2868,7 @@
+         "A09",
+         "A10"
+       ],
+-      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=4000，不注入 turn-state；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
++      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=2000（0.163.0 起主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000），不注入 turn-state；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
+       "required": true,
+       "steps": [
+         {
+@@ -2888,7 +2889,8 @@
+             "MODEL_TRACK": "main",
+             "EXPECT_USE_RESPONSES_LITE": "true",
+             "FORBID_REQUEST_PATHS": "/backend-api/codex/responses/compact",
+-            "EXPECT_COMPACTION_REASON": "context_limit"
++            "EXPECT_COMPACTION_REASON": "context_limit",
++            "COMPACT_TOKEN_LIMIT": "2000"
+           },
+           "timeout_seconds": 1800
+         }
+@@ -3104,7 +3106,8 @@
+             "RUN_ID": "{campaign_id}-official-legacy-compact-beta",
+             "SCENARIO": "legacy-compact-beta",
+             "FORBID_REQUEST_PATHS": "/backend-api/codex/responses/compact",
+-            "EXPECT_COMPACTION_REASON": "context_limit"
++            "EXPECT_COMPACTION_REASON": "context_limit",
++            "COMPACT_TOKEN_LIMIT": "2000"
+           },
+           "timeout_seconds": 1800
+         }
