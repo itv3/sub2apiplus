@@ -1,0 +1,2918 @@
+{
+ "calibration": {
+  "note": "新增的测试模块没有标定值（core_seconds 为 null）：按保守口径照跑；用 unit_ownership.py calibrate／materialize 重标",
+  "run_id": "20261022t115456z-1115662-239d70",
+  "source": "ARM64 记录库 10-22 一轮全集（re-execute，474 个单元）的单元秒数×核数按模块汇总"
+ },
+ "cheap_core_seconds": 30,
+ "coupled": [
+  {
+   "ignore_assignments": [
+    "FROZEN_PROFILE_SHA256S"
+   ],
+   "modules": [
+    "test_claude_build_rule_assertion_results",
+    "test_claude_candidate_draft_projection",
+    "test_claude_recorded_candidate_source",
+    "test_claude_recorded_full_validation",
+    "test_claude_rule_assertion",
+    "test_claude_rule_expectations_2_1_226",
+    "test_claude_upgrade_boundary_codex",
+    "test_claude_upgrade_candidate_seal_evidence",
+    "test_claude_upgrade_compare_accept",
+    "test_claude_vc5_chain_fixture"
+   ],
+   "patterns": [
+    "tools/official_client_capture/claude_upgrade_scenarios_[0-9]*.json",
+    "tools/official_client_capture/claude_rule_expectations_[0-9]*.json",
+    "tools/official_client_capture/claude_rule_assertion.py"
+   ],
+   "reason": "Codex 版本登记会机械地改 Claude 场景清单里的受管工具文件名单、重生成 Claude 期望画像并同步冻结摘要（FROZEN_PROFILE_SHA256S）；它们是镜像式重锚，只有直接核对这些锚点的测试需要重跑，Claude 重集成链并不关心。Python 联动文件只有在抹掉冻结摘要赋值后其余完全不变时才算联动。"
+  }
+ ],
+ "description": "门禁单元按客户端归属（Codex 升级工具优化第 9 项）：物化后的结果，评审看 diff；规则与校验见 tools/ci/unit_ownership.py，改它用 materialize 重新生成，不手改派生部分。",
+ "enabled_clients": [
+  "codex"
+ ],
+ "generic_names": [
+  "__init__.py",
+  "README.md",
+  "manifest.json",
+  "go.mod",
+  "go.sum",
+  "VERSION"
+ ],
+ "generic_refs": [
+  "tools/official_client_capture",
+  "tools/official_client_control",
+  "tools/ci",
+  "tools/arm64_capture_driver",
+  "tools/upstream_merge",
+  "docs/egress",
+  "backend/internal"
+ ],
+ "hubs": [
+  "tools/official_client_capture/codex_upgrade.py",
+  "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+  "tools/official_client_capture/codex_upgrade_campaign_disposition.py",
+  "tools/official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py",
+  "tools/official_client_capture/codex_upgrade_candidate_build.py",
+  "tools/official_client_capture/codex_upgrade_client_adapter.py",
+  "tools/official_client_capture/codex_upgrade_evidence_manifest.py",
+  "tools/official_client_capture/codex_upgrade_evidence_permissions.py",
+  "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+  "tools/official_client_capture/codex_upgrade_harden_evidence_permissions.py",
+  "tools/official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
+  "tools/official_client_capture/codex_upgrade_live_request_provenance.py",
+  "tools/official_client_capture/codex_upgrade_official_attempt_audit.py",
+  "tools/official_client_capture/codex_upgrade_policy_certification.py",
+  "tools/official_client_capture/codex_upgrade_pre_a3_certification.py",
+  "tools/official_client_capture/codex_upgrade_predispatch_stop.py",
+  "tools/official_client_capture/codex_upgrade_project_ledger.py",
+  "tools/official_client_capture/codex_upgrade_reconciler.py",
+  "tools/official_client_capture/codex_upgrade_root_cause.py",
+  "tools/official_client_capture/codex_upgrade_seal_rehearsal.py",
+  "tools/official_client_capture/codex_upgrade_supervisor.py",
+  "tools/official_client_capture/codex_upgrade_time_reconciliation.py",
+  "tools/official_client_capture/codex_upgrade_timing_ledger.py",
+  "tools/official_client_capture/codex_upgrade_tool_identity_policy.py",
+  "tools/official_client_capture/codex_upgrade_vc0_closeout.py",
+  "tools/official_client_capture/codex_upgrade_vc_artifacts.py",
+  "tools/official_client_capture/codex_upgrade_vc_receipt.py",
+  "tools/official_client_capture/codex_upgrade_wire_transition.py",
+  "tools/official_client_capture/codex_upgrade_zero_request_smoke.py",
+  "tools/official_client_capture/drive_codex_model_catalog.py"
+ ],
+ "infra_prefixes": [
+  "test_ci_",
+  "test_arm64_",
+  "test_pre_a3_",
+  "test_unit_inherit",
+  "test_driver_",
+  "test_managed_",
+  "test_orchestrator_",
+  "test_producer_replay_",
+  "test_upgrade_client_adapter",
+  "test_comparison_baseline_contract",
+  "test_commands"
+ ],
+ "modules": {
+  "test_acceptance_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_acceptance_end_to_end": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.2,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_account_gate_restoration": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_analysis": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_arm64_capture_driver": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 129.2,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_cleanup_context": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_fix_and_continue": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 526.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_fix_safety": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 61.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_vc2_preflight": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_vc4_preconditions": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 7.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_vc5_recover": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_vc_batch_boundary": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 13.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_driver_wait": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 17.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_phase_context": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_round_context": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_supervised_deploy": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 7.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_arm64_supervised_deploy_codex_parity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_arm64_supervised_deploy_transaction": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 61.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_assertion_bundle_wiring": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_assertion_gate": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_attempt_carry_forward": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_build_assertion_bundle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_build_capture_manifest": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_build_evidence_catalog": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_build_kilo_client_receipts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_build_rule_assertion_results": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_candidate_a15_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_admin_credential_preflight": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_candidate_aux_capture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_candidate_aux_label_sequence": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.2,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_core_capture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_environment_probe_exclusion": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_evidence_guard": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_gateway_ws": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_candidate_relay_extension": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_rule_assertion": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_test_trace": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_trace_test": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_candidate_version_authority": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_capture_runtime_scripts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_capture_test_layering": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.6,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_capture_validation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_certify_release": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 44.1,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_check_ledger_completeness": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_ci_audit_hardening_h1": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_preflight": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_reuse": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_validation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 29.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_validation_declared_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 15.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_background_validation_retry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_capture_entry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 75.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_core_deviation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_detached": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_entry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_entry_hardening": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_executor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 114.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_hardening": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_hardening_wp1f": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_probe_rules": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_records": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 37.6,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_run_origin": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_inputs_sampler_parity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sample_passthrough": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 9.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 10.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler_coverage": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler_followup": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler_git_spec": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler_glob_linear": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_declared_sampler_markers": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_dryrun": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 49.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_gates": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 16.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_housekeeping": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_housekeeping_retry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_orchestrator": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 26.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_entry_steps": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 19.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_full_set_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_go_compile_warmup": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 9.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_go_test_packages": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_opening_checks": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 16.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_host_snapshot_v3": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.6,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_runtime": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_v4_pipeline": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_v4_trace": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 13.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_v4_tracker": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r10": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r11": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r13": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r16": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r2": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r3": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 42.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r3_review": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r4": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r7a": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.3,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r7a_host_world": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 54.2,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_read_audit_wp_r8": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 10.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_reservation_preemption": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 20.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_target_platform_gate": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 50.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor_cleanup_hardening": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 44.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor_config_guard": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.2,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor_descendant_cleanup": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 23.6,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor_retry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_executor_timeouts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_inherit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_inherit_executor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 11.8,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_ownership": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_records": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 28.6,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_claude_21220_campaign_gate": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_21220_pending_evidence": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_acceptance_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_build_rule_assertion_results": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 20.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_build_runtime_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_bundle_module_graph": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_bundle_multimodule_ast": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 9.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_bundle_real_ast": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_candidate_attempt_projection": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_candidate_capture": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 44.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_candidate_draft_projection": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_candidate_provenance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 20.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_candidate_recorded_recovery_source": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_chain_diagnostic_budget": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 85.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_chain_registration": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_client_receipts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 19.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_closeout": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_current_fixture_inputs": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_delivery_configuration_original": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_delivery_installation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_delivery_qualification_batch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_delivery_source_batch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_delivery_v2_consumers": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 31.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_driver_binding": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_failed_evaluation_status": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fault_chain_world": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 9.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_complete_campaign": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_completeness": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_relay": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 27.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_runtime_snapshot": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_seal_plan": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_e_validation_closure": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_complete_runner": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_discovery_clearance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_measured_rules": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_profile": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_v3": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_v4": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_f_v5": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_g_acceptance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_g_candidate_pair": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_fw_g_official_finalize": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_gate_projection_index": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_generation_policy": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_guard_continuity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_guard_epoch_readiness": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_guard_epoch_wiring": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 10.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_guard_epochs": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_guard_registry_append": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 78.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_launch_probe": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 52.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_budget_consumer": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 10.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_candidate_services": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_capability_probe": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_capture_h2": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_capture_h2_service": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 294.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_capture_service": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 34.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_entry_integration": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_formal_bridge": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 7.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_process_events": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_process_events_owned_v2": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_process_identity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_bridge_state": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_execution": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 13.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_materials": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_recipe": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_recorder": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 11.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_sources": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_product_state": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_state_journal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_mac_v2_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_oauth_refresh": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_pre_a3_source_wiring": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 20.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_qualification_bindings": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 306.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_qualification_read_snapshot": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 94.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_qualified_archive_read": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 209.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_real_delivery_integration": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 4319.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_recorded_candidate_source": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_recorded_completion_commands": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 42.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_recorded_full_validation": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 151.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_recorded_replay": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_revision_evaluator_preparation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_revision_successor_dispatch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 12.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_root_cause_codes": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_rule_assertion": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_rule_expectations_2_1_226": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_run_manifest_normalization": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_sealed_gate_materials": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 1284.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_tool_identity_policy": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 27.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_typed_vc6_fixture": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 468.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_accept": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 67.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_arm64_delivery_executor": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 50.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_arm64_environment_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_atomic_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_attempt_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_attempt_segment": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_baseline": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 49.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_batch": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 60.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_boundary_checks": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 42.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_boundary_codex": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 28.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_campaign": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 193.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate_capture": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 41.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 29.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate_reuse": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 50.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate_seal": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 58.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_candidate_seal_evidence": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 397.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_capture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 24.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_classify": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 39.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_compare_accept": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 1210.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_control_plane": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_delivery": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 132.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_discovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_evaluation_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 102.0,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_failure_lifecycle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_freeze": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_job_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 99.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_job_tool_tree": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 80.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_live_request_provenance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 14.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_mac_budget": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_orchestrator": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_plan_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_predecessor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 18.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_profile": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 66.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 334.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_recovery_history": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_release_admission": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 23.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_scenarios": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 37.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_seal": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 71.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_staging_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 118.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_static": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 11.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_timing_ledger": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_vc0_closeout": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 37.7,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_vc5_admission": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 26.6,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_vc6_batch": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 3268.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_upgrade_zero_request_smoke": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc1_recorded_chain": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc23_driver": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 22.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc4_driver": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 33.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc5_chain_fixture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.2,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc5_driver": {
+   "claude_plan": "run",
+   "codex_plan": "skip",
+   "core_seconds": 237.8,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc5_gate_environment_fixture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 16.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_claude_vc5_official_source_fixture": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_client_launch_probe": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.7,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_codex_01491_terminal_state": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_0151_container_paths": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_0151_worktree_successor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 21.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_capture_stop": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_closeout": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 18.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_home_prewarm": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_identity_conservation": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 59.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_runtime_egress": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_scenario_retry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_scenario_target": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_static_segment_proof_closure": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 15.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 1081.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_0154_vc_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_arm64_environment_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_atomic_dispatch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_build_revision": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_campaign_disposition": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_campaign_resume": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 80.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_campaign_run_rehearsal_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 22.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_build": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_readiness": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_readiness_failures": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_readiness_integration": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_revision": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 249.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_candidate_stage_replay": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 43.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_canonical": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.2,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_capture_lifecycle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 8.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_control_epoch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_deadline_extension": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_deadline_orphan": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_environment_isolation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_environment_probe": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evaluation_attempt_recovery": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 228.8,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evaluation_baseline": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 15.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evaluation_builder": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 28.0,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evaluation_recovery": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 128.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evidence_conflict": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evidence_integrity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 26.0,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_evidence_permissions": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_gate_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_harden_evidence_permissions": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_job_rehearsal_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 17.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_legacy_boundary": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_live_request_provenance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_main_module": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_official_asset_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_official_attempt_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_official_compaction_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_p0_manifest_evidence": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_path_relocation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_plan_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_policy_certification": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_policy_v2_identity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_pre_a3_certification": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 131.7,
+   "owner": "shared",
+   "rule": "override"
+  },
+  "test_codex_upgrade_predispatch_stop": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_project_ledger": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_project_ledger_integration": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_reader_closure": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 65.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_receipt_finalizer": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_recovery_reuse_check": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_rollback_readback": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 10.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_root_cause": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_seal_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_segment_reuse": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_stage_recovery": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 108.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_stage_replay_binding": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_staging_dispatch": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 305.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_staging_supervisor": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 6.8,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_supervisor": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 62.0,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_time_reconciliation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_timing_ledger": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_timing_ledger_close": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_tool_evolution": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 18.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_tool_identity_policy": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 40.0,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_vc0_closeout": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 22.9,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_vc4_source": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_vc6_canonical_dispatch": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_vc_artifacts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_vc_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_watchdog": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_wire_transition": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 5.6,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_upgrade_zero_request_smoke": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.8,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_commands": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_compact_scenario": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_compaction_scenario_models": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_comparison_baseline_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_derive_official_observations": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_direct_matrix_account_selection": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_drive_claude_tui": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_drive_codex_daemon": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.1,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_driver_client_table": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 14.2,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_driver_client_table_codex_parity": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 33.0,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_dry_run": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_engineering_root_disk_policy": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_environment": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_evidence_root_supersession_rehearsal": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_exact_bash_hook": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_extract_capture_records": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_extract_claude_bundle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_extract_compaction_reason": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_fingerprint_mitm_wiring": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_fixture_project_guard": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.8,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_generate_claude_fw_g_profile": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "claude",
+   "rule": "name:claude"
+  },
+  "test_incremental_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_job_dependency_declarations": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 33.4,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_job_retry_within_attempt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_lifecycle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_live_attestation_capture_wiring": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_main_track_lite_expectations": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_main_track_models": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_managed_root_imports": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 7.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_managed_tree_copy_binding": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 21.7,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_mitm_capture_addon": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_mitm_scenario_checkpoint": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_model": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_model_catalog_prewarm": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.9,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_model_condition_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.7,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_observed_profile_runtime_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_official_directed_relay_flows": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 14.1,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_official_directed_samples": {
+   "claude_plan": "skip",
+   "codex_plan": "run",
+   "core_seconds": 34.0,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_orchestrator_surface_contract": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.4,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_post_run_secret_scan_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_pre_a3_client_grouping": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 44.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_pre_a3_codex_parity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_prepare_assertion_bundle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 2.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_producer_replay_registration_gate": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 70.9,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_production_activation_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.9,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_reconciler_isolation_window_reuse": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_recovery": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.3,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_relay_daemon_scenario": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.1,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_relay_request_assertions": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 1.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_scenario_receipt": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.3,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_scenario_validation": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_security": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.5,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_sub2api_ingress_lifecycle": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 7.8,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_unit_inherit_codex_parity": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 26.3,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_unit_inherit_consumers": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 8.0,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_upgrade_client_adapter": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 15.5,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_upstream_byte_relay": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 3.1,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_upstream_capacity_retry": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 0.4,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_vc5_admission": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": 4.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  }
+ },
+ "overrides": {
+  "test_codex_upgrade_pre_a3_certification": {
+   "owner": "shared",
+   "reason": "同时覆盖 Codex 与 Claude 场景登记（直接导入 51 个 Claude 面文件），不可按名字归 Codex"
+  }
+ },
+ "p3_literals": [
+  "/root/arm64-capture-driver",
+  "/root/docker/capture-cli/data",
+  "/etc/sub2api-egress",
+  "ARM64_VC_ENV"
+ ],
+ "pinned": {},
+ "recognized_areas": [
+  ".github/",
+  "assets/",
+  "backend/",
+  "deploy/",
+  "docs/",
+  "frontend/",
+  "openspec/",
+  "skills/",
+  "tools/arm64_capture_driver/",
+  "tools/ci/",
+  "tools/official_client_capture/",
+  "tools/official_client_control/",
+  "tools/spec_source_deps/",
+  "tools/upstream_merge/",
+  ".dockerignore",
+  ".gitattributes",
+  ".gitignore",
+  ".goreleaser.simple.yaml",
+  ".goreleaser.yaml",
+  "CLA.md",
+  "Dockerfile",
+  "Dockerfile.goreleaser",
+  "LICENSE",
+  "Makefile",
+  "README.md",
+  "README_CN.md",
+  "README_JA.md"
+ ],
+ "reviewed_hermetic": {
+  "test_claude_launch_probe": "复核结论不钉：/root/docker/capture-cli/data 只出现在假的候选载荷字典里（campaign_dir 的字符串值），测试不访问该路径",
+  "test_claude_sealed_gate_materials": "复核结论不钉：只用 Path(\"/root/arm64-capture-driver\").exists() 决定 skipTest(\"不读取本机已经存在的受管安装\")，其余全在 tempfile 里",
+  "test_claude_upgrade_batch": "复核结论不钉：runtime_egress_fixtures.py 里的 /etc/sub2api-egress 只在文档字符串里，说明离线测试禁止读取它；夹具把这些读取位置统一重定向到私有临时目录"
+ },
+ "schema_version": "unit-ownership/v1",
+ "shared_kernel": [
+  "tools/official_client_capture/build_assertion_bundle.py",
+  "tools/official_client_capture/build_evidence_catalog.py",
+  "tools/official_client_capture/candidate_rule_assertion.py",
+  "tools/official_client_capture/capture.py",
+  "tools/official_client_capture/capturelib/model.py",
+  "tools/official_client_capture/capturelib/security.py",
+  "tools/official_client_capture/certify_release.py",
+  "tools/official_client_capture/derive_official_observations.py",
+  "tools/official_client_capture/incremental_recovery.py",
+  "tools/official_client_capture/model_condition_receipts.py",
+  "tools/official_client_capture/pcap_clienthello.py",
+  "tools/official_client_capture/runtime_host_receipt.py",
+  "tools/official_client_capture/scrub_raw_bytes.py",
+  "tools/official_client_capture/upgrade_client_adapter.py",
+  "tools/official_client_capture/upgrade_control_plane.py",
+  "tools/official_client_capture/upstream_byte_relay.py"
+ ]
+}
