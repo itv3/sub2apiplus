@@ -1107,10 +1107,10 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_SH_1_BASELINE = '5fcdf0b6b6ba847e86f42452c975cd841832e606'
-CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '3639865da20fe37db7bbf602a932daa63d0516251a2cf555d569e28a2b4778c7'}
+CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '632db239a95f5d35f619b2ad8283d99261fcfbd1fab4051ecb730067619ac782'}
 CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
-        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan --select-base <40 位提交> [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; PRE_A3_STAGING_PARENT=""; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
         '+BIND_ONLY=false; BIND_ARGS=()',
         '+DECLARED_SAMPLE=off',
@@ -1123,9 +1123,28 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+    --pre-a3-staging-parent) PRE_A3_STAGING_PARENT="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+if ! [[ "$DECLARED_SAMPLE" =~ ^(off|always|every:[1-9][0-9]*)$ ]]; then echo "--declared-sample 只接受 off、always 或 every:N（N 为正整数）：$DECLARED_SAMPLE" >&2; exit 2; fi',
         '+fi',
-        '+case "$GATE_SCOPE" in full|client-plan) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan）" >&2; exit 2 ;; esac',
+        '+case "$GATE_SCOPE" in full|client-plan|auto) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan、auto）" >&2; exit 2 ;; esac',
         '+if [ "$GATE_SCOPE" = full ]; then',
-        '+  if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan 下有意义" >&2; exit 2; fi',
+        '+  if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan／auto 下有意义" >&2; exit 2; fi',
+        '+elif [ "$GATE_SCOPE" = auto ]; then',
+        '+  if [ -n "$SELECT_BASE" ] && ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--select-base 必须是 40 位小写提交：$SELECT_BASE" >&2; exit 2; fi',
+        '+  AUTO_SKIP=""',
+        '+  case "$PROFILE" in entry|full-gates|preflight) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac',
+        '+  if [ codex != codex ]; then AUTO_SKIP="本版只启用 codex 计划"; fi',
+        '+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then',
+        '+    AUTO_SKIP="模式或请求要求全集（全集通过、逐单元承接）"',
+        '+  fi',
+        '+  if [ "$AUDIT_READS" = true ] || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \\',
+        '+      || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then',
+        '+    AUTO_SKIP="读集审计、读集合同、收窄提案或固定79接线在用（这些走全集）"',
+        '+  fi',
+        '+  if [ -n "$AUTO_SKIP" ]; then',
+        '+    echo "按客户端筛选（auto）未启用，保持全集：${AUTO_SKIP}"',
+        '+  else',
+        '+    SCOPE_ARGS=(--gate-scope auto --client codex)',
+        '+    if [ -n "$SELECT_BASE" ]; then SCOPE_ARGS+=(--select-base "$SELECT_BASE"); fi',
+        '+    if [ "$INCLUDE_CLAUDE" = true ]; then SCOPE_ARGS+=(--include-claude); fi',
+        '+  fi',
         '+else',
         '+  if ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--gate-scope client-plan 必须同时给 --select-base（40 位小写提交）：$SELECT_BASE" >&2; exit 2; fi',
         '+  case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; exit 2 ;; esac',
@@ -1222,6 +1241,11 @@ CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"
 CLOSEOUT_SH_3_BASELINE = 'c14cba3cd62d7ea6bcd02b4abf43e0b19f460ad7'
 CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '4189a5e0d9929b81f985e7c4c9e5c7337e93fc7ddad14f3c3aea55aaaef7da4d'}
 CLOSEOUT_SH_3_RESIDUALS = {'env.example.sh': []}
+CLOSEOUT_SH_4_BASELINE = '3ab5afea9da94d68efdeebafbd7a6542e21ea3e4'
+CLOSEOUT_SH_4_DIGESTS = {'vc0-gate-target.sh': 'b1d173a477b03009cfa6abde600bc81953817ebf1d72a7038b2fe1675a2fb94d'}
+CLOSEOUT_SH_4_RESIDUALS = {'vc0-gate-target.sh': ['-bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?',
+        '+GATE_SCOPE_ARGS=(); if [ codex = codex ]; then GATE_SCOPE_ARGS=(--gate-scope auto); fi',
+        '+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"} "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?']}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),
@@ -1242,6 +1266,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ('收尾登记 entry-gates.sh', CLOSEOUT_SH_1_BASELINE, CLOSEOUT_SH_1_DIGESTS, CLOSEOUT_SH_1_RESIDUALS),
     ('收尾登记 entry-preflight.sh', CLOSEOUT_SH_2_BASELINE, CLOSEOUT_SH_2_DIGESTS, CLOSEOUT_SH_2_RESIDUALS),
     ('收尾登记 env.example.sh', CLOSEOUT_SH_3_BASELINE, CLOSEOUT_SH_3_DIGESTS, CLOSEOUT_SH_3_RESIDUALS),
+    ('收尾登记 vc0-gate-target.sh', CLOSEOUT_SH_4_BASELINE, CLOSEOUT_SH_4_DIGESTS, CLOSEOUT_SH_4_RESIDUALS),
     # <<< 收尾登记行
 )
 

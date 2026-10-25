@@ -73,7 +73,10 @@ environment_receipt() {  # <gate_before|gate_after> <文件名前缀>
 environment_receipt gate_before before
 trap - ERR
 RC=0
-bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?
+# Codex 的预跑缺省走按客户端筛选（--gate-scope auto，Codex 升级工具优化第 9 项）：基点取测试树里最近的发版 tag，能筛选就只跑 Codex 计划，任何一步不行回退全集并写明原因；
+# 预跑只是预检、不是 accept 的门禁收据，子集不影响 VC-5 的正式目标平台门禁（它保持全集）。其它客户端的命令行不变。
+GATE_SCOPE_ARGS=(); if [ "$CT_CLIENT" = codex ]; then GATE_SCOPE_ARGS=(--gate-scope auto); fi
+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"} "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?
 if [ "$RC" != 0 ] && [ "$RC" != 1 ]; then
   echo "VC0_GATE_TARGET_ABORTED：入口门禁没有给出结论（rc=${RC}），原因见上方输出；主体目录 ${OUT}"
   exit 3

@@ -269,6 +269,32 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(selection["modules"]["test_claude_brand_new"], uo.RUN)
         self.assertTrue(uo.check(world.root), "守卫要求登记：数据文件没有覆盖新模块")
 
+    def test_a_test_module_deleted_from_the_tree_is_reported_as_a_stale_table_row(self) -> None:
+        world = World(self)
+        selection = world.select((f"{TESTS}/test_claude_cheap.py", None))
+        self.assertEqual(selection["stale_modules"], ["test_claude_cheap"])
+        self.assertNotIn("test_claude_cheap", selection["modules"])
+        self.assertEqual(World(self).select()["stale_modules"], [])
+
+    def test_the_latest_release_tag_is_the_default_base(self) -> None:
+        world = World(self)
+        with self.assertRaisesRegex(uo.OwnershipError, "找不到最近的发版 tag"):
+            uo.latest_release_base(world.root)
+        git(world.root, "tag", "v0.2.17", world.base)
+        world.commit("第二个提交")
+        git(world.root, "tag", "v0.2.18-1")
+        git(world.root, "tag", "vendor-note")
+        world.commit("候选")
+        commit, name = uo.latest_release_base(world.root)
+        self.assertEqual(name, "v0.2.18-1")
+        self.assertEqual(commit, git(world.root, "rev-parse", "v0.2.18-1^{commit}"))
+        git(world.root, "tag", "-d", "v0.2.18-1")
+        self.assertEqual(uo.latest_release_base(world.root), (world.base, "v0.2.17"), "最近的是更早的那个发版 tag")
+        git(world.root, "tag", "-d", "v0.2.17")
+        git(world.root, "tag", "v7", world.base)
+        with self.assertRaisesRegex(uo.OwnershipError, "找不到最近的发版 tag"):
+            uo.latest_release_base(world.root)   # v7 不是发版格式（vX.Y.Z[-N]）
+
     def test_the_selection_digest_detects_edits(self) -> None:
         selection = World(self).select()
         self.assertTrue(uo.seal_ok(selection))

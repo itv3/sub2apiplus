@@ -903,10 +903,10 @@ CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
 CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '84d2d03cc8c4f5fed22ca326092d9eca785f7692efb5495be9e1436cb9bbb9af'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'b550b0ca6ea61ccf9ee5f4fac779bf2af3eded0d680819ce105d87557c0e7e87'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '4f45830872e05e732b507db210bf861f34f4bd7b752f4d2763e0c1e5732e1f2b'}
+CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '453f1c2a6180dd917dffc70d9b7c442a860559870168c2028cc185bdc79a445f'}
 CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
         '  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。',
         '                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:',
@@ -917,7 +917,7 @@ CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步�
         '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:',
         '                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)']}
 CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '33d47a41b10527ce5911cf794906cd2bc8f6148cfc9a6f100c064a537ad4a44d'}
+CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '8ea7896217fb3d68b419a013cc90b8f38cb969daed476e84ae41c8d245bd46b0'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
 CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '80f87d073eb41f21eb1c1bd1188be76e265cfecd079d8486b7454261807848a7'}

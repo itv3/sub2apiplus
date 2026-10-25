@@ -41,6 +41,9 @@
 #   按改动文件算出，写进门禁清单的 selection 块（谁跑、谁跳过、为什么并入、被改的枢纽文件只提示），执行器据此在规划之后过滤，单元 ID 与规格不变，记录与全集运行互通。
 #   这是子集：只许 --mode re-execute，不能与全集请求、逐单元承接、读集审计／合同、收窄提案、固定79接线同用；基点必须显式给出，缺省 full 行为不变。归属表、选择器
 #   自己在改动里（含第一次引入它们的那一轮）选择器整轮回退成全集。收尾 full-gates 与 VC-4／VC-5 的 make test 保持全集，不用本选项。
+#   --gate-scope auto（升级流程的缺省，入口编排器与 vc0-gate-target.sh 带上）：基点缺省取测试树里最近的发版 tag（--select-base 可显式覆盖）；能筛选就筛选，组合／模式／
+#   客户端／读集审计等要求全集或任何一步失败（选择器出错、找不到 tag、归属表与执行器 discover 的全集身份对不上）都回退全集并写明原因（gates-manifest.json 的 gate_scope_info、
+#   entry-gates.json 的 gate_scope），不报错也不静默。
 # 环境（E3-01）：门禁清单生成与执行器都在白名单环境里运行（env -i 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、
 #   Go／Docker／Node／pnpm 的变量，再显式给字节码、历史源码与 TypeScript 的设置）：单元能看到的环境就是环境指纹里的那一份，
 #   本轮参数文件导出的键（D、STAMP、各认证坐标……）不再进入单元环境。
@@ -76,7 +79,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan --select-base <40 位提交> [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -179,9 +182,31 @@ fi
 # 按客户端筛选测试单元（优化第 9 项）：--gate-scope client-plan --select-base <最近一次发版的 40 位提交>。只作用于采集工具测试组（命令单元与 pre-A3
 # 场景单元不受影响），清单里的 selection 块由归属表选择器按「基点..本次提交」的改动算出（谁跑、谁跳过、为什么并入）；缺省 full 不筛选，行为与改造前相同。
 # 子集不能承接也不能被承接：只许 --mode re-execute，与全集请求、逐单元承接、读集审计／合同、收窄提案、固定79接线互斥；基点必须显式给出，不自动猜。
-case "$GATE_SCOPE" in full|client-plan) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan）" >&2; exit 2 ;; esac
+# auto 是升级流程的缺省（入口编排器、VC-0 预跑脚本带上）：能筛选就筛选，不能就保持全集，不报错——组合没有采集工具测试组、非 Codex 客户端、模式或请求要求全集、
+# 读集审计／合同／收窄提案／固定79接线在用，都只打一行原因后保持全集；基点缺省取测试树里最近的发版 tag，选择器失败、归属表与执行器的全集身份对不上也回退全集
+# （原因写进门禁清单的 gate_scope_info 与入口门禁总摘要的 gate_scope，不静默）。
+case "$GATE_SCOPE" in full|client-plan|auto) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan、auto）" >&2; exit 2 ;; esac
 if [ "$GATE_SCOPE" = full ]; then
-  if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan 下有意义" >&2; exit 2; fi
+  if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan／auto 下有意义" >&2; exit 2; fi
+elif [ "$GATE_SCOPE" = auto ]; then
+  if [ -n "$SELECT_BASE" ] && ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--select-base 必须是 40 位小写提交：$SELECT_BASE" >&2; exit 2; fi
+  AUTO_SKIP=""
+  case "$PROFILE" in entry|full-gates|preflight) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac
+  if [ "$CT_CLIENT" != codex ]; then AUTO_SKIP="本版只启用 codex 计划"; fi
+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then
+    AUTO_SKIP="模式或请求要求全集（全集通过、逐单元承接）"
+  fi
+  if [ "$AUDIT_READS" = true ] || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \
+      || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then
+    AUTO_SKIP="读集审计、读集合同、收窄提案或固定79接线在用（这些走全集）"
+  fi
+  if [ -n "$AUTO_SKIP" ]; then
+    echo "按客户端筛选（auto）未启用，保持全集：${AUTO_SKIP}"
+  else
+    SCOPE_ARGS=(--gate-scope auto --client "$CT_CLIENT")
+    if [ -n "$SELECT_BASE" ]; then SCOPE_ARGS+=(--select-base "$SELECT_BASE"); fi
+    if [ "$INCLUDE_CLAUDE" = true ]; then SCOPE_ARGS+=(--include-claude); fi
+  fi
 else
   if ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--gate-scope client-plan 必须同时给 --select-base（40 位小写提交）：$SELECT_BASE" >&2; exit 2; fi
   case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; exit 2 ;; esac

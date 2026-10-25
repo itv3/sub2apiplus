@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "3639865da20fe37db7bbf602a932daa63d0516251a2cf555d569e28a2b4778c7",
+      "sha256": "632db239a95f5d35f619b2ad8283d99261fcfbd1fab4051ecb730067619ac782",
       "mode": "0700",
-      "bytes": 55205
+      "bytes": 57662
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -208,9 +208,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "84d2d03cc8c4f5fed22ca326092d9eca785f7692efb5495be9e1436cb9bbb9af",
+      "sha256": "b550b0ca6ea61ccf9ee5f4fac779bf2af3eded0d680819ce105d87557c0e7e87",
       "mode": "0700",
-      "bytes": 196437
+      "bytes": 202191
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -220,15 +220,15 @@
     },
     {
       "path": "driver/entry_orchestrator.py",
-      "sha256": "4f45830872e05e732b507db210bf861f34f4bd7b752f4d2763e0c1e5732e1f2b",
+      "sha256": "453f1c2a6180dd917dffc70d9b7c442a860559870168c2028cc185bdc79a445f",
       "mode": "0700",
-      "bytes": 85804
+      "bytes": 92443
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "33d47a41b10527ce5911cf794906cd2bc8f6148cfc9a6f100c064a537ad4a44d",
+      "sha256": "8ea7896217fb3d68b419a013cc90b8f38cb969daed476e84ae41c8d245bd46b0",
       "mode": "0700",
-      "bytes": 95818
+      "bytes": 96659
     },
     {
       "path": "driver/env.example.sh",
@@ -502,9 +502,9 @@
     },
     {
       "path": "driver/unit_ownership.py",
-      "sha256": "2519a7cef63844cef1b96b16190da95b7d9cdcf448c264f41f2e27f8f9cf0494",
+      "sha256": "14ebdaa5b64795148bbb3fcbd95672bd6c0502b982abaf2526046b249635456b",
       "mode": "0700",
-      "bytes": 56431
+      "bytes": 57918
     },
     {
       "path": "driver/unit_records.py",
@@ -532,9 +532,9 @@
     },
     {
       "path": "driver/vc0-gate-target.sh",
-      "sha256": "15b772d2f55fb6a45ce73f428e36ce5cf241581b6d86a224b42128e8f525071d",
+      "sha256": "b1d173a477b03009cfa6abde600bc81953817ebf1d72a7038b2fe1675a2fb94d",
       "mode": "0700",
-      "bytes": 9300
+      "bytes": 9836
     },
     {
       "path": "driver/vc1-claude.sh",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "26623d22a845c668ac094e6d61481ee29e63896c17596df043094ac58384ad1f"
+  "manifest_sha256": "48ec730c922147520400f330084bdb8e715baee3b712c7de7534c2ac28f2041a"
 }

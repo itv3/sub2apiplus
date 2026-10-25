@@ -450,6 +450,10 @@ AUDIT_POLICY_PARAM = "ENTRY_GATES_AUDIT_POLICY"
 # 来源（登记表证据还是本次运行自己的采样），所以和审计开关一样绑定进入口门禁与 pre-A3 两步的输入：同一提交下换了采样方式，不能沿用上一种方式留下的
 # 步骤记录。
 DECLARED_SAMPLE_PARAM = "ENTRY_GATES_DECLARED_SAMPLE"
+# 按客户端筛选（Codex 升级工具优化第 9 项）：入口编排器给入口门禁带了 --gate-scope（auto／client-plan，可带基点）时的取值，如 ``auto``、``auto:<基点>``。
+# 它决定这一步跑的是全集还是客户端计划，所以只绑定进入口门禁这一步的输入（同一提交下换了范围，不能沿用上一种范围留下的步骤记录）；pre-A3 一步不受影响，
+# 范围切换不会让昂贵的 pre-A3 认证重做。没带筛选（全集、非 Codex、全集承接、读集审计）时参数不存在，步骤输入与改造前逐字相同。
+GATE_SCOPE_PARAM = "ENTRY_GATES_SCOPE"
 UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
 UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
 
@@ -668,6 +672,8 @@ class Context:
                 raise EntryStepsError("完整79接线只允许Claude，文件与外持SHA必须成对提供")
             # 聚合项实读同一消费端的六项夹具与原预算来源全集；不能只绑定路径或自行刷新外持SHA。
             extra += (*_params(*bridge_keys), Input("environment", "recorded_full79"))
+        if self.params.get(GATE_SCOPE_PARAM):
+            steps = tuple(replace(step, inputs=step.inputs + _params(GATE_SCOPE_PARAM)) if step.step_id == "entry-gates" else step for step in steps)
         # 仅这两步登记显式调度与审计参数，缺省规格及其它步骤保持原样。
         return tuple(replace(step, inputs=step.inputs + extra)
                      if step.step_id in ("entry-gates", "pre-a3") else step for step in steps)

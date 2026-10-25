@@ -17,12 +17,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import entry_gates as eg
 from tools.ci import unit_executor as ue
 from tools.ci import unit_ownership as uo
 from tools.official_client_capture.tests import test_ci_entry_gates as entry_gates_tests
-from tools.official_client_capture.tests.unit_ownership_world import CAPTURE, TESTS, WORLD, World
+from tools.official_client_capture.tests.unit_ownership_world import CAPTURE, TESTS, WORLD, World, git
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = REPO_ROOT / "tools" / "ci" / "unit_executor.py"
@@ -103,6 +104,141 @@ class GateScopePlanTests(unittest.TestCase):
         for name in ("entry_gates.py", "unit_executor.py", "unit_ownership.py"):
             with self.subTest(name):
                 self.assertEqual((driver / name).read_bytes(), (REPO_ROOT / "tools" / "ci" / name).read_bytes())
+
+
+class AutoScopeTests(unittest.TestCase):
+    """``--gate-scope auto``（升级流程的缺省）：能筛选就筛选，基点缺省取最近的发版 tag，任何一步不行就回退全集、原因照实写明。"""
+
+    def setUp(self) -> None:
+        # 小测试树里调不起真实的执行器 plan（它按仓库的调度配置核对登记的模块都存在）：这里替身成"执行器 discover 出的就是测试目录里的模块"；
+        # 真实 discover 与归属表的一致性在 RealTreeDiscoveryTests 里用真实测试树核对。
+        def discovered(tree: Path) -> set[str]:
+            return {path.stem for path in (Path(tree) / TESTS).glob("test_*.py")}
+
+        patcher = mock.patch.object(eg, "executor_modules", side_effect=discovered)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def plan(self, world: World, **kwargs: object) -> dict:
+        return eg.plan_gates(world.root, profile="regression", launcher=[], gate_scope="auto", **kwargs)
+
+    def world(self, **kwargs: object) -> World:
+        return World(self, MINI, MINI_CALIBRATION, **kwargs)
+
+    def test_an_explicit_base_selects_and_records_where_it_came_from(self) -> None:
+        world = self.world()
+        manifest = self.plan(world, select_base=world.base)
+        info = manifest["gate_scope_info"]
+        self.assertEqual((info["requested"], info["applied"], info["base_source"], info["base_commit"]), ("auto", "client-plan", "explicit", world.base))
+        self.assertNotIn("fallback_reason", info)
+        self.assertEqual(manifest["selection"]["modules"]["test_claude_big"], "skip")
+        self.assertEqual(manifest["selection"]["base_commit"], world.base)
+
+    def test_the_default_base_is_the_nearest_release_tag(self) -> None:
+        world = self.world()
+        git(world.root, "tag", "v0.2.18-1", world.base)
+        world.commit("候选")
+        info = self.plan(world)["gate_scope_info"]
+        self.assertEqual((info["applied"], info["base_source"], info["base_tag"], info["base_commit"]), ("client-plan", "latest-release-tag", "v0.2.18-1", world.base))
+
+    def test_only_release_formatted_tags_count(self) -> None:
+        world = self.world()
+        git(world.root, "tag", "vendor-snapshot", world.base)
+        git(world.root, "tag", "v1", world.base)
+        world.commit("候选")
+        info = self.plan(world)["gate_scope_info"]
+        self.assertEqual(info["applied"], "full")
+        self.assertIn("找不到最近的发版 tag", info["fallback_reason"])
+
+    def assert_full(self, manifest: dict, reason: str) -> None:
+        self.assertNotIn("selection", manifest, "回退全集：清单不带 selection，执行器照常跑全集")
+        info = manifest["gate_scope_info"]
+        self.assertEqual((info["requested"], info["applied"]), ("auto", "full"))
+        self.assertIn(reason, info["fallback_reason"])
+
+    def test_every_selector_failure_falls_back_to_the_whole_set_with_the_reason(self) -> None:
+        world = self.world()
+        self.assert_full(self.plan(world), "找不到最近的发版 tag")                                   # 没有 tag
+        self.assert_full(self.plan(world, select_base="0" * 40), "不在测试树的历史里")                     # 基点不对
+        self.assert_full(self.plan(world, select_base="HEAD"), "40 位小写提交")                           # 基点不是完整提交
+        self.assert_full(self.plan(world, select_base=world.base, select_client="claude"), "只启用")      # 客户端未启用
+        world.write("Makefile", "dirty:\n")
+        self.assert_full(self.plan(world, select_base=world.base), "不干净")                              # 树不干净
+        git(world.root, "checkout", "--", "Makefile")
+        (world.root / uo.DATA_PATH).write_text("{坏的", encoding="utf-8")
+        world.commit("归属数据坏了")
+        self.assert_full(self.plan(world, select_base=world.base), "读不到归属数据")                       # 归属数据坏
+
+    def test_an_identity_mismatch_with_the_executor_falls_back_instead_of_aborting_the_run(self) -> None:
+        world = self.world()
+        common = dict(tree=world.root, gates_wanted=("test-capture-tools",), gate_scope="auto", select_base=world.base, select_client="codex",
+                      include_claude=False, audit_policy=None, input_scopes=(), recorded_bridge=None)
+        modules = {"test_ci_y", "test_claude_big", "test_claude_small", "test_codex_x"}
+        manifest: dict = {}
+        eg.apply_gate_scope(manifest, discover=lambda _tree: modules, **common)
+        self.assertEqual(manifest["gate_scope_info"]["applied"], "client-plan", "执行器 discover 与归属表一致：筛选")
+        for discovered, text in ((modules | {"test_ghost"}, "多 []，少 ['test_ghost']"), (modules - {"test_codex_x"}, "多 ['test_codex_x']")):
+            manifest = {}
+            eg.apply_gate_scope(manifest, discover=lambda _tree, value=discovered: value, **common)
+            self.assert_full(manifest, "全集身份对不上")
+            self.assertIn(text, manifest["gate_scope_info"]["fallback_reason"])
+        manifest = {}
+
+        def failing(_tree: Path) -> set[str]:
+            raise ValueError("执行器 plan 没跑通")
+
+        eg.apply_gate_scope(manifest, discover=failing, **common)
+        self.assert_full(manifest, "执行器 plan 没跑通")
+
+    def test_incompatible_selections_fall_back_quietly_instead_of_failing(self) -> None:
+        world = self.world()
+        common = dict(tree=world.root, select_base=world.base, select_client="codex", include_claude=False, audit_policy=None, input_scopes=(),
+                      recorded_bridge=None, gate_scope="auto", discover=lambda _tree: {"test_ci_y", "test_claude_big", "test_claude_small", "test_codex_x"})
+        for name, overrides, reason in (("没有测试组", {"gates_wanted": ("backend-go-test",)}, "没有 test-capture-tools"),
+                                        ("读集合同", {"audit_policy": {"units": {}}}, "走全集"),
+                                        ("收窄提案", {"input_scopes": ({"x": 1},)}, "走全集"),
+                                        ("固定79接线", {"recorded_bridge": {"unit": {}}}, "走全集")):
+            with self.subTest(name):
+                manifest: dict = {}
+                eg.apply_gate_scope(manifest, **{"gates_wanted": ("test-capture-tools",), **common, **overrides})
+                self.assert_full(manifest, reason)
+
+    def test_the_candidate_changing_its_own_rules_makes_the_selector_fall_back_to_the_whole_set(self) -> None:
+        world = self.world()
+        world.data["cheap_core_seconds"] = 31
+        world.write_data()
+        world.commit("候选改了归属表")
+        manifest = self.plan(world, select_base=world.base)
+        info = manifest["gate_scope_info"]
+        self.assertEqual((info["applied"], manifest["selection"]["scope"]), ("full", "full"))
+        self.assertIn("归属表或选择器本身在改动里", info["fallback_reason"])
+        self.assertEqual(set(manifest["selection"]["modules"].values()), {"run"})
+
+    def test_unclassified_and_stale_modules_are_reported_and_never_skipped(self) -> None:
+        world = self.world()
+        world.write(f"{TESTS}/test_claude_new.py", module_text("test_claude_new"))
+        (world.root / TESTS / "test_codex_x.py").unlink()
+        world.commit("候选")
+        manifest = eg.plan_gates(world.root, profile="regression", launcher=[], gate_scope="auto", select_base=world.base)
+        info = manifest["gate_scope_info"]
+        self.assertEqual((info["applied"], info["unclassified"], info["stale_modules"]), ("client-plan", ["test_claude_new"], ["test_codex_x"]))
+        self.assertEqual(manifest["selection"]["modules"]["test_claude_new"], "run")
+        self.assertNotIn("test_codex_x", manifest["selection"]["modules"])
+
+    def test_the_plan_command_prints_the_scope_and_the_reason(self) -> None:
+        world = self.world()
+        output = Path(world.root.parent) / f"{world.root.name}-auto-plan.json"
+        self.addCleanup(lambda: output.unlink(missing_ok=True))
+        completed = subprocess.run([sys.executable, "-B", str(REPO_ROOT / "tools" / "ci" / "entry_gates.py"), "plan", "--tree", str(world.root),
+                                    "--profile", "regression", "--launcher-json", "[]", "--gate-scope", "auto", "--output", str(output)],
+                                   capture_output=True, text=True, timeout=300, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        printed = [json.loads(line) for line in completed.stdout.strip().splitlines()]
+        scope = next(item["gate_scope"] for item in printed if "gate_scope" in item)
+        self.assertEqual((scope["requested"], scope["applied"]), ("auto", "full"))
+        self.assertIn("找不到最近的发版 tag", scope["fallback_reason"])
+        self.assertFalse(any("selection" in item for item in printed))
+        self.assertNotIn("selection", json.loads(output.read_text(encoding="utf-8")))
 
 
 class GateScopeExecutorTests(unittest.TestCase):
@@ -223,11 +359,13 @@ class GateScopeExecutorTests(unittest.TestCase):
 class GateScopeExportTests(unittest.TestCase):
     CHECKS = entry_gates_tests.EntryGatesPlanTests.CHECKS
 
-    def export(self, root: Path, selection: dict | None) -> tuple[dict, Path]:
+    def export(self, root: Path, selection: dict | None, info: dict | None = None) -> tuple[dict, Path]:
         tree = entry_gates_tests._tree(root, self.CHECKS)
         manifest = eg.plan_gates(tree, profile="full-gates", launcher=[], platform="linux")
         if selection is not None:
             manifest["selection"] = selection
+        if info is not None:
+            manifest["gate_scope_info"] = info
         manifest_path, summary_path = root / "manifest.json", root / "summary.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         summary_path.write_text(json.dumps(entry_gates_tests._summary_for(manifest)), encoding="utf-8")
@@ -236,6 +374,16 @@ class GateScopeExportTests(unittest.TestCase):
                                   subject="entry-gates-x", round_id="r1", tree=str(tree), isolation="unshare -m", host="arm64",
                                   architecture="linux/aarch64", target_version=None, bytecode_cache="/pyc")
         return entry, out
+
+    def test_the_auto_scope_info_is_echoed_even_when_it_fell_back_to_the_whole_set(self) -> None:
+        info = {"requested": "auto", "client": "codex", "applied": "full", "fallback_reason": "ValueError：测试树里找不到最近的发版 tag"}
+        with tempfile.TemporaryDirectory() as directory:
+            entry, out = self.export(Path(directory).resolve(), None, info)
+            self.assertEqual(entry["gate_scope"], info, "回退全集不是静默的：请求、实际范围与原因都在总摘要里")
+            self.assertNotIn("client_selection", entry)
+            for name in ("entry-gates.json", "full-gates-summary.json", "preflight.json"):
+                with self.subTest(name):
+                    self.assertEqual(json.loads((out / name).read_text(encoding="utf-8"))["gate_scope"], info)
 
     def test_the_full_gates_and_preflight_records_say_they_are_a_client_plan(self) -> None:
         selection = uo.seal({"schema_version": uo.SELECTION_SCHEMA, "client": "codex", "scope": "client-plan", "include_claude": False,
@@ -257,7 +405,9 @@ class GateScopeExportTests(unittest.TestCase):
             entry, out = self.export(Path(directory).resolve(), None)
             self.assertNotIn("client_selection", entry)
             for name in ("full-gates-summary.json", "preflight.json", "entry-gates.json"):
-                self.assertNotIn("client_selection", json.loads((out / name).read_text(encoding="utf-8")))
+                payload = json.loads((out / name).read_text(encoding="utf-8"))
+                self.assertNotIn("client_selection", payload)
+                self.assertNotIn("gate_scope", payload)
 
 
 class EntryGatesScopeScriptTests(unittest.TestCase):
@@ -266,16 +416,61 @@ class EntryGatesScopeScriptTests(unittest.TestCase):
     SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh"
     BASE = "b" * 40
 
-    def parse(self, *args: str) -> tuple[int, list[str], str]:
+    def parse(self, *args: str, client: str = "codex") -> tuple[int, list[str], str]:
         text = self.SCRIPT.read_text(encoding="utf-8")
         begin = text.index('PROFILE=entry; OUT="";')
         segment = text[begin:text.index('for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do', begin)]
-        snippet = ('set -Eeuo pipefail\nusage() { echo "用法" >&2; }\nD=/data; HISTORY_TEST_TREE=/hist; CT_CLIENT=codex\n' + segment +
+        snippet = (f'set -Eeuo pipefail\nusage() {{ echo "用法" >&2; }}\nD=/data; HISTORY_TEST_TREE=/hist; CT_CLIENT={client}\n' + segment +
                    'for item in ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}; do printf "[%s]" "$item"; done; printf "\\n"\n')
         completed = subprocess.run(["bash", "-c", snippet, "entry-gates", *args, "/bundle", "codex/x", "c" * 40], capture_output=True, text=True,
                                    timeout=30, env={**os.environ, "CLAUDE_ENTRY_FULL79_SPEC": "", "CLAUDE_ENTRY_FULL79_SPEC_SHA256": ""})
+        self.stdout = completed.stdout
         scope = [] if not completed.stdout.strip() else __import__("re").findall(r"\[([^]]*)\]", completed.stdout.splitlines()[-1])
         return completed.returncode, scope, completed.stderr
+
+    def test_auto_hands_the_client_and_an_optional_base_to_the_plan(self) -> None:
+        for profile in ("entry", "full-gates", "preflight"):
+            with self.subTest(profile=profile):
+                code, scope, stderr = self.parse("--profile", profile, "--gate-scope", "auto")
+                self.assertEqual((code, scope), (0, ["--gate-scope", "auto", "--client", "codex"]), stderr)
+        code, scope, _stderr = self.parse("--gate-scope", "auto", "--select-base", self.BASE, "--include-claude")
+        self.assertEqual((code, scope), (0, ["--gate-scope", "auto", "--client", "codex", "--select-base", self.BASE, "--include-claude"]))
+
+    def test_auto_keeps_the_whole_set_quietly_when_the_flow_needs_it(self) -> None:
+        cases = {
+            "Claude": (("--gate-scope", "auto"), {"client": "claude"}, "本版只启用 codex 计划"),
+            "pre-a3 组合": (("--profile", "pre-a3", "--gate-scope", "auto"), {}, "没有采集工具测试组"),
+            "定向回归组合": (("--profile", "regression", "--gate-scope", "auto"), {}, "没有采集工具测试组"),
+            "全集通过": (("--gate-scope", "auto", "--full-set-request", "/r.json"), {}, "模式或请求要求全集"),
+            "逐单元承接": (("--gate-scope", "auto", "--unit-inherit-request", "/r.json"), {}, "模式或请求要求全集"),
+            "读集审计": (("--gate-scope", "auto", "--audit-reads"), {}, "读集审计"),
+            "读集合同": (("--gate-scope", "auto", "--audit-reads", "--audit-strict", "--audit-policy", "/p.json"), {}, "读集审计"),
+            "收窄提案": (("--gate-scope", "auto", "--audit-reads", "--audit-strict", "--input-scope", "/s.json"), {}, "读集审计"),
+        }
+        for name, (options, extra, message) in cases.items():
+            with self.subTest(name):
+                code, scope, stderr = self.parse(*options, **extra)
+                self.assertEqual((code, scope), (0, []), stderr)
+                self.assertIn("按客户端筛选（auto）未启用，保持全集", self.stdout)
+                self.assertIn(message, self.stdout)
+
+    def test_the_vc0_preflight_script_hands_auto_to_codex_and_leaves_other_clients_alone(self) -> None:
+        text = (self.SCRIPT.parent / "vc0-gate-target.sh").read_text(encoding="utf-8")
+        line = next(item for item in text.splitlines() if item.startswith("GATE_SCOPE_ARGS=()"))
+        call = next(item for item in text.splitlines() if item.startswith('bash "$DRV/entry-gates.sh" --profile preflight'))
+        self.assertIn('${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"}', call)
+        self.assertLess(text.index(line), text.index(call))
+        for client, expected in (("codex", ["--gate-scope", "auto"]), ("claude", [])):
+            with self.subTest(client=client):
+                snippet = (f'set -Eeuo pipefail\nCT_CLIENT={client}\n{line}\n'
+                           'for item in ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"}; do printf "[%s]" "$item"; done\n')
+                completed = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True, timeout=30)
+                self.assertEqual((completed.returncode, __import__("re").findall(r"\[([^]]*)\]", completed.stdout)), (0, expected), completed.stderr)
+
+    def test_auto_still_rejects_a_malformed_base(self) -> None:
+        code, scope, stderr = self.parse("--gate-scope", "auto", "--select-base", "HEAD~1")
+        self.assertEqual((code, scope), (2, []))
+        self.assertIn("必须是 40 位小写提交", stderr)
 
     def test_the_default_passes_nothing_to_the_plan(self) -> None:
         self.assertEqual(self.parse()[:2], (0, []))
@@ -295,8 +490,8 @@ class EntryGatesScopeScriptTests(unittest.TestCase):
         cases = {
             "缺基点": (("--gate-scope", "client-plan"), "必须同时给 --select-base"),
             "基点不是 40 位": (("--gate-scope", "client-plan", "--select-base", "HEAD~1"), "必须同时给 --select-base"),
-            "没有筛选却给基点": (("--select-base", self.BASE), "只在 --gate-scope client-plan 下有意义"),
-            "没有筛选却给手动开关": (("--include-claude",), "只在 --gate-scope client-plan 下有意义"),
+            "没有筛选却给基点": (("--select-base", self.BASE), "只在 --gate-scope client-plan／auto 下有意义"),
+            "没有筛选却给手动开关": (("--include-claude",), "只在 --gate-scope client-plan／auto 下有意义"),
             "未知范围": (("--gate-scope", "everything"), "未知的门禁范围"),
             "pre-a3 组合": (("--profile", "pre-a3", "--gate-scope", "client-plan", "--select-base", self.BASE), "只用于含采集工具测试组的全量组合"),
             "定向回归组合": (("--profile", "regression", "--gate-scope", "client-plan", "--select-base", self.BASE), "只用于含采集工具测试组的全量组合"),
@@ -318,14 +513,8 @@ class RealTreeDiscoveryTests(unittest.TestCase):
     def test_the_executors_discovered_modules_are_exactly_the_ownership_table(self) -> None:
         """选择的模块表必须恰好等于执行器在真实测试树里 discover 出的模块（去掉 +pkg）：否则执行器失败关闭，整轮 ARM64 门禁起不来。"""
 
-        script = ("import json, sys\nfrom pathlib import Path\nsys.dont_write_bytecode = True\nsys.path.insert(0, 'tools/ci')\n"
-                  "import unit_executor as ue\ngrouped = ue.discover_test_ids(Path('tools/official_client_capture/tests'), 'test_*.py')\n"
-                  "print(json.dumps(sorted({name.removesuffix('+pkg') for name in grouped})))\n")
-        completed = subprocess.run([sys.executable, "-B", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, timeout=600,
-                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT)})
-        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
-        discovered = json.loads(completed.stdout.strip().splitlines()[-1])
-        self.assertEqual(discovered, sorted(uo.load_data(REPO_ROOT)["modules"]))
+        # 用 auto 模式实际调用的函数（执行器 plan 子命令在真实测试树里 discover），保证 auto 的核对和执行器开跑时的核对是同一件事。
+        self.assertEqual(sorted(eg.executor_modules(REPO_ROOT)), sorted(uo.load_data(REPO_ROOT)["modules"]))
 
 
 if __name__ == "__main__":

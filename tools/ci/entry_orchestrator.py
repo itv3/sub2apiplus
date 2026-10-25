@@ -48,6 +48,12 @@ Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，沿用下面
 声明级承接的采样方式（步骤 5 WP3b）：``--declared-sample off|always|every:N``（缺省 off）原样交给入口门禁与 pre-A3 两步的执行器，决定声明级命令
 单元的读集证据来自登记表还是每次执行自己采样；非法值在这里就拒绝，非 off 的取值进入这两步的输入（同一提交下换了采样方式不沿用旧步骤记录），缺省时
 命令行、参数与步骤输入与改造前逐字相同。
+按客户端筛选（Codex 升级工具优化第 9 项）：``--gate-scope auto``（缺省）让 Codex 升级的入口门禁只跑 Codex 计划的采集工具测试（Codex、共用、廉价 Claude 模块，
+加上基点..候选提交的改动确实会影响到的 Claude 重模块；命令单元与 pre-A3 场景不受影响），入口门禁这一次运行同时产出 VC-0 预跑记录（``preflight.json``）。改动集的来源：
+基点是 ``--select-base`` 显式给的提交，缺省由入口门禁取测试树里最近的发版 tag（最近一次发版的提交），候选提交取测试树 HEAD；选择器出错、找不到 tag、归属表与执行器 discover 的
+全集身份对不上，一律回退全集并把原因写进入口门禁总摘要的 ``gate_scope``。以下情形保持全集（命令行与改造前逐字相同）：全集通过（B-09）、逐单元承接、读集审计／合同、``--reexecute-gates``
+（显式要求重新执行全集）、Claude；``--gate-scope full`` 强制全集。子集结论的限制：不承接别人的记录也不被承接、不接后台验证的入口空跑（后台验证的筛选需显式开）、不签 B-09 全集收据；
+收尾 full-gates 与 VC-4／VC-5 的 ``make test`` 不经本编排器，保持全集。范围进入 ``entry-gates`` 一步的输入（``ENTRY_GATES_SCOPE``），pre-A3 一步不受影响。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -76,6 +82,9 @@ RUN_SCHEMA = "entry-orchestrator-run/v1"
 MACHINE_ACQUIRE_TIMEOUT_SECONDS = 3600
 # 收口模块的退出码 3：需要批准或人工处置（不是失败），这一步标「阻塞」。
 CLOSEOUT_NEEDS_OPERATOR = 3
+# 入口门禁的测试范围（Codex 升级工具优化第 9 项）：auto（缺省，Codex 升级走按客户端筛选，基点取最近的发版 tag，任何失败回退全集）、full（全集）、
+# client-plan（显式基点，选择器失败就报错）。
+ES_GATE_SCOPES = ("auto", "full", "client-plan")
 
 
 def _entry_steps_module() -> Any:
@@ -183,7 +192,8 @@ class Orchestrator:
                  full_set_request: Path | None = None, full_set_work: Path | None = None,
                  unit_inherit_request: Path | None = None, gate_parallel: int | None = None,
                  unit_inherit_full_gates_request: Path | None = None,
-                 audit_strict: bool = False, audit_policy: Path | None = None, declared_sample: str = "off") -> None:
+                 audit_strict: bool = False, audit_policy: Path | None = None, declared_sample: str = "off",
+                 gate_scope: str = "auto", select_base: str | None = None) -> None:
         self.params = dict(params)
         if audit_strict and not audit_reads:
             raise OrchestratorError("--audit-strict 必须同时启用 --audit-reads")
@@ -247,6 +257,29 @@ class Orchestrator:
         self.audit_reads = audit_reads
         # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
         self.approval = {key: value for key, value in (approval or {}).items() if value}
+        # 按客户端筛选（Codex 升级工具优化第 9 项）：Codex 升级的入口门禁缺省走 auto（基点取最近的发版 tag，任何失败回退全集）。只从本次选项生成，
+        # 环境里的同名键不能暗中改变；没带筛选时参数不存在，步骤输入与命令行与改造前逐字相同。
+        # 选项不合法或与其它选项冲突不在构造时抛（命令行入口只在 orchestrate() 里统一报用法错误，退出码 2）：记下，开跑前由 orchestrate() 抛出。
+        self.gate_scope, self.select_base, self.scope_error = gate_scope, select_base, None
+        try:
+            if gate_scope not in ES_GATE_SCOPES:
+                raise OrchestratorError(f"--gate-scope 只接受 {'、'.join(ES_GATE_SCOPES)}：{gate_scope!r}")
+            if select_base is not None and not re.fullmatch(r"[0-9a-f]{40}", select_base):
+                raise OrchestratorError("--select-base 必须是 40 位小写提交")
+            if gate_scope == "full" and select_base is not None:
+                raise OrchestratorError("--select-base 只在 --gate-scope client-plan／auto 下有意义")
+            if gate_scope == "client-plan" and select_base is None:
+                raise OrchestratorError("--gate-scope client-plan 必须同时给 --select-base（最近一次发版的 40 位提交；缺省取发版 tag 的是 auto）")
+            try:
+                run_client = ES.CT.client_of(self.params)
+            except Exception:   # noqa: BLE001 - 不认识的客户端由后面的步骤表照常报错，这里只决定筛选参数
+                run_client = None
+            self.gate_scope_args = self._gate_scope_args(client=run_client)
+        except OrchestratorError as error:
+            self.gate_scope_args, self.scope_error = [], error
+        self.params.pop(ES.GATE_SCOPE_PARAM, None)
+        if self.gate_scope_args:
+            self.params[ES.GATE_SCOPE_PARAM] = ":".join([gate_scope, *([select_base] if select_base else [])])
         context_args = {"params": self.params, "driver_dir": driver_dir, "steps_dir": steps_dir}
         self.ctx = ES.Context(**context_args, runner=es_runner) if es_runner else ES.Context(**context_args)
         self.outcomes: dict[str, Outcome] = {}
@@ -372,6 +405,31 @@ class Orchestrator:
         if self.full_set_request and not self.reexecute_gates:
             return "full-set-pass"
         return "unit-inherit" if self.unit_inherit_request is not None and not self.reexecute_gates else "re-execute"
+
+    def _gate_scope_args(self, *, client: str | None) -> list[str]:
+        """入口门禁这一步要带的筛选参数；空列表＝保持全集（命令行与改造前逐字相同）。
+
+        缺省 ``auto`` 只在 Codex 升级、模式为重新执行的普通入口生效：全集通过（B-09）、逐单元承接、读集审计／合同、Claude、``--reexecute-gates``
+        （显式要求重新执行全集：升级开工的入口空跑、一致性验收、收尾合入前）都保持全集——子集结论不能冒充全集，也不能拿来承接或被承接。
+        ``auto`` 遇到这些情形是静默保持全集；显式 ``client-plan`` 遇到它们是用法错误（操作员明确要子集，却又要求全集）。
+        改动集的来源：基点是 ``--select-base`` 显式给的提交，缺省由入口门禁取测试树里最近的发版 tag（与设计一致：最近一次发版的提交）；候选提交取测试树 HEAD。"""
+
+        if self.gate_scope == "full":
+            return []
+        blockers: list[str] = []
+        if client != "codex":
+            blockers.append("本版只启用 codex 计划")
+        if self._gates_mode() != "re-execute":
+            blockers.append("入口门禁走全集通过或逐单元承接")
+        if self.audit_reads or self.audit_strict or self.audit_policy is not None:
+            blockers.append("读集审计／读集合同在用")
+        if self.reexecute_gates and self.gate_scope == "auto":
+            blockers.append("--reexecute-gates 要求重新执行全集")
+        if blockers:
+            if self.gate_scope == "client-plan":
+                raise OrchestratorError("--gate-scope client-plan 不能与下列情形同用（子集结论不能冒充全集）：" + "；".join(blockers))
+            return []
+        return ["--gate-scope", self.gate_scope, *(["--select-base", self.select_base] if self.select_base else [])]
 
     def _unit_inherit_request_for(self, profile: str) -> Path | None:
         """只按本次实际门禁组合选择原文件；授权、来源与实时复核仍由 unit-inherit 合同核对。"""
@@ -518,6 +576,7 @@ class Orchestrator:
                                           *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                           *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
+                                          *self.gate_scope_args,
                                           *audit_args, *source], env=self.gate_env())
             summary = out / "entry-gates.json"
             try:
@@ -933,6 +992,8 @@ class Orchestrator:
 
     def orchestrate(self, *, plan_only: bool = False, from_step: str | None = None, to_step: str | None = None,
                     formal: bool | None = None) -> dict[str, Any]:
+        if self.scope_error is not None:
+            raise self.scope_error
         is_formal = ES.formal_built(self.ctx) if formal is None else formal
         force = None if is_formal else {"entry-gates": "B-09：每次开工重新核对全集承接身份、时效与撤销；不得沿用旧步骤缓存"}
         evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal, force=force)
@@ -1136,6 +1197,10 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--declared-sample", type=_declared_sample_mode, default="off", metavar="off|always|every:N",
                         help="声明级承接命令单元的读集证据来源：off（缺省）用登记表证据，always 每次执行都带 strace 采样，every:N 每 N 次采样一次；"
                              "原样交给入口门禁与 pre-A3 两步的执行器，并进入这两步的输入")
+    parser.add_argument("--gate-scope", choices=ES_GATE_SCOPES, default="auto",
+                        help="入口门禁的测试范围：auto（缺省；Codex 升级走按客户端筛选，基点取测试树里最近的发版 tag，筛选不了或任何一步失败都回退全集并写明原因；"
+                             "全集通过、逐单元承接、读集审计、--reexecute-gates、Claude 一律保持全集）、full（强制全集）、client-plan（显式基点，选择器失败就报错）")
+    parser.add_argument("--select-base", help="筛选的基点：最近一次发版的 40 位提交（缺省 auto 取测试树里最近的发版 tag；client-plan 必须给）")
     return parser.parse_args(argv)
 
 
@@ -1202,7 +1267,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads, full_set_request=args.full_set_request,
                                 full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel,
                                 unit_inherit_full_gates_request=args.unit_inherit_full_gates_request,
-                                audit_strict=args.audit_strict, audit_policy=args.audit_policy, declared_sample=args.declared_sample)
+                                audit_strict=args.audit_strict, audit_policy=args.audit_policy, declared_sample=args.declared_sample,
+                                gate_scope=args.gate_scope, select_base=args.select_base)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

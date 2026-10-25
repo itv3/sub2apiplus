@@ -898,11 +898,60 @@ def plan_gates(
 
 GATE_SCOPE_FULL = "full"
 GATE_SCOPE_CLIENT_PLAN = "client-plan"
-GATE_SCOPES = (GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN)
+GATE_SCOPE_AUTO = "auto"
+GATE_SCOPES = (GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN, GATE_SCOPE_AUTO)
+EXECUTOR_DISCOVER_TIMEOUT_SECONDS = 900
+
+
+def executor_modules(tree: Path) -> set[str]:
+    """执行器在测试树里 discover 出的测试模块（去掉 ``+pkg``）：auto 模式用它核对归属表选择的模块集合与执行器的全集身份对得上
+    （对不上，执行器会在开跑时失败关闭、整轮没有结论，所以规划阶段就回退全集）。"""
+
+    command = [sys.executable, "-B", str(EXECUTOR), "plan", "--start", "tools/official_client_capture/tests", "--pattern", "test_*.py"]
+    completed = subprocess.run(command, cwd=tree, capture_output=True, text=True, timeout=EXECUTOR_DISCOVER_TIMEOUT_SECONDS,
+                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    if completed.returncode != 0:
+        raise ValueError(f"执行器 plan 没跑通（退出码 {completed.returncode}）：{completed.stderr.strip()[-200:]}")
+    return {re.split(r"[#!]", unit["unit_id"])[0].removesuffix("+pkg") for unit in json.loads(completed.stdout)["units"]}
+
+
+def _apply_auto_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], select_base: str | None, select_client: str,
+                      include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any, discover: Any) -> None:
+    """``auto``：能按客户端筛选就筛选，任何一步不行就回退全集——选择器抛错（归属数据坏、基点不对、树不干净、客户端未启用、找不到发版 tag）、
+    归属表选择的模块集合与执行器 discover 的全集身份对不上、组合或选项与筛选互斥。回退不是错误：清单不带 ``selection``，原因与基点来源
+    写进 ``gate_scope_info``（请求、实际范围、基点及来源、回退原因），由 ``plan`` 打印、入口门禁总摘要回显。基点来源只有两种：显式给出，
+    或测试树 HEAD 的祖先里最近的发版 tag（设计：最近一次发版的提交）。"""
+
+    info: dict[str, Any] = {"requested": GATE_SCOPE_AUTO, "client": select_client, "applied": GATE_SCOPE_FULL}
+    manifest["gate_scope_info"] = info
+    try:
+        if "test-capture-tools" not in gates_wanted:
+            raise ValueError("门禁组合里没有 test-capture-tools（采集工具测试组）")
+        if audit_policy is not None or input_scopes or recorded_bridge is not None:
+            raise ValueError("与读集合同、收窄提案、固定79接线同用（这些走全集）")
+        ownership = _ownership()
+        if select_base:
+            base, tag, source = select_base, None, "explicit"
+        else:
+            (base, tag), source = ownership.latest_release_base(tree), "latest-release-tag"
+        info.update(base_commit=base, base_source=source, base_tag=tag)
+        selection = ownership.select(tree, client=select_client, base=base, include_claude=include_claude)
+        found = (discover or executor_modules)(tree)
+        modules = set(selection["modules"])
+        if found != modules:
+            raise ValueError(f"归属表选择的模块集合与执行器 discover 出的全集身份对不上：多 {sorted(modules - found)[:5]}，少 {sorted(found - modules)[:5]}")
+    except Exception as error:   # noqa: BLE001 - 选择器的任何失败都回退全集（宁可多跑），原因写进 gate_scope_info
+        info["fallback_reason"] = f"{type(error).__name__}：{error}"
+        return
+    info.update(applied=selection["scope"], unclassified=selection["unclassified"], stale_modules=selection["stale_modules"])
+    if selection["scope"] == GATE_SCOPE_FULL:
+        info["fallback_reason"] = "；".join(selection["fallback_reasons"])
+    manifest["selection"] = selection
 
 
 def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], gate_scope: str, select_base: str | None,
-                     select_client: str, include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any) -> None:
+                     select_client: str, include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any,
+                     discover: Any = None) -> None:
     """按客户端筛选测试单元（优化第 9 项）：``gate_scope=client-plan`` 时往清单加 ``selection`` 块（谁跑、谁跳过、为什么并入；
     由归属表选择器按基点..候选提交的改动算出），执行器据此只保留标 run 的测试模块；命令单元与 pre-A3 场景单元不受影响。
 
@@ -914,6 +963,12 @@ def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequ
     if gate_scope == GATE_SCOPE_FULL:
         if select_base is not None or include_claude:
             raise ValueError("--select-base、--include-claude 只在 --gate-scope client-plan 下有意义")
+        return
+    if gate_scope == GATE_SCOPE_AUTO:
+        # 升级流程的缺省：基点缺省取最近的发版 tag，任何失败都回退全集（见 _apply_auto_scope）。
+        _apply_auto_scope(manifest, tree, gates_wanted=gates_wanted, select_base=select_base, select_client=select_client,
+                          include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes,
+                          recorded_bridge=recorded_bridge, discover=discover)
         return
     if "test-capture-tools" not in gates_wanted:
         raise ValueError("按客户端筛选只作用于采集工具测试组：门禁组合里没有 test-capture-tools")
@@ -2661,7 +2716,17 @@ def export_records(
                      "completed_at_utc": regression["completed_at_utc"], "gate_json": "logs/full-regression.gate.json",
                      "executor_summary": str(summary_path), "test_tree": tree, "bytecode_cache": bytecode_cache},
         })
+    scope_info = manifest.get("gate_scope_info")
     chosen = manifest.get("selection")
+    if isinstance(scope_info, dict):
+        # auto 模式（升级流程的缺省）：请求、实际范围、基点及来源、回退原因照实回显，回退全集时也看得见为什么（不是静默没有收益）。
+        entry["gate_scope"] = scope_info
+        for key in ("full_gates_summary", "preflight"):
+            if entry.get(key):
+                echoed = Path(entry[key])
+                payload = json.loads(echoed.read_text(encoding="utf-8"))
+                payload["gate_scope"] = scope_info
+                _write(echoed, payload)
     if isinstance(chosen, dict):
         # 按客户端筛选（优化第 9 项）：这次运行是某个客户端计划的子集，不是全集——总摘要、全量门禁记录与预跑记录都回显筛选摘要（完整的
         # selection 在 gates-manifest.json 与执行器运行清单里）。读这些记录的人（后台验证准入、收尾校验）据此区分"全集通过"与"计划通过"。
@@ -2707,8 +2772,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--declared-registry", type=Path, default=None,
                       help="命令单元声明级承接登记表（缺省取测试树的 tools/ci/command_input_scopes.json，缺失即不启用；测试用）")
     plan.add_argument("--gate-scope", choices=GATE_SCOPES, default=GATE_SCOPE_FULL,
-                      help="采集工具测试组怎么选：full（缺省，全集）或 client-plan（按客户端归属筛选，改动涉及的重模块自动并入；优化第 9 项）")
-    plan.add_argument("--select-base", default=None, help="client-plan 的基点：最近一次发版的 40 位提交（候选提交取测试树 HEAD；工具不自动猜）")
+                      help="采集工具测试组怎么选：full（缺省，全集）；client-plan（按客户端归属筛选，改动涉及的重模块自动并入，必须给基点，选择器失败就报错）；"
+                           "auto（升级流程的缺省：基点缺省取最近的发版 tag，任何失败都回退全集并写明原因；优化第 9 项）")
+    plan.add_argument("--select-base", default=None,
+                      help="基点：最近一次发版的 40 位提交（候选提交取测试树 HEAD）。client-plan 必须给；auto 缺省取最近的发版 tag")
     plan.add_argument("--client", dest="select_client", default="codex", help="client-plan 的客户端计划（本版只启用 codex）")
     plan.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
     recorded = sub.add_parser("recorded-full79-inputs", help="只读核固定79接线及真实夹具、预算来源")
@@ -2813,6 +2880,12 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"profile": args.profile, "gates": [g["gate_id"] for g in manifest["gates"]], "units": len(manifest["units"]),
                               "test_groups": [g["group_id"] for g in manifest["test_groups"]],
                               "not_executed": [n for g in manifest["gates"] for n in g.get("not_executed", [])]}, ensure_ascii=False))
+            if "gate_scope_info" in manifest:
+                info = manifest["gate_scope_info"]
+                # 入口脚本把 plan 的输出截到 400 字符：先打短的（完整原因在 gates-manifest.json 与 entry-gates.json 的 gate_scope 里）。
+                print(json.dumps({"gate_scope": {**{key: value for key, value in info.items() if key not in ("unclassified", "stale_modules", "fallback_reason")},
+                                                 **({"fallback_reason": str(info["fallback_reason"])[:150]} if info.get("fallback_reason") else {})}},
+                                 ensure_ascii=False))
             if "selection" in manifest:
                 chosen = manifest["selection"]
                 print(json.dumps({"selection": {

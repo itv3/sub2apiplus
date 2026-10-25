@@ -658,6 +658,27 @@ def changed_files(tree: Path, base: str, head: str) -> list[tuple[str, str]]:
     return sorted(pairs, key=lambda item: (item[1], item[0]))
 
 
+RELEASE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9]+)?")
+
+
+def latest_release_base(tree: Path) -> tuple[str, str]:
+    """基点的缺省来源（设计：最近一次发版 tag 的提交）：测试树 HEAD 的祖先里最近的发版 tag（形如 ``v0.2.18``、``v0.2.18-1``），
+    返回（40 位提交, tag 名）。测试树里没有 tag、或最近的 tag 不是发版格式，抛 ``OwnershipError``（调用方在 auto 模式下回退全集）。
+
+    只认发版 tag：发版前 GitHub CI 全集是绿的、收尾在 ARM64 过了全量门禁，所以"这个提交上 Claude 单元已知是绿的"成立；
+    不拿 main 头当基点（它可能还没发版，没过收尾全集）。"""
+
+    tree = Path(tree)
+    described = _git(tree, "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD", check_rc=False)
+    name = described.stdout.decode("utf-8", "replace").strip()
+    if described.returncode != 0 or not RELEASE_TAG.fullmatch(name):
+        raise OwnershipError("测试树里找不到最近的发版 tag（describe --tags --match 'v[0-9]*'）：补齐 tag 或显式给 --select-base")
+    commit = _git(tree, "rev-parse", "--verify", f"{name}^{{commit}}").stdout.decode().strip()
+    if not SHA1.fullmatch(commit):
+        raise OwnershipError(f"发版 tag {name} 解析不出 40 位提交")
+    return commit, name
+
+
 def _git_show(tree: Path, revision: str, path: str) -> str | None:
     result = _git(tree, "show", f"{revision}:{path}", check_rc=False)
     return result.stdout.decode("utf-8", "replace") if result.returncode == 0 else None
@@ -792,6 +813,8 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     found = selector.found
     table = data["modules"]
     unclassified = sorted(module for module in found if module not in table)
+    present = set(found)
+    stale = sorted(module for module in table if module not in present)
     pulled: dict[str, set[str]] = {}
     advisories: dict[str, list[str]] = {}
     fail_closed: list[dict[str, Any]] = []
@@ -844,6 +867,7 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         "pulled": [{"module": module, "because": sorted(reasons)} for module, reasons in sorted(pulled.items())],
         "advisories": advisory_rows,
         "unclassified": unclassified,
+        "stale_modules": stale,
         "fail_closed": sorted(fail_closed, key=lambda item: (item["file"], item["reason"])),
         "fallback_reasons": sorted(fallback),
     }

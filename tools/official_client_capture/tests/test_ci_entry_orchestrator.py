@@ -212,13 +212,15 @@ class OrchestratorTestCase(unittest.TestCase):
         audit_policy = kwargs.pop("audit_policy", None)
         unit_inherit_request = kwargs.pop("unit_inherit_request", None)
         unit_inherit_full_gates_request = kwargs.pop("unit_inherit_full_gates_request", None)
-        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
+        params = kwargs.pop("params", None)
+        scope_options = {key: kwargs.pop(key) for key in ("gate_scope", "select_base") if key in kwargs}
+        orchestrator = eo.Orchestrator(params or self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
                                        approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request,
                                        full_set_work=full_set_work, gate_parallel=gate_parallel,
                                        audit_reads=audit_reads, audit_strict=audit_strict, audit_policy=audit_policy,
                                        unit_inherit_request=unit_inherit_request,
-                                       unit_inherit_full_gates_request=unit_inherit_full_gates_request)
+                                       unit_inherit_full_gates_request=unit_inherit_full_gates_request, **scope_options)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -675,6 +677,130 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         again = self.orchestrate()
         self.assertEqual(self.actions(again)["vc0-closeout"], "沿用")
         self.assertIn("收口已完成", again["stopped_because"])
+
+
+class OrchestratorGateScopeTests(OrchestratorTestCase):
+    """优化第 9 项：Codex 升级的入口门禁缺省走按客户端筛选（``--gate-scope auto``），Claude、全集承接、读集审计、显式重新执行全集一律保持全集。"""
+
+    BASE = "b" * 40
+
+    def entry_gate_calls(self) -> list[list[str]]:
+        return [call for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+
+    def scope_param(self, orchestrator_params: dict) -> str | None:
+        return orchestrator_params.get(eo.ES.GATE_SCOPE_PARAM)
+
+    def test_codex_default_hands_auto_to_the_entry_gate_without_guessing_a_base(self) -> None:
+        result = self.orchestrate(to_step="atomic-double")
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        [gate] = self.entry_gate_calls()
+        self.assertEqual((_option(gate, "--profile"), _option(gate, "--gate-scope")), ("entry", "auto"))
+        self.assertNotIn("--select-base", gate, "基点缺省由入口门禁取测试树里最近的发版 tag，编排器不猜")
+        self.assertNotIn("--include-claude", gate)
+
+    def test_an_explicit_base_is_forwarded_and_bound_into_the_step_input(self) -> None:
+        orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "scope-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, select_base=self.BASE)
+        self.assertEqual(orchestrator.gate_scope_args, ["--gate-scope", "auto", "--select-base", self.BASE])
+        self.assertEqual(orchestrator.params[eo.ES.GATE_SCOPE_PARAM], f"auto:{self.BASE}")
+        names = {item.name for item in orchestrator.ctx.step("entry-gates").inputs}
+        self.assertIn(f"param:{eo.ES.GATE_SCOPE_PARAM}", names)
+        self.assertNotIn(f"param:{eo.ES.GATE_SCOPE_PARAM}", {item.name for item in orchestrator.ctx.step("pre-a3").inputs},
+                         "范围只绑定入口门禁一步：切换范围不让昂贵的 pre-A3 认证重做")
+
+    def test_full_forces_the_whole_set_and_leaves_the_step_inputs_as_before(self) -> None:
+        result = self.orchestrate(to_step="atomic-double", gate_scope="full")
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        [gate] = self.entry_gate_calls()
+        self.assertNotIn("--gate-scope", gate)
+        orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "full-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, gate_scope="full")
+        self.assertNotIn(eo.ES.GATE_SCOPE_PARAM, orchestrator.params)
+        self.assertNotIn(f"param:{eo.ES.GATE_SCOPE_PARAM}", {item.name for item in orchestrator.ctx.step("entry-gates").inputs})
+
+    def test_every_flow_that_needs_the_whole_set_keeps_it(self) -> None:
+        request = self.fx.root / "request.json"
+        primary, companion = self.fx.root / "entry-request.json", self.fx.root / "full-gates-request.json"
+        for path in (primary, companion):
+            _write_json(path, {"approved": True})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        policy = self.fx.root / "policy.json"
+        _write_json(policy, {"units": {}})
+        cases = {
+            "全集通过（B-09）": {"full_set_request": request, "full_set_work": self.fx.root / "background-work"},
+            "逐单元承接": {"unit_inherit_request": primary},
+            "显式重新执行全集": {"reexecute_gates": True},
+            "读集审计": {"reexecute_gates": True, "audit_reads": True},
+            "读集合同": {"reexecute_gates": True, "audit_reads": True, "audit_strict": True, "audit_policy": policy},
+        }
+        for name, options in cases.items():
+            with self.subTest(name):
+                self.commands.calls.clear()
+                orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / f"keep-{abs(hash(name))}",
+                                               steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, **options)
+                self.assertEqual(orchestrator.gate_scope_args, [])
+                self.assertNotIn(eo.ES.GATE_SCOPE_PARAM, orchestrator.params)
+
+    def test_claude_is_never_scoped(self) -> None:
+        params = {**self.fx.params, "CLIENT": "claude"}
+        orchestrator = eo.Orchestrator(params, driver_dir=self.fx.driver, run_dir=self.fx.root / "claude-run", steps_dir=self.fx.steps_dir,
+                                       runner=self.commands, es_runner=self.fx.runner)
+        self.assertEqual(orchestrator.gate_scope_args, [])
+        self.assertNotIn(eo.ES.GATE_SCOPE_PARAM, orchestrator.params, "Claude 的步骤输入与改造前逐字相同")
+        explicit = eo.Orchestrator(params, driver_dir=self.fx.driver, run_dir=self.fx.root / "claude-explicit", steps_dir=self.fx.steps_dir,
+                                   runner=self.commands, es_runner=self.fx.runner, gate_scope="client-plan", select_base=self.BASE)
+        with self.assertRaisesRegex(eo.OrchestratorError, "本版只启用 codex 计划"):
+            explicit.orchestrate()
+
+    def test_explicit_client_plan_needs_a_base_and_refuses_whole_set_flows(self) -> None:
+        for options, message in (
+                ({"gate_scope": "client-plan"}, "必须同时给 --select-base"),
+                ({"gate_scope": "client-plan", "select_base": "HEAD~1"}, "40 位小写提交"),
+                ({"gate_scope": "full", "select_base": self.BASE}, "只在 --gate-scope client-plan／auto 下有意义"),
+                ({"gate_scope": "client-plan", "select_base": self.BASE, "full_set_request": self.fx.root / "request.json"}, "走全集通过"),
+                ({"gate_scope": "client-plan", "select_base": self.BASE, "reexecute_gates": True, "audit_reads": True}, "读集审计")):
+            with self.subTest(options=options):
+                orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "bad-run",
+                                               steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, **options)
+                with self.assertRaisesRegex(eo.OrchestratorError, message):
+                    orchestrator.orchestrate()
+        self.assertEqual(self.commands.calls, [], "选项冲突在开跑前就拒绝，一条命令都没执行")
+        bad = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "bad-scope", steps_dir=self.fx.steps_dir,
+                              runner=self.commands, es_runner=self.fx.runner, gate_scope="everything")
+        with self.assertRaisesRegex(eo.OrchestratorError, "--gate-scope 只接受"):
+            bad.orchestrate()
+
+    def test_explicit_client_plan_is_allowed_together_with_reexecute_gates(self) -> None:
+        orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "explicit-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, reexecute_gates=True,
+                                       gate_scope="client-plan", select_base=self.BASE)
+        self.assertEqual(orchestrator.gate_scope_args, ["--gate-scope", "client-plan", "--select-base", self.BASE],
+                         "操作员明确要子集：显式 client-plan 不被 --reexecute-gates 拦下（auto 才让位给它）")
+
+    def test_the_pre_a3_only_call_never_carries_the_scope(self) -> None:
+        orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "pre-a3-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner)
+        self.assertEqual(orchestrator.orchestrate(to_step="p0-receipt")["exit_code"], 0)
+        orchestrator.outcomes["pre-a3"] = eo.Outcome("pre-a3", "run")
+        orchestrator.entry_gates_and_pre_a3(False, True)
+        gates = self.entry_gate_calls()
+        self.assertEqual([_option(call, "--profile") for call in gates], ["entry", "pre-a3"])
+        self.assertEqual(_option(gates[0], "--gate-scope"), "auto")
+        self.assertNotIn("--gate-scope", gates[1], "pre-A3 组合没有采集工具测试组，不带筛选")
+
+    def test_switching_the_scope_does_not_redo_the_expensive_pre_a3_step(self) -> None:
+        first = self.orchestrate(to_step="atomic-double", gate_scope="auto")
+        second = self.orchestrate(to_step="atomic-double", gate_scope="full")
+        self.assertEqual([run["exit_code"] for run in (first, second)], [0, 0])
+        self.assertEqual(self.actions(second)["pre-a3"], "沿用", self.actions(second))
+
+    def test_the_command_line_defaults_to_auto_and_validates_the_base(self) -> None:
+        arguments = eo._parse([])
+        self.assertEqual((arguments.gate_scope, arguments.select_base), ("auto", None))
+        arguments = eo._parse(["--gate-scope", "client-plan", "--select-base", self.BASE])
+        self.assertEqual((arguments.gate_scope, arguments.select_base), ("client-plan", self.BASE))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            eo._parse(["--gate-scope", "sometimes"])
 
 
 class OrchestratorPieceTests(unittest.TestCase):
