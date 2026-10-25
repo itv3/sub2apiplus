@@ -2,7 +2,7 @@
 """恢复链一条命令（第 18 项，``recovery-plan.sh``）：读账本与 attempt 状态，判定恢复链每一步做没做，再按序补做。
 
 背景：一次采集失败后的恢复链此前由人逐条串联——``campaign-resume`` → 工具演进登记 → 对账 → 恢复预览 → 批准／授权 → 续跑，
-0.163 的 VC-1 恢复链连做了 7 次，每次都要人工回忆"上一次做到哪了、这次从哪接"。本模块在这些**既有受管命令**之上做一个
+一次真实升级里 VC-1 的恢复链连做了 7 次，每次都要人工回忆"上一次做到哪了、这次从哪接"。本模块在这些**既有受管命令**之上做一个
 可重复执行的恢复计划：
 
 * **计划预览（``--plan``，缺省）**：只读。从受管账本接口、工具演进状态、Campaign 目录里的对账收据／恢复预览／批准收据、
@@ -200,7 +200,7 @@ def load_params(path: Path) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# 磁盘读取（只读；字段形状取自 0.163 真实 Campaign 记录）
+# 磁盘读取（只读；字段形状取自真实升级 Campaign 的归档记录）
 # ---------------------------------------------------------------------------
 
 
@@ -280,7 +280,7 @@ def _preview_summary(path: Path, data: Mapping[str, Any], index: int) -> dict[st
 
 
 def read_recovery_records(params: Mapping[str, str]) -> dict[str, Any]:
-    """目标 attempt 的对账目录：对账收据、全部恢复预览与批准收据（形状取自真实 0.163 记录）。"""
+    """目标 attempt 的对账目录：对账收据、全部恢复预览与批准收据（形状取自真实升级 Campaign 的归档记录）。"""
 
     directory = Path(params["C"]) / "control" / "reconciliation" / f"attempt-{params['ATTEMPT']}"
     result: dict[str, Any] = {"directory": str(directory), "receipt": None, "previews": [], "approvals": []}

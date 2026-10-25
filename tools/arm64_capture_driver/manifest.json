@@ -430,9 +430,9 @@
     },
     {
       "path": "driver/recovery_plan.py",
-      "sha256": "222fce3b1850eede7efb973ed2b6dcff4338acbabefba175301788232cf782e4",
+      "sha256": "5dbd3f727321c46daf668aa86c445cfed6885ca19d5dac3e972ea71616722919",
       "mode": "0700",
-      "bytes": 78741
+      "bytes": 78782
     },
     {
       "path": "driver/retry_policy.py",
@@ -741,5 +741,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "5b27b32743a036e54f4becb832fa96935aec1420faaae90976d7afe2658d2c0c"
+  "manifest_sha256": "2a9c9c9893ef534d5a63bfa54d4a8d710bac542e7fadc022b07e3bc759aba88f"
 }
