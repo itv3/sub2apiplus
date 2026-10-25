@@ -849,7 +849,7 @@ func TestModelProtocolCatalogWarmupRefreshesEnabledAccountsInBackground(t *testi
 	started := time.Now()
 	svc.Start()
 	require.Less(t, time.Since(started), 750*time.Millisecond, "Start 立即返回，不阻塞启动") // time-threshold: allow 预热延迟已拉到 1.5s，Start 若退化成同步执行至少耗时 1.5s，上界 750ms 区分“立即返回”与“同步等待”
-	svc.Start() // 重复启动无副作用
+	svc.Start()                                                                    // 重复启动无副作用
 
 	require.Eventually(t, func() bool {
 		return upstreamModelProtocols.peek(modelProtocolCatalogKey(&pending, buildOpenAIModelsURL(base)), "deepseek/deepseek-v4.1-flash") != nil
