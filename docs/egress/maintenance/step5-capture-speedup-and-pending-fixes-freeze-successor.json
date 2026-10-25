@@ -1,0 +1,189 @@
+{
+  "base_commit": "a0442ceb117d27fa9da1a3f603185774f051dc52",
+  "changed_path_count": 15,
+  "current_commit": "b1c4255dea9d4f7fd854ac559f43d80bb261d6d4",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7015,
+  "frozen_path_count": 2318,
+  "identity_sha256": "29cf51f0c8c6bec1f3340a37bb7eec2abb7d11effd961215b8e232eeeb4a259a",
+  "issued_at_utc": "2026-10-25T06:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-step5-capture-speedup-and-pending-fixes-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "bc21b4dbe8b7eb98e5ea8d25505d938b293ff0347d01f244469a75e8c6ed8606"
+      ],
+      "reason": "第 5 步采集测试提速（attempt_recovery 退避打桩、vc6 reader 结果按进程首次真实启动后复用）与待修问题一（协议转换账号拒绝 WebSocket 后同会话握手回 426）、问题二（自定义多协议账号用量列显示今日统计）；不改受管工具与官方出站身份 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "cb33810e3c5c97994c8ff069f81052fe495bb9dc18e7372764aada23c43b6118"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "170261b6126910df9b72deced237408dc5bdf9dbe8e2970289118c29acd7c236"
+      ],
+      "reason": "第 5 步采集测试提速（attempt_recovery 退避打桩、vc6 reader 结果按进程首次真实启动后复用）与待修问题一（协议转换账号拒绝 WebSocket 后同会话握手回 426）、问题二（自定义多协议账号用量列显示今日统计）；不改受管工具与官方出站身份 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9b7c0f8458743187ba37d2fbe9bcc20ca32728971459a79211434aa6f6abd54b"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountUsageCell.vue",
+      "predecessor_sha256s": [
+        "1ccbfd296796b276aeda9b136d00eaa39a53a91245731efe4f0ff58d08a31a9e"
+      ],
+      "reason": "第 5 步采集测试提速（attempt_recovery 退避打桩、vc6 reader 结果按进程首次真实启动后复用）与待修问题一（协议转换账号拒绝 WebSocket 后同会话握手回 426）、问题二（自定义多协议账号用量列显示今日统计）；不改受管工具与官方出站身份 path=frontend/src/components/account/AccountUsageCell.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4e234e40e22f2b279ae0eb577daca7bcbe7d03c46fac8ae31b7c49fa5f0e5bcf"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "predecessor_sha256s": [
+        "325759f832fae0b62af5ceddb2ffa2eb74fb44abd5ef48e8946372944f9b8ef2"
+      ],
+      "reason": "第 5 步采集测试提速（attempt_recovery 退避打桩、vc6 reader 结果按进程首次真实启动后复用）与待修问题一（协议转换账号拒绝 WebSocket 后同会话握手回 426）、问题二（自定义多协议账号用量列显示今日统计）；不改受管工具与官方出站身份 path=frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cf6018f722c93b53a53b7c89dc1ce1092896075119f98a5a7174db0d790fd7e8"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/credentialsBuilder.ts",
+      "predecessor_sha256s": [
+        "cefa9d05eb8501507279c39bc3dd4d92a774b75510f2030e2f42182c34a9863f"
+      ],
+      "reason": "第 5 步采集测试提速（attempt_recovery 退避打桩、vc6 reader 结果按进程首次真实启动后复用）与待修问题一（协议转换账号拒绝 WebSocket 后同会话握手回 426）、问题二（自定义多协议账号用量列显示今日统计）；不改受管工具与官方出站身份 path=frontend/src/components/account/credentialsBuilder.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cf690992c897ffd3614e7d67066ee49e415a262a12a6de31951cd69908eff9e6"
+    }
+  ],
+  "unregistered_path_count": 10,
+  "unregistered_paths": [
+    "backend/internal/handler/openai_gateway_ws_http_fallback_pin.go",
+    "backend/internal/handler/openai_gateway_ws_http_fallback_pin_test.go",
+    "backend/internal/service/openai_ws_http_fallback_pin.go",
+    "backend/internal/service/openai_ws_http_fallback_pin_bridge_test.go",
+    "backend/internal/service/openai_ws_http_fallback_pin_test.go",
+    "frontend/src/components/account/__tests__/AccountUsageCell.custom.spec.ts",
+    "tools/official_client_capture/tests/claude_gate_reader_memo.py",
+    "tools/official_client_capture/tests/claude_typed_vc6_fixture.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_vc6_batch.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_evaluation_attempt_recovery.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
