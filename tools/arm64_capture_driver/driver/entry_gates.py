@@ -309,6 +309,22 @@ PRE_A3_GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
 }
 
 
+GO_PACKAGE_WRAPPER = "go_test_packages.py"
+
+
+def go_package_argv(argv: Sequence[str]) -> list[str]:
+    """后端 go test 门禁项实际执行的命令（优化第 3 项）：按包运行的包装器 ``go_test_packages.py``。
+
+    门禁记录、P0 证据里写的字面命令仍是 ``GATE_COMMANDS`` 里的 ``go test … -count=1``（收尾门禁按它核对）；实际执行换成包装器：首轮核对
+    ``go test -json`` 的包清单与 ``go list`` 的期望包集合逐个对上（没跑到的包按失败处理），补跑时只补跑失败的包。包装器自己固定带
+    ``-count=1``（入口门禁缓存合同）。标签取自字面命令里的 ``-tags=…``。"""
+
+    if list(argv[:2]) != ["go", "test"] or "-count=1" not in argv:
+        raise ValueError(f"不是带 -count=1 的 go test 门禁命令：{list(argv)}")
+    tags = next((item.split("=", 1)[1] for item in argv if item.startswith("-tags=")), "")
+    return ["python3", "-B", str(HERE / GO_PACKAGE_WRAPPER), *(["--tags", tags] if tags else []), "--pattern", "./..."]
+
+
 def gate_literal_command(gate_id: str, units: Sequence[str] = ()) -> tuple[list[str], str]:
     """门禁记录里写的字面命令：pre-a3 门禁项按它的场景单元所属客户端取（清单只属一个客户端，规划时已核对），
     其余门禁项照旧查表；没有单元时按 Codex（与改造前相同）。"""
@@ -833,6 +849,11 @@ def plan_gates(
                 units.append(merged)
                 members.append(unit["unit_id"])
             gates.append({"gate_id": gate_id, "units": members})
+    # 优化第 3 项：后端三组 go test 实际由按包运行的包装器执行（门禁记录里的字面命令不变）。放在单元生成之后统一替换，上面生成单元的行不动。
+    for gate_id in ("backend-go-test", "backend-unit", "backend-integration"):
+        for unit in units:
+            if unit["unit_id"] == f"backend:{gate_id.removeprefix('backend-')}":
+                unit["argv"] = [*launcher, *go_package_argv(GATE_COMMANDS[gate_id][0])]
     manifest = {"schema_version": GATES_SCHEMA, "profile": profile, "test_groups": groups, "units": units, "gates": gates,
                 "scheduling": scheduling_table()}
     if environment is not None:

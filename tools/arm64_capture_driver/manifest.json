@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 115,
+  "file_count": 116,
   "files": [
     {
       "path": "README.md",
@@ -190,9 +190,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "0f75ca753207e9e723e40e53eb164f2b49e1d774d09f2613ef6fde84747581f1",
+      "sha256": "28af68821b1593248ecd42817c30330a90a42000895dcb5e7c52a6a976aac1cb",
       "mode": "0700",
-      "bytes": 182862
+      "bytes": 184395
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -289,6 +289,12 @@
       "sha256": "26e2fe90355c21e44c7ec20c6a39223dbac688a1017baf41efbc23e6154f961f",
       "mode": "0700",
       "bytes": 17884
+    },
+    {
+      "path": "driver/go_test_packages.py",
+      "sha256": "8bbd0f6e5675463aaf8a60996df9340bc98e033082184f975e00ad810f371c61",
+      "mode": "0700",
+      "bytes": 23646
     },
     {
       "path": "driver/guard.sh",
@@ -442,9 +448,9 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "ea31081132052fb398d85d3d674405653d3d71570f7edd47b379a0345dd4e9e7",
+      "sha256": "6592b262a85f453657a4e773337bfe710d96180d27700e7dc8c88e03ac4e2c4b",
       "mode": "0700",
-      "bytes": 301660
+      "bytes": 303308
     },
     {
       "path": "driver/unit_inherit.py",
@@ -693,5 +699,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "92f2eed65e25c9abcf2932491517d55c6992f485665276b8e0cd1bc3270ae619"
+  "manifest_sha256": "2d23302eb935d783bf06860fcc95a92155137f00cd08814ec5eaa841ce24b214"
 }

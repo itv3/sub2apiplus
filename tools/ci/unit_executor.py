@@ -44,13 +44,13 @@
   不发布。决策收据随清单发布进记录库。执行的单元可以带读集审计（``--audit-reads``，承接的单元以来源记录的读集为准）。
   ``--decide-only --unit-inherit-propose <目录>`` 写出当前上下文与来源集合提案，供两类批准签字。
 
-* **失败单元补跑**（Codex 升级工具优化第 2 项，``run-gates`` 专用；调度配置的 ``retry.enabled`` 打开才生效，缺省关，规则与限制见同目录
+* **失败单元补跑**（Codex 升级工具优化第 2、3 项，``run-gates`` 专用；调度配置的 ``retry.enabled`` 打开才生效，缺省关，规则与限制见同目录
   ``retry_policy.py``）：并行段与独占段都跑完、机器腾空之后，对“执行失败”类（命令正常退出但退出码非 0、测试报告了失败）的失败单元逐个单独补跑一次；
   通过则并入结论并标注“补跑通过”（汇总行 ``retry``、汇总 ``retry`` 段、运行清单 ``retries``，两次日志都留），同一次运行里补跑再红即判红。
   超时被杀、读集未闭合、环境失败（信号终止、命令找不到、没写结果文件）不补跑，保持原来的诊断重跑（不改结论）。累计规则：同一单元最近 5 轮只许补跑
   通过 1 次，第 2 次再红直接判红、不再补跑，按单元 ID 写进记录库的 ``retry-ledger/``。补跑尝试的记录记为“正式执行”（运行清单自检不用改）但永不作
-  承接来源。
-
+  承接来源。后端三组 go test 由 ``go_test_packages.py`` 按包运行：补跑只补跑失败的包（失败用例能独立运行时才缩到 ``-run``），命令经环境变量
+  ``UNIT_EXECUTOR_SIDECAR``／``UNIT_EXECUTOR_FIRST_SIDECAR`` 读写自己的结构化旁路结果（路径不进环境指纹与单元规格）。
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
 若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
@@ -161,14 +161,14 @@ def _executor_files(helper: Path) -> list[Path]:
 
 
 def _retry_executor_files() -> list[Path]:
-    """打开补跑的运行把补跑策略模块 retry_policy.py的字节也算进执行器版本；没打开（缺省）返回空，执行器版本与改造前逐字相同。"""
+    """打开补跑的运行把补跑策略模块 retry_policy.py（与 go_test_packages.py）的字节也算进执行器版本；没打开（缺省）返回空，执行器版本与改造前逐字相同。"""
 
     here = Path(__file__).resolve().parent
-    # 补跑策略决定“什么算通过”，是执行器版本的一部分。
-    return [here / "retry_policy.py"] if _RETRY_ACTIVE.get() else []
+    # 补跑策略与后端 go test 按包运行的包装器（它决定后端三组测试的“没跑到的包算失败”与按包补跑）：都是“什么算通过”的一部分。
+    return [here / "retry_policy.py", here / "go_test_packages.py"] if _RETRY_ACTIVE.get() else []
 
 
-# 补跑打开时执行器版本多算补跑策略文件。用“包一层”的写法而不是改上面那个函数的返回行：control 四链的回归对 _executor_files 的
+# 补跑打开时执行器版本多算补跑策略与 Go 包装器两个文件。用“包一层”的写法而不是改上面那个函数的返回行：control 四链的回归对 _executor_files 的
 # 既有行逐字比较（补跑关闭时返回值与改造前相同）。
 _executor_files_without_retry = _executor_files
 
@@ -1511,6 +1511,10 @@ class Recorder:
             body.update(inheritable=False, not_inheritable_reason=outcome.extra["declared_not_inheritable"])
         if item.resumed_from:
             body["resumed_from"] = item.resumed_from
+        sidecar = item.log_path.parent.parent / "units" / (item.log_path.name.removesuffix(".log") + ".sidecar.json")
+        if sidecar.is_file():
+            # 命令单元写的结构化旁路结果（go test 按包结果等）：路径与摘要进记录，补跑通过的证据可追到首次尝试的包清单。
+            body["sidecar"] = {"path": str(sidecar), "sha256": self.records.file_sha256(sidecar), "bytes": sidecar.stat().st_size}
         if item.kind == "retry":
             # 补跑尝试（优化第 2 项）：记录仍记为“正式执行”（运行清单自检只认正式执行记录），但永不作承接来源，并写明它补的是哪次尝试。
             # 补跑通过是“抖动后的通过”，不是干净的一次通过，所以不让后续运行当承接依据。
@@ -2884,11 +2888,17 @@ class Scheduler:
         result_path = self.out_dir / "units" / f"{safe}{suffix}.result.json"
         record_path = self.out_dir / "units" / f"{safe}{suffix}.record.json"
         tests_path = self.out_dir / "units" / f"{safe}{suffix}.tests.json"
+        # 单元自己的结构化旁路结果（命令单元可选；后端 go test 的按包结果等）。补跑时同时给出首次尝试的那一份，让命令按首次结果
+        # 只补跑必要的部分。路径经 ``UNIT_EXECUTOR_`` 前缀的环境变量下发：不进环境指纹，也不在单元规格里。
+        sidecar_path = self.out_dir / "units" / f"{safe}{suffix}.sidecar.json"
+        first_sidecar_path = self.out_dir / "units" / f"{safe}.sidecar.json"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         for stale in (result_path, record_path, result_path.with_suffix('.observed-failure.json'),
                       result_path.with_suffix('.observed-failure.json.tmp')):
             with contextlib.suppress(FileNotFoundError):
                 stale.unlink()
+        with contextlib.suppress(FileNotFoundError):
+            sidecar_path.unlink()
         if unit.command:
             # 命令单元：经 /bin/sh 切到单元的工作目录再 exec 原命令（posix_spawn 不能指定工作目录；exec 按 PATH 找命令）。
             argv = ["/bin/sh", "-c", 'cd -- "$0" && exec "$@"', unit.cwd or os.getcwd(), *unit.command]
@@ -2913,6 +2923,8 @@ class Scheduler:
             **dict(unit.env),
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
+            "UNIT_EXECUTOR_SIDECAR": str(sidecar_path),
+            "UNIT_EXECUTOR_FIRST_SIDECAR": str(first_sidecar_path),
             RUN_TAG_ENV: f"{parent_tags}:{tag}" if parent_tags else tag,
             # 同目录的 unit_records.py：按闭包复制受管树的测试辅助（managed_tree_copy）在数据根里没有 tools/ci，靠它找到与
             # 输入声明同一份的闭包算法（E3-04）。UNIT_EXECUTOR_ 开头的变量不进环境指纹，也不在单元规格里。

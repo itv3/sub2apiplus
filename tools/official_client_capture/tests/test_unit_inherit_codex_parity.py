@@ -902,7 +902,7 @@ CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
 CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '0f75ca753207e9e723e40e53eb164f2b49e1d774d09f2613ef6fde84747581f1'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '28af68821b1593248ecd42817c30330a90a42000895dcb5e7c52a6a976aac1cb'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '4f45830872e05e732b507db210bf861f34f4bd7b752f4d2763e0c1e5732e1f2b'}
@@ -919,7 +919,7 @@ CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'ea31081132052fb398d85d3d674405653d3d71570f7edd47b379a0345dd4e9e7'}
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '6592b262a85f453657a4e773337bfe710d96180d27700e7dc8c88e03ac4e2c4b'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
         '            for member in [pid, *_session_members(pid)]:',
         '                    os.kill(member, signal.SIGKILL)',

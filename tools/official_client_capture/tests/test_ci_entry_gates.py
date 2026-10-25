@@ -163,7 +163,9 @@ class EntryGatesPlanTests(unittest.TestCase):
                              ("tools/official_client_capture/tests", "test_*.py", {"CLAUDE_AST_TYPESCRIPT_MODULE": "/ts.js"}, LAUNCHER))
             units = {unit["unit_id"]: unit for unit in preflight["units"]}
             self.assertTrue(all(unit["argv"][:len(LAUNCHER)] == LAUNCHER for unit in units.values()), "测试树单元都套隔离前缀")
-            self.assertEqual(units["backend:go-test"]["argv"][len(LAUNCHER):], ["go", "test", "./...", "-count=1"])
+            # 优化第 3 项：后端 go test 实际由按包运行的包装器执行（字面命令仍记在门禁记录里）；包装器固定带 -count=1。
+            self.assertEqual(units["backend:go-test"]["argv"][len(LAUNCHER):],
+                             ["python3", "-B", str(eg.HERE / eg.GO_PACKAGE_WRAPPER), "--pattern", "./..."])
             self.assertEqual(units["backend:go-test"]["cwd"], str(tree / "backend"))
             self.assertEqual(units["egress-spec:egress-spec-go-test"]["argv"][len(LAUNCHER):], ["make", "--no-print-directory", "egress-spec-go-test"])
 
