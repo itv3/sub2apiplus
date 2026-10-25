@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -20,7 +25,10 @@ from unittest import mock
 
 from tools.ci import backend_dependencies as bd
 from tools.ci import entry_gates as eg
+from tools.ci import unit_executor as ue
+from tools.ci import unit_records as ur
 from tools.official_client_capture.tests import test_ci_declared_inputs_entry as base
+from tools.official_client_capture.tests.test_ci_unit_executor_retry import RetryRunBase
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCKER_VERSION = ("docker", "version", "--format", "client={{.Client.Version}} server={{.Server.Version}}")
@@ -50,7 +58,8 @@ class InventoryStructureTests(unittest.TestCase):
         for dependency in ("docker-engine", "image-postgres", "image-redis", "image-ryuk"):
             self.assertEqual((by_id[dependency]["state"], tuple(by_id[dependency]["units"])), (bd.STATE_CONTRACT_READY, ("backend:integration",)))
         self.assertEqual(by_id["sampling-evidence"]["state"], bd.STATE_NOT_INHERITABLE, "没有采样证据就不能登记 declared")
-        self.assertEqual(by_id["docker-missing-skips"]["state"], bd.STATE_NOT_INHERITABLE)
+        self.assertEqual(by_id["docker-missing-skips"]["state"], bd.STATE_CLEARED, "门禁里的 integration 单元固定带 CI=true，缺 Docker 直接失败")
+        self.assertIn("CI=true", by_id["docker-missing-skips"]["how"])
 
     def test_required_contracts_per_unit(self) -> None:
         for unit_id in ("backend:go-test", "backend:unit"):
@@ -345,6 +354,161 @@ class ImageSourceConsistencyTests(unittest.TestCase):
         self.assertEqual(entry["detail"]["id"], "redis")
         self.assertIn("unavailable", entry["detail"]["image_id"])
         self.assertIn("不一致", entry["detail"]["error"])
+
+
+HARNESS_GO = "backend/internal/repository/integration_harness_test.go"
+WRAPPER = REPO_ROOT / "tools" / "ci" / "go_test_packages.py"
+HAVE_GO = shutil.which("go") is not None
+
+
+def mirrored_harness() -> str:
+    """按真实脚手架里的两段原文拼一个最小的 Go 测试包：``dockerIsAvailable`` 函数，和 TestMain 里判断 Docker 可用性、按 CI 变量决定“失败还是整包跳过”的那一段。
+    不复制逻辑，只摘原文；摘不到（脚手架改了写法）就让测试失败，提醒这里的模拟要重新对照。"""
+
+    text = (REPO_ROOT / HARNESS_GO).read_text(encoding="utf-8")
+    function = re.search(r"func dockerIsAvailable\(ctx context\.Context\) bool \{\n.*?\n\}\n", text, re.S)
+    block = re.search(r"\tif !dockerIsAvailable\(ctx\) \{\n.*?\n\t\}\n", text, re.S)
+    if function is None or block is None:
+        raise AssertionError("integration_harness_test.go 里的 Docker 可用性判断写法变了，这里的模拟要重新对照")
+    return ("//go:build integration\n\npackage harness\n\nimport (\n\t\"context\"\n\t\"log\"\n\t\"os\"\n\t\"os/exec\"\n\t\"testing\"\n)\n\n"
+            "func TestMain(m *testing.M) {\n\tctx := context.Background()\n" + block.group(0) + "\tos.Exit(m.Run())\n}\n\n" + function.group(0)
+            + "\nfunc TestNeedsDocker(t *testing.T) {}\n")
+
+
+class IntegrationUnitCiEnvTests(unittest.TestCase):
+    """门禁里 integration 单元的命令环境固定带 ``CI=true``（缺 Docker 时脚手架 TestMain 退出 1，而不是整包跳过并判通过）。
+    这个变量走单元规格、环境指纹的现有规则，没有被当成可忽略的变量。"""
+
+    def setUp(self) -> None:
+        self.world = base.World(self)
+        self.unit = self.world.units["backend:integration"]
+
+    def test_only_the_integration_unit_carries_ci_true_in_its_command_environment(self) -> None:
+        self.assertEqual(self.unit["env"].get("CI"), "true")
+        self.assertEqual(self.unit["env"].get("GOMAXPROCS"), eg.GO_ENV["GOMAXPROCS"], "原有的 Go 内部并行度不变")
+        for other in ("backend:go-test", "backend:unit"):
+            self.assertNotIn("CI", self.world.units[other]["env"], other)
+        self.assertEqual(bd.plan_problems(list(self.world.units.values())), [])
+
+    def test_the_plan_check_reports_a_missing_or_stray_ci(self) -> None:
+        units = {key: json.loads(json.dumps(value)) for key, value in self.world.units.items()}
+        del units["backend:integration"]["env"]["CI"]
+        units["backend:unit"]["env"]["CI"] = "true"
+        problems = bd.plan_problems(list(units.values()))
+        self.assertEqual(len(problems), 2, problems)
+        self.assertTrue(any("backend:integration" in problem and "CI=true" in problem for problem in problems))
+        self.assertTrue(any("backend:unit" in problem and "不应带 CI" in problem for problem in problems))
+        units["backend:integration"]["env"]["CI"] = "1"
+        self.assertTrue(bd.plan_problems([units["backend:integration"]]), "只认 CI=true")
+
+    def command_unit(self, env: dict) -> ue.Unit:
+        return ue.Unit(unit_id="backend:integration", module="", test_ids=(), quota=ue.Quota(cores=0.7, memory_mb=5120), exclusive=False, weight=1.0,
+                       command=tuple(self.unit["argv"]), cwd=self.unit["cwd"], env=tuple(sorted(env.items())))
+
+    def test_ci_is_part_of_the_unit_spec_so_changing_it_makes_a_different_unit(self) -> None:
+        with_ci = ue.unit_spec(self.command_unit(self.unit["env"]), start=None, pattern=None, timeout_seconds=3600)
+        without = ue.unit_spec(self.command_unit({key: value for key, value in self.unit["env"].items() if key != "CI"}),
+                               start=None, pattern=None, timeout_seconds=3600)
+        self.assertEqual(with_ci["env"]["CI"], "true")
+        self.assertNotIn("CI", without["env"])
+        self.assertNotEqual(ur.sha256_json(with_ci), ur.sha256_json(without), "规格摘要不同：没带 CI=true 的旧记录不能被当成同一个单元承接")
+
+    def test_ci_is_not_one_of_the_ignorable_variables(self) -> None:
+        self.assertNotIn("CI", ur.ENV_CACHE_ONLY)
+        self.assertEqual(sorted(ur.ENV_CACHE_ONLY), ["CODEX_UPGRADE_IDENTITY_MEMO", "PYTHONPYCACHEPREFIX"])
+        names = {entry["name"] for entry in ur.executor_environment({"CI": "true", "UNIT_EXECUTOR_KIND": "retry", "PYTHONPYCACHEPREFIX": "/p"})}
+        self.assertIn("envvar:CI", names, "执行器进程环境里的 CI 进环境指纹")
+        self.assertNotIn("envvar:UNIT_EXECUTOR_KIND", names)
+        self.assertNotIn("envvar:PYTHONPYCACHEPREFIX", names)
+
+    def test_a_declared_integration_unit_keeps_ci_true_next_to_the_offline_variables(self) -> None:
+        base.install_wp1_stubs(self)
+        world = base.World(self)
+        world.declare("backend:integration", base.default_scope(contracts=("toolchain:go",)))
+        world.write()
+        env = base.inputs_of(world.plan())["backend:integration"]["env"]
+        self.assertEqual(env.get("CI"), "true")
+        for key, value in eg.DECLARED_OFFLINE_ENV.items():
+            self.assertEqual(env.get(key), value)
+
+    def test_the_driver_whitelist_environment_does_not_pass_ci_so_it_must_live_in_the_unit_env(self) -> None:
+        """驱动 entry-gates.sh 的白名单环境（env -i）不放行 CI——所以 CI=true 必须写在单元自己的命令环境里（上面几项核对的就是它），不能指望继承。"""
+
+        script = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh").read_text(encoding="utf-8")
+        start = script.index("EXEC_ENV=(env -i")
+        block = script[start:script.index("EXEC_ENV+=(PYTHONPATH", start)]
+        self.assertIsNone(re.search(r"\bCI\b", block))
+
+
+@unittest.skipUnless(HAVE_GO, "需要本机装有 Go")
+class DockerMissingFailsTheIntegrationUnitTests(unittest.TestCase):
+    """缺 Docker 时该单元判失败而不是通过：用假 docker（PATH 垫片）和一份由真实脚手架原文拼出的最小 Go 测试包，经按包运行的包装器实际跑一遍。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.module = self.root / "module"
+        (self.module / "harness").mkdir(parents=True)
+        (self.module / "go.mod").write_text("module example.com/harness\n\ngo 1.18\n", encoding="utf-8")
+        (self.module / "harness" / "harness_test.go").write_text(mirrored_harness(), encoding="utf-8")
+        self.unit = base.World(self).units["backend:integration"]
+
+    def shim(self, name: str, exit_code: int) -> str:
+        directory = self.root / name
+        directory.mkdir()
+        (directory / "docker").write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+        (directory / "docker").chmod(0o755)
+        return f"{directory}:{os.environ['PATH']}"
+
+    def unit_env(self, path: str, *, ci: bool = True) -> dict[str, str]:
+        planned = {key: value for key, value in self.unit["env"].items() if ci or key != "CI"}
+        return {**planned, "PATH": path, "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOFLAGS": "", "GOCACHE": str(self.root / "gocache"),
+                "HOME": str(self.root)}
+
+    def run_wrapper(self, env: dict[str, str]) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-B", str(WRAPPER), "--tags", "integration", "--pattern", "./..."], cwd=self.module, capture_output=True,
+                              text=True, timeout=300, env={**env, "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_without_docker_the_planned_environment_makes_the_unit_fail(self) -> None:
+        completed = self.run_wrapper(self.unit_env(self.shim("no-docker", 1)))
+        self.assertEqual(completed.returncode, 1, completed.stdout[-1500:])
+        self.assertIn("failing integration tests", completed.stdout + completed.stderr)
+
+    def test_without_ci_the_same_missing_docker_would_silently_pass_which_is_the_gap_the_env_closes(self) -> None:
+        completed = self.run_wrapper(self.unit_env(self.shim("no-docker", 1), ci=False))
+        self.assertEqual(completed.returncode, 0, completed.stdout[-1500:])
+        self.assertIn("skipping integration tests", completed.stdout + completed.stderr)
+
+    def test_with_docker_available_the_unit_runs_its_tests_and_passes(self) -> None:
+        completed = self.run_wrapper(self.unit_env(self.shim("docker-ok", 0)))
+        self.assertEqual(completed.returncode, 0, completed.stdout[-1500:])
+
+
+@unittest.skipUnless(HAVE_GO, "需要本机装有 Go")
+class DockerMissingThroughTheExecutorTests(RetryRunBase):
+    """同样的场景交给真实的执行器进程：单元带着计划里的命令环境（CI=true），缺 Docker 时汇总里是失败，补跑也救不回来。"""
+
+    def test_the_executor_reports_the_unit_as_failed_when_docker_is_missing(self) -> None:
+        module = self.root / "module"
+        (module / "harness").mkdir(parents=True)
+        (module / "go.mod").write_text("module example.com/harness\n\ngo 1.18\n", encoding="utf-8")
+        (module / "harness" / "harness_test.go").write_text(mirrored_harness(), encoding="utf-8")
+        shim = self.root / "shim"
+        shim.mkdir()
+        (shim / "docker").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (shim / "docker").chmod(0o755)
+        planned = base.World(self).units["backend:integration"]
+        env = {**planned["env"], "PATH": f"{shim}:{os.environ['PATH']}", "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOFLAGS": "",
+               "GOCACHE": str(self.root / "gocache"), "HOME": str(self.root)}
+        unit = self.command_unit("backend:integration", [str(WRAPPER), "--tags", "integration", "--pattern", "./..."], cwd=str(module), env=env)
+        completed, summary, _manifest = self.run_gates([unit])
+        self.assertEqual(completed.returncode, 1, completed.stdout[-1500:] + completed.stderr[-800:])
+        self.assertEqual(summary["status"], "failed")
+        row = summary["units"][0]
+        self.assertFalse(row["passed"])
+        self.assertEqual(row["exit_code"], 1)
+        self.assertEqual(row["retry"]["status"], "retry-failed", "补跑时 Docker 仍然缺失，补跑也是红的")
 
 
 if __name__ == "__main__":

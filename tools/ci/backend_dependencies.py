@@ -95,9 +95,10 @@ DEPENDENCIES: tuple[dict[str, Any], ...] = (
      "how": "合同 service-image:ryuk（引用取自 testcontainers-go 的 ReaperDefaultImage，不在测试源码里；起任何容器都先起它）",
      "remaining": "待 ARM64 现取镜像 Id，取不到失败关闭"},
     {"id": "docker-missing-skips", "title": "Docker 缺失时整包跳过且判通过（脚手架 TestMain：未设 CI 变量就 os.Exit(0)，约 216 个 integration 用例一个都不跑）",
-     "units": DOCKER_UNITS, "state": STATE_NOT_INHERITABLE,
-     "how": "镜像合同取不到摘要时记录不可承接，所以空跑的“通过”不会被承接",
-     "remaining": "运行本身仍可能空绿；是否给 integration 单元固定 CI=true（缺 Docker 时直接失败）会改变门禁通过语义，待调度者决定"},
+     "units": DOCKER_UNITS, "state": STATE_CLEARED,
+     "how": "门禁里的 integration 单元命令环境固定带 CI=true（entry_gates.plan_gates 自入口门禁落地起如此，env 进单元规格，换了就是另一个单元规格、记录不可承接），"
+            "缺 Docker 时 TestMain 退出 1、该单元判失败，不再整包空绿；本机 make 目标与推送前门禁不经这个单元，行为不变；plan_problems 核对计划里确实带着",
+     "remaining": "待 ARM64 用 docker 垫片复验"},
     {"id": "sampling-evidence", "title": "ARM64 断网沙箱下的声明级采样证据（declared-sample/v1）", "units": ALL_UNITS, "state": STATE_NOT_INHERITABLE,
      "how": "登记为 declared 需要有效的采样证据（命令摘要、启动前缀摘要、采样器摘要、读集覆盖），本机不能代替 ARM64 采样",
      "remaining": "取到证据前保持 rerun-only"},
@@ -171,7 +172,8 @@ def command_tags(argv: Sequence[str]) -> str | None:
 
 
 def plan_problems(units: Sequence[Mapping[str, Any]]) -> list[str]:
-    """计划（清单 ``units``）里的三个后端单元：命令必须是 Go 测试（裸 go test 或包装器）且标签与该单元的约定一致；缺单元不报（别的组合只规划一部分）。"""
+    """计划（清单 ``units``）里的三个后端单元：命令必须是 Go 测试（裸 go test 或包装器）且标签与该单元的约定一致；需要 Docker 的单元命令环境必须固定带
+    ``CI=true``（缺 Docker 时脚手架 TestMain 才会失败而不是整包跳过判通过），别的单元不带；缺单元不报（别的组合只规划一部分）。"""
 
     problems: list[str] = []
     for unit in units:
@@ -183,6 +185,11 @@ def plan_problems(units: Sequence[Mapping[str, Any]]) -> list[str]:
             problems.append(f"{unit_id}：命令不是 go test，也不是按包运行的包装器 {WRAPPER_NAME}")
         elif tags != UNITS[unit_id]["tags"]:
             problems.append(f"{unit_id}：命令的构建标签是 {tags!r}，该单元约定为 {UNITS[unit_id]['tags']!r}（登记的合同与采样都按约定的标签）")
+        env = unit.get("env") if isinstance(unit.get("env"), Mapping) else {}
+        if UNITS[unit_id]["docker"] and env.get("CI") != "true":
+            problems.append(f"{unit_id}：命令环境没有固定 CI=true（缺 Docker 时脚手架会整包跳过并判通过）")
+        elif not UNITS[unit_id]["docker"] and "CI" in env:
+            problems.append(f"{unit_id}：不需要 Docker 的单元不应带 CI 变量（它改变测试行为，不是约定的环境）")
     return problems
 
 

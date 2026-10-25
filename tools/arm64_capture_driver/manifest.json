@@ -22,9 +22,9 @@
     },
     {
       "path": "driver/backend_dependencies.py",
-      "sha256": "0f5e6512d2c133815e88acb160516c45287c590cc0cb066bf4aedc73e981c1a9",
+      "sha256": "37178a93ad12f1cf5f49c034fedb1071733fec9bba4190bfa19f7653d984cbfe",
       "mode": "0700",
-      "bytes": 23272
+      "bytes": 24105
     },
     {
       "path": "driver/background-validate.sh",
@@ -717,5 +717,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "22bff7b1ef76ae52b2562e05f89d422973d84b20e9209b6a4c59e2bc785a63f9"
+  "manifest_sha256": "6793b89287a34871a2e8bbe754bce880898d5de903ec3068d0093df6a5e527d6"
 }
