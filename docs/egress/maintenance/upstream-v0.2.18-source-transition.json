@@ -1,0 +1,784 @@
+{
+  "base_commit": "d4a25c748c1031a79d88986e5ab7dc3cb71dafb3",
+  "base_tree": "e2a48267b2f1309e7931ad3b0f6df6969938e07c",
+  "chain_sequence": 1,
+  "current_commit": "de61b568c89e15926e78c384855f4118a64f0e8a",
+  "current_tree": "851e18800da5e55d6bfe28c241f3d8b0fbdaa57b",
+  "entries": [
+    {
+      "current_sha256": "bf03409654c42bf7492805e8343f5c7f75503930e76535fe655b706a867b563a",
+      "old_path": "",
+      "path": "README_CN.md",
+      "predecessor_sha256": "58c03d21b458277f8874df0396f03f69de3a25c03c375585748efc70f72c2d84",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=README_CN.md",
+      "status": "M"
+    },
+    {
+      "current_sha256": "75c2bf2d56f6cba7d189329e2df5f8f18d636a636cbd31b538704ebd25748f95",
+      "old_path": "",
+      "path": "README_JA.md",
+      "predecessor_sha256": "e1749cf19ae992b3769f71298b4011faec3e1b8c5266941d52e3c2f645945c59",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=README_JA.md",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7887ced6187a8c66902e30fbd5dc7b54f0fb3793088690e01f4170d63d0b4762",
+      "old_path": "",
+      "path": "assets/partners/logos/chenju_ai.png",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=assets/partners/logos/chenju_ai.png",
+      "status": "A"
+    },
+    {
+      "current_sha256": "398f8586a3b4b141b12fdc28a01eaa199122d4529238573860294212300b92ab",
+      "old_path": "",
+      "path": "assets/partners/logos/ooko.ai.png",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=assets/partners/logos/ooko.ai.png",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3fa69719d0146f620eac46461ac7f66c9113fcab8daf858dc7ac4a6dcc5f599d",
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256": "c7d6a4a3ed1680f8fcdcf668915a713051a7887acf849a1608746dea41d809d9",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/cmd/server/VERSION",
+      "status": "M"
+    },
+    {
+      "current_sha256": "023b5bb0f6f8cbc0108a3134492e04f3f8aa4934d14fe5c41865205c58d7de2d",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/account_quota_service_account_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/dto/account_quota_service_account_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "b654aaa63417a2fa6451638b25248a203ae32580f2f713c0f8cafd2dff83a235",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/mappers.go",
+      "predecessor_sha256": "ef2814f6f1d5d7037a085928514bacdfbeaaec376e1aec54cb220b054639038e",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/dto/mappers.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a49fdd5debc9f6629aa8204467d5393fe7e79471209bb33537761d279a08b893",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_compat_stream_usage_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_compat_stream_usage_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "948b08a77dec2b82af35bd0bb4ae5c48846f8951dcd4e7c166b71cb4a98ecaf1",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256": "ec8a50b7dc6bbb6e32015e9b62844bb492c0207506db90fa85b10188ad612feb",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "08daa8ccff9eaf824d0c77e95d03ca7bae4bec530c6785edb5911cf62beabca8",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_chat_completions.go",
+      "predecessor_sha256": "b74566c8ed0fcd83de448d09001d6d1621aa6911c5ddb9f59fa5734e814c8d30",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1ca543d0579ab184daa7fa9ac1611350d38aeb93125fa990c521488a072dfbe3",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_responses.go",
+      "predecessor_sha256": "d04a40f992637efd67e1ad94cd3554524da3624a43e44aa22cc992cdbdb35069",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "676000dd6e84ed95f59746cc403e886a4678aa676c27ae99295060e09d6d600a",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_warmup_intercept_unit_test.go",
+      "predecessor_sha256": "46dba62912c0cadf474f9e9195ac765a0ec62ca882668e4da11a738cf01af18d",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler_warmup_intercept_unit_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "81917f89020897f437aa5d38326a113276fa70c82f15a73c4dad9bca41b4c4f7",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_client_cancel_test.go",
+      "predecessor_sha256": "5ffd08d7d1e627bbbbd9cfaf4330f7c97df4728dc29bfb1eb4cbeba0a7f6e1db",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_client_cancel_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b708cbc3d78e6da8239c08fb0afda0ac7ad6e3a9acbdc9a8faa3b646abdc0062",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_image_generation_gate.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_image_generation_gate.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6cba2f3e36f2de14d144ff3ac80e287a54df854dc15d54d761743f129cd32f18",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_image_generation_gate_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_image_generation_gate_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "da051f15570dda5b1018594b4365c173ae65a77faf28798739edc4a7937302be",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256": "6ca2c4b739b20e6106418b52f236aa6cfc289a5363f3fee335aa9f7f43f20cc1",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "112360d3367e18c172d5599b0d52752e4162ffad39d97f9721af1c900f1108af",
+      "old_path": "",
+      "path": "backend/internal/handler/single_account_retry_probe_unit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/single_account_retry_probe_unit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "0f05486b8bdedc4b7d79911b7771fd110aed28a8b3d54abee7adedc2f6c1b47a",
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/response_transformer.go",
+      "predecessor_sha256": "912fc7bf224db513aae3713c6eaf9f36fc1220c88fe6a8dfedb9a4a0b0dddb96",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/antigravity/response_transformer.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4f9bf1eea184bb9f1eb7da88bc06ae91dcf66958d9f27d93b53236de6c22f657",
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/stream_transformer.go",
+      "predecessor_sha256": "1bbb395afa7467574d2f203dec202139b5360c285e1a7710fddf22704b211be3",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/antigravity/stream_transformer.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5532f3723b5d3e5f97e0b0b325113a88e1d173f385d01c99478bc65a804bbf93",
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/usage_contract_test.go",
+      "predecessor_sha256": "94ce2414dff20359be9a3c0abe4a87171f929f6fc4fd70711ced7845276e229b",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/antigravity/usage_contract_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b13e0b1c61d8d0e20ca6b60ee761c3445c6aa3f935f8270abc2a56b675fb52bd",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/request.go",
+      "predecessor_sha256": "6e886f06232fca304da48cf40bf1bb36b4e216fb7941210e394fb9b40015d755",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/openai/request.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e9e06148f30996b69394f452061ea49755608261a430ac496a1c2f9630113e7b",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/request_codex_identity_normalization_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/openai/request_codex_identity_normalization_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "282fd768343e9a1344ea7933f293a8dc115b7c2c70ead93a8a770e5ab306beae",
+      "old_path": "",
+      "path": "backend/internal/repository/scheduler_cache.go",
+      "predecessor_sha256": "1a7386b00f12b1ae209506e9cf9b596957555219321bdf037edb15a9373b1ef0",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/scheduler_cache.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fd27137b1bcf352a5b7a343e3dc2ea141d115cf601ee29e111d09465d0b39d48",
+      "old_path": "",
+      "path": "backend/internal/repository/scheduler_cache_snapshot_memo_unit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/scheduler_cache_snapshot_memo_unit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "2bd4976f0ca1321a7048442bbd6a3ad9d61afdadeed1ae82dd131f9a392feb3b",
+      "old_path": "",
+      "path": "backend/internal/repository/simple_mode_default_groups.go",
+      "predecessor_sha256": "f97420b2b184b5a7ec02651dfcfcfb468bdb111cf925cf01f61917bcebc8206c",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/simple_mode_default_groups.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e5837bf759079294512d40a2da202da367af1c8528e1199f7f91c893bbe7a543",
+      "old_path": "",
+      "path": "backend/internal/repository/simple_mode_default_groups_integration_test.go",
+      "predecessor_sha256": "45a7f454857abc8fae0dc8b50291742113d16bb5644f6e272b026bb3b1788c89",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/simple_mode_default_groups_integration_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "00b4464e1e25774035612f267fe69b45038cc46a3bdb70311ee412e8a4ad0bef",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo.go",
+      "predecessor_sha256": "dd4ac4c31b86da0e358593cfbde1e705e71374ff4b03eb2a1845d4824e36a9de",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "35041b28e2b763fce6496e459c63848941191c6e73db9ab7626bab05db57037b",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_integration_test.go",
+      "predecessor_sha256": "10d7e85c182fbc7d7216572352877737a32bb3fe9f1006b32ab89a0c4c462b79",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo_integration_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1407e40bd69e28bd8051eb539cd9432322cd9e86f1a749ae322df4931d28a7b5",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_unit_test.go",
+      "predecessor_sha256": "dce8ab02c06943844416cea6f1d62d1818167cb1a5bbbe021bfcb7d157e76248",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo_unit_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e0df306ab013cdb2b5821d234e0669d8244cbca1c2f12df5f10996988e63c387",
+      "old_path": "",
+      "path": "backend/internal/service/account.go",
+      "predecessor_sha256": "2789a0002b73da56e88098886c4f6a6d430b1118c459dc831f616998785ace12",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "be85edf754adea9eb62667c89137da1d4964d608c6c5c3c4b1f01e281cd9cb02",
+      "old_path": "",
+      "path": "backend/internal/service/account_model_mapping_signature_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account_model_mapping_signature_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c1ef0b9cac0daeb2839208937493fafc847531a7a8c1c9e8f863a67b16f5cfb5",
+      "old_path": "",
+      "path": "backend/internal/service/account_quota_schedulable_test.go",
+      "predecessor_sha256": "12a72b5e766df01437a9134fcedf356dcdecb6932f7bb1819f520caed73f022b",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account_quota_schedulable_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6c9bcc1a0d4e5532b2574c60a166762b0a711a350220530df82ef15bc8d24468",
+      "old_path": "",
+      "path": "backend/internal/service/account_quota_service_account_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account_quota_service_account_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "53666ef20d346523c224c1f51a197d3243a5a7bd2313730033bd9ce33d072da7",
+      "old_path": "",
+      "path": "backend/internal/service/account_shared_snapshot_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account_shared_snapshot_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ffaf97b8657587d6ab1d5b91b43773063e2851111470d289b51a55408d2f0111",
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256": "55c5866b9a12ddc2602312e25f9e2ce0da66bb187a0d36a6ee29a05facea55d5",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/admin_group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fc1ccc446b7613eb4073a922e9124e359c111db37805a327e8962cf00d1fe855",
+      "old_path": "",
+      "path": "backend/internal/service/admin_service_group_test.go",
+      "predecessor_sha256": "5b08518f1c98d6f4fe197f37a2da54248849571ff8baf7f48676228539d968c3",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/admin_service_group_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2c0c7689385ac5400243048f48b80ecdebd1d452510aae810b6d84cb28620ba7",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_claude.go",
+      "predecessor_sha256": "5964c5feb0120134226562b81b2a3d4faf35b8831440d5aa8bd20faa87db2a34",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_claude.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c97a962ced4de58ed788b33243ab030fdaa413472241307cdf01f378fdf1ec74",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat.go",
+      "predecessor_sha256": "31bd455964639e833886c25c865c112ff28b35ed60267b75b24af32dbb636ac2",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_compat.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "07b42e1c1ca3ee7a13fc01224de90d0746ebc96b3eba76635530da2d60012fb2",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256": "fa44068cba0d25d46dbc28685fcb5cc854b30d65fe16bf5186d209953bbbe4d5",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fb4ee4ebea3e588db4ab6a1a7121209c9313c71559a8b6ece2b7b9c7f4851023",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_retry.go",
+      "predecessor_sha256": "77b90b4b5159d2c05e45eaa3830ef2cb84257d5a075fc618a33394c4f80620f9",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_retry.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8ef188cb10de68c268c98e44033551bb328accfb4c611bcb59c997e88f33de0c",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256": "fa3b9670983855dee03c7afd37021bd08018b33953cf19acb6c1ee65a3bed367",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/billing_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c93cfb95047b2dc6fbe23dd674103c2fb0d14df7697a0f6d200484e243a7d7b8",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256": "4f70692a84eb403f7773be828cce0b15cb023a18abbe0a07b5765bdbbfda1462",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/billing_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b6ec7c82c0502d39dbaeefc71615fcf09873e16900069711cd8e012050e704e1",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward.go",
+      "predecessor_sha256": "e21aeed7c20a48428e80a34ae15b33445e62f2f077c1a79f963209860cf7d5b0",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "539191fbdf2faedd8feecb4d5ea7445944e5fa71d520f84900c70aa42367658e",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "predecessor_sha256": "6f2740f408ec5ed46dd84483feb2ebacf57830667fa9b2f32643df05a3a8eef2",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "58004593e830a38c5cbaba2155731fd94e834e25f92b2f74303b9a7674188a65",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_chat_completions_ping_test.go",
+      "predecessor_sha256": "20ec1c1ae7be85b037ebceafa3aa8b9ca90601a4f930c7c133e5a52d242e3e8c",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_chat_completions_ping_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "513be0b8dca3c6226456ced285fa09ee2d8dcd8360b9a031d3974689490b793c",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "predecessor_sha256": "a7ca49b04e4c28df1f96f59fcfc2e32eb690439bccb2c47cc4b1ec029fffa3be",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "38fe4b8e3fbfa0d43d866d911b3cab9afdd49dd3a8c03fa2b06238fb0c1211a6",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_compat_client_disconnect_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_compat_client_disconnect_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "9ab10c988ad3f79d21c26208e7380f7bb2875392ef786d43f23c07ce588d4aac",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_compat_stream.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_compat_stream.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "2219a85b1b75bced1748e25b61e289bd179a05fca5421320afaec5bd9be60b4d",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_scheduling.go",
+      "predecessor_sha256": "50fd6c6ca3e2f9f81d544ff7ede458da7256ac6bae42580c3441057726383cce",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_scheduling.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "af51dd17aa10873313f6eb5391841e7869d7e6e7d6eb87b1075c107b991520ac",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256": "cbf83923e2a00a6cf143185c31c51dfe69022ae8b7cf6eeb79a14761cb8bd128",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_usage_billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e7af3d843b57cdc47af54317b46cf92655a677c09f2a11aeead01939b9aef4ad",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing_account_quota_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_usage_billing_account_quota_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "bc4fb904f0ad31c251d8aec4dbb865d9c279725f055e59dbc5b24bdb4ad697e6",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_chat_completions_compat_service.go",
+      "predecessor_sha256": "680fe5bf259f7e3a9106196ae598594601572b72bc3fa34323a114a9e27df009",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_chat_completions_compat_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6aff34f0acbd84180dbb4f2c477d3f1df586c16f8806fceeca74e086815c022b",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_image_generation_gate.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_image_generation_gate.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5fc1034f034ef36384acfddf9ccf63486f72d299698cd646def0b65aa1f0e3b9",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_image_generation_gate_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_image_generation_gate_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1309884db171c2653feeb293a62adc9c060e754d3e8e2c14b2bd7524711eaf30",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service.go",
+      "predecessor_sha256": "231df2052f8ccb37b49ac5db00cbb81bbe9e7c8ab8fc959a3a960a9997e1f53d",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_messages_compat_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4c5f71a17aa5e0ca2c5355935e686361c895cc69982ce843b5f0c52abbee50df",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service_test.go",
+      "predecessor_sha256": "42cf115134354bf4d677df88cdbc44fafe459a6d5ff3c9fcc59ce6d3a44a07b8",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_messages_compat_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "685770e475a2c25e56613d61b7e9ea333933d54e0c74e0c6ff70d3101dc15741",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_native_response_signal_test.go",
+      "predecessor_sha256": "a8bf0aca06a178cb2063b7fe9bd448dac1940a34ecc3a1d060916d14ec03b69f",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_native_response_signal_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "915ebe2282b90c1327462deec954ccf45c06f02a98bdf447a2358f5ed5c4e3cf",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_stream_client_abort.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_stream_client_abort.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6b1b7d921d52648ede46f9847b545481c225361f2d8dddd778c5f73322b007dd",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_stream_client_abort_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_stream_client_abort_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6bbfb101d65bd1bd0d788157c25508a7bc9b4054a06c4f8db0aa46be0d70cd42",
+      "old_path": "",
+      "path": "backend/internal/service/image_storage.go",
+      "predecessor_sha256": "b579024c6c5dd1cf65bf1ab1ee45f02b862a1147411eca788746d900f723c889",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/image_storage.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2a80bc06f6850ccc58fb99acaebbedbfc0d9accacb3f116940a13d6e5b1f277f",
+      "old_path": "",
+      "path": "backend/internal/service/image_storage_test.go",
+      "predecessor_sha256": "e0864d68112b423f6dadd117cec0f833c68192e7bb03f75b7c02e0cd4657e679",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/image_storage_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "bbd6ff4fe648f4d082f34ebc0dd8323b5a2e77a6f9025f1ecdecae360d643705",
+      "old_path": "",
+      "path": "backend/internal/service/model_rate_limit.go",
+      "predecessor_sha256": "24a3988a949d15c5d111b168aa7d077d8be382107d0c123f364475dc17271ad2",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/model_rate_limit.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b4844e30fa610613d6bc84a45d83aa88086b88f9d36e9f312fc814cc00aa0fe9",
+      "old_path": "",
+      "path": "backend/internal/service/model_rate_limit_snapshot_cow_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/model_rate_limit_snapshot_cow_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "a4e2e78723db8a79d0ed486e1f7ae8322878d9589915be2173c8ee9a7201540e",
+      "old_path": "",
+      "path": "backend/internal/service/openai_capacity_shed_test.go",
+      "predecessor_sha256": "5b4d5577f85c493ddfb28f9c44eb0d43f5f3ad93f7e73226e066dce52124ee24",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_capacity_shed_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5fbcbd0a5988116754f39bff0328c45064025a55d01fcb537e9db6b6c983fe55",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_anthropic_native_pump.go",
+      "predecessor_sha256": "acdeff0a8cb5ac99c81d237be6a0366229c599e15174929a004bb170de2850cb",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_anthropic_native_pump.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ab3d49cc71fcd1fedbc31546556fe1adac81bcb183b3ff74c1f321b19ee6d9cf",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_anthropic_native_pump_test.go",
+      "predecessor_sha256": "dd92b709c403bc2ecaf9ea38d5b10be4883ad13d45bde9ed76012c124a425eb4",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_anthropic_native_pump_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0c029ba4198a886a4efb6e282d91c31eb15b438bdfe44f2f5712101c7d781f05",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_anthropic_native.go",
+      "predecessor_sha256": "eabfbff832c39e2c3a0845cd69edf2400e195dd4146502de38165972938990b1",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_chat_completions_anthropic_native.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b5c60151d1ffb1fdceb34303c190e0162fbb68eee9c3a162d8c29fc39c9716b4",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_deepseek_input_image_test.go",
+      "predecessor_sha256": "a673773d69f99aeb93ad5fb5fd40044451c3ba68233b786bea13ec8fe9cc5935",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_deepseek_input_image_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "79f26ced1c0a4e438efc1189a28f6cebdeea84d31847ecf30cd4bbe68d2034a0",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "predecessor_sha256": "cf2b884f1bcd9c6cc87663b1be5065adc7bd94d5bf9ae7273a875683f82ee731",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_passthrough.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0e73ca5f34cbb7e9be72c86f1a44957c11f83a76f98e9d0b9e900c0a6fc36337",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256": "a9cff3c738823ec92ec5f483e52e990ae24b0117ba8ba7ec88b1e956934461a3",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_request_body.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5e98561b0cbefb1d7bd5a80b1ac4dc56f40f2bd2d986092e938bcd70d615612b",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_responses_anthropic_native.go",
+      "predecessor_sha256": "355d887b367fc6165020e88bff4effaa0979c3898780d86d9dbc361527bfe65b",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_responses_anthropic_native.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0120b9fbbadaf1215c538bf8205c14d0b6a7b800123b8a947a0b368718e79c0f",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_upstream_errors.go",
+      "predecessor_sha256": "4e3884e76971b55e6738716eeee2221fe007a1436dbd7af946ded2540d93516d",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_upstream_errors.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "223465e68885c6e9b972778d17a1324d6e10a82c6b83c2d0a0d88cd6743b4d08",
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge_test.go",
+      "predecessor_sha256": "d348507b6b7d82a23ab9770b9234a5e40078d7d5374d0cae73ba7425a5285d69",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_ws_http_bridge_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8df1bedb7d64ca14a56848e7c00ff1d1e4a15213946e419c4af53e50ab0beea1",
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service_test.go",
+      "predecessor_sha256": "3bbeda35872f056983b566c7cae1af14c7905dc385bd7fd1f74bf1a34fddd3d3",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/pricing_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6158eac4f069ccf8820d94b260a3e14541c71b4644d5d46fd08a12caf20e3f2f",
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_service.go",
+      "predecessor_sha256": "af46bcdeb7d0702f11059f62bf12414d7e221c14c6dbf000121cc39c4c53cc83",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/ratelimit_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1fa935c1764d7e703cce14fa61dec462de8515172ab3ca84d546d459a6cda419",
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_service_403_html_test.go",
+      "predecessor_sha256": "d150f0c1f00df156a5365f2343e5a1431c2fc470647fd4d5ee75ab8e8e6d0d4a",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/ratelimit_service_403_html_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "695dab682bf2fc6bccf0a30b60c806fc2c8c871f13a65558a0ee6a2531876da3",
+      "old_path": "",
+      "path": "backend/internal/service/request_metadata.go",
+      "predecessor_sha256": "19e4b0e3a521f41f0d7118fa1f48a91d041702e3cd2fe352b32a3fe04716df8a",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/request_metadata.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c24b7ad3772ad14866d176b64284070094e7dbed6a2e0f65116491ba2c864986",
+      "old_path": "",
+      "path": "backend/internal/service/scheduler_cache.go",
+      "predecessor_sha256": "61d833d00617668a54cce36d4b2109515fdd451e7e054d6012895d9e012683de",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/scheduler_cache.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "99892e1205cdd2a0a06efad5f512b5f5ed520f3c97dc413b81ee97e99fcde346",
+      "old_path": "",
+      "path": "backend/internal/service/single_account_retry_probe_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/single_account_retry_probe_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "43cedb245bc1987ab3c43fcb30461b1e25ec2b74150f2fd997b95cdfecf0e9b0",
+      "old_path": "",
+      "path": "backend/internal/service/usage_billing.go",
+      "predecessor_sha256": "245ffa6e46d494b982a03a3d6e1e9c76aec8cb40d44827cb1128c3efd18a5f1f",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/usage_billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f49b458cfbd52bd17f5bb02e30e3813c8e192e4ae38bce6358713ef65f3874b5",
+      "old_path": "",
+      "path": "backend/migrations/246_enable_gemini_image_generation_groups.sql",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/migrations/246_enable_gemini_image_generation_groups.sql",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c186d29ea2c2082d62f23901ed9f2a6e81fc97c28a86143ac9fab443cee360ee",
+      "old_path": "",
+      "path": "backend/migrations/gemini_image_generation_groups_migration_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/migrations/gemini_image_generation_groups_migration_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e092d8fe3fb6abd66ecdc1da5ac1c094d9aaadd07a8d3df752dc5f7d09997812",
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256": "b983a64097160513bf7eb4257a48d61037a1f6e8136dabd44e38850e93cbb56f",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ecb077258317cdb186a6dfda68efd39c63308b4cf3b8753bb09f18c13bb38a23",
+      "old_path": "",
+      "path": "docs/egress/maintenance/upstream-v0.2.18-egress-merge-ledger.json",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=docs/egress/maintenance/upstream-v0.2.18-egress-merge-ledger.json",
+      "status": "A"
+    },
+    {
+      "current_sha256": "0997382cfeecf477301b573e3c8d9777b0ddb6d50df45d3487ee1b21e32efaf5",
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountCapacityCell.vue",
+      "predecessor_sha256": "0831b87342b1ff89ce666410361dccb43e5f8e6610c1662de1fd1c9c07ab662c",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/AccountCapacityCell.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1ccbfd296796b276aeda9b136d00eaa39a53a91245731efe4f0ff58d08a31a9e",
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountUsageCell.vue",
+      "predecessor_sha256": "85308e146b682dc7ebae633e723e91a631cf4227fee950fb22182ef84c17d549",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/AccountUsageCell.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e231a1c5ec766aeb224c82d1af375a79c7e323b35559e245d2c86fb262eba6f1",
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256": "d6010f3547e3b1e8994b23fcb32145db9faeba2206ead0db49a844702302f2e0",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/CreateAccountModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6b938db7c45d4b6be9e067f401cc58f6718a44fd94daec122e440c6756b2596f",
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256": "27033f24e53e0ffdfabd9ee68e648309e4208c1d8dbaeab7f7412a09c399895c",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/EditAccountModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "325759f832fae0b62af5ceddb2ffa2eb74fb44abd5ef48e8946372944f9b8ef2",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "predecessor_sha256": "db9a694e9d077f070fe0fb6691fbff10beb9d9507a2e6fc05cf7a93ca465c275",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ac824734ae59bb188fda39aade5fe5ce9868d430be35d96168463de7d4df9eeb",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "predecessor_sha256": "78a748b34f8dbe7183190ebc2715710c8cf49d8c31643143f676f17824ee1d48",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5397f5b338800fd8be99ab645b7c644e801ae0c4cf14bda2fd804796652daedd",
+      "old_path": "",
+      "path": "frontend/src/components/admin/account/AccountActionMenu.vue",
+      "predecessor_sha256": "90f0dfee9d7cd8d5384db2ae210ff9cc208f731b8de9af1c0b1af33567aeb9be",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/admin/account/AccountActionMenu.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f9ebde0fb37a6923b80466619f90ef5e8eeea988f7b1001676e3cb6920dc7fb4",
+      "old_path": "",
+      "path": "frontend/src/utils/accountQuota.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/utils/accountQuota.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "243ef68f88efbda53c1255a3589d37fe5934e27da79da1934019b866f1f9e07c",
+      "old_path": "",
+      "path": "frontend/src/views/admin/AccountsView.vue",
+      "predecessor_sha256": "64b1343a5311886cfe8795f335500e7d42bfe81016e9747553c9b40f9f22f53c",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/AccountsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ee5359af30863733b44eda77df6a6dd471f2760c7a9bec48e100cb02f83d23d7",
+      "old_path": "",
+      "path": "frontend/src/views/admin/GroupsView.vue",
+      "predecessor_sha256": "ed4b3db780e7342638e9cbcd91bb26b7c4f0aa473af43dcd218409a36992c418",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/GroupsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "97bc73ecd21205648d04e27764140a2e849de081a61be7d58c6ffa2569c6c2b4",
+      "old_path": "",
+      "path": "frontend/src/views/admin/__tests__/groupsImagePricing.spec.ts",
+      "predecessor_sha256": "57983d6fc6a20b82a53242cdffe2940a63ee5e5fdad8bc6ccf4934398c2129fa",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/__tests__/groupsImagePricing.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "de3d621e02b55cb3e04d0f0e636135c838d5a9846c3fe0508b9f08067021db77",
+      "old_path": "",
+      "path": "frontend/src/views/admin/groupsImagePricing.ts",
+      "predecessor_sha256": "5d60837bbf7da3fac1b1ea61a966b91c10ce8a0923383951d7ec5a1a1edf8094",
+      "reason": "合并上游 v0.2.18：冲突解决与源码适配（兼容流统一收尾、lint 适配），不采纳兼容层 Codex 身份归一；不改写历史节点，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/groupsImagePricing.ts",
+      "status": "M"
+    }
+  ],
+  "entry_count": 96,
+  "identity_sha256": "ddff6bd3236f2f19adcab4efe165f7938f0963b285826740b0e95ea197ed0f18",
+  "issued_at_utc": "2026-10-25T00:13:00Z",
+  "predecessor_register": null,
+  "reason_policy": "每个路径由 Git 差异确定；predecessor/current 摘要不可手填。reason 可统一提供，但官方 Persona、wire、selector 和共享控制面仍需人工补充。",
+  "result": "generated",
+  "schema_version": "official-egress-upstream-source-transition/v3"
+}

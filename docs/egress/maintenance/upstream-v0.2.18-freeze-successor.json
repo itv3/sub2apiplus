@@ -1,0 +1,1158 @@
+{
+  "base_commit": "d4a25c748c1031a79d88986e5ab7dc3cb71dafb3",
+  "changed_path_count": 96,
+  "current_commit": "de61b568c89e15926e78c384855f4118a64f0e8a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6940,
+  "frozen_path_count": 2279,
+  "identity_sha256": "4ecbb4e409749139156f80c262cdd8e2c7703644bda4a28c9bc69f2e822c001d",
+  "issued_at_utc": "2026-10-25T00:12:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0.2.18-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README_CN.md",
+      "predecessor_sha256s": [
+        "58c03d21b458277f8874df0396f03f69de3a25c03c375585748efc70f72c2d84"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=README_CN.md",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bf03409654c42bf7492805e8343f5c7f75503930e76535fe655b706a867b563a"
+    },
+    {
+      "old_path": "",
+      "path": "README_JA.md",
+      "predecessor_sha256s": [
+        "e1749cf19ae992b3769f71298b4011faec3e1b8c5266941d52e3c2f645945c59"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=README_JA.md",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "75c2bf2d56f6cba7d189329e2df5f8f18d636a636cbd31b538704ebd25748f95"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "c7d6a4a3ed1680f8fcdcf668915a713051a7887acf849a1608746dea41d809d9"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/chat-completions-id-20261005-freeze-successor.json",
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-10-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-11-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3fa69719d0146f620eac46461ac7f66c9113fcab8daf858dc7ac4a6dcc5f599d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/dto/mappers.go",
+      "predecessor_sha256s": [
+        "ef2814f6f1d5d7037a085928514bacdfbeaaec376e1aec54cb220b054639038e"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/dto/mappers.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b654aaa63417a2fa6451638b25248a203ae32580f2f713c0f8cafd2dff83a235"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256s": [
+        "ec8a50b7dc6bbb6e32015e9b62844bb492c0207506db90fa85b10188ad612feb"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "948b08a77dec2b82af35bd0bb4ae5c48846f8951dcd4e7c166b71cb4a98ecaf1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_chat_completions.go",
+      "predecessor_sha256s": [
+        "b74566c8ed0fcd83de448d09001d6d1621aa6911c5ddb9f59fa5734e814c8d30"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler_chat_completions.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "08daa8ccff9eaf824d0c77e95d03ca7bae4bec530c6785edb5911cf62beabca8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_responses.go",
+      "predecessor_sha256s": [
+        "d04a40f992637efd67e1ad94cd3554524da3624a43e44aa22cc992cdbdb35069"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gateway_handler_responses.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1ca543d0579ab184daa7fa9ac1611350d38aeb93125fa990c521488a072dfbe3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_client_cancel_test.go",
+      "predecessor_sha256s": [
+        "5ffd08d7d1e627bbbbd9cfaf4330f7c97df4728dc29bfb1eb4cbeba0a7f6e1db"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_client_cancel_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "81917f89020897f437aa5d38326a113276fa70c82f15a73c4dad9bca41b4c4f7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256s": [
+        "6ca2c4b739b20e6106418b52f236aa6cfc289a5363f3fee335aa9f7f43f20cc1"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "da051f15570dda5b1018594b4365c173ae65a77faf28798739edc4a7937302be"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/stream_transformer.go",
+      "predecessor_sha256s": [
+        "1bbb395afa7467574d2f203dec202139b5360c285e1a7710fddf22704b211be3"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/antigravity/stream_transformer.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4f9bf1eea184bb9f1eb7da88bc06ae91dcf66958d9f27d93b53236de6c22f657"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/usage_contract_test.go",
+      "predecessor_sha256s": [
+        "94ce2414dff20359be9a3c0abe4a87171f929f6fc4fd70711ced7845276e229b"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/antigravity/usage_contract_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5532f3723b5d3e5f97e0b0b325113a88e1d173f385d01c99478bc65a804bbf93"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/request.go",
+      "predecessor_sha256s": [
+        "6e886f06232fca304da48cf40bf1bb36b4e216fb7941210e394fb9b40015d755"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/pkg/openai/request.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b13e0b1c61d8d0e20ca6b60ee761c3445c6aa3f935f8270abc2a56b675fb52bd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/scheduler_cache.go",
+      "predecessor_sha256s": [
+        "1a7386b00f12b1ae209506e9cf9b596957555219321bdf037edb15a9373b1ef0"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/scheduler_cache.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "282fd768343e9a1344ea7933f293a8dc115b7c2c70ead93a8a770e5ab306beae"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo.go",
+      "predecessor_sha256s": [
+        "dd4ac4c31b86da0e358593cfbde1e705e71374ff4b03eb2a1845d4824e36a9de"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00b4464e1e25774035612f267fe69b45038cc46a3bdb70311ee412e8a4ad0bef"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_integration_test.go",
+      "predecessor_sha256s": [
+        "10d7e85c182fbc7d7216572352877737a32bb3fe9f1006b32ab89a0c4c462b79"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "35041b28e2b763fce6496e459c63848941191c6e73db9ab7626bab05db57037b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_unit_test.go",
+      "predecessor_sha256s": [
+        "dce8ab02c06943844416cea6f1d62d1818167cb1a5bbbe021bfcb7d157e76248"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/repository/usage_billing_repo_unit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1407e40bd69e28bd8051eb539cd9432322cd9e86f1a749ae322df4931d28a7b5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account.go",
+      "predecessor_sha256s": [
+        "2789a0002b73da56e88098886c4f6a6d430b1118c459dc831f616998785ace12"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/account.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e0df306ab013cdb2b5821d234e0669d8244cbca1c2f12df5f10996988e63c387"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256s": [
+        "55c5866b9a12ddc2602312e25f9e2ce0da66bb187a0d36a6ee29a05facea55d5"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/admin_group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ffaf97b8657587d6ab1d5b91b43773063e2851111470d289b51a55408d2f0111"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_service_group_test.go",
+      "predecessor_sha256s": [
+        "5b08518f1c98d6f4fe197f37a2da54248849571ff8baf7f48676228539d968c3"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/admin_service_group_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fc1ccc446b7613eb4073a922e9124e359c111db37805a327e8962cf00d1fe855"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_claude.go",
+      "predecessor_sha256s": [
+        "5964c5feb0120134226562b81b2a3d4faf35b8831440d5aa8bd20faa87db2a34"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_claude.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2c0c7689385ac5400243048f48b80ecdebd1d452510aae810b6d84cb28620ba7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat.go",
+      "predecessor_sha256s": [
+        "31bd455964639e833886c25c865c112ff28b35ed60267b75b24af32dbb636ac2"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_compat.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c97a962ced4de58ed788b33243ab030fdaa413472241307cdf01f378fdf1ec74"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256s": [
+        "fa44068cba0d25d46dbc28685fcb5cc854b30d65fe16bf5186d209953bbbe4d5"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "07b42e1c1ca3ee7a13fc01224de90d0746ebc96b3eba76635530da2d60012fb2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_retry.go",
+      "predecessor_sha256s": [
+        "77b90b4b5159d2c05e45eaa3830ef2cb84257d5a075fc618a33394c4f80620f9"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/antigravity_gateway_retry.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fb4ee4ebea3e588db4ab6a1a7121209c9313c71559a8b6ece2b7b9c7f4851023"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256s": [
+        "fa3b9670983855dee03c7afd37021bd08018b33953cf19acb6c1ee65a3bed367"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/billing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8ef188cb10de68c268c98e44033551bb328accfb4c611bcb59c997e88f33de0c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256s": [
+        "4f70692a84eb403f7773be828cce0b15cb023a18abbe0a07b5765bdbbfda1462"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/billing_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c93cfb95047b2dc6fbe23dd674103c2fb0d14df7697a0f6d200484e243a7d7b8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward.go",
+      "predecessor_sha256s": [
+        "e21aeed7c20a48428e80a34ae15b33445e62f2f077c1a79f963209860cf7d5b0"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b6ec7c82c0502d39dbaeefc71615fcf09873e16900069711cd8e012050e704e1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "predecessor_sha256s": [
+        "6f2740f408ec5ed46dd84483feb2ebacf57830667fa9b2f32643df05a3a8eef2"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_chat_completions.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "539191fbdf2faedd8feecb4d5ea7445944e5fa71d520f84900c70aa42367658e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_chat_completions_ping_test.go",
+      "predecessor_sha256s": [
+        "20ec1c1ae7be85b037ebceafa3aa8b9ca90601a4f930c7c133e5a52d242e3e8c"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_chat_completions_ping_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "58004593e830a38c5cbaba2155731fd94e834e25f92b2f74303b9a7674188a65"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "predecessor_sha256s": [
+        "a7ca49b04e4c28df1f96f59fcfc2e32eb690439bccb2c47cc4b1ec029fffa3be"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_forward_as_responses.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "513be0b8dca3c6226456ced285fa09ee2d8dcd8360b9a031d3974689490b793c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_scheduling.go",
+      "predecessor_sha256s": [
+        "50fd6c6ca3e2f9f81d544ff7ede458da7256ac6bae42580c3441057726383cce"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_scheduling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2219a85b1b75bced1748e25b61e289bd179a05fca5421320afaec5bd9be60b4d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256s": [
+        "cbf83923e2a00a6cf143185c31c51dfe69022ae8b7cf6eeb79a14761cb8bd128"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gateway_usage_billing.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "af51dd17aa10873313f6eb5391841e7869d7e6e7d6eb87b1075c107b991520ac"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_chat_completions_compat_service.go",
+      "predecessor_sha256s": [
+        "680fe5bf259f7e3a9106196ae598594601572b72bc3fa34323a114a9e27df009"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_chat_completions_compat_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bc4fb904f0ad31c251d8aec4dbb865d9c279725f055e59dbc5b24bdb4ad697e6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service.go",
+      "predecessor_sha256s": [
+        "231df2052f8ccb37b49ac5db00cbb81bbe9e7c8ab8fc959a3a960a9997e1f53d"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_messages_compat_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1309884db171c2653feeb293a62adc9c060e754d3e8e2c14b2bd7524711eaf30"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service_test.go",
+      "predecessor_sha256s": [
+        "42cf115134354bf4d677df88cdbc44fafe459a6d5ff3c9fcc59ce6d3a44a07b8"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_messages_compat_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4c5f71a17aa5e0ca2c5355935e686361c895cc69982ce843b5f0c52abbee50df"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_native_response_signal_test.go",
+      "predecessor_sha256s": [
+        "a8bf0aca06a178cb2063b7fe9bd448dac1940a34ecc3a1d060916d14ec03b69f"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/gemini_native_response_signal_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "685770e475a2c25e56613d61b7e9ea333933d54e0c74e0c6ff70d3101dc15741"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_rate_limit.go",
+      "predecessor_sha256s": [
+        "24a3988a949d15c5d111b168aa7d077d8be382107d0c123f364475dc17271ad2"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/model_rate_limit.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bbd6ff4fe648f4d082f34ebc0dd8323b5a2e77a6f9025f1ecdecae360d643705"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_capacity_shed_test.go",
+      "predecessor_sha256s": [
+        "5b4d5577f85c493ddfb28f9c44eb0d43f5f3ad93f7e73226e066dce52124ee24"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_capacity_shed_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a4e2e78723db8a79d0ed486e1f7ae8322878d9589915be2173c8ee9a7201540e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_anthropic_native_pump_test.go",
+      "predecessor_sha256s": [
+        "dd92b709c403bc2ecaf9ea38d5b10be4883ad13d45bde9ed76012c124a425eb4"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_anthropic_native_pump_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ab3d49cc71fcd1fedbc31546556fe1adac81bcb183b3ff74c1f321b19ee6d9cf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_anthropic_native.go",
+      "predecessor_sha256s": [
+        "eabfbff832c39e2c3a0845cd69edf2400e195dd4146502de38165972938990b1"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_chat_completions_anthropic_native.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0c029ba4198a886a4efb6e282d91c31eb15b438bdfe44f2f5712101c7d781f05"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_deepseek_input_image_test.go",
+      "predecessor_sha256s": [
+        "a673773d69f99aeb93ad5fb5fd40044451c3ba68233b786bea13ec8fe9cc5935"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_deepseek_input_image_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b5c60151d1ffb1fdceb34303c190e0162fbb68eee9c3a162d8c29fc39c9716b4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "predecessor_sha256s": [
+        "cf2b884f1bcd9c6cc87663b1be5065adc7bd94d5bf9ae7273a875683f82ee731"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_passthrough.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "79f26ced1c0a4e438efc1189a28f6cebdeea84d31847ecf30cd4bbe68d2034a0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "a9cff3c738823ec92ec5f483e52e990ae24b0117ba8ba7ec88b1e956934461a3"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_request_body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0e73ca5f34cbb7e9be72c86f1a44957c11f83a76f98e9d0b9e900c0a6fc36337"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_responses_anthropic_native.go",
+      "predecessor_sha256s": [
+        "355d887b367fc6165020e88bff4effaa0979c3898780d86d9dbc361527bfe65b"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_responses_anthropic_native.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5e98561b0cbefb1d7bd5a80b1ac4dc56f40f2bd2d986092e938bcd70d615612b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_upstream_errors.go",
+      "predecessor_sha256s": [
+        "4e3884e76971b55e6738716eeee2221fe007a1436dbd7af946ded2540d93516d"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_gateway_upstream_errors.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0120b9fbbadaf1215c538bf8205c14d0b6a7b800123b8a947a0b368718e79c0f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge_test.go",
+      "predecessor_sha256s": [
+        "d348507b6b7d82a23ab9770b9234a5e40078d7d5374d0cae73ba7425a5285d69"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/openai_ws_http_bridge_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "223465e68885c6e9b972778d17a1324d6e10a82c6b83c2d0a0d88cd6743b4d08"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service_test.go",
+      "predecessor_sha256s": [
+        "3bbeda35872f056983b566c7cae1af14c7905dc385bd7fd1f74bf1a34fddd3d3"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/pricing_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8df1bedb7d64ca14a56848e7c00ff1d1e4a15213946e419c4af53e50ab0beea1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_service.go",
+      "predecessor_sha256s": [
+        "af46bcdeb7d0702f11059f62bf12414d7e221c14c6dbf000121cc39c4c53cc83"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/ratelimit_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6158eac4f069ccf8820d94b260a3e14541c71b4644d5d46fd08a12caf20e3f2f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_service_403_html_test.go",
+      "predecessor_sha256s": [
+        "d150f0c1f00df156a5365f2343e5a1431c2fc470647fd4d5ee75ab8e8e6d0d4a"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/internal/service/ratelimit_service_403_html_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1fa935c1764d7e703cce14fa61dec462de8515172ab3ca84d546d459a6cda419"
+    },
+    {
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256s": [
+        "b983a64097160513bf7eb4257a48d61037a1f6e8136dabd44e38850e93cbb56f"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e092d8fe3fb6abd66ecdc1da5ac1c094d9aaadd07a8d3df752dc5f7d09997812"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountUsageCell.vue",
+      "predecessor_sha256s": [
+        "85308e146b682dc7ebae633e723e91a631cf4227fee950fb22182ef84c17d549"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/AccountUsageCell.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1ccbfd296796b276aeda9b136d00eaa39a53a91245731efe4f0ff58d08a31a9e"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256s": [
+        "d6010f3547e3b1e8994b23fcb32145db9faeba2206ead0db49a844702302f2e0"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/CreateAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e231a1c5ec766aeb224c82d1af375a79c7e323b35559e245d2c86fb262eba6f1"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256s": [
+        "27033f24e53e0ffdfabd9ee68e648309e4208c1d8dbaeab7f7412a09c399895c"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/EditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6b938db7c45d4b6be9e067f401cc58f6718a44fd94daec122e440c6756b2596f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "predecessor_sha256s": [
+        "db9a694e9d077f070fe0fb6691fbff10beb9d9507a2e6fc05cf7a93ca465c275"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/__tests__/AccountUsageCell.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "325759f832fae0b62af5ceddb2ffa2eb74fb44abd5ef48e8946372944f9b8ef2"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "78a748b34f8dbe7183190ebc2715710c8cf49d8c31643143f676f17824ee1d48"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ac824734ae59bb188fda39aade5fe5ce9868d430be35d96168463de7d4df9eeb"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/admin/account/AccountActionMenu.vue",
+      "predecessor_sha256s": [
+        "90f0dfee9d7cd8d5384db2ae210ff9cc208f731b8de9af1c0b1af33567aeb9be"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/components/admin/account/AccountActionMenu.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5397f5b338800fd8be99ab645b7c644e801ae0c4cf14bda2fd804796652daedd"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/AccountsView.vue",
+      "predecessor_sha256s": [
+        "64b1343a5311886cfe8795f335500e7d42bfe81016e9747553c9b40f9f22f53c"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/AccountsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "243ef68f88efbda53c1255a3589d37fe5934e27da79da1934019b866f1f9e07c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/GroupsView.vue",
+      "predecessor_sha256s": [
+        "ed4b3db780e7342638e9cbcd91bb26b7c4f0aa473af43dcd218409a36992c418"
+      ],
+      "reason": "合并上游 v0.2.18：冲突按 fork 官方出站优先解决（不采纳兼容层 TUI→CLI 身份归一）、兼容流流内错误改走上游统一收尾、上游测试 lint 适配；不改写历史收据，不改变官方客户端画像或 Persona 选择。 path=frontend/src/views/admin/GroupsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ee5359af30863733b44eda77df6a6dd471f2760c7a9bec48e100cb02f83d23d7"
+    }
+  ],
+  "unregistered_path_count": 39,
+  "unregistered_paths": [
+    "assets/partners/logos/chenju_ai.png",
+    "assets/partners/logos/ooko.ai.png",
+    "backend/internal/handler/dto/account_quota_service_account_test.go",
+    "backend/internal/handler/gateway_compat_stream_usage_test.go",
+    "backend/internal/handler/gateway_handler_warmup_intercept_unit_test.go",
+    "backend/internal/handler/gemini_image_generation_gate.go",
+    "backend/internal/handler/gemini_image_generation_gate_test.go",
+    "backend/internal/handler/single_account_retry_probe_unit_test.go",
+    "backend/internal/pkg/antigravity/response_transformer.go",
+    "backend/internal/pkg/openai/request_codex_identity_normalization_test.go",
+    "backend/internal/repository/scheduler_cache_snapshot_memo_unit_test.go",
+    "backend/internal/repository/simple_mode_default_groups.go",
+    "backend/internal/repository/simple_mode_default_groups_integration_test.go",
+    "backend/internal/service/account_model_mapping_signature_test.go",
+    "backend/internal/service/account_quota_schedulable_test.go",
+    "backend/internal/service/account_quota_service_account_test.go",
+    "backend/internal/service/account_shared_snapshot_test.go",
+    "backend/internal/service/gateway_forward_compat_client_disconnect_test.go",
+    "backend/internal/service/gateway_forward_compat_stream.go",
+    "backend/internal/service/gateway_usage_billing_account_quota_test.go",
+    "backend/internal/service/gemini_image_generation_gate.go",
+    "backend/internal/service/gemini_image_generation_gate_test.go",
+    "backend/internal/service/gemini_stream_client_abort.go",
+    "backend/internal/service/gemini_stream_client_abort_test.go",
+    "backend/internal/service/image_storage.go",
+    "backend/internal/service/image_storage_test.go",
+    "backend/internal/service/model_rate_limit_snapshot_cow_test.go",
+    "backend/internal/service/openai_gateway_anthropic_native_pump.go",
+    "backend/internal/service/request_metadata.go",
+    "backend/internal/service/scheduler_cache.go",
+    "backend/internal/service/single_account_retry_probe_test.go",
+    "backend/internal/service/usage_billing.go",
+    "backend/migrations/246_enable_gemini_image_generation_groups.sql",
+    "backend/migrations/gemini_image_generation_groups_migration_test.go",
+    "docs/egress/maintenance/upstream-v0.2.18-egress-merge-ledger.json",
+    "frontend/src/components/account/AccountCapacityCell.vue",
+    "frontend/src/utils/accountQuota.ts",
+    "frontend/src/views/admin/__tests__/groupsImagePricing.spec.ts",
+    "frontend/src/views/admin/groupsImagePricing.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
