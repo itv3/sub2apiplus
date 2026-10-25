@@ -4,7 +4,7 @@
 ==================================
 ``test_claude_upgrade_vc6_batch`` 的整条恢复链全程约 1000 秒（本机）／2100～2400 秒（CI），其中每次门禁材料
 重放都要新开一个 ``python -I -B -S claude_gate_material_worker.py`` 私有进程（冷启动加导入加 ``sys.setprofile``
-逐访问重放，单次约 0.8～1.2 秒）。实测整条用例共 205 次这样的新进程，**输入只有 3 种**（其中 203 次逐字相同：
+逐访问重放，单次约 0.8～1.2 秒）。实测整条用例共 205 次这样的新进程，**输入只有 2 种**（其中 203 次逐字相同：
 同一世界、同一材料、同一预期 subject，只是由测试进程、父批次动作进程、守卫进程、finalize 动作进程分别各问了一遍），
 合计 165～250 秒，占用例墙钟的 17%～21%。
 
@@ -14,10 +14,11 @@
 （三）用 ``GateMaterialReadView`` 把旧结果记录的每一次元数据访问重做一遍并要求访问集逐项相同，
 （四）核读取身份里的禁用 bytecode 前缀仍不存在。只有这条路径不跨进程、不跨 scope。
 
-本模块把同一条路径**原样**搬到进程之间：第一次（未命中）仍然启动真实的独立 reader 进程，结果落到测试私有目录；
-之后任何进程（测试进程、守卫进程、动作子进程）再遇到逐字相同的输入，就用产品自己的 ``prior_replays`` 路径
-复核这份旧结果，**复核通过才复用，复核失败（材料漂移、访问集变化、前缀出现等）一律回退到真实 reader**，
-不会掩盖任何一次失败，也不会改变任何返回值的形状。
+本模块把同一条路径**原样**搬到进程之间：**每个进程**（测试进程、守卫进程、动作子进程）对每种输入的第一次
+调用仍然启动真实的独立 reader 进程，结果落到测试私有目录；同一进程之后再遇到逐字相同的输入，才用产品自己的
+``prior_replays`` 路径复核这份旧结果。**复核通过才复用；复核失败（材料漂移、访问集变化、前缀出现、缓存内容
+损坏无法解析等）一律回退到真实 reader**，不会掩盖任何一次失败，也不会改变任何返回值的形状。按进程首次真实启动，
+是为了保留“守卫进程、动作子进程在各自环境里真实启动 reader”这条覆盖，只多花十几秒。
 
 范围与不降低覆盖的论证
 ----------------------
@@ -49,6 +50,10 @@ MEMO_ENV = "CLAUDE_VC6_GATE_READER_MEMO_DIR"
 STATS_FILE = "stats.log"
 
 _local = threading.local()
+# 本进程已经真实启动过 reader 的输入键。键里带进程号：守卫进程经 fork 继承父进程内存，
+# 不带进程号会把父进程见过的键当成自己的，子进程就再也不会真实启动 reader。
+_seen_in_process: set[tuple[int, str]] = set()
+_seen_lock = threading.Lock()
 
 
 def _specification(reader: Any, files: list[dict[str, Any]], directories: list[dict[str, Any]], missing: list[str],
@@ -105,8 +110,13 @@ def _memoized(real: Any, directory: Path) -> Any:
                         view=view, expected_subject=expected_subject)
         specification = _specification(reader_identity, files, directories, missing, gate_root, receipt_relative,
                                        view, expected_subject)
-        path = directory / f"{hashlib.sha256(specification).hexdigest()}.json"
-        cached = _load(path)
+        digest = hashlib.sha256(specification).hexdigest()
+        path = directory / f"{digest}.json"
+        with _seen_lock:
+            first_in_process = (os.getpid(), digest) not in _seen_in_process
+            _seen_in_process.add((os.getpid(), digest))
+        # 本进程第一次遇到这种输入：不读缓存，直接真实启动 reader（见模块说明）。
+        cached = None if first_in_process else _load(path)
         if cached is not None:
             _local.replaying = True
             _local.fell_back = False
@@ -120,8 +130,9 @@ def _memoized(real: Any, directory: Path) -> Any:
                         view=view, expected_subject=expected_subject, prior_replays=(prior,))
                 _note(directory, "run" if _local.fell_back else "hit")
                 return result
-            except worker.ReaderError:
-                # 复核不通过（材料、访问集或前缀变化）：不使用旧结果，回退到真实 reader，由它给出结论。
+            except (worker.ReaderError, ValueError, KeyError, TypeError):
+                # 复核不通过（材料、访问集或前缀变化），或缓存内容损坏无法解析（JSONDecodeError 属于 ValueError）：
+                # 不使用旧结果，回退到真实 reader，由它给出结论。
                 pass
             finally:
                 _local.replaying = False
