@@ -68,7 +68,7 @@ func newStubDNSResolver(hosts map[string][]string) *net.Resolver {
 
 // serveStubDNS 在管道另一端按“两字节长度加报文”的流式格式应答查询（Go 解析器对非 PacketConn 的连接使用该格式）。
 func serveStubDNS(connection net.Conn, table map[string][]netip.Addr) {
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	for {
 		var prefix [2]byte
 		if _, err := io.ReadFull(connection, prefix[:]); err != nil {

@@ -11,9 +11,12 @@
 
 检查的四类写法（规则编号出现在输出里）
 ======================================
-* ``elapsed-bound``   ：把“实测已用时间”和一个数字常量做**上界**比较，例如 ``assertLess(elapsed, 0.5)``、
+* ``elapsed-bound``   ：把“实测已用时间”和一个常量做**上界**比较，例如 ``assertLess(elapsed, 0.5)``、
   ``assert time.monotonic() - start < 3``、Go 的 ``require.Less(t, elapsed, 200*time.Millisecond)``、
-  ``if elapsed > 2*time.Second { t.Fatal }``。只报上界：下界（“至少等了多久”）在机器变慢时只会更容易满足，
+  ``if elapsed > 2*time.Second { t.Fatal }``。“已用时间”除了名字里带 elapsed／took 等，也认两个时间点相减
+  （``end - start``、``finished_at - started_at``、Go 的 ``end.Sub(start)``）；上界除了数字字面量，也认命名常量
+  （``assertLess(elapsed, TIMEOUT + 1)``、Go 的 ``require.Less(t, elapsed, retryDelay)``）：同文件里能解析出数值的按数值
+  判（小于 ``--loose-seconds`` 才报），解析不出来的（来自别的模块或包）一律报，交给人判，改写或加豁免标记。只报上界：下界（“至少等了多久”）在机器变慢时只会更容易满足，
   不会抖红，所以不报。常数 0（“非负”）不报；常数不小于 ``--loose-seconds``（缺省 5 秒）的视为看门狗式的宽裕上限，
   不报。
 * ``short-timeout``   ：小于 1 秒的超时、截止或等待上限，例如 ``join(timeout=0.2)``、``settimeout(0.2)``、
@@ -46,7 +49,8 @@
     python3 -B tools/ci/time_threshold_lint.py --self-test            # 内置样例自检
 
 退出码：0 无新增未豁免命中；1 有；2 参数或读取错误。
-基线条目的键是“文件相对路径＋规则＋命中行去空白后的文本”，不含行号，所以无关改动移动行号不会让基线失效。
+基线条目的键是“文件相对路径＋规则＋命中行去空白后的文本＋同文本序号”，不含行号，所以无关改动移动行号不会让基线失效；
+同一个文件里同一规则下写法逐字相同的命中带序号（#1、#2……），重复写法不会被一个键盖住。
 
 实现说明：Python 用 ``ast``；Go 不做类型分析，用括号配平的正则，宁可多报交给人判。
 """
@@ -94,7 +98,21 @@ class Finding:
     test: str | None = None
 
     def key(self) -> str:
+        """不含序号的基础键；基线实际使用 ``keyed`` 给出的带序号键。"""
+
         return f"{self.path}\t{self.rule}\t{' '.join(self.text.split())}"
+
+
+def keyed(findings: list[Finding]) -> list[tuple[Finding, str]]:
+    """给命中配上基线键：基础键加“同文本序号”（按文件内出现顺序）。"""
+
+    counts: dict[str, int] = {}
+    result = []
+    for item in findings:
+        base = item.key()
+        counts[base] = counts.get(base, 0) + 1
+        result.append((item, f"{base}\t#{counts[base]}"))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +163,9 @@ def _exemption(lines: list[str], index: int, scope_start: int | None) -> str | N
 # Python
 # ---------------------------------------------------------------------------
 
-_ELAPSED_NAME = re.compile(r"elapsed|took|latency|waited|spent|runtime|wall_?time|duration_seconds", re.I)
+_ELAPSED_NAME = re.compile(r"elapsed|took|latency|waited|spent|wall_?time|duration_seconds", re.I)
+# 两个时间点相减（不含 elapsed 字样）：end - start、finished_at - started_at、after - before。
+_TIMEISH_NAME = re.compile(r"start|began|begin|finish|\bend\b|_end\b|^end|ended|stop|before|after|^t[01]$|_at$|_time$|_ts$|^now$", re.I)
 _CLOCK_CALLS = {"monotonic", "perf_counter", "monotonic_ns", "perf_counter_ns", "time", "time_ns", "process_time"}
 
 
@@ -191,10 +211,39 @@ def _has_clock_call(node: ast.AST) -> bool:
     return False
 
 
+def _name_text(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _timeish(node: ast.AST) -> bool:
+    name = _name_text(node)
+    return bool(name and _TIMEISH_NAME.search(name)) or _has_clock_call(node) and isinstance(node, ast.Call)
+
+
+def _is_named_bound(node: ast.AST) -> bool:
+    """上界表达式只由名字、属性、数字与四则运算构成，且至少含一个名字：命名常量上界。"""
+
+    names = 0
+    for child in ast.walk(node):
+        if isinstance(child, (ast.Name, ast.Attribute)):
+            names += 1
+        elif isinstance(child, (ast.BinOp, ast.Constant, ast.operator, ast.Load, ast.UnaryOp, ast.USub)):
+            continue
+        else:
+            return False
+    return names > 0 and not _looks_elapsed(node)
+
+
 def _looks_elapsed(node: ast.AST) -> bool:
     """表达式像“实测已用时间”：名字里带 elapsed／took 等，或是时钟读数相减。"""
 
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub) and (_has_clock_call(node.left) or _has_clock_call(node.right)):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub) and _timeish(node.left) and _timeish(node.right):
         return True
     if isinstance(node, (ast.Name, ast.Attribute)):
         return bool(_ELAPSED_NAME.search(node.id if isinstance(node, ast.Name) else node.attr))
@@ -204,8 +253,9 @@ def _looks_elapsed(node: ast.AST) -> bool:
 
 
 class _PythonVisitor(ast.NodeVisitor):
-    def __init__(self, loose: float):
+    def __init__(self, loose: float, constants: dict[str, float] | None = None):
         self.loose = loose
+        self.constants = constants or {}
         self.hits: list[tuple[int, str, str, int | None, str | None]] = []
         self.scope: list[int] = []
         self.classes: list[str] = []
@@ -221,6 +271,45 @@ class _PythonVisitor(ast.NodeVisitor):
     def _record(self, node: ast.AST, rule: str, detail: str) -> None:
         test = self.test_names[0] if self.test_names else None
         self.hits.append((getattr(node, "lineno", 1), rule, detail, self.scope[-1] if self.scope else None, test))
+
+    def _resolve(self, node: ast.AST) -> float | None:
+        """同文件里能解析出数值的命名常量（模块级、类级赋值）；解析不出来返回 None。"""
+
+        number = _const_number(node)
+        if number is not None:
+            return number
+        name = _name_text(node)
+        if name is not None:
+            return self.constants.get(name)
+        if isinstance(node, ast.BinOp):
+            left, right = self._resolve(node.left), self._resolve(node.right)
+            if left is None or right is None:
+                return None
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div) and right:
+                return left / right
+        return None
+
+    def _upper_node(self, expression: ast.AST, bound: ast.AST, node: ast.AST, how: str) -> None:
+        """expression 的上界是 bound（数字字面量、命名常量或解析不出的命名值）。"""
+
+        if not _looks_elapsed(expression):
+            return
+        limit = _const_number(bound)
+        if limit is not None:
+            self._upper(expression, limit, node, how)
+        elif _is_named_bound(bound):
+            value = self._resolve(bound)
+            text = ast.unparse(bound)
+            if value is None:
+                self._record(node, "elapsed-bound", f"{how}：已用时间上界是未解析的命名值 {text}，请人工确认数值并改写或加豁免")
+            elif 0 < value < self.loose:
+                self._record(node, "elapsed-bound", f"{how}：已用时间上界是命名常量 {text}＝{value:g} 秒")
 
     def _upper(self, expression: ast.AST, limit: float, node: ast.AST, how: str) -> None:
         if limit > 0 and limit < self.loose and _looks_elapsed(expression):
@@ -248,26 +337,18 @@ class _PythonVisitor(ast.NodeVisitor):
         for left, op, right in zip(operands, node.ops, operands[1:]):
             # 上界：expression < C、expression <= C、C > expression、C >= expression
             if isinstance(op, (ast.Lt, ast.LtE)):
-                limit = _const_number(right)
-                if limit is not None:
-                    self._upper(left, limit, node, "比较")
+                self._upper_node(left, right, node, "比较")
             elif isinstance(op, (ast.Gt, ast.GtE)):
-                limit = _const_number(left)
-                if limit is not None:
-                    self._upper(right, limit, node, "比较")
+                self._upper_node(right, left, node, "比较")
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         func = node.func
         name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
         if name in {"assertLess", "assertLessEqual"} and len(node.args) >= 2:
-            limit = _const_number(node.args[1])
-            if limit is not None:
-                self._upper(node.args[0], limit, node, name)
+            self._upper_node(node.args[0], node.args[1], node, name)
         elif name in {"assertGreater", "assertGreaterEqual"} and len(node.args) >= 2:
-            limit = _const_number(node.args[0])
-            if limit is not None:
-                self._upper(node.args[1], limit, node, name)
+            self._upper_node(node.args[1], node.args[0], node, name)
         # 小于 1 秒的超时：关键字实参，或常见阻塞调用的第一个位置实参。
         for keyword in node.keywords:
             if keyword.arg and re.search(r"timeout|deadline|grace|wait_?seconds", keyword.arg, re.I):
@@ -300,7 +381,13 @@ def scan_python(relative: str, text: str, loose: float) -> list[Finding]:
         tree = ast.parse(text, filename=relative)
     except SyntaxError:
         return []
-    visitor = _PythonVisitor(loose)
+    constants: dict[str, float] = {}
+    for child in ast.walk(tree):
+        if isinstance(child, ast.Assign) and len(child.targets) == 1 and _name_text(child.targets[0]):
+            value = _const_number(child.value)
+            if value is not None:
+                constants[_name_text(child.targets[0])] = value
+    visitor = _PythonVisitor(loose, constants)
     visitor.visit(tree)
     file_reason = _file_allow(lines)
     findings: dict[tuple[int, str], Finding] = {}
@@ -328,7 +415,12 @@ _GO_TIMEOUT_CALL = re.compile(
     r"\.SetDeadline\(|\.SetReadDeadline\(|\.SetWriteDeadline\(|\bTimeout:\s|"
     r"\b(?:require|assert)\.(?:Eventually|Eventuallyf|EventuallyWithT|Never|Neverf)\("
 )
-_GO_ELAPSED = re.compile(r"\belapsed\w*|\btook\w*|\blatency\w*|\bwaited\w*|\bspent\w*|time\.Since\(|time\.Now\(\)\.Sub\(", re.I)
+_GO_ELAPSED = re.compile(
+    r"\belapsed\w*|\btook\w*|\blatency\w*|\bwaited\w*|\bspent\w*|time\.Since\(|time\.Now\(\)\.Sub\("
+    # 不含 elapsed 字样的两个时间点相减：end.Sub(start)、finishedAt.Sub(startedAt)、x.Sub(before)
+    r"|\.Sub\(\s*\w*(?:start|began|begin|before|t0)\w*\s*\)|\b\w*(?:ended|finish|after|stopped)\w*\.Sub\(",
+    re.I)
+_GO_NAMED_BOUND = re.compile(r"^[A-Za-z_][\w.]*(?:\s*[*+/-]\s*(?:[A-Za-z_][\w.]*|\d+(?:\.\d+)?))*$|^\d+(?:\.\d+)?\s*\*\s*[A-Za-z_][\w.]*$")
 _GO_FUNC = re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(")
 _GO_ARGS_CMP = {"Less": "upper", "LessOrEqual": "upper", "Lessf": "upper", "LessOrEqualf": "upper",
                 "Greater": "lower", "GreaterOrEqual": "lower", "Greaterf": "lower", "GreaterOrEqualf": "lower"}
@@ -346,6 +438,37 @@ def _go_durations(segment: str) -> list[float]:
         else:
             seconds.append(_GO_UNITS[match.group("u4")])
     return seconds
+
+
+def _go_bound(bound: str, text: str) -> tuple[str, float | None, str] | None:
+    """上界表达式：返回 (``literal``|``named``, 秒数或 None, 文本)；不是上界（含已用时间字样、不是简单表达式）返回 None。
+
+    ``named`` 是命名常量上界：在同一文件里能解析成数值的给出秒数，解析不出（来自别的文件或包）给 None。
+    """
+
+    bound = bound.strip().rstrip(",")
+    durations = _go_durations(bound)
+    if durations:
+        return "literal", sum(durations), bound
+    if _GO_ELAPSED.search(bound) or not _GO_NAMED_BOUND.match(bound):
+        return None
+    expression = bound
+    for name in set(re.findall(r"[A-Za-z_][\w.]*", bound)):
+        if name.startswith("time.") or name in {"float64"}:
+            return None
+        found = re.search(rf"(?<![\w.]){re.escape(name.split('.')[-1])}\s*(?::=|=)\s*([^\n/]+)", text)
+        value = None
+        if found:
+            parts = _go_durations(found.group(1))
+            value = sum(parts) if parts else None
+        if value is None:
+            return "named", None, bound
+        expression = re.sub(rf"(?<![\w.]){re.escape(name)}(?![\w.])", repr(value), expression)
+    try:
+        seconds = float(eval(expression, {"__builtins__": {}}, {}))  # noqa: S307 —— 只含数字与四则运算符
+    except Exception:  # noqa: BLE001
+        return "named", None, bound
+    return "named", seconds, bound
 
 
 def _call_arguments(text: str, start: int) -> list[str]:
@@ -455,9 +578,15 @@ def scan_go(relative: str, text: str, loose: float, positive_wait: float = 0.0) 
                 direction = _GO_ARGS_CMP[function.group(1)]
                 first, second = arguments[1], arguments[2]
                 measured, bound = (first, second) if direction == "upper" else (second, first)
-                durations = _go_durations(bound)
-                if _GO_ELAPSED.search(measured) and durations and 0 < sum(durations) < loose and not _GO_ELAPSED.search(bound):
-                    add(index, "elapsed-bound", f"{function.group(1)}：已用时间上界 {sum(durations):g} 秒")
+                resolved = _go_bound(bound, text)
+                if _GO_ELAPSED.search(measured) and resolved:
+                    kind, seconds, label = resolved
+                    if kind == "literal" and 0 < seconds < loose:
+                        add(index, "elapsed-bound", f"{function.group(1)}：已用时间上界 {seconds:g} 秒")
+                    elif kind == "named" and seconds is None:
+                        add(index, "elapsed-bound", f"{function.group(1)}：已用时间上界是未解析的命名值 {label}，请人工确认数值并改写或加豁免")
+                    elif kind == "named" and 0 < seconds < loose:
+                        add(index, "elapsed-bound", f"{function.group(1)}：已用时间上界是命名常量 {label}＝{seconds:g} 秒")
         else:
             condition = re.match(r"(?:if|for|\}\s*else\s+if)\b(.*?)\{?\s*$", code) or re.search(r";\s*(.*?)\{\s*$", code)
             comparison = re.search(r"(?P<l>[^<>=!&|]+?)\s*(?P<op><=|>=|<|>)\s*(?P<r>[^<>=!&|{]+)", condition.group(1) if condition else "")
@@ -465,14 +594,20 @@ def scan_go(relative: str, text: str, loose: float, positive_wait: float = 0.0) 
                 left, op, right = comparison.group("l"), comparison.group("op"), comparison.group("r")
                 is_loop = code.startswith("for")
                 for measured, bound, measured_on_left in ((left, right, True), (right, left, False)):
-                    durations = _go_durations(bound)
-                    if not (_GO_ELAPSED.search(measured) and durations and 0 < sum(durations) < loose and not _GO_ELAPSED.search(bound)):
+                    resolved = _go_bound(bound, text)
+                    if not (_GO_ELAPSED.search(measured) and resolved):
+                        continue
+                    kind, seconds, label = resolved
+                    if kind == "literal" and not 0 < seconds < loose:
+                        continue
+                    if kind == "named" and seconds is not None and not 0 < seconds < loose:
                         continue
                     # 上界：“耗时 > 常数”“常数 < 耗时”会让用例失败；循环里的“耗时 < 常数”是等待上限，也算上界。
                     # “if 耗时 < 常数 {Fatal}”是下界，不报。
                     greater = (op in {">", ">="}) == measured_on_left
                     if greater or (is_loop and measured_on_left and op in {"<", "<="}):
-                        add(index, "elapsed-bound", f"比较：已用时间上界 {sum(durations):g} 秒")
+                        detail = f"{seconds:g} 秒" if kind == "literal" else (f"命名常量 {label}＝{seconds:g} 秒" if seconds is not None else f"未解析的命名值 {label}，请人工确认数值并改写或加豁免")
+                        add(index, "elapsed-bound", f"比较：已用时间上界 {detail}")
                         break
         if positive_wait > 0:
             waited = re.match(r"case\s+<-time\.After\((.*)\):", code)
@@ -649,11 +784,12 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError) as error:
             print(f"基线读取失败：{error}", file=sys.stderr)
             return 2
-    pending = [item for item in findings if item.exempt_reason is None and item.key() not in baseline]
+    keys = {id(item): key for item, key in keyed(findings)}
+    pending = [item for item in findings if item.exempt_reason is None and keys[id(item)] not in baseline]
     if arguments.write_baseline:
-        entries = sorted({item.key() for item in findings if item.exempt_reason is None})
+        entries = sorted(keys[id(item)] for item in findings if item.exempt_reason is None)
         arguments.write_baseline.write_text(
-            json.dumps({"schema_version": "time-threshold-baseline/v1", "entries": entries}, ensure_ascii=False, indent=1) + "\n",
+            json.dumps({"schema_version": "time-threshold-baseline/v2", "entries": entries}, ensure_ascii=False, indent=1) + "\n",
             encoding="utf-8")
         print(f"基线已写入 {arguments.write_baseline}（{len(entries)} 条）")
         return 0
@@ -662,10 +798,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([asdict(item) for item in shown], ensure_ascii=False, indent=1))
     else:
         for item in shown:
-            state = f" [已豁免：{item.exempt_reason}]" if item.exempt_reason else (" [基线内]" if item.key() in baseline else "")
+            state = f" [已豁免：{item.exempt_reason}]" if item.exempt_reason else (" [基线内]" if keys[id(item)] in baseline else "")
             print(f"{item.path}:{item.line}: {item.rule}（{item.detail}）{state}\n    {item.text}")
     exempt = sum(1 for item in findings if item.exempt_reason is not None)
-    in_baseline = sum(1 for item in findings if item.exempt_reason is None and item.key() in baseline)
+    in_baseline = sum(1 for item in findings if item.exempt_reason is None and keys[id(item)] in baseline)
     print(f"合计命中 {len(findings)} 处；已豁免 {exempt}；基线内 {in_baseline}；未豁免新增 {len(pending)}。", file=sys.stderr)
     return 1 if pending else 0
 

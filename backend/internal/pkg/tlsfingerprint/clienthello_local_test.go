@@ -49,7 +49,7 @@ func (c *capturedConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	c.mu.Lock()
 	if !c.done && n > 0 {
-		c.recorded.Write(p[:n])
+		_, _ = c.recorded.Write(p[:n])
 		if c.recorded.Len() >= 5 && c.recorded.Len() >= 5+int(binary.BigEndian.Uint16(c.recorded.Bytes()[3:5])) {
 			c.done = true
 		}

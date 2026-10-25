@@ -844,16 +844,16 @@ func TestModelProtocolCatalogWarmupRefreshesEnabledAccountsInBackground(t *testi
 	}}
 	repo := &warmupRepo{accounts: []Account{loaded, pending, disabled, plain}}
 	svc := NewModelProtocolCatalogWarmupService(repo, &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream})
-	svc.delay = 1500 * time.Millisecond
+	svc.delay = 600 * time.Millisecond
 
 	started := time.Now()
 	svc.Start()
-	require.Less(t, time.Since(started), 750*time.Millisecond, "Start 立即返回，不阻塞启动") // time-threshold: allow 预热延迟已拉到 1.5s，Start 若退化成同步执行至少耗时 1.5s，上界 750ms 区分“立即返回”与“同步等待”
+	require.Less(t, time.Since(started), 300*time.Millisecond, "Start 立即返回，不阻塞启动") // time-threshold: allow 预热延迟是 600ms，Start 若退化成同步执行至少耗时 600ms，上界 300ms 区分“立即返回”与“同步等待”（延迟再缩短会把判别余量压到噪声量级，所以不再缩）
 	svc.Start()                                                                    // 重复启动无副作用
 
 	require.Eventually(t, func() bool {
 		return upstreamModelProtocols.peek(modelProtocolCatalogKey(&pending, buildOpenAIModelsURL(base)), "deepseek/deepseek-v4.1-flash") != nil
-	}, 6*time.Second, 5*time.Millisecond)
+	}, 3*time.Second, 5*time.Millisecond)
 	svc.Stop()
 	upstream.mu.Lock()
 	defer upstream.mu.Unlock()

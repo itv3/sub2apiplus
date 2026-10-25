@@ -47,7 +47,27 @@ from typing import Iterable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import time_threshold_lint as lint  # noqa: E402
 
-BURNER_SOURCE = "while True:\n    pass\n"
+# 烧核进程的源码：忙循环，每百万次迭代检查一次“父进程是否还在、是否超过最长寿命”。
+# 主进程被 kill -9 时 ``Burners.__exit__`` 没有机会运行，没有这两项检查烧核进程会一直占着 CPU；
+# 检查父进程用 ``os.getppid()`` 与启动方写进来的父进程号比较（父进程退出后会变成 1 或别的进程），最长寿命是兜底。
+BURNER_TEMPLATE = (
+    "import os, time\n"
+    "parent = {parent}\n"
+    "end = time.monotonic() + {lifetime}\n"
+    "count = 0\n"
+    "while True:\n"
+    "    count += 1\n"
+    "    if count % 1000000 == 0 and (os.getppid() != parent or time.monotonic() > end):\n"
+    "        break\n"
+)
+DEFAULT_BURNER_LIFETIME_SECONDS = 3600.0
+
+
+def burner_source(lifetime: float, parent_pid: int | None = None) -> str:
+    """烧核进程源码。父进程号由启动方显式写进去（缺省是当前进程）：若让烧核进程自己用 getppid 取，
+    主进程恰好在它启动前后被强杀时，它取到的就是已经被收养后的 1，永远发现不了父进程没了。"""
+
+    return BURNER_TEMPLATE.format(lifetime=float(lifetime), parent=os.getpid() if parent_pid is None else int(parent_pid))
 
 
 @dataclass(frozen=True)
@@ -123,13 +143,14 @@ def cases_from_file(path: Path) -> list[Case]:
 class Burners:
     """常驻忙循环进程；退出时一定回收。"""
 
-    def __init__(self, count: int):
+    def __init__(self, count: int, lifetime: float = DEFAULT_BURNER_LIFETIME_SECONDS):
         self.count = count
+        self.lifetime = lifetime
         self.processes: list[subprocess.Popen] = []
 
     def __enter__(self) -> "Burners":
         for _ in range(self.count):
-            self.processes.append(subprocess.Popen([sys.executable, "-c", BURNER_SOURCE], stdin=subprocess.DEVNULL,
+            self.processes.append(subprocess.Popen([sys.executable, "-c", burner_source(self.lifetime)], stdin=subprocess.DEVNULL,
                                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         return self
 
@@ -244,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--cases-file", type=Path, help="显式清单 JSON；给了就不再扫描")
     parser.add_argument("--load", type=int, default=12, help="烧核进程数（缺省 12，使可运行线程数超过 12）")
+    parser.add_argument("--burner-lifetime-seconds", type=float, default=DEFAULT_BURNER_LIFETIME_SECONDS,
+                        help="烧核进程的最长寿命（兜底；主进程被强杀时它们还会检查父进程是否存活）")
     parser.add_argument("--ramp-seconds", type=float, default=20.0, help="烧核后等多久再开跑（缺省 20 秒）")
     parser.add_argument("--go-repeat", type=int, default=3)
     parser.add_argument("--python-repeat", type=int, default=2)
@@ -271,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     results: dict[str, dict] = {}
     started = time.time()
     load_start = os.getloadavg()[0]
-    with Burners(arguments.load):
+    with Burners(arguments.load, arguments.burner_lifetime_seconds):
         time.sleep(arguments.ramp_seconds)
         load_after_ramp = os.getloadavg()[0]
         groups: dict[tuple[str, str], list[str]] = defaultdict(list)

@@ -548,7 +548,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "incremental-noop")
             self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
             self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
-            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STARTUP_GRACE_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STARTUP_GRACE_SECONDS)  # time-threshold: allow 上界是受测常量 DEFAULT_MONITOR_STARTUP_GRACE_SECONDS（30s，定义在 supervisor 模块），只区分“没有等满冷启动宽限”；不贴着正常值
 
     def test_stop_keeps_two_second_timeout_for_started_monitor_that_hangs(self) -> None:
         """已写出首条 watchdog 心跳的 monitor 不再处理 stop-request：仍按 2 秒判卡住，封存
@@ -572,7 +572,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertFalse((run_dir / "stop-receipt.json").exists())
             self.assertIsNotNone(client.process.poll())
             self.assertGreaterEqual(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
-            self.assertLess(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS + 5)
+            self.assertLess(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS + 5)  # time-threshold: allow 上界是受测常量 DEFAULT_STOP_WAIT_SECONDS（2s）加 5s，只区分“按 2 秒判卡住”与“一直等”；留有 5 秒调度余量
 
     def test_stop_cold_start_grace_is_bounded_by_run_start(self) -> None:
         """冷启动宽限有绝对上限：monitor 一直没写出心跳时，等到父 run 起动后宽限秒数为止，到时照常封存
@@ -625,7 +625,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
             self.assertEqual(client.process.returncode, 0)
             self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
-            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)  # time-threshold: allow 上界是受测常量 DEFAULT_MONITOR_STOP_FINALIZE_SECONDS（30s），只区分“等到 monitor 写完收据”与“等满终结时限”；不贴着正常值
 
     def test_stop_waits_for_monitor_that_took_over_stop_request_even_if_one_write_stalls(self) -> None:
         """monitor 已接手停止请求（stop-requested 与 failed 终态事件都已写出）后，写停线收据这一步卡了 3 秒、期间
@@ -648,7 +648,7 @@ class SupervisorTests(unittest.TestCase):
             )
             self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
             self.assertGreater(waited, delay)
-            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)  # time-threshold: allow 上界是受测常量 DEFAULT_MONITOR_STOP_FINALIZE_SECONDS（30s），下界已卡住必须等过 3 秒；不贴着正常值
 
     def test_stop_progress_extension_is_bounded_by_finalize_cap(self) -> None:
         """一直有写入、却永远不处理 stop-request 的 monitor（替身每 0.1 秒追加一行心跳）：进展续期不能无限等，到 stop
@@ -3356,7 +3356,7 @@ raise SystemExit(9)
             state = self._wait_campaign_state(run_dir, {"failed"})
             # 断言的是“立即检测到 worker 丢失”，即远快于心跳失联判定（heartbeat_seconds × 1.25）；
             # 阈值取 2 秒，既保留量级差异，又不被 CI runner 的调度抖动误判。
-            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)
+            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)  # time-threshold: allow IMMEDIATE_DETECTION_SECONDS＝2s 是已评估过的取值（见文件顶部注释）：必须早于 6.25s 的心跳失联判定，0.5s 曾在 CI 上被 2.6ms 误判后放宽；真正的防护是后面的状态与回执断言
             self.assertEqual(state["state"], "failed")
             archive = run_dir / "campaign-actions" / f"{activity['action_id']}.json"
             receipt = json.loads(archive.read_text(encoding="utf-8"))
@@ -3389,7 +3389,7 @@ raise SystemExit(9)
             os.kill(process.pid, signal.SIGHUP)
             process.communicate(timeout=2)
             state = self._wait_campaign_state(run_dir, {"failed"})
-            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)
+            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)  # time-threshold: allow IMMEDIATE_DETECTION_SECONDS＝2s 是已评估过的取值（见文件顶部注释）：必须早于 6.25s 的心跳失联判定，0.5s 曾在 CI 上被 2.6ms 误判后放宽；真正的防护是后面的状态与回执断言
             self.assertEqual(state["state"], "failed")
             # 第 34 项：与 SIGKILL 用例同理，等父监督器收尾退出再让 tempfile 清理（4 路分片并行实测撞到 Directory not empty）。
             self._wait_campaign_monitor_exit(run_dir)
@@ -3467,7 +3467,7 @@ raise SystemExit(9)
             state = self._wait_campaign_state(run_dir, {"watchdog-aborted"}, timeout=5)
             # 修好接着跑第 34 项扩展：0.5 秒在 ARM64 实测 0.60 秒误判。断言的是“在 watchdog 窗口
             # 量级内即时封存”，即远快于心跳失联判定；改用文件顶部的量级阈值（2 秒），语义不变。
-            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)
+            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)  # time-threshold: allow IMMEDIATE_DETECTION_SECONDS＝2s 是已评估过的取值（见文件顶部注释）：必须早于 6.25s 的心跳失联判定，0.5s 曾在 CI 上被 2.6ms 误判后放宽；真正的防护是后面的状态与回执断言
             self.assertEqual(state["state"], "watchdog-aborted")
             report = _audit_command(run_dir)
             self.assertTrue(report["audit_incomplete"])

@@ -188,8 +188,21 @@ class SnapshotMemoTests(unittest.TestCase):
         self.assertEqual(self.real_calls, 2)
 
     def test_memo_is_removed_on_exit(self) -> None:
+        """退出作用域后：函数还原成进入前的那一个，本进程缓存清空，再调用就是真实计算。"""
+
+        before = identity._managed_tree_snapshot  # setUp 里已经装了计数包装和一层 memo
         self.snapshot()
-        self.assertIsNot(identity._managed_tree_snapshot, memo_real)
+        with memo.tool_snapshot_memo():
+            inner = identity._managed_tree_snapshot
+            self.assertIsNot(inner, before, "作用域内是新的复用包装")
+            identity._managed_tree_snapshot(self.root, POLICY)
+            self.assertTrue(memo._cache, "作用域内已缓存")
+        self.assertIs(identity._managed_tree_snapshot, before, "退出后还原成进入前的函数")
+        self.assertFalse(memo._cache, "退出时清空本进程缓存")
+        calls = self.real_calls
+        # 进入前那层 memo 的缓存也被一并清空（缓存是进程级的）：再调用必须真实计算一次。
+        self.snapshot()
+        self.assertEqual(self.real_calls, calls + 1)
 
 
 class RealManagedTreeTests(unittest.TestCase):

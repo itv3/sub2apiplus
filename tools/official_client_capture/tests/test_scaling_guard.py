@@ -38,9 +38,24 @@ class ScalingGuardTests(unittest.TestCase):
         measured = guard.assert_growth_is_bounded(self, clock.prepare(cost), lengths, label="样例", timer=clock.timer)
         return clock, measured
 
-    def test_linear_and_quadratic_growth_pass(self) -> None:
-        self.run_guard(lambda length: length * 1e-5)
-        self.run_guard(lambda length: (length ** 2) * 1e-8)
+    def test_linear_growth_passes_in_both_bands(self) -> None:
+        self.run_guard(lambda length: length * 1e-5)  # 120 字符 1.2 毫秒…1920 字符 19 毫秒：后面几步进紧档，比值 2 ≤ 3.2
+        self.run_guard(lambda length: length * 1e-7)  # 全程在微秒级：宽档
+
+    def test_tiny_quadratic_stays_in_the_wide_band_and_passes(self) -> None:
+        # 常数很小的二次实现（最大长度上只要 3.7 毫秒、没进紧档）抓不住：模块说明里写明的局限。
+        self.run_guard(lambda length: (length ** 2) * 1e-9)
+
+    def test_quadratic_that_reaches_the_precise_band_is_caught(self) -> None:
+        with self.assertRaises(AssertionError) as caught:
+            self.run_guard(lambda length: (length ** 2) * 1e-6)  # 120 字符 14 毫秒，已在紧档：比值 4 > 3.2
+        self.assertIn("紧档", str(caught.exception))
+
+    def test_noise_up_to_the_precise_limit_is_tolerated(self) -> None:
+        # 线性实现两端都在 5 毫秒以上，后一端有 2.8 的比值（噪声）仍低于 3.2。
+        self.run_guard(lambda length: 0.006 if length == 120 else 0.0168, lengths=(120, 240))
+        with self.assertRaises(AssertionError):
+            self.run_guard(lambda length: 0.006 if length == 120 else 0.0200, lengths=(120, 240))
 
     def test_cubic_growth_fails_at_the_first_doubling_without_measuring_longer_inputs(self) -> None:
         clock = FakeClock()

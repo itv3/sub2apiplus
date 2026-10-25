@@ -148,15 +148,18 @@ class WorstCaseTimingTests(unittest.TestCase):
 
     def test_many_long_paths_through_one_matcher_stay_fast(self) -> None:
         matcher = ds.PathMatcher("out/*a*a*a*b")
-        paths = [f"out/{'a' * 1000}{index}" for index in range(200)] + [f"out/{'a' * 1000}b"]
-        self.assertEqual([matcher.matches(path) for path in paths].count(True), 1)
 
-        # 一批路径的总耗时随路径长度加倍的相对比较（每批 50 条）；不用“单条 < 0.5 秒、200 条 < 2 秒”的绝对阈值。
+        # 规模守卫放在最前面：真回归（退回回溯正则）时在 250→500 字符这一步、几秒内就失败，不会先把几百条 1000 字符的路径跑完
+        # （那样每条要二十多秒，总共要算上一个多小时）。一批路径的总耗时随路径长度加倍做相对比较（每批 50 条），不用绝对阈值。
         def prepare(length: int):
             batch = [f"out/{'a' * length}{index}" for index in range(50)] + [f"out/{'a' * length}b"]
             return lambda: [matcher.matches(path) for path in batch]
 
         scaling_guard.assert_growth_is_bounded(self, prepare, (250, 500, 1000, 2000), label="一批长路径")
+
+        # 正确性断言只用少量路径：5 条不匹配、1 条匹配（线性实现下都是毫秒级）。
+        paths = [f"out/{'a' * 1000}{index}" for index in range(5)] + [f"out/{'a' * 1000}b"]
+        self.assertEqual([matcher.matches(path) for path in paths], [False] * 5 + [True])
 
 
 class MergeReachabilityTests(FollowupBase):

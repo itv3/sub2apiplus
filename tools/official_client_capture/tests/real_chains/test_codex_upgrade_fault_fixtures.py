@@ -932,7 +932,7 @@ for line in sys.stdin:
 
         def await_status(expected, limit=6):
             start = time.monotonic()
-            while time.monotonic() - start < limit:
+            while time.monotonic() - start < limit:  # time-threshold: allow 轮询循环的等待上限（await_status 的 limit 参数缺省 6 秒，调用方可放大），不是断言上限；超时走 self.fail
                 self.assertFalse(guard_errors, guard_errors)
                 if guards["origin"].status_path.exists():
                     status = json.loads(guards["origin"].status_path.read_text())
@@ -948,7 +948,7 @@ for line in sys.stdin:
         def await_probe_table(expected, limit=3):
             start = time.monotonic()
             wanted = sorted(socket.inet_aton(item) for item in expected)
-            while time.monotonic() - start < limit:
+            while time.monotonic() - start < limit:  # time-threshold: allow 轮询循环的等待上限（await_probe_table 的 limit 参数缺省 3 秒，调用方可放大），不是断言上限；超时走 self.fail
                 self.assertFalse(guard_errors, guard_errors)
                 if sorted(self.maps.keys("probes", 4)) == wanted:
                     return

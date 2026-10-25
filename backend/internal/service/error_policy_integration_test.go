@@ -273,7 +273,7 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		// Use a short-lived context: the backoff sleep (~1s) will be
 		// interrupted, proving the code entered the default retry path
 		// instead of breaking early via error policy.
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond) // time-threshold: allow 被测对象是“默认重试在约 1s 的退避里被截止时间打断”；截止时间必须晚于第一次上游调用（断言 calls>=1），放大到 400ms，仍明显小于退避时长，仍能区分“进入了默认重试”与“提前退出”
 		defer cancel()
 
 		p := newRetryParams(account, upstream, func(_ context.Context, _ string, _ *Account, _ int, _ http.Header, _ []byte, _ string, _ int64, _ string, _ bool) *handleModelRateLimitResult {
@@ -310,7 +310,7 @@ func TestRetryLoop_ErrorPolicy_NilRateLimitService(t *testing.T) {
 		Concurrency: 1,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond) // time-threshold: allow 被测对象是“无速率限制服务时进入默认重试，并在退避里被截止时间打断”；截止时间必须晚于第一次上游调用（断言 calls>=1），放大到 400ms，仍明显小于退避时长
 	defer cancel()
 
 	p := newRetryParams(account, upstream, func(_ context.Context, _ string, _ *Account, _ int, _ http.Header, _ []byte, _ string, _ int64, _ string, _ bool) *handleModelRateLimitResult {

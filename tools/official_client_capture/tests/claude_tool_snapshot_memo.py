@@ -114,7 +114,7 @@ def _fingerprint(repository_root: Path, policy: Mapping[str, Any]) -> tuple[tupl
     except OSError:
         return None
     newest = max(max(item[3], item[4]) for item in states)
-    if time.time_ns() - newest < RACY_NS:
+    if time.time_ns() - newest < RACY_NS:  # time-threshold: allow 这是夹具判断“文件状态太新、不可信”的窗口常量（RACY_NS），不是测试断言里的耗时上界
         return None
     return states
 

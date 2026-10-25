@@ -1,6 +1,6 @@
 {
- "schema_version": "time-threshold-baseline/v1",
+ "schema_version": "time-threshold-baseline/v2",
  "entries": [
-  "backend/internal/service/billing_inflight_reservation_test.go\talloc-bound\trequire.Less(t, int64(after.HeapAlloc)-int64(before.HeapAlloc), int64(8<<20), \"no per-model cache growth\")"
+  "backend/internal/service/billing_inflight_reservation_test.go\talloc-bound\trequire.Less(t, int64(after.HeapAlloc)-int64(before.HeapAlloc), int64(8<<20), \"no per-model cache growth\")\t#1"
  ]
 }

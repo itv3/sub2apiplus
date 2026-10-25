@@ -111,6 +111,71 @@ class TimeThresholdLintTests(unittest.TestCase):
         self.assertIsNotNone(findings[24].exempt_reason)
         self.assertEqual({item.test for item in findings.values()}, {"TestA"})
 
+    def test_python_named_constant_and_subtraction_bounds(self) -> None:
+        source = (
+            "import unittest\n"
+            "TIMEOUT = 1.5\n"
+            "HUGE = 60\n"
+            "class T(unittest.TestCase):\n"
+            "    LIMIT = 0.8\n"
+            "    def test_a(self):\n"
+            "        self.assertLess(elapsed, TIMEOUT)\n"              # 7 命中：同文件常量 1.5
+            "        self.assertLess(elapsed, TIMEOUT + 1)\n"          # 8 命中：2.5
+            "        self.assertLess(elapsed, self.LIMIT)\n"           # 9 命中：类级常量 0.8
+            "        self.assertLess(elapsed, HUGE)\n"                 # 10 宽裕，不报
+            "        self.assertLess(elapsed, other.DEFAULT_SECONDS)\n"  # 11 命中：未解析的命名值
+            "        self.assertLess(finished_at - started_at, 0.5)\n"  # 12 命中：不含 elapsed 字样的减法
+            "        self.assertLess(end - start, TIMEOUT)\n"          # 13 命中
+            "        self.assertLess(count - total, 0.5)\n"            # 14 不是时间点相减，不报
+            "        self.assertLess(elapsed, previous_elapsed)\n"     # 15 上界本身是实测值，不报
+            "        self.assertLess(time.monotonic(), deadline)\n"    # 16 轮询截止时间，不报
+        )
+        found = {item.line: item for item in _scan({"test_named.py": source})}
+        self.assertEqual(sorted(found), [7, 8, 9, 11, 12, 13])
+        self.assertIn("命名常量 TIMEOUT＝1.5", found[7].detail)
+        self.assertIn("未解析的命名值 other.DEFAULT_SECONDS", found[11].detail)
+
+    def test_go_named_constant_and_subtraction_bounds(self) -> None:
+        source = (
+            "package x\n"
+            "const retryDelay = 500 * time.Millisecond\n"
+            "const hugeWait = 30 * time.Second\n"
+            "func TestN(t *testing.T) {\n"
+            "\trequire.Less(t, elapsed, retryDelay)\n"                 # 5 命中：同文件常量
+            "\trequire.Less(t, elapsed, 2*retryDelay)\n"               # 6 命中：1s
+            "\trequire.Less(t, elapsed, hugeWait)\n"                   # 7 宽裕，不报
+            "\trequire.Less(t, elapsed, otherPackageDelay)\n"          # 8 命中：未解析
+            "\trequire.Less(t, end.Sub(start), 300*time.Millisecond)\n"  # 9 命中：end.Sub(start)
+            "\tif finishedAt.Sub(startedAt) > retryDelay {\n"          # 10 命中
+            "\t}\n"
+            "\trequire.Less(t, elapsed, other.elapsed)\n"              # 12 上界本身是实测值，不报
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "n_test.go").write_text(source, encoding="utf-8")
+            found = {item.line: item for item in lint.scan([root], root)}
+        self.assertEqual(sorted(found), [5, 6, 8, 9, 10])
+        self.assertIn("命名常量 retryDelay＝0.5 秒", found[5].detail)
+        self.assertIn("未解析的命名值 otherPackageDelay", found[8].detail)
+
+    def test_baseline_keys_carry_a_per_text_ordinal(self) -> None:
+        # 同一文件里写法逐字相同的两处命中，基线里是两个键；删掉其中一处后另一处不会被“一个键盖住”。
+        source = "class T:\n    def test_a(self):\n        self.assertLess(elapsed, 0.5)\n    def test_b(self):\n        self.assertLess(elapsed, 0.5)\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample = root / "test_dup.py"
+            sample.write_text(source, encoding="utf-8")
+            baseline = root / "baseline.json"
+            self.assertEqual(self.run_main("--root", str(root), "--write-baseline", str(baseline), str(sample)), 0)
+            entries = json.loads(baseline.read_text(encoding="utf-8"))["entries"]
+            self.assertEqual(len(entries), 2)
+            self.assertTrue(entries[0].endswith("#1") and entries[1].endswith("#2"))
+            self.assertEqual(self.run_main("--root", str(root), "--baseline", str(baseline), str(sample)), 0)
+            # 新增第三处同样写法：没有第三个键，所以是新增命中。
+            sample.write_text(source + "    def test_c(self):\n        self.assertLess(elapsed, 0.5)\n", encoding="utf-8")
+            self.assertEqual(self.run_main("--root", str(root), "--baseline", str(baseline), str(sample)), 1)
+
     def test_positive_wait_rule_is_opt_in(self) -> None:
         source = (
             "package x\n"
@@ -148,7 +213,7 @@ class TimeThresholdLintTests(unittest.TestCase):
             # 新增一处不在基线里的命中：失败。
             sample.write_text(sample.read_text(encoding="utf-8") + "    def test_b(self):\n        self.assertLess(took, 0.1)\n", encoding="utf-8")
             self.assertEqual(self.run_main("--root", str(root), "--baseline", str(baseline), str(sample)), 1)
-            self.assertEqual(json.loads(baseline.read_text(encoding="utf-8"))["schema_version"], "time-threshold-baseline/v1")
+            self.assertEqual(json.loads(baseline.read_text(encoding="utf-8"))["schema_version"], "time-threshold-baseline/v2")
             self.assertEqual(self.run_main("--root", str(root), "--baseline", str(root / "missing.json"), str(sample)), 2)
 
 
