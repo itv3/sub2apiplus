@@ -55,6 +55,8 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import claude_gate_reader_memo as gate_reader_memo
+from tools.official_client_capture.tests import claude_stage_result_read_once as stage_result_once
+from tools.official_client_capture.tests import claude_tool_snapshot_memo as tool_snapshot_memo
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
 from tools.official_client_capture.tests import claude_typed_vc6_fixture as vc6_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
@@ -488,6 +490,19 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         memo = gate_reader_memo.gate_reader_memo(self.reader_memo_dir)
         memo.__enter__()
         self.addCleanup(memo.__exit__, None, None, None)
+        # 受管工具清单快照（claude_tool_identity_policy._managed_tree_snapshot）全程被调用 1108 次（测试进程 458、守卫 213、
+        # 动作子进程 437），读的 492 个文件一直没变，合计约 33 个 CPU 秒。同样装在测试进程（守卫由它 fork，继承）与动作
+        # 子进程（经环境变量）里：每个进程对每种输入的第一次调用仍真实计算，之后在核对受管根与每个文件的状态
+        # （路径、类型、大小、mtime_ns、ctime_ns、inode）没变后才复用，任何变化或核对异常都回退真实计算。
+        # 论证与范围见 claude_tool_snapshot_memo 模块说明。
+        self.tool_snapshot_dir = Path(tempfile.mkdtemp(prefix="vc6-tool-snapshot-memo-"))
+        self.addCleanup(shutil.rmtree, self.tool_snapshot_dir, ignore_errors=True)
+        snapshot_environment = mock.patch.dict(os.environ, tool_snapshot_memo.environment(self.tool_snapshot_dir))
+        snapshot_environment.start()
+        self.addCleanup(snapshot_environment.stop)
+        snapshot_memo = tool_snapshot_memo.tool_snapshot_memo(self.tool_snapshot_dir)
+        snapshot_memo.__enter__()
+        self.addCleanup(snapshot_memo.__exit__, None, None, None)
 
     def vc5_complete_world(self) -> dict[str, Any]:
         world = self.vc5_world(typed_official_source=True)
@@ -626,13 +641,21 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         state = timing.phase_ledger_state(self.ledger_dir)
         self.assertEqual(state["revision_phase_state"]["1"]["VC-6"], "completed")
         self.assertIsNone(state["active_phase"])
-        result = delivery.load_stage_result(campaign, CANDIDATE)
-        self.assertEqual((result["vc6_status"], result["release_state"]), ("complete", "ready_for_operator_release"))
-        _path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(
-            campaign, claude_upgrade_vc.vc_campaign_plan(campaign, world["manifest"]), "VC-6", revision=1
-        )
-        self.assertEqual(checkpoint["stage_receipt"]["path"], f"delivery/{CANDIDATE}/result.json")
-        self.assert_status(world, "ready_for_operator_release")
+        # 结尾三步只读核对（交付阶段结果、VC-6 checkpoint 重放、ready_for_operator_release 状态）各自都会调用一次
+        # delivery.load_stage_result（replay_vc_checkpoint 经 _validate_vc6_delivery_consumer，delivery_status 直接调用），
+        # 参数等价、读到的文件一字节未变，白算三遍（本机约 30 秒）。放进同一个作用域：第一次真实读取，其余复用；
+        # 三条断言与各调用方自己的其余校验一条不少，作用域出口还会核对阶段结果与 VC-6 checkpoint 两个文件的 sha256
+        # 没变（即“同一份字节”被核实而非假设）。论证见 claude_stage_result_read_once 模块说明。
+        with stage_result_once.stage_result_read_once(campaign, CANDIDATE, 1) as reads:
+            result = delivery.load_stage_result(campaign, CANDIDATE)
+            self.assertEqual((result["vc6_status"], result["release_state"]), ("complete", "ready_for_operator_release"))
+            _path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(
+                campaign, claude_upgrade_vc.vc_campaign_plan(campaign, world["manifest"]), "VC-6", revision=1
+            )
+            self.assertEqual(checkpoint["stage_receipt"]["path"], f"delivery/{CANDIDATE}/result.json")
+            self.assert_status(world, "ready_for_operator_release")
+        # 作用域内真实读取恰好一次（其余复用）；不要求复用次数，产品改动后复用变少不算错误。
+        self.assertEqual(reads.real_calls, 1)
         receipts = world["store"].list_receipt_refs("candidate_delivery")
         self.assertEqual(len(receipts), 1)
         self.assertEqual(result["receipt_ref"], receipts[0])

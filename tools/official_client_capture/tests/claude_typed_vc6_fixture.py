@@ -40,6 +40,7 @@ from tools.official_client_capture.tests.test_claude_real_delivery_integration i
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_capture.tests import claude_fault_chain_world as stops
 from tools.official_client_capture.tests import claude_gate_reader_memo as gate_reader_memo
+from tools.official_client_capture.tests import claude_tool_snapshot_memo as tool_snapshot_memo
 from tools.official_client_control import delivery_execution as execution
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes, sha256_file
 
@@ -1027,6 +1028,11 @@ def install(control_path: str) -> None:
         memo_directory = os.environ.get(gate_reader_memo.MEMO_ENV)
         if memo_directory:
             stack.enter_context(gate_reader_memo.gate_reader_memo(Path(memo_directory)))
+        # 同理：受管工具清单快照（492 个文件逐个读取加 sha256）在整条链里被反复计算上千次而输入不变。调用方显式给出统计
+        # 目录时，动作子进程在核对文件状态没变的前提下复用本进程已算好的结果，见 claude_tool_snapshot_memo。
+        snapshot_directory = os.environ.get(tool_snapshot_memo.MEMO_ENV)
+        if snapshot_directory:
+            stack.enter_context(tool_snapshot_memo.tool_snapshot_memo(Path(snapshot_directory)))
     except BaseException:
         stack.close()
         raise
