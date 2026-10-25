@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "5808884c4b759afaa92cc73364b36261eb87dfaa071604d13424ebf0fdd427ae",
+      "sha256": "adcf63ea96678705995e2a198c9dcb3ef9a3efe63c11fd0e1dd90baee7e34a43",
       "mode": "0700",
-      "bytes": 9450
+      "bytes": 9468
     },
     {
       "path": "driver/background_preflight.py",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "081d42a63b5a3a18c66d32d415e8023192de3940857ad7207120caf045cfb840"
+  "manifest_sha256": "93011b89950f49521d42f9934f049cd877d050f9b0778dceb1e4dd729768ecc0"
 }

@@ -55,7 +55,7 @@ case "$command" in
     scope_args=(); if [ "$CT_CLIENT" = codex ]; then scope_args=(--gate-scope auto); fi
     rest=()
     for arg in "$@"; do
-      case "$arg" in --gate-scope|--gate-scope=*) scope_args=() ;; esac
+      if [[ "$arg" == --gate-scope || "$arg" == --gate-scope=* ]]; then scope_args=(); fi
       if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(--preflight off); elif [ "$arg" = --no-reuse ]; then reuse_args=(--reuse off); else rest+=("$arg"); fi
     done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
