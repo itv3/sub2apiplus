@@ -113,6 +113,8 @@ MAX_ITERATIONS = 24  # 执行循环上限：每轮至少推进一步，超过即
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_LOCKED, EXIT_OPERATOR = 0, 1, 2, 3, 4
 
+# 续跑进程结束时由派发包装写进日志末行的标记（足够独特，续跑脚本自己的输出不会碰巧产生）。
+EXIT_MARKER = "RECOVERY_PLAN_EXIT="
 PREVIEW_RE = re.compile(r"^recovery-preview-(\d{2,})\.json$")
 APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2,})\.json$")
 
@@ -505,6 +507,13 @@ def _tail_lines(path: Path, count: int = 3) -> list[str]:
     return data.decode("utf-8", "replace").splitlines()[-count:]
 
 
+def _exit_code(log: Path) -> str | None:
+    """续跑日志末尾的结束标记里的退出码；还没有标记返回 None。"""
+
+    line = next((item for item in reversed(_tail_lines(log)) if item.startswith(EXIT_MARKER)), None)
+    return None if line is None else line[len(EXIT_MARKER):].strip()
+
+
 def launch_records(params: Mapping[str, str]) -> list[dict[str, Any]]:
     """本轮对目标 attempt 做过的全部续跑派发（占位＋启动记录），按占位文件时间升序。
 
@@ -544,15 +553,17 @@ def continuation_state(params: Mapping[str, str], siblings: list[str]) -> dict[s
         started = last["started"]
         if started is not None:
             log = Path(str(started.get("log") or ""))
-            exit_line = next((line for line in reversed(_tail_lines(log)) if line.startswith("exit=")), None)
             pid = started.get("pid")
-            if exit_line is not None:
-                code = exit_line.split("=", 1)[1].strip()
-                state.update(state="finished-ok" if code == "0" else "finished-failed", exit_code=code, log=str(log), pid=pid)
-            elif _process_alive(pid):
+            code = _exit_code(log)
+            if code is None and _process_alive(pid):
                 state.update(state="running", pid=pid, log=str(log))
             else:
-                state.update(state="lost", pid=pid, log=str(log))
+                # 先读日志、后查进程：进程恰好在两次之间结束时结束标记已经落盘，必须再读一次才能断定"消失"。
+                code = code if code is not None else _exit_code(log)
+                if code is None:
+                    state.update(state="lost", pid=pid, log=str(log))
+                else:
+                    state.update(state="finished-ok" if code == "0" else "finished-failed", exit_code=code, log=str(log), pid=pid)
     if state["state"] == "none" and successors:
         state["state"] = "successor-exists"
     return state
@@ -1176,7 +1187,7 @@ class Runner:
             old = runroot / name
             if phase != "official" and old.exists():
                 old.rename(runroot / f"{name}.pre-{self.params['ROUND']}-{self.backend.stamp}")
-        wrapper = 'cd "$1" && shift && "$@"; code=$?; echo "exit=$code"; exit "$code"'
+        wrapper = 'cd "$1" && shift && "$@"; code=$?; echo "RECOVERY_PLAN_EXIT=$code"; exit "$code"'
         with open(log, "w", encoding="utf-8") as handle:
             os.chmod(log, 0o600)
             process = subprocess.Popen(["bash", "-c", wrapper, "recovery-plan-launch", self.params["D"], *command], stdin=subprocess.DEVNULL,

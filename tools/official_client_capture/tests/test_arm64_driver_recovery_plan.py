@@ -559,6 +559,34 @@ class ContinueGuardTests(_WorldCase):
         self.assertEqual(self.step(plan, "continue")["status"], "done")
         self.assertEqual(len(world.dispatches()), 1)
 
+    def test_process_ending_between_log_read_and_liveness_check_is_not_lost(self) -> None:
+        """先读日志后查进程：进程恰在两次之间结束（结束标记已落盘）不能被误判成"进程消失"。"""
+
+        from unittest import mock
+
+        world = self.make_world()
+        helper = world.helper()
+        params = helper.load_params(world.params_path)
+        launch = Path(params["OUT"]) / "continue"
+        launch.mkdir(parents=True, mode=0o700)
+        log = world.root / "launch.log"
+        log.write_text("续跑输出\n", encoding="utf-8")
+        rw.write_json(launch / ("a" * 64 + ".inflight.json"), {"attempt": params["ATTEMPT"], "status": "dispatch_pending"})
+        rw.write_json(launch / ("a" * 64 + ".started.json"), {"pid": 4242424, "log": str(log)})
+
+        def ends_meanwhile(_pid):
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write("RECOVERY_PLAN_EXIT=0\n")
+            return False
+
+        with mock.patch.object(helper, "_process_alive", side_effect=ends_meanwhile):
+            state = helper.continuation_state(params, [])
+        self.assertEqual((state["state"], state["exit_code"]), ("finished-ok", "0"))
+        # 日志没有标记、进程也不在：才是真的消失。
+        log.write_text("续跑输出\n", encoding="utf-8")
+        with mock.patch.object(helper, "_process_alive", return_value=False):
+            self.assertEqual(helper.continuation_state(params, [])["state"], "lost")
+
     def test_old_driver_logs_are_kept_not_overwritten(self) -> None:
         world = self._ready()
         (world.runroot / "vc5-recover.out").write_text("旧日志\n", encoding="utf-8")
