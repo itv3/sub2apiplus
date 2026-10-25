@@ -14,6 +14,9 @@
 #       旧结论须 passed／failed、进程组已退出且留有已发布的逐单元清单（被 stop 的运行不发布清单，其成果不能承接）；--work 须是旧结论的 WORK；旧提交须能
 #       验证是新提交的祖先（确定不是则永远拒绝，只有「无法验证」才可加 --allow-unverified-ancestry，结论标 unverified）；没有任何单元被承接时结论
 #       outcome=full_rerun。这两个选项只有本命令 start 支持，入口空跑 entry-dryrun.sh 没有。
+#   preflight <bundle 绝对路径> <分支> <40 位提交> [--only <检查项,…>]
+#       只做起跑前置检查（优化第 4 项）：冻结收据、基线重封、重部署、准入绑定四项逐项核对，退出码 0 通过、3 不通过（打印哪一项为什么）；不起后台验证。
+#       start 缺省先做同一套检查（--preflight on），不通过拒绝起跑；--no-preflight 显式跳过。
 #   stop [--reason <原因>]   停下在跑的后台验证（修复轮跑定向回归之前）
 #   check-boundary            批次边界：当前部署的结论 failed／aborted 退出 3（拒绝派发下一批），其余退出 0
 #   require-passed            VC-5 验收前：当前部署的结论是 passed 才退出 0，否则退出 3
@@ -32,13 +35,20 @@ case "$command" in
     if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh start <bundle 绝对路径> <分支> <40 位提交> [--profile …] [--record-store …] [--no-dryrun]" >&2; exit 2; fi
     bundle=$1; branch=$2; commit=$3; shift 3
     extra=(--then-dryrun)
+    preflight_args=(--preflight on)
     rest=()
-    for arg in "$@"; do if [ "$arg" = --no-dryrun ]; then extra=(); else rest+=("$arg"); fi; done
+    for arg in "$@"; do
+      if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(); else rest+=("$arg"); fi
+    done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
-      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${rest[@]+"${rest[@]}"} \
+      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${rest[@]+"${rest[@]}"} \
       ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
+  preflight)
+    if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh preflight <bundle 绝对路径> <分支> <40 位提交> [--only …]" >&2; exit 2; fi
+    bundle=$1; branch=$2; commit=$3; shift 3
+    exec "${BV[@]}" preflight --runroot "$RUNROOT" --data-root "$D" --bundle "$bundle" --branch "$branch" --commit "$commit" "$@" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   stop) exec "${BV[@]}" stop --runroot "$RUNROOT" "$@" ;;
   check-boundary|require-passed) exec "${BV[@]}" "$command" --runroot "$RUNROOT" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   status) exec "${BV[@]}" status --runroot "$RUNROOT" ;;
-  *) echo "用法：bash background-validate.sh start|stop|check-boundary|require-passed|status …" >&2; exit 2 ;;
+  *) echo "用法：bash background-validate.sh start|preflight|stop|check-boundary|require-passed|status …" >&2; exit 2 ;;
 esac

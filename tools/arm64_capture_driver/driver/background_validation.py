@@ -65,6 +65,11 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 ``require-passed``（VC-5 统一准入 ``vc5_admission.state`` 也经 ``check`` 取同一份判定）的提示单列这些单元，并在判定时按执行器汇总重放标注（含两次
 日志的摘要）——标注被改写、被藏起来、日志缺失，结论就不是通过，不静默放行。补跑关闭或没有补跑时结论与改造前逐字相同。
 
+起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署）。
+``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定，任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
+报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 off（保持既有调用方
+不变），驱动入口 ``background-validate.sh start`` 缺省带 ``--preflight on``（``--no-preflight`` 显式跳过）。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
@@ -812,6 +817,39 @@ def start(args: argparse.Namespace) -> dict[str, Any]:
             os.close(shared)
     finally:
         os.close(fd)
+
+
+def _preflight_module() -> Any:
+    """同目录的 background_preflight.py（起跑前置检查，优化第 4 项）：按路径加载。"""
+
+    name = "background_preflight_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "background_preflight.py")
+        if spec is None or spec.loader is None:
+            raise ValidationError(f"找不到同目录的 background_preflight.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any],
+                    deployments: Mapping[str, Mapping[str, Any]] | None) -> None:
+    """``--preflight on`` 时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定；不通过抛 ``ValidationError``（拒绝起跑）。缺省 off，没给就什么都不做。"""
+
+    if getattr(args, "preflight", "off") != "on":
+        return
+    module = _preflight_module()
+    scratch = Path(args.runroot) / DIRECTORY / "preflight"
+    try:
+        report = module.preflight_with_bundle(bundle=Path(args.bundle), branch=args.branch, commit=args.commit, data_root=Path(args.data_root),
+                                              runroot=Path(args.runroot), client=client, deployment=deployment, deployments=deployments,
+                                              scratch_parent=scratch)
+    except module.PreflightError as error:
+        raise ValidationError(f"起跑前置检查做不了，拒绝起跑后台验证：{error}") from error
+    _write(scratch / f"{args.commit[:12]}-{time.strftime('%Y%m%dt%H%M%Sz', time.gmtime())}.json", report)
+    if not report["passed"]:
+        raise ValidationError(module.format_failures(report))
 
 
 def _shared_contract(inputs: Any) -> dict[str, Any]:
@@ -1734,6 +1772,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         # 登记里同一次验证在另一运行根、但没法搭（要重跑全集）：本运行根新起一次，登记改指向新的这一份。
         path = result_path(args.runroot, args.commit, deployment, deployments)
         existing = _read(path)
+    # 起跑前置检查（优化第 4 项）：放在停掉其它验证之前——拒绝起跑不能连累已在跑的那一轮。
+    _preflight_gate(args, client=client, deployment=deployment, deployments=deployments)
     stop_notes: list[str] = []
     superseded = stop(args.runroot, f"被提交 {args.commit[:12]} 在部署 {deployment['receipt']} 上的后台验证取代", keep=path,
                       notes=stop_notes)
@@ -2193,6 +2233,16 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="旧提交是新提交祖先的验证因材料不足做不了时，退化为在结论里标明 unverified（确定不是祖先永远拒绝）；"
                               "只与 --unit-inherit-source-result 同用")
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
+    p_start.add_argument("--preflight", choices=("on", "off"), default="off",
+                         help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 off，驱动入口 background-validate.sh 缺省带 on")
+    p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
+    p_pre.add_argument("--runroot", type=Path, required=True)
+    p_pre.add_argument("--data-root", type=Path, required=True)
+    p_pre.add_argument("--bundle", type=Path, required=True)
+    p_pre.add_argument("--branch", required=True)
+    p_pre.add_argument("--commit", required=True)
+    p_pre.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
+    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")
@@ -2220,6 +2270,22 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValidationError(f"--{name.replace('_', '-')} 必须是绝对路径")
             print(json.dumps(start(args), ensure_ascii=False))
             return 0
+        if args.command == "preflight":
+            if not re.fullmatch(r"[0-9a-f]{40}", args.commit):
+                raise ValidationError("--commit 要完整的 40 位小写提交号")
+            module = _preflight_module()
+            client_deployment = latest_deployment(args.data_root, args.client)
+            try:
+                report = module.preflight_with_bundle(
+                    bundle=args.bundle, branch=args.branch, commit=args.commit, data_root=args.data_root, runroot=args.runroot, client=args.client,
+                    deployment=client_deployment, deployments=deployment_set(args.data_root),
+                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in (args.only or "").split(",") if item] or None)
+            except module.PreflightError as error:
+                raise ValidationError(f"起跑前置检查做不了：{error}") from error
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            if not report["passed"]:
+                print(module.format_failures(report), file=sys.stderr)
+            return 0 if report["passed"] else 3
         if args.command == "run":
             return run(args.result)
         if args.command == "stop":

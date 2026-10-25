@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 116,
+  "file_count": 117,
   "files": [
     {
       "path": "README.md",
@@ -22,15 +22,21 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "07f1250ca372568918b0b8d0a6528a191cbe108e29cdda56c16aab5c316257fc",
+      "sha256": "7b8effb683230184b547e58609ad330b3e7aa9699efb246e7035fdee003eaac3",
       "mode": "0700",
-      "bytes": 4497
+      "bytes": 5468
+    },
+    {
+      "path": "driver/background_preflight.py",
+      "sha256": "d88e3e3663eada2fa7aca83ba105e7084641e2aab80169134926c456d1164431",
+      "mode": "0700",
+      "bytes": 19414
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "09711501951421900e1b84126f16e1ea959ab493593bb965e882104cda46a1b0",
+      "sha256": "42765e97e795ab423382ea8318e50d5b438e494534e18df19a54a8fa381f0887",
       "mode": "0700",
-      "bytes": 159802
+      "bytes": 164732
     },
     {
       "path": "driver/build.sh",
@@ -699,5 +705,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "2d23302eb935d783bf06860fcc95a92155137f00cd08814ec5eaa841ce24b214"
+  "manifest_sha256": "e295f3e1caf489d8f19a5cfb241ff92892cb296d0394e38de5fce474eb1e934f"
 }
