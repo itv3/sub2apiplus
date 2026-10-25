@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 119,
+  "file_count": 120,
   "files": [
     {
       "path": "README.md",
-      "sha256": "a02f2e10547db1ab14bff7f9303fbfa4124e23d104724539eeea09ab590f4122",
+      "sha256": "53c0e613cdef89e761a1e66347561b835f9033b9c23f41fe3db06cf0cf28d56a",
       "mode": "0600",
-      "bytes": 120314
+      "bytes": 123244
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -73,6 +73,12 @@
       "sha256": "7d66759d2b7ea6fff771ed15bdb56df2c9b8bfd188491de48984a9cbc3136d70",
       "mode": "0700",
       "bytes": 10900
+    },
+    {
+      "path": "driver/chain-rehearsal.sh",
+      "sha256": "34178d92593dfa7d8d805cf9e242360c27ac2b4f21594367d73fdae2f35696ea",
+      "mode": "0700",
+      "bytes": 3135
     },
     {
       "path": "driver/claude_catalog_chain.py",
@@ -717,5 +723,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "6793b89287a34871a2e8bbe754bce880898d5de903ec3068d0093df6a5e527d6"
+  "manifest_sha256": "563ff7510be72612058936a7a236984a7f7b91d6b3a03a47712b10ff00083c13"
 }
