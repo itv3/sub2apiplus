@@ -2397,6 +2397,15 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
     status = effective_status(payload)
     where = f"提交 {str(payload.get('commit'))[:12]}，结论 {path}，日志 {payload.get('log')}"
     if status == "passed":
+        # 补跑标注无条件重放（优化第 2 项，验收修正建议 8）：不论结论文件里有没有 retry_passed_units 这个键、也不论是哪种执行模式，都按执行器
+        # 汇总现算一遍——结论文件被抹掉登记、或汇总里藏了没有标注的补跑尝试，都不能靠“结论里没写”绕过去。执行记录目录（out）不在时无从核对，
+        # 与改造前相同（有登记却对不上＝拒绝）。
+        registered = sorted(str(item.get("unit_id")) for item in (payload.get("retry_passed_units") or []) if isinstance(item, Mapping))
+        replay = retry_report(payload["out"]) if payload.get("out") else {"problems": [], "passed_units": []}
+        replayed = sorted(item["unit_id"] for item in replay["passed_units"])
+        if replay["problems"] or replayed != registered:
+            reasons = replay["problems"] or [f"结论登记的补跑通过名单 {registered} 与执行器汇总现算的 {replayed} 不一致"]
+            return 3, f"后台验证的补跑标注不能重放（{where}）：{'；'.join(reasons[:5])}"
         if (payload.get("mode") == "unit-inherit" or payload.get("unit_inherit_request")
                 or payload.get("input_contract", {}).get("execution_contract") == "unit-inherit/v1"):
             try:
@@ -2424,14 +2433,8 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
             if reasons:
                 return 3, f"后台验证的沿用不能重放（{where}）：{'；'.join(reasons[:5])}"
             reused_note = f"；沿用自提交 {str(payload.get('commit'))[:12]} 在部署 {payload['reuse'].get('source_deployment')} 上的通过结论（同树重部署，测试结论不重跑）"
-        retried = payload.get("retry_passed_units")
-        if retried:
-            # 结论带补跑通过的单元（优化第 2 项）：不能只信 passed 标签，按执行器汇总重放标注（含两次日志的摘要）；对不上就不放行。
-            replay = retry_report(payload.get("out") or "")
-            registered = sorted(str(item.get("unit_id")) for item in retried if isinstance(item, Mapping))
-            if replay["problems"] or sorted(item["unit_id"] for item in replay["passed_units"]) != registered:
-                reasons = replay["problems"] or ["结论登记的补跑通过名单与执行器汇总不一致"]
-                return 3, f"后台验证的补跑标注不能重放（{where}）：{'；'.join(reasons[:5])}"
+        if registered:
+            # 结论带补跑通过的单元：重放已在上面做过（标注、两次日志的摘要都对得上），这里只补提示。
             return 0, (f"后台验证通过（{where}）；其中补跑通过的单元 {len(registered)} 个（首次失败后单独补跑一次通过，已单列）：{'、'.join(registered[:8])}"
                        + reused_note)
         return 0, f"后台验证通过（{where}）{reused_note}"

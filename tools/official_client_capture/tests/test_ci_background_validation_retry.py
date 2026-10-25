@@ -142,6 +142,40 @@ class BackgroundRetryTests(RetryRunBase):
         self.assertEqual(code, 3)
         self.assertIn("补跑标注不能重放", message)
 
+    def test_check_replays_even_when_the_conclusion_has_no_retry_registration(self) -> None:
+        """验收修正建议 8：结论文件里的 retry_passed_units 被抹掉，check 也按执行器汇总现算，对不上就拒绝，不能靠“没写”绕过。"""
+
+        path = self.conclusion()
+        self.run_background()
+        payload = bv._read(path)
+        self.assertTrue(payload["retry_passed_units"])
+        del payload["retry_passed_units"]
+        bv._write(path, payload)
+        code, message = bv.check(self.runroot, self.data, require_passed=True)
+        self.assertEqual(code, 3, message)
+        self.assertIn("补跑标注不能重放", message)
+
+    def test_check_replays_for_unit_inherit_conclusions_too(self) -> None:
+        self.run_background()
+        path, payload = bv.for_deployment(self.runroot, bv.latest_deployment(self.data), client="codex", data_root=self.data)
+        payload = {**payload, "mode": "unit-inherit", "unit_inherit_request": str(self.root / "request.json")}
+        del payload["retry_passed_units"]
+        bv._write(path, payload)
+        code, message = bv.check(self.runroot, self.data, require_passed=True)
+        self.assertEqual(code, 3, message)
+        self.assertIn("补跑标注不能重放", message, "逐单元模式的结论也先重放补跑标注，再谈别的")
+
+    def test_a_retry_attempt_row_stripped_of_its_marker_does_not_pass(self) -> None:
+        summary_file = self.exec_out / "summary.json"
+        document = json.loads(summary_file.read_text(encoding="utf-8"))
+        del document["units"][0]["retry"]
+        document["retry"]["units"] = {}
+        document["retry"]["retry_passed"] = []
+        summary_file.write_text(json.dumps(document), encoding="utf-8")
+        payload = self.run_background()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("补跑尝试却没有补跑标注", payload["reason"])
+
     def test_conclusions_without_retry_are_unchanged(self) -> None:
         # 总摘要不指向执行器汇总（旧形态／替身）：没有补跑信息可核，结论不多出任何键。
         self.write_entry(summary_path=None)

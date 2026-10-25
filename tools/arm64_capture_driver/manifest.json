@@ -34,9 +34,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "9f43541ab3a83eff9fab5f8e513b50ec7a0ab92370d7249c5e5878e0a312293a",
+      "sha256": "b85501b2f72f65afeac168302a64c9af5003b1e65dba5893844cfbaaf3976616",
       "mode": "0700",
-      "bytes": 185863
+      "bytes": 186377
     },
     {
       "path": "driver/build.sh",
@@ -298,9 +298,9 @@
     },
     {
       "path": "driver/go_test_packages.py",
-      "sha256": "8bbd0f6e5675463aaf8a60996df9340bc98e033082184f975e00ad810f371c61",
+      "sha256": "fa7746e39f110ab562329394af4303425570e424b8da0c0ebccd45d1f77c71ff",
       "mode": "0700",
-      "bytes": 23646
+      "bytes": 28190
     },
     {
       "path": "driver/guard.sh",
@@ -406,9 +406,9 @@
     },
     {
       "path": "driver/retry_policy.py",
-      "sha256": "e5013a35a80ee6e1753f654d23999c684a3017ebaf4018f100fefb382d98e743",
+      "sha256": "a686385049eb241a856cea3634b7cdb4c43f51b0f686c7bed5dc73a3259e604f",
       "mode": "0700",
-      "bytes": 21193
+      "bytes": 24432
     },
     {
       "path": "driver/round_context.py",
@@ -460,9 +460,9 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "fbeb5554173c3a847b4f8d757dd556f3d4e9ee6f547c344ce48b81a9492f5fc5",
+      "sha256": "bb46d0f2190f8047c74fc4fc6f8109459fbe36c064cbb658c27ee0554a810b03",
       "mode": "0700",
-      "bytes": 309301
+      "bytes": 310159
     },
     {
       "path": "driver/unit_inherit.py",
@@ -711,5 +711,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "77bc508cd723dedee050d60ceb92585a6ddb0157ddf5a1bf814fbf234eae38af"
+  "manifest_sha256": "332a0edb9c9c24142c090e6d9818bce9930a6e703cda98a37f44fe5c14136d00"
 }

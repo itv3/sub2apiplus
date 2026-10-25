@@ -39,6 +39,10 @@ LEDGER_DIRECTORY = "retry-ledger"
 # 累计窗口与放行上限的缺省值（方案第 2 项：N 取 5，窗口内补跑通过只许 1 次）。
 DEFAULT_WINDOW_ROUNDS = 5
 DEFAULT_PASS_LIMIT = 1
+# 规则的底线（验收修正必修 2）：窗口至少 5 轮、窗口内补跑通过至多 1 次。配置与校验都钉死在这里——汇总（以及它带的标注）只能声明
+# **更严**的值（窗口更长），声明更宽（窗口更短、上限更高）一律判问题。否则一份被改写的汇总写上 pass_limit=99 就能自证“还有补跑额度”。
+POLICY_MIN_WINDOW_ROUNDS = DEFAULT_WINDOW_ROUNDS
+POLICY_MAX_PASS_LIMIT = DEFAULT_PASS_LIMIT
 
 CLASS_EXECUTION = "execution"
 CLASS_TIMEOUT = "timeout"
@@ -59,8 +63,10 @@ OUTCOME_FAILED = "failed"
 OUTCOMES = (OUTCOME_PASSED, OUTCOME_FAILED, STATUS_PASSED, STATUS_FAILED, STATUS_DENIED)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-# 命令找不到／不可执行：shell 约定的 127、126，属环境问题。
-_COMMAND_NOT_RUN_CODES = frozenset({126, 127})
+# 命令单元的下列退出码说明“没有真正跑到被测内容”，属环境问题，不补跑（验收修正建议 9）：
+# 124（timeout 类包装器超时）、125（包装器自己出错，如 go list 失败）、126／127（不可执行／找不到命令，含 go 不在 PATH 里）、
+# 129～159（shell 约定的 128＋信号：被信号杀，如 137＝SIGKILL、143＝SIGTERM；包装器里 go 子进程被信号杀时也按这个约定退出）。
+ENVIRONMENT_EXIT_CODES = frozenset({124, 125, 126, 127}) | frozenset(range(129, 160))
 
 
 class RetryPolicyError(RuntimeError):
@@ -95,6 +101,8 @@ def parse_config(raw: Any) -> RetryConfig:
             raise RetryPolicyError(f"retry.{name} 必须是正整数")
     if limit > window:
         raise RetryPolicyError("retry.pass_limit 不能大于 window_rounds")
+    if window < POLICY_MIN_WINDOW_ROUNDS or limit > POLICY_MAX_PASS_LIMIT:
+        raise RetryPolicyError(f"retry 配置不得比规定宽松：window_rounds 至少 {POLICY_MIN_WINDOW_ROUNDS}、pass_limit 至多 {POLICY_MAX_PASS_LIMIT}")
     return RetryConfig(enabled=enabled, window_rounds=window, pass_limit=limit)
 
 
@@ -119,10 +127,10 @@ def classify_failure(*, is_command: bool, exit_code: int | None, signal: int | N
         return CLASS_READ_SET
     if observed_failure or signal is not None:
         return CLASS_ENVIRONMENT
+    if exit_code in ENVIRONMENT_EXIT_CODES:
+        return CLASS_ENVIRONMENT
     if is_command:
-        if exit_code is None or exit_code in _COMMAND_NOT_RUN_CODES:
-            return CLASS_ENVIRONMENT
-        return CLASS_EXECUTION
+        return CLASS_ENVIRONMENT if exit_code is None else CLASS_EXECUTION
     # 测试单元：必须写出了结果文件，才能说是“测试报告了失败”；没写结果（进程崩在加载阶段等）归环境。
     if not has_result or exit_code is None:
         return CLASS_ENVIRONMENT
@@ -282,9 +290,19 @@ def marker_problems(marker: Any, *, unit_id: str = "", passed: bool | None = Non
         else:
             if ledger.get("window_rounds") != window_rounds or ledger.get("pass_limit") != pass_limit:
                 problems.append(f"账本窗口或上限与规定不符（应为 {window_rounds} 轮、{pass_limit} 次）")
+            # 底线（必修 2）：不论调用方传什么，账本声明的窗口都不得短于 5 轮、上限都不得高于 1 次。
+            declared_window, declared_limit = ledger.get("window_rounds"), ledger.get("pass_limit")
+            if (isinstance(declared_window, bool) or not isinstance(declared_window, int) or declared_window < POLICY_MIN_WINDOW_ROUNDS
+                    or isinstance(declared_limit, bool) or not isinstance(declared_limit, int) or declared_limit > POLICY_MAX_PASS_LIMIT):
+                problems.append(f"账本声明的窗口或上限比规定宽松（窗口至少 {POLICY_MIN_WINDOW_ROUNDS} 轮、补跑通过至多 {POLICY_MAX_PASS_LIMIT} 次）")
             prior = ledger.get("prior_retry_passed")
-            if isinstance(prior, bool) or not isinstance(prior, int) or prior < 0 or prior >= pass_limit:
+            if isinstance(prior, bool) or not isinstance(prior, int) or prior < 0 or prior >= min(pass_limit, POLICY_MAX_PASS_LIMIT):
                 problems.append(f"窗口内此前已有 {prior!r} 次补跑通过，不应再放行补跑")
+            recent = ledger.get("recent")
+            if isinstance(recent, list):
+                counted = sum(1 for item in recent if isinstance(item, Mapping) and item.get("outcome") == STATUS_PASSED)
+                if counted != prior or len(recent) > max(window_rounds, POLICY_MIN_WINDOW_ROUNDS):
+                    problems.append("账本引用的最近几轮结局与累计数对不上")
     elif status == STATUS_PASSED and marker.get("retry_attempt") is None:
         problems.append("补跑通过却没有补跑尝试")
     if status == STATUS_DENIED and not str(marker.get("reason") or "").strip():
@@ -335,14 +353,21 @@ def summary_problems(summary: Any, rows: Iterable[Mapping[str, Any]] | None = No
     row_list = list(rows) if rows is not None else list((summary or {}).get("units") or [])
     block = (summary or {}).get("retry") if isinstance(summary, Mapping) else None
     marked = {str(row.get("unit_id")): row for row in row_list if isinstance(row, Mapping) and row.get("retry") is not None}
+    # 补跑尝试的行（kind=retry）必须带补跑标注：没有标注的补跑尝试等于把“补跑通过”伪装成一次普通通过（验收修正建议 8）。
+    unmarked_retry = [f"{row.get('unit_id')}：汇总行是补跑尝试却没有补跑标注（补跑被伪装成普通通过）"
+                      for row in row_list if isinstance(row, Mapping) and row.get("kind") == "retry" and row.get("retry") is None]
     if block is None:
-        return [f"{unit_id}：汇总行带补跑标注，汇总却没有 retry 段（补跑被藏起来了）" for unit_id in sorted(marked)]
+        return [f"{unit_id}：汇总行带补跑标注，汇总却没有 retry 段（补跑被藏起来了）" for unit_id in sorted(marked)] + unmarked_retry
     if not isinstance(block, Mapping) or block.get("schema_version") != SUMMARY_SCHEMA:
         return ["汇总的 retry 段格式版本不对"]
     window, limit = block.get("window_rounds"), block.get("pass_limit")
     if isinstance(window, bool) or not isinstance(window, int) or isinstance(limit, bool) or not isinstance(limit, int):
         return ["汇总的 retry 段缺少窗口或上限"]
     problems: list[str] = []
+    # 窗口和上限钉死（必修 2）：汇总只能声明更严的值；声明更宽（窗口短于 5 轮、上限高于 1 次）一律判问题，不信汇总自己说的额度。
+    if window < POLICY_MIN_WINDOW_ROUNDS or limit > POLICY_MAX_PASS_LIMIT or limit < 1:
+        problems.append(f"汇总声明的补跑窗口 {window} 轮／上限 {limit} 次比规定宽松（窗口至少 {POLICY_MIN_WINDOW_ROUNDS} 轮、补跑通过至多 {POLICY_MAX_PASS_LIMIT} 次）")
+    problems.extend(unmarked_retry)
     for unit_id, row in sorted(marked.items()):
         problems.extend(marker_problems(row["retry"], unit_id=unit_id, passed=row.get("passed"), window_rounds=window, pass_limit=limit))
         if require_files and row["retry"].get("status") in (STATUS_PASSED, STATUS_FAILED):

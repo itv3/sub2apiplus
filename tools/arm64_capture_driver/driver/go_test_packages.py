@@ -11,7 +11,10 @@
   的包重新 ``go test -json -count=1``（沿用入口门禁缓存合同：``-count=1``，补跑不会撞上测试结果缓存）。**只有该包的失败用例能独立运行时才缩到
   ``-run`` 单个用例**：包里没有 ``TestMain``、没有 ``init``、失败的都是顶层用例、且首轮里该包的每个顶层用例都有终态（没有被崩溃截断）、失败用例不多；
   拿不准一律整包重跑。缩到用例时，被点名的用例必须真的跑到并通过（``-run`` 没匹配到任何用例会让 go test 悄悄通过，这里按失败处理）。
+  **缩到用例补跑通过后，对该包再整包补跑一次，整包通过才算这个包补跑通过**（标注写“缩到用例＋整包确认”）。
   最终通过＝首轮通过的包＋补跑通过的包恰好覆盖期望包集合、没有任何失败。
+* **退出码**（验收修正）：测试失败退出 1（可补跑）；PATH 里找不到 go 退出 127、包装器自己出错（go list 失败）退出 125、go 子进程被信号杀退出 128＋信号
+  （137、143 等）——这几种是环境失败，执行器不补跑。
 * **失败关闭**：首轮旁路文件缺失、不合法、与本次命令的标签不符，补跑退回整套重跑（仍只此一次）；任何环节拿不准都不判通过。
 
 用法（由门禁清单生成，工作目录是 ``backend``）：``python3 go_test_packages.py [--tags unit|integration] [--pattern ./...] [-- <附加 go test 参数>]``。
@@ -41,8 +44,26 @@ _TERMINAL = ("pass", "fail", "skip")
 _UNSAFE_OUTPUT = ("panic:", "fatal error:", "DATA RACE", "test timed out", "signal: killed", "signal: ")
 
 
+# 包装器自己的退出码约定（与执行器的失败分类一致，见 ``retry_policy.ENVIRONMENT_EXIT_CODES``，验收修正建议 9）：这几种都说明“没有真正跑到测试”，
+# 属环境失败，执行器不补跑——127＝PATH 里找不到 go；125＝包装器自己出错（go list 失败等）；128＋信号＝go 子进程被信号杀（137＝SIGKILL、143＝SIGTERM）。
+# 测试本身失败仍退出 1（可补跑）。
+EXIT_TEST_FAILED = 1
+EXIT_WRAPPER_ERROR = 125
+EXIT_GO_NOT_FOUND = 127
+
+
+def signal_exit_code(returncode: int) -> int:
+    """``Popen.wait()`` 返回负数＝被该信号杀；按 shell 约定折成 128＋信号。"""
+
+    return 128 - returncode
+
+
 class GoRunError(RuntimeError):
-    pass
+    exit_code = EXIT_WRAPPER_ERROR
+
+
+class GoNotFoundError(GoRunError):
+    exit_code = EXIT_GO_NOT_FOUND
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +74,7 @@ class GoRunError(RuntimeError):
 def go_executable() -> str:
     found = shutil.which("go")
     if found is None:
-        raise GoRunError("PATH 里找不到 go")
+        raise GoNotFoundError("PATH 里找不到 go")
     return found
 
 
@@ -323,9 +344,14 @@ def run_first(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
     except GoRunError as error:
         echo(f"go_test_packages：{error}\n")
         write_sidecar(sidecar, {"mode": "first", "tags": tags, "pattern": pattern, "expected_ok": False, "error": str(error)})
-        return 2
+        return error.exit_code
     echo(f"go_test_packages 首轮：期望包 {len(expected)} 个（go list {pattern} tags={tags or '无'}）\n")
     code, lines = stream_go_test([*tag_args(tags), "-count=1", *extra, pattern], echo=echo)
+    if code < 0:
+        # go 子进程被信号杀（OOM、外部 kill、超时清理）：不是测试失败，是环境失败；按 128＋信号退出，执行器不补跑。
+        echo(f"go_test_packages：go test 被信号 {-code} 杀掉，按环境失败处理（退出码 {signal_exit_code(code)}）\n")
+        write_sidecar(sidecar, {"mode": "first", "tags": tags, "pattern": pattern, "expected_ok": False, "error": f"go test 被信号 {-code} 杀掉"})
+        return signal_exit_code(code)
     parsed = parse_events(lines)
     verdict = judge(expected, parsed, go_exit_code=code)
     write_sidecar(sidecar, {
@@ -338,6 +364,28 @@ def run_first(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
                f"没跑到 {verdict['missing_packages']}，go test 退出码 {code}\n")
     echo(summary)
     return 0 if verdict["ok"] else 1
+
+
+def retry_note(results: Sequence[dict[str, Any]]) -> str:
+    """补跑范围的一句话说明，写进旁路文件的 ``retry_note``；执行器把它抄进补跑标注，结论里就看得出这次补跑是怎么通过的。"""
+
+    narrowed = [f"{item['package']} {item.get('tests')}" for item in results if item["scope"] == "tests+package"]
+    narrow_failed = [f"{item['package']} {item.get('tests')}" for item in results if item["scope"] == "tests"]
+    whole = [item["package"] for item in results if item["scope"] == "package"]
+    parts = []
+    if narrowed:
+        parts.append("缩到用例＋整包确认：" + "；".join(narrowed))
+    if narrow_failed:
+        parts.append("缩到用例未通过（未做整包确认）：" + "；".join(narrow_failed))
+    if whole:
+        parts.append("整包补跑：" + "、".join(whole))
+    return "；".join(parts) or "没有补跑范围说明"
+
+
+def _killed_in_retry(sidecar: str | None, tags: str, pattern: str, code: int, echo: Callable[[str], None]) -> int:
+    echo(f"go_test_packages：补跑中 go test 被信号 {-code} 杀掉，补跑不算通过（退出码 {signal_exit_code(code)}）\n")
+    write_sidecar(sidecar, {"mode": "retry", "tags": tags, "pattern": pattern, "scope": "packages", "ok": False, "error": f"go test 被信号 {-code} 杀掉"})
+    return signal_exit_code(code)
 
 
 def run_retry(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | None, first_sidecar: str | None, narrow_enabled: bool,
@@ -368,6 +416,8 @@ def run_retry(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
     if whole:
         echo(f"-- 整包补跑：{whole}\n")
         code, lines = stream_go_test([*tag_args(tags), "-count=1", *extra, *whole], echo=echo)
+        if code < 0:
+            return _killed_in_retry(sidecar, tags, pattern, code, echo)
         verdict = judge(whole, parse_events(lines), go_exit_code=code)
         for package in whole:
             results.append({"package": package, "scope": "package", "why": plans[package]["why"], "ok": package in verdict["passed_packages"]})
@@ -376,6 +426,8 @@ def run_retry(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
         tests = plans[package]["tests"]
         echo(f"-- 缩到用例补跑：{package} {tests}\n")
         code, lines = stream_go_test([*tag_args(tags), "-count=1", *extra, "-run", run_pattern(tests), package], echo=echo)
+        if code < 0:
+            return _killed_in_retry(sidecar, tags, pattern, code, echo)
         parsed = parse_events(lines)
         verdict = judge([package], parsed, go_exit_code=code)
         ran = parsed["packages"].get(package, {}).get("tests", {})
@@ -383,8 +435,23 @@ def run_retry(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
         missing_named = [name for name in tests if ran.get(name) != "pass"]
         ok = verdict["ok"] and not missing_named
         results.append({"package": package, "scope": "tests", "tests": tests, "why": plans[package]["why"], "ok": ok,
-                        "named_tests_not_passed": missing_named})
+                        "named_tests_not_passed": missing_named, "narrow_ok": ok})
         still_ok = still_ok and ok
+    # 缩到用例补跑通过的包，再整包补跑一次，整包通过才算这个包补跑通过（验收修正必修 5）：缩到用例只证明“失败的那几个用例单独跑能过”，
+    # 同包里其它用例有没有受牵连、包级的 init／共享状态有没有问题，它说明不了；整包确认把这个口子补上。缩到用例没通过的包不用确认（已经红了）。
+    confirm = [item["package"] for item in results if item["scope"] == "tests" and item["ok"]]
+    if confirm:
+        echo(f"-- 整包确认（缩到用例已通过，整包再跑一次）：{confirm}\n")
+        code, lines = stream_go_test([*tag_args(tags), "-count=1", *extra, *confirm], echo=echo)
+        if code < 0:
+            return _killed_in_retry(sidecar, tags, pattern, code, echo)
+        verdict = judge(confirm, parse_events(lines), go_exit_code=code)
+        for item in results:
+            if item["package"] in confirm:
+                item["scope"] = "tests+package"
+                item["confirm_ok"] = item["package"] in verdict["passed_packages"]
+                item["ok"] = item["confirm_ok"]
+        still_ok = still_ok and verdict["ok"]
     # 最终通过＝首轮通过（或跳过）的包＋补跑通过的包恰好覆盖期望包集合，且补跑的每一项都通过；“不在失败名单里”不等于通过。
     first_unproblematic = {name for name in expected if name not in redo and first["packages"].get(name, {}).get("action") in ("pass", "skip")}
     retried_ok = {item["package"] for item in results if item["ok"]}
@@ -392,7 +459,7 @@ def run_retry(tags: str, pattern: str, extra: Sequence[str], *, sidecar: str | N
     write_sidecar(sidecar, {
         "mode": "retry", "tags": tags, "pattern": pattern, "extra": list(extra), "scope": "packages", "expected_packages": expected,
         "first_sidecar_sha256": hashlib.sha256(Path(first_sidecar).read_bytes()).hexdigest() if first_sidecar else None,
-        "retried": results, "seconds": round(time.monotonic() - started, 3), "ok": final_ok})
+        "retried": results, "retry_note": retry_note(results), "seconds": round(time.monotonic() - started, 3), "ok": final_ok})
     echo(f"go_test_packages 补跑结论：{'通过' if final_ok else '仍失败'}；补跑 {len(redo)} 个包，首轮已通过的 {len(first_unproblematic)} 个包沿用\n")
     return 0 if final_ok else 1
 
@@ -417,7 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_first(args.tags, args.pattern, args.extra, sidecar=sidecar, echo=echo)
     except GoRunError as error:
         echo(f"go_test_packages：{error}\n")
-        return 2
+        return error.exit_code
 
 
 if __name__ == "__main__":

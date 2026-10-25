@@ -322,6 +322,16 @@ class RetryDisabledByDefaultTests(RetryRunBase):
         with self.assertRaisesRegex(ue.ExecutorError, "补跑段非法"):
             ue.load_config(path)
 
+    def test_the_retry_config_cannot_be_looser_than_five_rounds_and_one_pass(self) -> None:
+        """验收修正必修 2：配置也钉死底线——窗口至少 5 轮、补跑通过至多 1 次；更严（窗口更长）可以。"""
+
+        for loose in ({"enabled": True, "window_rounds": 4}, {"enabled": True, "window_rounds": 3, "pass_limit": 1},
+                      {"enabled": True, "window_rounds": 10, "pass_limit": 2}):
+            with self.subTest(loose=loose), self.assertRaises(rp.RetryPolicyError):
+                rp.parse_config(loose)
+        stricter = rp.parse_config({"enabled": True, "window_rounds": 10, "pass_limit": 1})
+        self.assertEqual((stricter.window_rounds, stricter.pass_limit), (10, 1))
+
     def test_the_repository_config_turns_retry_on_with_five_rounds_and_one_pass(self) -> None:
         config = ue.load_config(REPO_ROOT / "tools" / "ci" / "unit_executor.json")
         self.assertEqual((config.retry.enabled, config.retry.window_rounds, config.retry.pass_limit), (True, 5, 1))
@@ -342,6 +352,21 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertEqual(self.classify(exit_code=127), rp.CLASS_ENVIRONMENT)
         self.assertEqual(self.classify(exit_code=126), rp.CLASS_ENVIRONMENT)
         self.assertEqual(self.classify(observed_failure=True), rp.CLASS_ENVIRONMENT)
+
+    def test_timeout_wrapper_signal_and_wrapper_error_exit_codes_are_environment_failures(self) -> None:
+        """验收修正建议 9：124（超时类包装器）、125（包装器自己出错）、128＋信号（137、143 等）都不是“测试失败”，不补跑。"""
+
+        for code in (124, 125, 126, 127, 129, 130, 137, 143, 159):
+            with self.subTest(exit_code=code):
+                self.assertEqual(self.classify(exit_code=code), rp.CLASS_ENVIRONMENT)
+        for code in (1, 2, 3, 128, 160, 255):
+            with self.subTest(exit_code=code):
+                self.assertEqual(self.classify(exit_code=code), rp.CLASS_EXECUTION, "普通的非零退出码仍是执行失败，可补跑")
+
+    def test_a_test_unit_killed_with_a_shell_style_code_is_also_an_environment_failure(self) -> None:
+        test_unit = {**self.base, "is_command": False, "has_result": True, "result_successful": False}
+        self.assertEqual(rp.classify_failure(**{**test_unit, "exit_code": 137}), rp.CLASS_ENVIRONMENT)
+        self.assertEqual(rp.classify_failure(**{**test_unit, "exit_code": 1}), rp.CLASS_EXECUTION)
 
     def test_test_units_need_a_result_file_to_count_as_execution_failure(self) -> None:
         test_unit = {**self.base, "is_command": False}
@@ -378,6 +403,67 @@ class MarkerSelfCheckTests(RetryRunBase):
                 mutate(forged["units"][0]["retry"])
                 forged["retry"]["units"] = {forged["units"][0]["unit_id"]: forged["units"][0]["retry"]}
                 self.assertTrue(rp.summary_problems(forged, require_files=True), label)
+
+    def forge(self, summary: dict, *, block: dict | None = None, ledger: dict | None = None, **marker: object) -> dict:
+        forged = json.loads(json.dumps(summary))
+        row = forged["units"][0]
+        if ledger:
+            row["retry"]["ledger"].update(ledger)
+        row["retry"].update(marker)
+        forged["retry"]["units"] = {row["unit_id"]: row["retry"]}
+        if block:
+            forged["retry"].update(block)
+        return forged
+
+    def test_a_self_consistent_forgery_with_a_looser_limit_is_still_rejected(self) -> None:
+        """验收修正必修 2：汇总声明的窗口与上限不可信，校验时钉死在 5 轮／1 次，只能声明更严的值。"""
+
+        summary = self.passed_summary()
+        self.assertEqual(rp.summary_problems(summary, require_files=True), [])
+        forgeries = {
+            "上限伪造成 99（汇总与账本口径一致）": self.forge(summary, block={"pass_limit": 99}, ledger={"pass_limit": 99}),
+            "上限伪造成 99 且声称此前已补跑通过 7 次": self.forge(summary, block={"pass_limit": 99}, ledger={"pass_limit": 99, "prior_retry_passed": 7}),
+            "只改账本的上限": self.forge(summary, ledger={"pass_limit": 99}),
+            "只改汇总的上限": self.forge(summary, block={"pass_limit": 99}),
+            "窗口缩成 2 轮": self.forge(summary, block={"window_rounds": 2}, ledger={"window_rounds": 2}),
+            "窗口缩成 4 轮": self.forge(summary, block={"window_rounds": 4}, ledger={"window_rounds": 4}),
+            "此前已补跑通过 7 次却被放行": self.forge(summary, ledger={"prior_retry_passed": 7}),
+            "上限为 0": self.forge(summary, block={"pass_limit": 0}, ledger={"pass_limit": 0}),
+        }
+        for label, forged in forgeries.items():
+            with self.subTest(label):
+                self.assertTrue(rp.summary_problems(forged, require_files=True), label)
+        wide = rp.summary_problems(forgeries["上限伪造成 99（汇总与账本口径一致）"], require_files=True)
+        self.assertTrue(any("比规定宽松" in problem for problem in wide), wide)
+
+    def test_a_stricter_declaration_is_accepted(self) -> None:
+        summary = self.passed_summary()
+        stricter = self.forge(summary, block={"window_rounds": 8}, ledger={"window_rounds": 8})
+        self.assertEqual(rp.summary_problems(stricter, require_files=True), [], "声明更严（窗口更长）是允许的")
+
+    def test_marker_check_alone_also_enforces_the_floor(self) -> None:
+        marker = self.passed_summary()["units"][0]["retry"]
+        loose = json.loads(json.dumps(marker))
+        loose["ledger"].update(window_rounds=3, pass_limit=3)
+        self.assertTrue(rp.marker_problems(loose, window_rounds=3, pass_limit=3), "调用方把口径也放宽，标注自检照样拒绝")
+
+    def test_the_ledger_recent_rounds_must_match_the_prior_count(self) -> None:
+        summary = self.passed_summary()
+        forged = self.forge(summary, ledger={"recent": [{"run_id": "x", "outcome": "retry-passed"}]})
+        self.assertTrue(any("最近几轮" in problem for problem in rp.summary_problems(forged)))
+
+    def test_a_retry_attempt_row_without_a_marker_is_reported(self) -> None:
+        """验收修正建议 8：kind=retry 的汇总行必须带补跑标注，否则补跑被伪装成一次普通通过。"""
+
+        summary = self.passed_summary()
+        stripped = json.loads(json.dumps(summary))
+        del stripped["units"][0]["retry"]
+        stripped["retry"]["units"] = {}
+        stripped["retry"]["retry_passed"] = []
+        problems = rp.summary_problems(stripped)
+        self.assertTrue(any("补跑尝试却没有补跑标注" in problem for problem in problems), problems)
+        hidden = {key: value for key, value in stripped.items() if key != "retry"}
+        self.assertTrue(any("补跑尝试却没有补跑标注" in problem for problem in rp.summary_problems(hidden)), "连汇总的 retry 段一起抹掉也报")
 
     def test_passed_flag_must_match_the_retry_status(self) -> None:
         summary = self.passed_summary()

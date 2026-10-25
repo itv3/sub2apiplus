@@ -3200,12 +3200,27 @@ def classify_outcome(outcome: Outcome) -> str | None:
     ) if not outcome.passed else None
 
 
+def _sidecar_note(outcome: Outcome) -> str | None:
+    """命令单元旁路结果里的 ``retry_note``（补跑范围的一句话说明，如 go 包装器的“缩到用例＋整包确认”）；没有或读不出来返回 None。"""
+
+    sidecar = outcome.log_path.parent.parent / "units" / (outcome.log_path.name.removesuffix(".log") + ".sidecar.json")
+    try:
+        note = json.loads(sidecar.read_text(encoding="utf-8")).get("retry_note")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return note if isinstance(note, str) and note.strip() else None
+
+
 def _attempt_ref(records: Any, outcome: Outcome) -> dict[str, Any]:
     digest = records.path_digest(outcome.log_path) if outcome.log_path.exists() else None
-    return _retry_module().attempt_ref(
+    reference = _retry_module().attempt_ref(
         kind=outcome.kind, passed=outcome.passed, exit_code=outcome.exit_code, signal=outcome.signal, timed_out=outcome.timed_out,
         seconds=outcome.seconds, record_sha256=outcome.extra.get("record_sha256"), record_path=outcome.extra.get("record_path"),
         log_path=str(outcome.log_path), log_sha256=digest)
+    note = _sidecar_note(outcome)
+    if note is not None:
+        reference["note"] = note
+    return reference
 
 
 def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: Any, run_id: str, config: Any,
@@ -3274,11 +3289,13 @@ def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: An
                 raise ExecutorError(f"补跑阶段没有拿到单元 {unit_id} 的补跑结果")
             passed = attempt.passed
             attempt.extra["retry_of"] = scheduler.retry_of[unit_id]
+            retry_attempt = _attempt_ref(records, attempt)
+            scope_note = f"（{retry_attempt['note']}）" if retry_attempt.get("note") else ""
             marker = policy.build_marker(
                 status=policy.STATUS_PASSED if passed else policy.STATUS_FAILED, failure_class=failure_class,
-                reason=("首次执行失败，机器腾空后单独补跑一次通过：结论算通过，但单列为补跑通过（两次日志都留）" if passed
-                        else "首次执行失败，补跑仍然失败：判红"),
-                first_attempt=_attempt_ref(records, first_outcome), retry_attempt=_attempt_ref(records, attempt), ledger=allowance)
+                reason=(("首次执行失败，机器腾空后单独补跑一次通过：结论算通过，但单列为补跑通过（两次日志都留）" if passed
+                         else "首次执行失败，补跑仍然失败：判红") + scope_note),
+                first_attempt=_attempt_ref(records, first_outcome), retry_attempt=retry_attempt, ledger=allowance)
             markers[unit_id] = marker
             winner = attempt if passed else first_outcome
             winner.extra["retry"] = marker

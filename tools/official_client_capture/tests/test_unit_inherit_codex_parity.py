@@ -867,7 +867,7 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '9f43541ab3a83eff9fab5f8e513b50ec7a0ab92370d7249c5e5878e0a312293a'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': 'b85501b2f72f65afeac168302a64c9af5003b1e65dba5893844cfbaaf3976616'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',
@@ -920,7 +920,7 @@ CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '33d47a41b10527ce5911cf794906cd2bc8f6148cfc9a6f100c064a537ad4a44d'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'fbeb5554173c3a847b4f8d757dd556f3d4e9ee6f547c344ce48b81a9492f5fc5'}
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'bb46d0f2190f8047c74fc4fc6f8109459fbe36c064cbb658c27ee0554a810b03'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
         '            for member in [pid, *_session_members(pid)]:',
         '                    os.kill(member, signal.SIGKILL)',

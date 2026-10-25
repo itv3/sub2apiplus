@@ -262,10 +262,13 @@ class RealGoTests(unittest.TestCase):
         _first, retry, doc, retried = self.first_and_retry()
         self.assertEqual(retry.returncode, 0, retry.stdout[-2500:])
         scopes = {item["package"].rsplit("/", 1)[1]: item["scope"] for item in retried["retried"]}
-        self.assertEqual(scopes, {"flaky": "tests", "mainpkg": "package", "panicky": "package"},
-                         "偶发用例缩到 -run；带 TestMain 的包、被崩溃截断的包整包重跑")
+        self.assertEqual(scopes, {"flaky": "tests+package", "mainpkg": "package", "panicky": "package"},
+                         "偶发用例缩到 -run 并做整包确认；带 TestMain 的包、被崩溃截断的包整包重跑")
         flaky = next(item for item in retried["retried"] if item["package"].endswith("/flaky"))
         self.assertEqual(flaky["tests"], ["TestFlaky"])
+        self.assertTrue(flaky["narrow_ok"] and flaky["confirm_ok"] and flaky["ok"], "缩到用例通过后整包确认也通过，才算这个包补跑通过")
+        self.assertIn("整包确认", retry.stdout)
+        self.assertIn("缩到用例＋整包确认", retried["retry_note"])
         self.assertTrue(retried["ok"])
         self.assertNotIn("example.com/demo/steady", retry.stdout, "首轮通过的包不重跑")
         self.assertNotIn("example.com/demo/notest", retry.stdout)
@@ -339,6 +342,8 @@ class ExecutorEndToEndTests(RetryRunBase):
         self.assertIn("首轮结论", first_log)
         self.assertIn("补跑结论：通过", retry_log)
         self.assertIn("缩到用例补跑", retry_log)
+        self.assertIn("整包确认", retry_log)
+        self.assertIn("缩到用例＋整包确认", row["retry"]["retry_attempt"]["note"], "标注里写清是缩到用例＋整包确认")
         self.assertNotIn("example.com/demo/steady", retry_log, "首轮通过的包不重跑")
         record_path = manifest["units"][0]["retry"]["retry_attempt"]["record_path"]
         record = json.loads(Path(record_path).read_text(encoding="utf-8"))
