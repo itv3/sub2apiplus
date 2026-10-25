@@ -3260,9 +3260,10 @@ def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: An
             denied = "没有记录库，无法累计补跑次数，不补跑"
         elif unit.command and not unit.reservation_restartable:
             denied = "命令单元不是可从头重跑的（pre-A3 认证场景等有副作用的单元不补跑）"
-        elif audited(unit):
-            denied = "本次运行对该单元做读集审计，补跑得不到完整读集，不补跑"
         else:
+            # D6（第 10a 项配套）：审计运行里失败的单元也允许补跑一次——补跑尝试不包 strace、不产生读集审计（调度器只对 formal 种类包审计器），
+            # 所以补跑记录永远 inheritable=false，单元下一轮重新带审计执行；否则带审计的修复轮里一个偶发失败就让整轮变红。审计结果的
+            # 汇总口径由 ``_retried_unaudited_adjust`` 处理。
             try:
                 allowance = ledger.allowance(unit.unit_id, window_rounds=config.window_rounds, pass_limit=config.pass_limit)
             except policy.LedgerError as error:
@@ -3316,6 +3317,38 @@ def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: An
         ledger.append(entries)
     diagnostic_units = [outcome.unit for outcome in formal if not outcome.execution_passed and outcome.unit.unit_id not in pending]
     return final, retried, diagnostic_units, markers
+
+
+def _retried_unaudited_adjust(report: dict[str, Any], auditor: Any, markers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """D6：审计运行里被无审计补跑过的单元，读集审计汇总的口径。
+
+    首次尝试的审计结果（它的执行失败了）留在审计器里，而结论取的是补跑尝试——补跑不包审计，没有读集证据，记录也不可承接。这些单元
+    对承接边界没有风险（下一轮没有可承接的来源，会带审计重新执行），所以它们的审计结果不应该让整轮审计汇总变红：其余单元的审计
+    全部闭合且通过时，汇总记为通过、承接边界已强制，并另列 ``retried_unaudited_units``；其余单元只要有一个没闭合，汇总口径与改造前相同。
+    没有补跑过的运行、非严格审计或审计汇总本来就通过时，原样返回。"""
+
+    retried = sorted(unit_id for unit_id, marker in markers.items()
+                     if marker.get("status") in ("retry-passed", "retry-failed") and unit_id in auditor.results)
+    if not retried or not getattr(auditor, "strict", False):
+        return report
+    expected = set(auditor.currents) - set(auditor.inherited)
+    others = {unit_id: result for unit_id, result in auditor.results.items() if unit_id not in retried}
+    complete = (set(auditor.results) == expected and all(
+        result.get("coverage_complete") is True and result.get("status") == "passed" and not result.get("undeclared_count")
+        for result in others.values()))
+    if not complete:
+        return report
+    adjusted = {**report, "status": "passed", "reuse_boundary_enforced": True, "coverage_complete": False,
+                "undeclared_total": sum(int(result.get("undeclared_count") or 0) for result in others.values()),
+                "units_with_findings": [unit_id for unit_id in report.get("units_with_findings", []) if unit_id not in retried],
+                "retried_unaudited_units": retried}
+    path = Path(str(report.get("report") or ""))
+    if path.is_file():
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        stored.update(coverage_complete=False, reuse_boundary_enforced=True, retried_unaudited_units=retried,
+                      undeclared_total=adjusted["undeclared_total"], units_with_findings=adjusted["units_with_findings"])
+        _write_json(path, stored)
+    return adjusted
 
 
 CORE_DEVIATION_SCHEMA = "unit-executor-core-deviation/v1"
@@ -4681,6 +4714,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             summary["status"] = "failed"
         if auditor is not None:
             summary["read_audit"] = auditor.report()
+            if retry_config is not None and retry_attempts:
+                summary["read_audit"] = _retried_unaudited_adjust(
+                    summary["read_audit"], auditor, {o.unit.unit_id: o.extra["retry"] for o in outcomes if o.extra.get("retry")})
             summary["read_audit"].update(auditor.declared_extra())  # 只有存在声明级结果时才多一个 declared 键
             if summary["read_audit"]["status"] != "passed":
                 summary["status"] = "failed"
