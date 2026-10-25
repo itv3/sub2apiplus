@@ -1114,6 +1114,9 @@ _DECLARED_SAMPLE_OPTIONAL = ("sampled_commit", "sampled_at_utc", "runs", "reaudi
 DECLARED_TOOLCHAINS: dict[str, list[str]] = {
     "go": ["go", "version"], "node": ["node", "--version"], "pnpm": ["pnpm", "--version"], "make": ["make", "--version"],
 }
+# Docker（后端 integration 单元的 testcontainers 依赖，第 8 项）：版本行同时带客户端与守护进程版本（守护进程不可达时命令失败，条目记 unavailable，
+# 失败关闭），可执行文件摘要绑定 docker 命令行本身（脚手架 TestMain 会真的执行 ``docker info``）。守护进程的内核由执行器环境指纹里的 kernel 覆盖。
+DECLARED_TOOLCHAINS["docker"] = ["docker", "version", "--format", "client={{.Client.Version}} server={{.Server.Version}}"]
 # go 命令行为受这些环境变量的「生效值」影响（go env 已合并环境变量与 go env -w 写下的配置文件）。
 DECLARED_GO_ENV_KEYS = ("GOFLAGS", "GOPROXY", "GOTOOLCHAIN", "GOEXPERIMENT", "CGO_ENABLED", "GOENV")
 DECLARED_GO_TOOLS = ("compile", "link", "asm", "vet")
@@ -1160,6 +1163,39 @@ DECLARED_SERVICE_IMAGES: dict[str, dict[str, str]] = {
 # 解析来源只写进条目的 detail（resolved_from），不进摘要——否则缓存由冷变热会改变摘要。
 DECLARED_RYUK_DEFAULT_IMAGES = {"v0.40.0": "testcontainers/ryuk:0.13.0"}
 DECLARED_RYUK_SOURCE = "internal/config/config.go"
+# 服务镜像引用的交叉核对（第 8 项）：redis 的镜像引用在三份测试源码里各写一遍（脚手架 redisImageTag、中间件限流集成测试 redisImageTag、
+# 路由限流集成测试 authRouteRedisImageTag），合同只从脚手架那份取值——任何一份被单独改掉而合同不知道，就会出现“绑定的镜像不是测试真正用的镜像”。
+# 所以后端里凡是用了 testcontainers 的测试源码，其中出现的 postgres／redis 镜像字面量都必须等于合同解析出的引用；用到合同表里没有的
+# testcontainers 模块（mysql、mongodb……）同样失败关闭——新的容器依赖必须先有镜像合同。读不了的文件、解析不了的内容都算不一致。
+DECLARED_IMAGE_SCAN_ROOT = "backend"
+DECLARED_TESTCONTAINERS_MODULES = frozenset({"postgres", "redis"})
+_DECLARED_IMAGE_LITERAL = re.compile(r'"((?:redis|postgres):[0-9][A-Za-z0-9._-]*)"')
+_DECLARED_TC_MODULE = re.compile(r'"github\.com/testcontainers/testcontainers-go/modules/([A-Za-z0-9_-]+)')
+_DECLARED_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _declared_check_image_sources(tree: Path, ident: str, reference: str) -> None:
+    """后端测试源码里的 postgres／redis 镜像字面量必须都等于合同解析出的默认引用；不一致抛 ValueError（失败关闭）。"""
+
+    if ident not in DECLARED_TESTCONTAINERS_MODULES:
+        return
+    root = Path(tree) / DECLARED_IMAGE_SCAN_ROOT
+    problems: list[str] = []
+    for path in sorted(root.rglob("*_test.go")):
+        relative = path.relative_to(tree).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise ValueError(f"读不了后端测试源码 {relative}，镜像引用交叉核对做不了：{error}") from error
+        if "testcontainers" not in text:
+            continue
+        for module in sorted(set(_DECLARED_TC_MODULE.findall(text)) - DECLARED_TESTCONTAINERS_MODULES):
+            problems.append(f"{relative} 用了 testcontainers 模块 {module}，没有对应的服务镜像合同（先登记合同）")
+        for literal in sorted(set(_DECLARED_IMAGE_LITERAL.findall(text))):
+            if literal.partition(":")[0] == ident and literal != reference:
+                problems.append(f"{relative} 里的 {ident} 镜像引用 {literal} 与合同解析出的 {reference} 不一致")
+    if problems:
+        raise ValueError("；".join(problems[:4]))
 # testcontainers 的 Hub 前缀配置（环境变量或 ~/.testcontainers.properties 的 hub.image.name.prefix）会给所有 Docker Hub 镜像
 # 加前缀，实际镜像名不再是源码常量；检测到时镜像条目失败关闭（image_id 记 unavailable），单元不得承接。
 DECLARED_HUB_PREFIX_ENV = "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX"
@@ -1916,6 +1952,7 @@ def _declared_image_default(tree: Path, ident: str, environ: Mapping[str, str], 
         match = re.search(rf'^\s*{re.escape(spec["const"])}\s*=\s*"([^"\n]+)"', text, re.M)
         if match is None or not _DECLARED_IMAGE_REF.fullmatch(match.group(1)):
             raise ValueError(f"{DECLARED_IMAGE_SOURCE_FILE} 里解析不到常量 {spec['const']} 的镜像引用")
+        _declared_check_image_sources(Path(tree), ident, match.group(1))
         return match.group(1), {"file": DECLARED_IMAGE_SOURCE_FILE, "const": spec["const"]}, "source"
     try:
         go_mod = (Path(tree) / spec["go_mod"]).read_text(encoding="utf-8")
@@ -2241,6 +2278,10 @@ def declared_contract_problems(entries: Sequence[Mapping[str, Any]], *, argv: Se
                 problems.append(f"{name}：{path} 探测失败（{value}）")
         if detail.get("executable_sha256") == "missing":
             problems.append(f"{name}：找不到可执行文件")
+        image_id = detail.get("image_id")
+        if detail.get("type") == "service-image" and not (isinstance(image_id, str) and (image_id.startswith("unavailable(") or _DECLARED_IMAGE_ID.fullmatch(image_id))):
+            # 拿到的不是 sha256 摘要（空、乱码、别的形状）：同样当作拿不到，失败关闭（unavailable(…) 的已由上面的遍历报过）。
+            problems.append(f"{name}：镜像 Id 不是 sha256:<64 位十六进制>（拿不到镜像摘要，失败关闭）：{image_id!r}")
         requirements = detail.get("requirements")
         if isinstance(requirements, Mapping) and requirements.get("met") is not True:
             problems.append(f"{name}：命令运行期离线要求未满足（{requirements.get('unmet')}）")
