@@ -10,20 +10,24 @@ git 变更集，列出哪些单元**可能**受影响。**预览不是权威**�
 单元 u 的来源记录给出：访问集合 ``A_u``（``host_path_modes`` 里有访问类型的路径）和每个路径的访问方式。变更集（仓库相对路径，来自
 ``git diff --raw -z --no-renames <旧提交> <新提交>``）里的路径 p 让 u 受影响，当且仅当满足下列任一条：
 
-1. p 属于 ``A_u``，且 p 被修改、删除或改了权限（内容或存在性变化；stat 级只改内容不改大小的权威会放过，预览仍报）。例外：整树遍历签名下
-   （``read_audit.walk_stat_directories``，B2）只被 stat 的测试文件，只改内容不改权限、不删除时不报——权威本来就忽略它们的大小；
+1. p 属于 ``A_u``，且 p 被修改、删除或改了权限（内容或存在性变化；stat 级只改内容不改大小的权威会放过，预览仍报）。经符号链接访问的路径，
+   链接解析后的目标也算被访问（目标文件被改、目标目录的目录项变了都报，链接自己被改是 120000 变更，走一票否决）。例外：整树遍历签名下
+   （``read_audit.walk_stat_directories``，B2；覆盖被遍历的测试目录及其下被枚举的全部后代目录）只被 stat 的测试文件，只改内容不改权限、
+   不删除时不报——权威本来就忽略它们的大小；被 G-P 提升（镜像或同级字节码被读）的 ``.py`` 与经链接访问的目标不享受这条例外；
 2. p 被新增或删除，且 u 枚举过它的某个祖先目录 d（``list``）：直接父目录一定算；更高层的祖先只有“p 在 d 下的第一层名字原本不在 d 的目录项里”
    （新增）或“原本在”（删除，保守）时才算——目录项只记名字；
 3. p 被新增，且 p 或 p 的某个祖先是 u 探测过却不存在的路径（``missing``）；
 4. p 的类型变了（文件↔目录↔符号链接），且 p 或它的父目录属于 ``A_u``——目录项只有名字没有类型，权威发现不了这种变化（已知缺口 R2），
-   所以变更集里出现类型变化、符号链接（120000）、子模块（160000）或 ``.gitmodules`` 变更时**一票否决**：本轮不承接任何单元；
+   所以变更集里出现类型变化、符号链接（120000）、子模块（160000）、``.gitmodules`` 变更，或同名的文件↔目录翻转（git 里是一条删除加若干条新增，
+   不是类型变化 T，由 ``parse_raw_diff`` 另外识别）时**一票否决**：本轮不承接任何单元；
 5. u 读过仓库 ``.git`` 下的东西（``HEAD``、对象库…），而提交变了——提交一变就该重跑，这是真依赖；
 6. u 的非宿主视图条目（``runtime-test-spec`` 等整份比较的）在 ``changed_entries`` 里。
 
 另外祖先目录被整个删除（它的全部目录项都在被删除的路径里）时，访问过这个目录本身的单元也算受影响。没有可窄化的来源记录（旧口径、读集未闭合、
 没有来源）的单元一律报“必重跑”——自然成立：无来源即执行。
 
-``changeset_from_git`` 取变更集；``predict_affected`` 出预览；命令行 ``affected --store <记录库> --run-id <来源运行> --repo <测试树> --old <提交> --new <提交>``
+``changeset_from_git`` 取变更集；``type_change_veto``／``veto_for_runs`` 是权威路径（后台验证承接、收尾承接）用的一票否决——权威判定发现不了
+“同名文件变目录”这类类型翻转（已知缺口 R2），所以来源提交到当前提交之间有类型变化就整轮不承接；``predict_affected`` 出预览；命令行 ``affected --store <记录库> --run-id <来源运行> --repo <测试树> --old <提交> --new <提交>``
 把两者接起来，打印每个受影响单元的原因。
 """
 
@@ -32,6 +36,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -112,6 +117,18 @@ def parse_raw_diff(output: bytes, *, head_changed: bool = False) -> ChangeSet:
             changes.veto.append(f"{path}：类型变化、符号链接或子模块（模式 {old_mode}→{new_mode}）")
         if path == ".gitmodules":
             changes.veto.append(".gitmodules 变更")
+    # 同名的“文件变目录”“目录变文件”在 git 里不是类型变化（T），而是一条删除加若干条新增（或反过来）：被删除的路径是某个被新增路径的祖先，
+    # 或被新增的路径是某个被删除路径的祖先。这正是承接视图发现不了的 R2 缺口（目录项只有名字），所以同样一票否决。
+    for added in sorted(changes.added):
+        for ancestor in _ancestors(added)[:-1]:
+            if ancestor in changes.deleted:
+                changes.type_changed.add(ancestor)
+                changes.veto.append(f"{ancestor}：同名文件变成了目录（新增 {added}）")
+    for deleted in sorted(changes.deleted):
+        for ancestor in _ancestors(deleted)[:-1]:
+            if ancestor in changes.added:
+                changes.type_changed.add(ancestor)
+                changes.veto.append(f"{ancestor}：同名目录变成了文件（删除 {deleted}）")
     return changes
 
 
@@ -119,7 +136,10 @@ def changeset_from_git(repo: Path | str, old: str, new: str) -> ChangeSet:
     """旧提交到新提交的变更集（只读）。``head_changed`` 由两个提交解析出的对象号是否相同决定。"""
 
     def run(*args: str) -> bytes:
-        completed = subprocess.run(["git", "--no-optional-locks", "-C", str(repo), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
+        # 去掉继承来的 GIT_*（例如从 git 钩子里运行时的 GIT_DIR），免得落到别的仓库上。
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        completed = subprocess.run(["git", "--no-optional-locks", "-C", str(repo), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=300,
+                                   env=environment)
         if completed.returncode != 0:
             raise ValueError(f"git {' '.join(args)} 失败：{completed.stderr.decode('utf-8', 'replace').strip()[-300:]}")
         return completed.stdout
@@ -179,6 +199,25 @@ def _unit_reasons(record: Mapping[str, Any], changes: ChangeSet, changed_entries
         if kinds and relative is not None:
             accessed[relative] = frozenset(kinds)
     listings = _listing(record, repo_root)
+    # 经符号链接访问的路径，真正被读到的是链接解析后的目标：目标文件被改、目标目录的目录项变了都要报出，访问方式沿用链接路径的。
+    # 链接自己被改在 git 里是模式 120000 的变更，直接触发一票否决，不在这里处理。
+    via_link: set[str] = set()
+    for entry in record.get("inputs") or []:
+        if not audit_module.is_host_entry_v3(entry):
+            continue
+        detail = entry["detail"]
+        kinds = frozenset(modes.get(detail["path"]) or ())
+        resolved = _relative(str(detail["snapshot"].get("target") or ""), repo_root)
+        if not kinds or resolved is None or resolved == _relative(detail["path"], repo_root):
+            continue
+        accessed[resolved] = accessed.get(resolved, frozenset()) | kinds
+        via_link.add(resolved)
+        if detail["snapshot"].get("kind") == "directory":
+            listings.setdefault(resolved, list(detail["snapshot"].get("entries") or []))
+    # G-P：只被 stat 的 .py 若字节码被读，权威按内容比较（提升），预览也不再给整树遍历的豁免。
+    promoted = {relative for relative in (_relative(path, repo_root)
+                                          for path in audit_module._pyc_promotions(modes, (repo_root, block.get("data_root"))))
+                if relative is not None}
     reasons: list[str] = []
 
     def add(reason: str) -> None:
@@ -189,8 +228,8 @@ def _unit_reasons(record: Mapping[str, Any], changes: ChangeSet, changed_entries
         kinds = accessed.get(path)
         if kinds is None:
             continue
-        exempt = (path in changes.modified and path not in changes.mode_changed and kinds == {"stat"}
-                  and (repo_root.rstrip("/") + "/" + _parent(path)).rstrip("/") in walk)
+        exempt = (path in changes.modified and path not in changes.mode_changed and kinds == {"stat"} and path not in promoted
+                  and path not in via_link and (repo_root.rstrip("/") + "/" + _parent(path)).rstrip("/") in walk)
         if not exempt:
             add(f"被访问的 {path} 被{'删除' if path in changes.deleted else '修改'}（访问方式 {'／'.join(sorted(kinds))}）")
     missing = [path for path, kinds in accessed.items() if "missing" in kinds]
@@ -222,6 +261,60 @@ def _unit_reasons(record: Mapping[str, Any], changes: ChangeSet, changed_entries
     for name in sorted(changed_entries):
         if any(entry.get("name") == name for entry in record.get("inputs") or []):
             add(f"整份比较的非宿主输入 {name} 变了")
+    return reasons
+
+
+def type_change_veto(repo: Path | str, old: str, new: str) -> list[str]:
+    """旧提交到新提交之间有没有“一票否决”的变更（类型变化、符号链接 120000、子模块 160000、``.gitmodules``）：返回原因列表，空＝没有。
+
+    权威路径（后台验证承接、收尾承接）在做承接决策之前对来源提交到当前提交各跑一次：目录项只有名字没有 ``d_type``，被枚举目录里同名的
+    “文件变目录”权威判定发现不了（已知缺口 R2），所以有这类变化就整轮不承接任何单元。读不出变更集（提交不在库里）时抛 ``ValueError``，
+    由调用方按失败关闭处理。"""
+
+    return list(changeset_from_git(repo, old, new).veto)
+
+
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+def source_run_commit(store_root: Path | str, run_id: str) -> str | None:
+    """来源运行属于哪个提交：读它入口门禁摘要里的提交，且摘要登记的清单就是这次运行的那一份。解析不出给 None（调用方按“无法排除类型变化”失败关闭）。"""
+
+    try:
+        store = _records().RecordStore(Path(store_root))
+        manifest = store.manifest(run_id)
+        summary = json.loads((Path(str(manifest["out_dir"])).parent / "entry-gates.json").read_text(encoding="utf-8"))
+        commit = (summary.get("source") or {}).get("commit")
+        if ((summary.get("unit_manifest") or {}).get("manifest_sha256") == manifest.get("manifest_sha256")
+                and isinstance(commit, str) and _COMMIT.fullmatch(commit)):
+            return commit
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def veto_for_runs(store_root: Path | str, run_ids: Iterable[str], repo: Path | str, new_commit: str) -> list[str]:
+    """权威路径的一票否决（R2 残余的补丁）：每个来源运行的提交到 ``new_commit`` 之间有类型变化、符号链接、子模块或 ``.gitmodules`` 变更就返回原因。
+
+    取不到的东西一律按失败关闭给原因，不放行：来源运行的提交解析不出来、变更集读不出来（提交不在 ``repo`` 的对象库里）。空列表＝可以继续按
+    承接视图判定。同一个提交只算一次。"""
+
+    reasons: list[str] = []
+    checked: set[str] = set()
+    for run_id in sorted(set(run_ids)):
+        commit = source_run_commit(store_root, run_id)
+        if commit is None:
+            reasons.append(f"来源运行 {run_id} 的提交解析不出来：无法排除类型变化，不承接")
+            continue
+        if commit in checked or commit == new_commit:
+            continue
+        checked.add(commit)
+        try:
+            veto = type_change_veto(repo, commit, new_commit)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            reasons.append(f"读不出 {commit[:12]} 到 {new_commit[:12]} 的变更集：{error}；无法排除类型变化，不承接")
+            continue
+        reasons.extend(f"{commit[:12]} 到 {new_commit[:12]}：{item}" for item in veto)
     return reasons
 
 

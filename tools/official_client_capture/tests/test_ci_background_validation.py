@@ -914,6 +914,23 @@ class CrossCommitCase(unittest.TestCase):
         return scene
 
 
+class FlipHistory(cross.GitHistory):
+    """新提交让 ``input.txt`` 由文件变成同名目录（git 里是一条删除加一条新增，不是类型变化 T）。"""
+
+    def advance(self) -> None:
+        self.run("checkout", "-q", cross.BRANCH)
+        (self.source / "input.txt").unlink()
+        (self.source / "input.txt").mkdir()
+        (self.source / "input.txt" / "inner.txt").write_text("目录里的文件\n", encoding="utf-8")
+        self.run("add", "-A")
+        self.run("commit", "-q", "-m", "文件变目录")
+        self.new = self.rev()
+        self.run("checkout", "-q", "unrelated")
+        self.commit("other.txt", "无关历史线的后继\n", "无关历史线的新提交")
+        self.unrelated_new = self.rev()
+        self.run("checkout", "-q", cross.BRANCH)
+
+
 class BackgroundCrossCommitProductionLoaderTests(CrossCommitCase):
     """后台模块不替换承接合同、走生产的按路径加载（与夹具不是同一个模块实例，只经文件交接），整条 H7→H8 路径照样成立。"""
 
@@ -1244,7 +1261,7 @@ class BackgroundCrossCommitInheritTests(CrossCommitCase):
         payload = bv._read(scene.start_successor(scene.request(), real_ancestry=True))
         self.assertEqual(payload["unit_inherit_source"]["ancestry"],
                          {"old_commit": scene.c7, "new_commit": scene.c8, "status": "verified",
-                          "method": "git merge-base --is-ancestor（临时对象库：WORK 测试树对象库作备用，加新 bundle）"})
+                          "method": "git merge-base --is-ancestor（临时对象库：WORK 测试树对象库作备用，加新 bundle）；来源提交到新提交之间没有类型变化"})
         self.assertEqual(tree_snapshot(scene.work / "test-tree"), before)
 
     def test_unverifiable_ancestry_is_refused_unless_explicitly_degraded_and_recorded(self) -> None:
@@ -1261,7 +1278,8 @@ class BackgroundCrossCommitInheritTests(CrossCommitCase):
         # 没有测试树但 bundle 自带完整历史（不是增量）：只靠 bundle 就能验证，方式如实写明。
         full = scene.git.bundle(scene.root / "full.bundle", None, cross.BRANCH)
         verified = bv._verify_ancestry(scene.c7, scene.c8, bundle=full, branch=cross.BRANCH, work=scene.work)
-        self.assertEqual((verified["status"], verified["method"]), ("verified", "git merge-base --is-ancestor（临时对象库：仅新 bundle 自带历史）"))
+        self.assertEqual((verified["status"], verified["method"]),
+                         ("verified", "git merge-base --is-ancestor（临时对象库：仅新 bundle 自带历史）；来源提交到新提交之间没有类型变化"))
 
     def test_ancestry_decisions_for_equal_unknown_and_foreign_commits(self) -> None:
         scene = self.prepared(real_git=True)
@@ -1284,6 +1302,24 @@ class BackgroundCrossCommitInheritTests(CrossCommitCase):
         request = scene.request(commit=scene.c7)
         payload = bv._read(scene.start_successor(request, commit=scene.c7, real_ancestry=True))
         self.assertEqual(payload["unit_inherit_source"]["ancestry"]["method"], "same-commit")
+
+    def test_a_same_name_file_to_directory_flip_vetoes_the_successor_even_with_degraded_ancestry(self) -> None:
+        """T10 在权威路径上的补丁（已知缺口 R2）：承接视图发现不了“同名文件变目录”，所以来源提交到新提交之间有这类翻转时拒绝起承接后继。
+        这是确定的结论（不是“无法验证”），``--allow-unverified-ancestry`` 绕不过；去掉承接请求完整执行不受影响。"""
+        git = FlipHistory(self.root / "flip-history")
+        scene = cross.Scenario(self, self.root / "flip-scene", git=git)
+        scene.start_h7()
+        scene.deploy_h8()
+        scene.prepare_h8()
+        scene.advance_git()
+        request = scene.request()
+        before = tree_snapshot(scene.work / "test-tree")
+        for extra in ((), ("--allow-unverified-ancestry",)):
+            with self.subTest(extra=extra):
+                self.assert_refused(scene, request, "input.txt：同名文件变成了目录.*完整执行", *extra, real_ancestry=True)
+        self.assertEqual(tree_snapshot(scene.work / "test-tree"), before)
+        with self.assertRaisesRegex(bv.ValidationError, "类型变化"):
+            bv._verify_ancestry(git.old, git.new, bundle=scene.h8_bundle, branch=cross.BRANCH, work=scene.work, allow_unverified=True)
 
     # ------------------------------------------------------------------ 单元级的不承接：来源失效、被篡改、过期、审计未通过
 

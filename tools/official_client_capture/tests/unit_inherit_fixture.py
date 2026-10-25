@@ -162,13 +162,18 @@ class World:
             "started_at_utc": moment, "completed_at_utc": moment,
         }
         if audit:
-            body["read_audit"] = {"status": "passed", "coverage_complete": True, "coverage_scope": "all-file-paths/v1",
-                                  "undeclared_count": 0, "undeclared": [], "inputs_sha256": ur.entries_sha256(inputs),
-                                  "trace": {"sha256": self.trace_sha256}, "repo_root": str(self.root), "data_root": None}
+            body["read_audit"] = self.audit_block(inputs)
         body.update(overrides)
         record = ur.seal_record(body)
         self.store.put_record(record)
         return record
+
+    def audit_block(self, inputs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """来源记录的读集审计块（子类可以改成窄化记录的形状，见 ``test_codex_closeout_inherit``）。"""
+
+        return {"status": "passed", "coverage_complete": True, "coverage_scope": "all-file-paths/v1",
+                "undeclared_count": 0, "undeclared": [], "inputs_sha256": ur.entries_sha256(inputs),
+                "trace": {"sha256": self.trace_sha256}, "repo_root": str(self.root), "data_root": None}
 
     def entry(self, record: Mapping[str, Any], disposition: str, reasons: Sequence[str] | None = None) -> dict[str, Any]:
         unit_id = str(record["unit_id"])

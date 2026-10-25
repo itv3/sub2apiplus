@@ -7,7 +7,10 @@
 * 命令行：承接配置下门禁以 ``--mode unit-inherit`` 运行并带固定坐标、记录库、承接请求与阶段；没配置时仍是 ``re-execute`` 与 ``<work_root>/gate-work``；
 * 校验：承接单元与运行清单逐一相符，运行清单经 ``verify_published`` 重放通过，决策收据缺失、清单被改、承接集合对不上、测试树坐标不是固定坐标一律拒绝；
   没配置承接时承接单元仍被拒绝（旧口径）；
-* 收据：逐项列出承接单元（来源运行、来源记录摘要、视图摘要）与被重跑的单元和原因。
+* 收据：逐项列出承接单元（来源运行、来源记录摘要、视图摘要）与被重跑的单元和原因；
+* 窄化来源记录的真实流程（不桩 ``verify_published``）：承接项带 ``inherit_check``，收尾校验全部真实运行；
+* 一票否决（已知缺口 R2）：来源提交到候选提交之间有“同名文件变目录”之类的类型翻转时，收尾拒绝承接——跑门禁之前先拦、门禁结果出来后再独立复核一次；
+  来源提交解析不出来同样失败关闭。
 """
 
 from __future__ import annotations
@@ -21,12 +24,42 @@ from unittest import mock
 
 from tools import codex_closeout as closeout
 from tools.ci import entry_gates
+from tools.ci import read_audit as ra
 from tools.ci import unit_records as ur
 from tools.official_client_capture.tests import test_codex_closeout as base
 from tools.official_client_capture.tests import unit_inherit_fixture as fx
 
 T0 = fx.T0
 write_json = base.write_json
+
+
+class NarrowedFixtureWorld(fx.World):
+    """来源记录是窄化记录（带 ``host_path_modes`` 与承接视图摘要，宿主输入是 v3 快照）的承接世界：承接项带 ``inherit_check``，
+    当前事实带测试树坐标——与真实执行器写出的形状一致。"""
+
+    def record_inputs(self, unit_id):
+        return ur._unique([*self.base_inputs(unit_id), ra.host_snapshot_v3(str(self.host_input)),
+                           ur.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
+
+    def audit_block(self, inputs):
+        block = super().audit_block(inputs)
+        document = json.loads((self.root / "trace.json").read_text(encoding="utf-8"))
+        modes = ra.host_path_modes(document, list(inputs))
+        block.update(host_path_modes=modes, inherit_view_schema=ra.INHERIT_VIEW_SCHEMA,
+                     inherit_inputs_sha256=ra.inherit_view_digest(ra.inherit_view(list(inputs), modes, roots=(str(self.root), None))))
+        return block
+
+    def current(self, unit_id, **overrides):
+        current = super().current(unit_id, **overrides)
+        current.inherit_repo_root, current.inherit_data_root = str(self.root), None
+        return current
+
+    def entry(self, record, disposition, reasons=None):
+        row = super().entry(record, disposition, reasons)
+        if disposition == "inherited" and ur._narrowed_source(record):
+            row["inherit_check"] = {"schema_version": ra.INHERIT_VIEW_SCHEMA, "repo_root": str(self.root), "data_root": None,
+                                    "inherit_inputs_sha256": record["read_audit"]["inherit_inputs_sha256"]}
+        return row
 
 
 class CloseoutInheritBase(unittest.TestCase):
@@ -36,6 +69,11 @@ class CloseoutInheritBase(unittest.TestCase):
         self.addCleanup(self.case.doCleanups)
         self.root = self.case.root
         self.fixed = self.root / "entry-gates-source-work" / "fixed" / "codex"
+        # 来源运行的提交：默认是权威仓库的基线提交（收尾候选的祖先）；入口门禁摘要不在测试夹具里，所以换成固定值。用例可以改 ``self.source_commit``。
+        self.source_commit = self.case.base
+        patcher = mock.patch.object(closeout._inherit_predict(), "source_run_commit", side_effect=lambda _store, _run_id: self.source_commit)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def inherit_config(self, world: fx.World, request: Path) -> dict:
         config = deepcopy(self.case.config)
@@ -43,8 +81,8 @@ class CloseoutInheritBase(unittest.TestCase):
                               unit_inherit={"request": str(request), "stage": "pre-ledger"})
         return config
 
-    def world_run(self, *, rerun: str | None = None):
-        world = fx.World(self.root / "inherit-world")
+    def world_run(self, *, rerun: str | None = None, factory=fx.World, root: Path | None = None):
+        world = factory(root or self.root / "inherit-world")
         world.sample(T0)
         request = world.request(at=T0)
         currents = None
@@ -260,7 +298,7 @@ class CheckInheritedGateTests(CloseoutInheritBase):
         plan = self.prepared(world, request)
         forged = deepcopy(result.manifest)
         forged["units"][0]["inherit_check"] = {"schema_version": "unit-inherit-view/v1", "inherit_inputs_sha256": "a" * 64,
-                                               "repo_root": "/some/commit-bound/test-tree"}
+                                               "repo_root": "/some/commit-bound/test-tree", "data_root": None}
         unit_id = forged["units"][0]["unit_id"]
         forged = ur.seal({key: value for key, value in forged.items() if key != "manifest_sha256"}, "manifest_sha256")
         forged_result = mock.Mock(manifest=forged)
@@ -273,6 +311,111 @@ class CheckInheritedGateTests(CloseoutInheritBase):
             forged = ur.seal({key: value for key, value in forged.items() if key != "manifest_sha256"}, "manifest_sha256")
             self.write_gate_files(plan, world, mock.Mock(manifest=forged))
             closeout.check_gate_result(plan)
+
+
+class NarrowedCloseoutTests(CloseoutInheritBase):
+    """窄化来源记录的真实收尾流程：``verify_published``、``check_record`` 的窄化分支、承接项 ``inherit_check`` 全部真实运行，不桩。"""
+
+    def narrowed_run(self, *, rerun: str | None = None):
+        return self.world_run(rerun=rerun, factory=NarrowedFixtureWorld, root=self.fixed / "test-tree")
+
+    def commit_flip(self) -> None:
+        """在权威仓库里让 ``docs/flip.txt`` 由文件变成同名目录（git 里是一条删除加一条新增，不是类型变化 T），并推到远端、更新预期的远端头。
+        来源提交取“文件还是文件”的那个提交——来源看到的是文件，候选里是目录。"""
+        repo = self.case.repo
+        flip = repo / "docs" / "flip.txt"
+        flip.parent.mkdir(exist_ok=True)
+        flip.write_text("先是文件\n")
+        self.case.git("add", "-A")
+        self.case.git("commit", "-m", "加文件")
+        self.source_commit = self.case.git("rev-parse", "HEAD")
+        flip.unlink()
+        flip.mkdir()
+        (flip / "inside.txt").write_text("后来变成目录\n")
+        self.case.git("add", "-A")
+        self.case.git("commit", "-m", "文件变目录")
+        self.case.git("push", "origin", "main")
+        self.case.config["push"]["expected_tip"] = self.case.git("rev-parse", "HEAD")
+
+    def test_a_real_narrowed_inherit_run_passes_every_closeout_check(self) -> None:
+        world, request, result = self.narrowed_run(rerun="test_beta")
+        inherited = [entry for entry in result.manifest["units"] if entry["disposition"] == "inherited"]
+        self.assertTrue(inherited and all("inherit_check" in entry for entry in inherited), "（对照）承接项是窄化承接，带 inherit_check")
+        plan = self.prepared(world, request)
+        self.write_gate_files(plan, world, result)
+        files = closeout.check_gate_result(plan)
+        self.assertIn(str(world.store.decision_path(result.manifest["run_id"])), files)
+        dispositions = {entry["disposition"] for entry in result.manifest["units"]}
+        self.assertEqual(dispositions, {"executed", "inherited"}, "S1：承接模式下执行与承接两种处置都被允许")
+        summary = closeout.gate_inherit_summary(plan)
+        self.assertTrue(all(len(item["view_digest"] or "") == 64 for item in summary["inherited"]))
+
+    def test_the_gate_record_cannot_claim_more_inherited_units_than_the_executor_summary(self) -> None:
+        """S2：门禁分项记录登记的承接单元必须是执行器汇总承接单元的子集。"""
+        world, request, result = self.narrowed_run(rerun="test_beta")
+        plan = self.prepared(world, request)
+
+        def claim_more(_summary, _path):
+            for gate in (self.case.work / "gates" / "logs").glob("*.gate.json"):
+                value = json.loads(gate.read_text())
+                if value["inherited_units"]:
+                    value["inherited_units"] = [*value["inherited_units"], "test_beta"]       # test_beta 在汇总里是“执行”
+                    write_json(gate, value)
+
+        self.write_gate_files(plan, world, result, mutate=claim_more)
+        with self.assertRaisesRegex(closeout.CloseoutError, "门禁记录登记的承接单元不在执行器汇总"):
+            closeout.check_gate_result(plan)
+
+    def test_a_same_name_file_to_directory_flip_vetoes_the_inheritance_after_the_gate(self) -> None:
+        """T10 在权威路径上的补丁：承接视图发现不了的“同名文件变目录”由 git 变更集一票否决——门禁结果被接受之前独立复核，拒绝。"""
+        self.commit_flip()
+        world, request, result = self.narrowed_run()
+        plan = self.prepared(world, request)
+        self.write_gate_files(plan, world, result)
+        with self.assertRaisesRegex(closeout.CloseoutError, "一票否决.*docs/flip.txt|docs/flip.txt.*同名文件变成了目录"):
+            closeout.check_gate_result(plan)
+
+    def test_the_veto_also_blocks_the_gate_before_it_is_launched(self) -> None:
+        self.commit_flip()
+        world, request, _ = self.narrowed_run()
+        self.case.config = self.inherit_config(world, request)
+        plan = self.case.prepare()
+        real = closeout.subprocess.run
+
+        def forbid_the_driver(argv, *args, **kwargs):
+            if argv and argv[0] == "bash":
+                raise AssertionError("被否决后不应启动门禁")
+            return real(argv, *args, **kwargs)
+
+        with mock.patch.object(closeout.subprocess, "run", side_effect=forbid_the_driver):
+            with self.assertRaisesRegex(closeout.CloseoutError, "一票否决.*docs/flip.txt：同名文件变成了目录"):
+                closeout.run_gates(self.case.plan_path)
+        self.assertIsNone(closeout.journal_read(plan, "gates", "started"), "没跑就拦下，不留“已启动”记录")
+
+    def test_an_unresolvable_source_commit_fails_closed(self) -> None:
+        world, request, result = self.narrowed_run()
+        plan = self.prepared(world, request)
+        self.write_gate_files(plan, world, result)
+        self.source_commit = None
+        with self.assertRaisesRegex(closeout.CloseoutError, "解析不出来"):
+            closeout.check_gate_result(plan)
+        self.source_commit = "1" * 40                            # 提交不在权威仓库的对象库里：读不出变更集
+        with self.assertRaisesRegex(closeout.CloseoutError, "读不出"):
+            closeout.check_gate_result(plan)
+        self.source_commit = self.case.base
+        closeout.check_gate_result(plan)
+
+    def test_ordinary_edits_between_source_and_candidate_do_not_veto(self) -> None:
+        self.case.repo.joinpath("docs").mkdir(exist_ok=True)
+        (self.case.repo / "docs" / "ordinary.txt").write_text("普通新增\n")
+        self.case.git("add", "-A")
+        self.case.git("commit", "-m", "普通新增")
+        self.case.git("push", "origin", "main")
+        self.case.config["push"]["expected_tip"] = self.case.git("rev-parse", "HEAD")
+        world, request, result = self.narrowed_run()
+        plan = self.prepared(world, request)
+        self.write_gate_files(plan, world, result)
+        closeout.check_gate_result(plan)
 
 
 if __name__ == "__main__":

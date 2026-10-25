@@ -1434,7 +1434,18 @@ def _ancestry_attempt(old: str, new: str, *, bundle: Path, branch: str, work: Pa
             raise _AncestryUndetermined(f"{label}提交 {commit[:12]} 不在可用历史里（WORK 测试树的对象库加新 bundle）")
     answer = run("merge-base", "--is-ancestor", old, new)
     if answer.returncode == 0:
-        return "git merge-base --is-ancestor（临时对象库：" + ("WORK 测试树对象库作备用，加新 bundle）" if borrowed else "仅新 bundle 自带历史）")
+        # 窄化承接的一票否决（补承接视图发现不了的类型翻转，已知缺口 R2）：来源提交到新提交之间有类型变化、符号链接、子模块或 .gitmodules 变更，
+        # 就不承接。这是确定的结论（不是“无法验证”），``--allow-unverified-ancestry`` 绕不过；变更集读不出来才按「无法验证」处理。
+        predict = _sibling_module("inherit_predict.py", "background_inherit_predict_sibling")
+        try:
+            veto = predict.type_change_veto(repo, old, new)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            raise _AncestryUndetermined(f"读不出来源提交到新提交的变更集：{error}") from error
+        if veto:
+            raise ValidationError(f"来源提交 {old[:12]} 到新提交 {new[:12]} 之间有类型变化、符号链接、子模块或 .gitmodules 变更："
+                                  + "；".join(veto[:3]) + "。窄化承接发现不了这类变化，本轮不承接：请不带 --unit-inherit-request 完整执行")
+        return ("git merge-base --is-ancestor（临时对象库：" + ("WORK 测试树对象库作备用，加新 bundle）" if borrowed else "仅新 bundle 自带历史）")
+                + "；来源提交到新提交之间没有类型变化")
     if answer.returncode == 1:
         raise ValidationError(f"旧提交 {old[:12]} 不是新提交 {new[:12]} 的祖先：来源后台属于另一条历史线，拒绝承接它的成果")
     raise _AncestryUndetermined("merge-base 判定失败：" + _one_line(answer.stderr))

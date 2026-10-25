@@ -14,6 +14,9 @@
   连锁）影响到的单元。门禁以 ``--mode unit-inherit`` 运行，收尾校验改为：运行清单经 ``unit_inherit.verify_published(purpose="closeout")``
   重放通过、承接项的 ``inherit_check.repo_root`` 等于固定测试树；收尾收据逐项列出承接单元、来源运行、来源记录摘要、视图摘要，以及被重跑的单元与原因
   （语义变化：“一次全绿”变成“全绿，允许逐单元承接”）。
+  一票否决（补承接视图发现不了的类型翻转，已知缺口 R2）：每个来源运行的提交到候选提交之间只要有类型变化、符号链接（120000）、子模块（160000）、
+  ``.gitmodules`` 变更，或同名的文件↔目录翻转，整轮就不承接任何单元——门禁启动之前先拦（``run_gates``），门禁结果出来后 ``check_gate_result``
+  再独立复核一次；来源提交解析不出来、变更集读不出来同样按失败关闭拒绝（要完整执行就去掉 ``gate.unit_inherit``）。
 
 Claude 升级共用这一份收尾编排（Claude 升级控制面设计 B5b-06）：配置合同名是 ``claude-upgrade-closeout/v1`` 时（客户端表
 ``closeout_schema``），随客户端变的三件事——指南材料的封存读侧、第二部分摘要连锁、终态收据的生成与校验——转给
@@ -553,6 +556,31 @@ def _unit_inherit():
     return sys.modules[name]
 
 
+def _inherit_predict():
+    """同仓库 tools/ci 的影响集预览模块（收尾只用它的一票否决函数，不另写类型变化规则）。"""
+    name = "closeout_inherit_predict_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "ci" / "inherit_predict.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+def inherit_veto(plan, run_ids):
+    """逐单元承接的类型变化一票否决（补承接视图发现不了的“同名文件变目录”，已知缺口 R2）：每个来源运行的提交到收尾候选提交之间有类型变化、
+    符号链接、子模块或 ``.gitmodules`` 变更，或来源提交解析不出、变更集读不出，就拒绝承接（失败关闭；要完整执行就去掉 ``gate.unit_inherit``）。"""
+    config = plan["basis"]["config"]
+    # 变更集在候选克隆里取：它是权威仓库的完整克隆（含全部历史）再加上候选提交，来源提交与候选提交都在里面。
+    reasons = _inherit_predict().veto_for_runs(safety.plain(config["gate"]["record_store"]), run_ids, plan["candidate"], plan["candidate_commit"])
+    if reasons:
+        raise CloseoutError("收尾逐单元承接被一票否决（来源提交到候选提交之间的类型变化无法被承接视图发现，本轮不承接任何单元）：" + "；".join(reasons[:3]))
+
+
 def validate_config(config):
     required = {"schema_version", "repo", "work_root", "guide", "material", "terminal_facts", "terminal_relative",
                 "tag", "gate", "cleanup", "push", "deployment_check"}
@@ -934,6 +962,9 @@ def check_inherited_units(plan, root, summary, inherited_ids):
         module.verify_published(manifest, store, purpose="closeout", historical=True)
     except module.ContractError as error:
         raise CloseoutError(f"收尾承接的决策收据或来源核验不通过：{error}") from error
+    # 独立于执行器的一票否决复核：承接项的来源运行到候选提交之间不能有类型变化（门禁结果被改写或执行器漏判时在这里拦下）。
+    if inherited_ids:
+        inherit_veto(plan, {(entry.get("basis") or {}).get("run_id") for entry in manifest["units"] if entry.get("disposition") == "inherited"})
     tree = str(safety.plain(config["gate"]["work"]) / "test-tree")
     for entry in manifest["units"]:
         check = entry.get("inherit_check")
@@ -1021,6 +1052,10 @@ def run_gates(plan_path):
             files = check_gate_result(plan)
         else:
             inherit = gate_inherit(config)
+            if inherit:
+                # 跑之前先过一票否决：来源提交到候选提交之间有类型变化就别白跑一轮承接（门禁结果出来后 check_gate_result 还会独立复核一次）。
+                module = _unit_inherit()
+                inherit_veto(plan, module.sources_check(module._read_request(Path(inherit["request"]))[1]["sources"])["runs"])
             argv = ["bash", config["gate"]["driver"], "--profile", "full-gates", "--mode", "unit-inherit" if inherit else "re-execute",
                     "--out", str(work / "gates"), "--work", config["gate"].get("work") or str(work / "gate-work"),
                     "--record-store", config["gate"].get("record_store") or str(work / "gate-records"),
