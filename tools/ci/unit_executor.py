@@ -54,6 +54,9 @@
 * **运行绑定**（Codex 升级工具优化第 5 项）：``run-gates`` 每次运行结束（以及 ``--decide-only`` 判定时）在输出目录另写 ``binding.json``——调度策略摘要、
   平台环境摘要、执行器摘要、门禁集合摘要和输入清单摘要（逐单元的规格摘要、输入摘要与可否承接按单元 ID 排序后的摘要）。后台验证用它给通过的结论做“沿用绑定”，
   同树重部署后用 ``entry-gates.sh --bind-only`` 现算一份比对，不跑任何测试。它是独立文件，不进汇总、清单与判定文件。
+* **核数偏差报告**（Codex 升级工具优化第 6 项）：``run-gates`` 每次运行结束在输出目录另写 ``core-deviation.json``——对本次真正执行的单元，比较声明核数（调度额度）与
+  实测核数（单元 CPU 秒／墙钟秒），偏差超过 30% 的单元逐个列出（耗时不足 5 秒的不计，太短测不准），并给出整轮实测／声明的总比值。后台验证把它放进结论目录。
+  它是独立文件，不进汇总、清单与判定文件，也不影响任何结论。
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
 若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
@@ -3293,6 +3296,50 @@ def _run_retry_phase(scheduler: "Scheduler", formal: list[Outcome], *, store: An
     return final, retried, diagnostic_units, markers
 
 
+CORE_DEVIATION_SCHEMA = "unit-executor-core-deviation/v1"
+CORE_DEVIATION_THRESHOLD = 0.30
+CORE_DEVIATION_MIN_SECONDS = 5.0
+
+
+def core_deviation_report(outcomes: list[Outcome], *, threshold: float = CORE_DEVIATION_THRESHOLD,
+                          min_seconds: float = CORE_DEVIATION_MIN_SECONDS) -> dict[str, Any]:
+    """核数偏差报告（优化第 6 项）。只看本次真正执行的单元（承接的没有用量）；耗时不足 ``min_seconds`` 的不计。偏差＝实测核数／声明核数－1，
+    绝对值超过 ``threshold`` 的单元列进 ``flagged``（按偏差绝对值从大到小）。``overall_ratio`` 是整轮实测核·秒／声明核·秒（用量到位的单元合计）。"""
+
+    flagged: list[dict[str, Any]] = []
+    measured_units = skipped = 0
+    declared_total = measured_total = 0.0
+    for outcome in outcomes:
+        if outcome.extra.get("disposition", "executed") != "executed":
+            continue
+        declared, seconds = float(outcome.unit.quota.cores), float(outcome.seconds)
+        if seconds < min_seconds or declared <= 0:
+            skipped += 1
+            continue
+        measured = float(outcome.cpu_seconds) / seconds
+        measured_units += 1
+        declared_total += declared * seconds
+        measured_total += float(outcome.cpu_seconds)
+        deviation = measured / declared - 1
+        if abs(deviation) > threshold:
+            flagged.append({"unit_id": outcome.unit.unit_id, "declared_cores": declared, "measured_cores": round(measured, 3),
+                            "deviation": round(deviation, 3), "direction": "实测高于声明（额度偏小）" if deviation > 0 else "实测低于声明（额度偏大）",
+                            "seconds": round(seconds, 3), "cpu_seconds": round(float(outcome.cpu_seconds), 3)})
+    flagged.sort(key=lambda row: (-abs(row["deviation"]), row["unit_id"]))
+    return {"schema_version": CORE_DEVIATION_SCHEMA, "threshold": threshold, "min_seconds": min_seconds, "units_measured": measured_units,
+            "units_too_short": skipped, "units_flagged": len(flagged),
+            "declared_core_seconds": round(declared_total, 3), "measured_core_seconds": round(measured_total, 3),
+            "overall_ratio": round(measured_total / declared_total, 3) if declared_total else None, "flagged": flagged}
+
+
+def _write_core_deviation(out_dir: Path, outcomes: list[Outcome]) -> None:
+    report = core_deviation_report(outcomes)
+    _write_json(out_dir / "core-deviation.json", report)
+    ratio = "无" if report["overall_ratio"] is None else f"{report['overall_ratio']:.2f}"
+    print(f"核数偏差：{report['units_flagged']}／{report['units_measured']} 个单元的实测核数偏离声明超过 {int(report['threshold'] * 100)}%"
+          f"（整轮实测／声明 {ratio}）；报告 {out_dir / 'core-deviation.json'}", file=sys.stderr)
+
+
 BINDING_SCHEMA = "unit-executor-binding/v1"
 
 
@@ -4521,6 +4568,7 @@ def _run_gates_current(args: argparse.Namespace) -> int:
                 summary["status"] = "failed"
         _write_binding(out_dir, mode=args.mode, policy=policy, environment_sha256=recorder.environment_sha256, executor=executor, units=units,
                        currents=currents, gates=gates)
+        _write_core_deviation(out_dir, outcomes)
         _write_json(out_dir / "summary.json", summary)
         _print_gates_summary(summary)
         return 0 if summary["status"] == "passed" else 1

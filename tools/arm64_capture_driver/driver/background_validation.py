@@ -78,6 +78,10 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 任一项变了或过了有效期就拒绝并逐项写明原因，要求重验。``check``（批次边界、VC-5 前核对与统一准入）对沿用的结论重放：来源冻结副本的摘要与自摘要、来源仍是通过、绑定未过期、
 新部署的工具身份与来源一致，不能只信 passed 标签。
 
+核数偏差报告（Codex 升级工具优化第 6 项）：执行器每轮结束写 ``core-deviation.json``（声明核数与实测核数偏差超过 30% 的单元，整轮实测／声明总比值）；后台验证结束时
+（不论通过与否）把它复制进结论目录——``<提交前 12 位>-<部署摘要前 12 位>.core-deviation.json``，与结论文件并排——并在结论里登记 ``core_deviation``
+（路径、摘要、偏差单元数、总比值）。报告只供调优额度参考，不影响任何结论。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
@@ -859,6 +863,26 @@ def executor_binding(out: Path | str) -> dict[str, Any] | None:
         return None
     required = {"schema_version", "policy_sha256", "environment_sha256", "executor_sha256", "gate_set_sha256", "inputs_manifest_sha256"}
     return document if isinstance(document, dict) and required <= set(document) else None
+
+
+def core_deviation_info(out: Path | str, destination: Path) -> dict[str, Any] | None:
+    """执行器的核数偏差报告（入口门禁总摘要指向的执行器汇总所在目录）复制到结论目录 ``destination``；没有报告返回 None。"""
+
+    entry = _entry_summary(Path(out))
+    if entry is None or not entry.get("executor_summary"):
+        return None
+    source = Path(str(entry["executor_summary"])).parent / "core-deviation.json"
+    try:
+        report = json.loads(source.read_text(encoding="utf-8"))
+        data = source.read_bytes()
+    except (OSError, ValueError):
+        return None
+    if not isinstance(report, dict) or "units_flagged" not in report:
+        return None
+    destination.write_bytes(data)
+    os.chmod(destination, 0o600)
+    return {"report": str(destination), "sha256": hashlib.sha256(data).hexdigest(), "threshold": report.get("threshold"),
+            "units_measured": report.get("units_measured"), "units_flagged": report.get("units_flagged"), "overall_ratio": report.get("overall_ratio")}
 
 
 def build_reuse_binding(payload: Mapping[str, Any], binding: Mapping[str, Any], *, completed_at_utc: str,
@@ -2247,6 +2271,9 @@ def run(result: Path) -> int:
         binding_doc = executor_binding(payload["out"])
         if binding_doc is not None:
             current = {**current, "reuse_binding": build_reuse_binding(current, binding_doc, completed_at_utc=_utc_now())}
+    deviation = core_deviation_info(payload["out"], path.with_name(f"{path.stem}.core-deviation.json"))
+    if deviation is not None:
+        current = {**current, "core_deviation": deviation}   # 核数偏差报告（优化第 6 项）：放进结论目录并登记，不论通过与否
     if status == "passed" and current.get("unit_inherit_request"):
         try:
             current = {**current, "unit_inherit_consumption": _inherit_completion(current)}
