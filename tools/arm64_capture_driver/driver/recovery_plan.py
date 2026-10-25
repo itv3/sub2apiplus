@@ -43,6 +43,7 @@ import hashlib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
+import signal  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
@@ -375,10 +376,16 @@ class ManagedBackend:
         self.row = row
 
     # --- CLI ----------------------------------------------------------------
-    def environment(self) -> dict[str, str]:
+    def environment(self, *, with_path: bool = True) -> dict[str, str]:
+        """受管命令与续跑脚本的环境，与 fix-and-continue.sh 同一约定：身份记忆化目录与字节码共享层在数据根之外，
+        只有受管 CLI 带 PYTHONPATH（续跑脚本里 lib.sh 自己处理路径）。"""
+
         env = dict(os.environ)
         data = self.params["D"]
-        env["PYTHONPATH"] = data
+        if with_path:
+            env["PYTHONPATH"] = data
+        else:
+            env.pop("PYTHONPATH", None)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         parent = str(Path(data).parent)
         env["CODEX_UPGRADE_IDENTITY_MEMO"] = f"{parent}/identity-memo"
@@ -1146,7 +1153,7 @@ class Runner:
             raise Stop("needs-operator", f"已有运行中的父 run {facts['active_runs']} 或驱动进程", "等其结束后再执行同一条命令")
         driver = Path(self.params["DRIVER_TARGET"]) / "driver"
         runroot = Path(self.params["RUNROOT"])
-        env = {**os.environ, "ARM64_VC_ENV": self.params["VC_ENV"], "PYTHONDONTWRITEBYTECODE": "1"}
+        env = {**self.backend.environment(with_path=False), "ARM64_VC_ENV": self.params["VC_ENV"]}
         if phase == "official":
             script = driver / "entry.sh"
             command = ["bash", str(script), "--approve-sha256", review, "--approved-by", self.params["APPROVER"]]
@@ -1282,6 +1289,9 @@ def main(argv: list[str] | None = None) -> int:
             plan = build_plan(params, gather_facts(params, backend, revisit=tuple(prior_revisit(params))))
             print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True) if args.json else render_plan(plan, mode="只读预览"))
             return EXIT_OK
+        # nohup 启动会让子进程继承 SIG_IGN 的 SIGHUP，入口门禁里的挂断检测用例会必红（与 fix-and-continue run-tests 同一处理）：
+        # 先恢复默认处置，之后派发的续跑进程继承的就是默认处置。
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
         lock = acquire_lock(params)
         try:
             backend = ManagedBackend(params, raw_dir=Path(params["OUT"]) / "raw")
