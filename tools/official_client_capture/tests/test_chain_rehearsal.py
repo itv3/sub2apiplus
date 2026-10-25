@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture.tests import chain_rehearsal as engine
 from tools.official_client_capture.tests.chain_rehearsal import (
@@ -646,7 +647,10 @@ class CommandLineTest(unittest.TestCase):
 
     def run_cli(self, *argv: str, registry: Registry) -> tuple[int, str]:
         buffer = io.StringIO()
-        with redirect_stdout(buffer), redirect_stderr(io.StringIO()):
+        # 命令行入口会探测真实宿主的能力：本机没装 Docker 而 GitHub 运行器自带，用例不能依赖宿主。
+        # 这里固定 docker 为“不具备”，其余能力保持引擎的真实探测（用例里没有探针需要它们）。
+        with mock.patch.dict(engine.CAPABILITY_PROBES, {"docker": lambda: (False, "测试固定：不具备")}), \
+                redirect_stdout(buffer), redirect_stderr(io.StringIO()):
             code = engine.main([*argv, "--out", str(self.out), "--work", str(self.out / "work")], registry=registry)
         return code, buffer.getvalue()
 
