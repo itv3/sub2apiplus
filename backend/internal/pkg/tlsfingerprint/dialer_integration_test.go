@@ -3,46 +3,20 @@
 // Package tlsfingerprint provides TLS fingerprint simulation for HTTP clients.
 //
 // Integration tests for verifying TLS fingerprint correctness.
-// These tests make actual network requests to external services and should be run manually.
+// 这些用例原先向外网 tls.peet.ws 取回 JA3／JA4；现在改为本地 TLS 捕获服务端
+// （见 clienthello_local_test.go）：服务端原样记录 ClientHello 并按定义自算 JA3／JA4，
+// 期望值不变，不再依赖外网。
 //
 // Run with: go test -v -tags=integration ./internal/pkg/tlsfingerprint/...
 package tlsfingerprint
 
 import (
-	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
-// skipIfExternalServiceUnavailable checks if the external service is available.
-// If not, it skips the test instead of failing.
-func skipIfExternalServiceUnavailable(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		// Check for common network/TLS errors that indicate external service issues
-		errStr := err.Error()
-		if strings.Contains(errStr, "certificate has expired") ||
-			strings.Contains(errStr, "certificate is not yet valid") ||
-			strings.Contains(errStr, "connection refused") ||
-			strings.Contains(errStr, "connection reset") ||
-			strings.Contains(errStr, "broken pipe") ||
-			strings.Contains(errStr, "EOF") ||
-			strings.Contains(errStr, "no such host") ||
-			strings.Contains(errStr, "network is unreachable") ||
-			strings.Contains(errStr, "timeout") ||
-			strings.Contains(errStr, "deadline exceeded") {
-			t.Skipf("skipping test: external service unavailable: %v", err)
-		}
-		t.Fatalf("failed to get fingerprint: %v", err)
-	}
-}
-
 // TestJA3Fingerprint verifies the JA3/JA4 fingerprint matches expected value.
-// This test uses tls.peet.ws to verify the fingerprint.
+// 指纹由本地捕获服务端按 ClientHello 原始字节自算（原先依赖 tls.peet.ws，期望值相同）。
 // Expected JA3 hash: 44f88fca027f27bab4bb08d4af15f23e (Node.js 24.x)
 // Expected JA4: t13d1714h1_5b57614c22b0_7baf387fc6ff
 func TestJA3Fingerprint(t *testing.T) {
@@ -50,64 +24,37 @@ func TestJA3Fingerprint(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	profile := &Profile{
+	fp := startLocalFingerprintServer(t).fetch(t, &Profile{
 		Name:         "Default Profile Test",
 		EnableGREASE: false,
-	}
-	dialer := NewDialer(profile, nil)
+	})
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialTLSContext: dialer.DialTLSContext,
-		},
-		Timeout: 30 * time.Second,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://tls.peet.ws/api/all", nil)
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-	}
-	req.Header.Set("User-Agent", "Claude Code/2.0.0 Node.js/24.3.0")
-
-	resp, err := client.Do(req)
-	skipIfExternalServiceUnavailable(t, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	skipIfExternalServiceUnavailable(t, err)
-	if resp.StatusCode != http.StatusOK {
-		t.Skipf("skipping test: external service unhealthy: status %d", resp.StatusCode)
-	}
-
-	var fpResp FingerprintResponse
-	if err := json.Unmarshal(body, &fpResp); err != nil {
-		t.Logf("Response body: %s", string(body))
-		t.Skipf("skipping test: external service returned unparsable response: %v", err)
-	}
-
-	t.Logf("JA3: %s", fpResp.TLS.JA3)
-	t.Logf("JA3 Hash: %s", fpResp.TLS.JA3Hash)
-	t.Logf("JA4: %s", fpResp.TLS.JA4)
+	t.Logf("JA3: %s", fp.JA3)
+	t.Logf("JA3 Hash: %s", fp.JA3Hash)
+	t.Logf("JA4: %s", fp.JA4)
 
 	expectedJA3Hash := "44f88fca027f27bab4bb08d4af15f23e"
-	if fpResp.TLS.JA3Hash == expectedJA3Hash {
+	if fp.JA3Hash == expectedJA3Hash {
 		t.Logf("✓ JA3 hash matches: %s", expectedJA3Hash)
 	} else {
-		t.Errorf("✗ JA3 hash mismatch: got %s, expected %s", fpResp.TLS.JA3Hash, expectedJA3Hash)
+		t.Errorf("✗ JA3 hash mismatch: got %s, expected %s", fp.JA3Hash, expectedJA3Hash)
 	}
 
 	expectedJA4CipherHash := "_5b57614c22b0_"
-	if strings.Contains(fpResp.TLS.JA4, expectedJA4CipherHash) {
+	if strings.Contains(fp.JA4, expectedJA4CipherHash) {
 		t.Logf("✓ JA4 cipher hash matches: %s", expectedJA4CipherHash)
 	} else {
-		t.Errorf("✗ JA4 cipher hash mismatch: got %s, expected containing %s", fpResp.TLS.JA4, expectedJA4CipherHash)
+		t.Errorf("✗ JA4 cipher hash mismatch: got %s, expected containing %s", fp.JA4, expectedJA4CipherHash)
+	}
+
+	// 文档注释里记录的完整 JA4；原先只比对中间的密码套件哈希，本地复现后一并比对整串。
+	expectedJA4 := "t13d1714h1_5b57614c22b0_7baf387fc6ff"
+	if fp.JA4 != expectedJA4 {
+		t.Errorf("✗ JA4 mismatch: got %s, expected %s", fp.JA4, expectedJA4)
 	}
 }
 
-// TestAllProfiles tests multiple TLS fingerprint profiles against tls.peet.ws.
+// TestAllProfiles tests multiple TLS fingerprint profiles against the local capture server.
 // Run with: go test -v -tags=integration -run TestAllProfiles ./internal/pkg/tlsfingerprint/...
 func TestAllProfiles(t *testing.T) {
 	if testing.Short() {
@@ -184,43 +131,8 @@ func TestAllProfiles(t *testing.T) {
 	}
 }
 
-// fetchFingerprint makes a request to tls.peet.ws and returns the TLS fingerprint info.
+// fetchFingerprint 向本地捕获服务端发一次请求并返回它按 ClientHello 算出的 TLS 指纹。
 func fetchFingerprint(t *testing.T, profile *Profile) *TLSInfo {
 	t.Helper()
-
-	dialer := NewDialer(profile, nil)
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialTLSContext: dialer.DialTLSContext,
-		},
-		Timeout: 30 * time.Second,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://tls.peet.ws/api/all", nil)
-	if err != nil {
-		t.Fatalf("failed to create request: %v", err)
-		return nil
-	}
-	req.Header.Set("User-Agent", "Claude Code/2.0.0 Node.js/20.0.0")
-
-	resp, err := client.Do(req)
-	skipIfExternalServiceUnavailable(t, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	skipIfExternalServiceUnavailable(t, err)
-	if resp.StatusCode != http.StatusOK {
-		t.Skipf("skipping test: external service unhealthy: status %d", resp.StatusCode)
-	}
-
-	var fpResp FingerprintResponse
-	if err := json.Unmarshal(body, &fpResp); err != nil {
-		t.Logf("Response body: %s", string(body))
-		t.Skipf("skipping test: external service returned unparsable response: %v", err)
-	}
-
-	return &fpResp.TLS
+	return startLocalFingerprintServer(t).fetch(t, profile)
 }
