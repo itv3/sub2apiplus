@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 120,
+  "file_count": 123,
   "files": [
     {
       "path": "README.md",
@@ -256,9 +256,9 @@
     },
     {
       "path": "driver/fix_safety.py",
-      "sha256": "6343230d0b45c2de7c87c02c7bfde985612c777e641bc6337fcc2c84263ae863",
+      "sha256": "67ce8f94755273c75829ac966aa549e5760f68fada4978ac8c516cf2fad8ac50",
       "mode": "0700",
-      "bytes": 9415
+      "bytes": 10793
     },
     {
       "path": "driver/frontend.sh",
@@ -415,6 +415,24 @@
       "sha256": "47927d277c74290136d6204aa1c4d531b8df8a4cca6c6120210699f17ec8d13a",
       "mode": "0700",
       "bytes": 127541
+    },
+    {
+      "path": "driver/recovery-plan.example.params",
+      "sha256": "ea62162824a133d168c03e5d9f3597d777e0422bc017ebc87b00a62754ceb997",
+      "mode": "0600",
+      "bytes": 2347
+    },
+    {
+      "path": "driver/recovery-plan.sh",
+      "sha256": "5f3d82fa704dceec872001318e1ecbf297dc4a2241e3bf69023590f1a16234ff",
+      "mode": "0700",
+      "bytes": 3003
+    },
+    {
+      "path": "driver/recovery_plan.py",
+      "sha256": "de7742f7a96bcbb20b36484cb6d22f7bd258f026793c1adcee875119cbcf6486",
+      "mode": "0700",
+      "bytes": 77433
     },
     {
       "path": "driver/retry_policy.py",
@@ -723,5 +741,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "12c77ed1accc5b6181246dacb852f6a2cbfc214d68f2f301cb5e3a5fbce1f103"
+  "manifest_sha256": "613f412fe1b3fce9790b857a066a95d044e2591fd821f507ea7ae5085ec4ef0c"
 }

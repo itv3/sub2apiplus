@@ -15,6 +15,10 @@ import tempfile
 
 APPROVAL_SCHEMA = "arm64-fix-operation-approval/v1"
 OPERATIONS = {"deploy", "evolution", "deadline-extension", "recovery-approve", "recovery-authorize"}
+# 批准绑定的文件键与批准目录的缺省子目录：修好接着跑（fix-and-continue）用下面两个缺省值；恢复计划（recovery_plan.py，
+# 第 18 项）复用同一套批准合同，只换操作集合、绑定文件与子目录，不另写一份校验逻辑。
+APPROVAL_FILE_KEYS = ("VC_ENV", "BUNDLE", "EXPECT", "ENTRY_GREPS")
+APPROVAL_SUBDIR = "fix-and-continue-approvals"
 
 
 class SafetyError(ValueError):
@@ -150,27 +154,39 @@ def package(params, *, apply):
     return {"action": "verified", "package_sha256": digest(value), "receipt": str(path), "package": value}
 
 
-def approval_binding(params, operation, subject):
-    if operation not in OPERATIONS or not isinstance(subject, str) or not subject:
+def approval_binding(params, operation, subject, *, operations=OPERATIONS, file_keys=APPROVAL_FILE_KEYS):
+    if operation not in operations or not isinstance(subject, str) or not subject:
         raise SafetyError("人工批准的操作或待批准对象非法")
     return {"operation": operation, "subject": subject,
             "parameters": {key: value for key, value in params.items()
                            if key not in {"PARAMS_PATH", "PARAMS_SHA256", "APPROVALS_DIR"}},
-            "files": {key: file_binding(params[key]) for key in ("VC_ENV", "BUNDLE", "EXPECT", "ENTRY_GREPS")}}
+            "files": {key: file_binding(params[key]) for key in file_keys}}
 
 
-def approval_directory(params):
-    return plain(params.get("APPROVALS_DIR", str(Path(params["RUNROOT"]) / "fix-and-continue-approvals" / params["ROUND"])))
+def approval_directory(params, *, subdir=APPROVAL_SUBDIR):
+    return plain(params.get("APPROVALS_DIR", str(Path(params["RUNROOT"]) / subdir / params["ROUND"])))
 
 
-def require_approval(params, operation, subject, *, now=None):
-    """只消费已由人提交的精确范围批准；缺失时只生成意向，返回待人工处理。"""
-    binding = approval_binding(params, operation, subject)
+def approval_intent(params, operation, subject, *, operations=OPERATIONS, file_keys=APPROVAL_FILE_KEYS, subdir=APPROVAL_SUBDIR):
+    """写出（或复核）批准意向并返回 (批准键, 意向路径, 应放置的批准文件路径)；不判断批准是否存在，也不代签。
+
+    意向文件按内容摘要命名、只写一次：同一操作与对象重复调用得到同一个文件。require_approval 与恢复计划都从这里取，
+    恢复计划可以在停下之前把后面几步已经确定的批准意向一次写全（批准与授权共用同一个预览摘要）。
+    """
+    binding = approval_binding(params, operation, subject, operations=operations, file_keys=file_keys)
     key = digest(binding)
     intent = Path(params["OUT"]) / "approval-intents" / (key + ".json")
+    approval = approval_directory(params, subdir=subdir) / (key + ".json")
     write_once(intent, {"schema_version": "arm64-fix-approval-intent/v1", "binding": binding, "review_sha256": key,
-                        "required_approval_path": str(approval_directory(params) / (key + ".json"))})
-    path = approval_directory(params) / (key + ".json")
+                        "required_approval_path": str(approval)})
+    return key, intent, approval, binding
+
+
+def require_approval(params, operation, subject, *, now=None, operations=OPERATIONS, file_keys=APPROVAL_FILE_KEYS,
+                     subdir=APPROVAL_SUBDIR):
+    """只消费已由人提交的精确范围批准；缺失时只生成意向，返回待人工处理。"""
+    key, intent, path, binding = approval_intent(params, operation, subject, operations=operations,
+                                                 file_keys=file_keys, subdir=subdir)
     if not path.exists():
         raise SafetyError(f"缺少 {operation} 专项人工批准；批准意向：{intent}")
     value = read(path)

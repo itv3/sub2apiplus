@@ -1,0 +1,32 @@
+# 恢复链一条命令（第 18 项，driver/recovery-plan.sh）的参数模板。
+# 复制为 $RUNROOT/recovery-plan-<轮次>.env 后逐项填写；REPLACE_* 与全零提交号都是占位符，不能直接执行。
+# （模板在仓库里用 .params 后缀：仓库 .gitignore 忽略 *.env。）
+# 解析规则与驱动参数文件、修好接着跑轮次参数文件相同（driver/parse_env.py 词法层 parse_assignments）：只接受 KEY=VALUE 或
+# KEY="VALUE"；值里只允许引用本文件前面已定义的键（$NAME／${NAME}）；任何 $(…)、反引号、; & | < > ( ) \ 与内嵌引号一律拒绝，
+# 理由文本请用全角括号与全角分号。D／RUNROOT／CAMPAIGN／CANDIDATE 必须与 VC_ENV（驱动参数文件）里的 D／RUNROOT／NEW／CAND 一致。
+
+# ---- 轮次与坐标（必填）----
+ROUND=rNN
+D=/root/docker/capture-cli/data
+RUNROOT=/root/vc-rounds/REPLACE_RUNROOT
+VC_ENV=$RUNROOT/env.sh
+VC_STATE_DIR=$D/control/REPLACE_SUPERVISOR_STATE_DIR
+CAMPAIGN=REPLACE_CAMPAIGN_ID
+# 目标 attempt：最近一次失败（或被截停）的 attempt。官方首批（VC-1）放 official/attempts 下的，候选采集（VC-5）放
+# candidates/<CANDIDATE>/attempts 下的；阶段由它所在的目录判定，不必另写。目标之后已有后继 attempt 时，计划判定
+# “续跑已由别处派发”，不再派发——换成最新失败的 attempt 重新规划。
+ATTEMPT=REPLACE_TARGET_ATTEMPT_ID
+CANDIDATE=REPLACE_CANDIDATE_ID
+# 批准人：专项批准文件里的 approved_by 必须与它相同（程序只校验和消费批准，不代签）。
+APPROVER="REPLACE：批准人与授权原话"
+# APPROVALS_DIR=$RUNROOT/recovery-plan-approvals/$ROUND
+# DRIVER_TARGET=/root/arm64-capture-driver
+# CLI_TIMEOUT_SECONDS=3600
+
+# ---- 以下只在对应步骤真要执行时必填（缺了计划里标阻塞，预览照常输出）----
+# 工具演进登记（tool-evolution）：受管工具有未登记漂移时需要。
+# FIX_COMMIT=0000000000000000000000000000000000000000
+# EVOLUTION_REASON="REPLACE：修了什么（全角括号）；提交范围；受管树哪一层变化"
+# campaign-resume：Campaign 计时账本停线（stopped／stop_required）时需要，FIX_COMMIT 同上。
+# REGRESSION_RECEIPT=$RUNROOT/REPLACE-regression-receipt.json
+# RESUME_REASON="REPLACE：失败原因已如何消除"
