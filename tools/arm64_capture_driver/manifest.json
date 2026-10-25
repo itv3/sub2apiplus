@@ -178,9 +178,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "162cff5e680f856245d968858964d41b70855e1913cfd2a84a04f8ddc6f081f0",
+      "sha256": "525fdbb5516ad6d95149b9c6c6255068d15f22b4dc30c788ab5964848a57b451",
       "mode": "0700",
-      "bytes": 15203
+      "bytes": 17373
     },
     {
       "path": "driver/entry.sh",
@@ -220,9 +220,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "a0504a53f47488df9d35c5ca373b5ce973d76623fe8a3cf9b7d36332d8ccd9a2",
+      "sha256": "4189a5e0d9929b81f985e7c4c9e5c7337e93fc7ddad14f3c3aea55aaaef7da4d",
       "mode": "0700",
-      "bytes": 11036
+      "bytes": 12424
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -711,5 +711,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "332a0edb9c9c24142c090e6d9818bce9930a6e703cda98a37f44fe5c14136d00"
+  "manifest_sha256": "9af78067bd71ae7f219fdd9450f339dca9fa02302c20ea005a9df7a276fcd643"
 }

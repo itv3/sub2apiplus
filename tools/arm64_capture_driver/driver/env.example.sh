@@ -135,3 +135,12 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   BOUNDARY_CODEX_API_KEY_ID=REPLACE_CODEX_API_KEY_ID
 #   BOUNDARY_CODEX_MODEL=REPLACE_CODEX_MAIN_MODEL
 #   PRODUCTION_COMMIT=REPLACE_PRODUCTION_COMMIT_40_HEX
+# 开工检查补的两项外部事实检查（优化第 14 项，entry-preflight.sh 的 model-availability 与 main-security-scan）所用的变量是调用环境变量，
+# 不是参数文件的键（parse_env.py 不接受它们当赋值）：在启动入口的 shell 里导出，或写进启动命令前缀。没配置也算未通过（fail-closed）。
+# - MODEL_PROBE_URL：中转基地址（含 /v1），向它拉 /models，本轮的 MAIN_MODEL 与 LITE_MODEL 必须都在列表里（模型被下线当场拦下）
+# - MODEL_PROBE_KEY_FILE：只含密钥的普通文件，属主自己、权限 0600；密钥不进命令行、不写日志
+# - MODEL_PROBE_MINIMAL：可选，非空即开，另发一个最小请求确认模型真的能用
+# - SECURITY_SCAN_REPO：owner/name；main 当前头对应的 Security Scan 必须已跑完、success、不超过 36 小时（要有登录好的 gh；本仓库的 gh 默认会查到上游，必须显式给）
+# - OPENING_CHECKS_SKIP：确需跳过时列出要跳过的项目名（model-availability、main-security-scan），逗号分隔
+# - OPENING_CHECKS_SKIP_REASON：跳过的理由，必填；列了跳过却没写理由，拒绝跳过、这一项按未通过处理
+# 被跳过的项在 results.txt 与 summary.json 里记为 skipped（带理由），不是 passed；入口编排器不把 skipped 当失败，但汇总里一眼看得出。

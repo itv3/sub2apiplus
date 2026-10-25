@@ -1145,24 +1145,62 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+  exit 0',
         '+fi']}
 CLOSEOUT_SH_2_BASELINE = '6d8e73b95d06bc66cd7fcf74e9d03297bb25b5df'
-CLOSEOUT_SH_2_DIGESTS = {'entry-preflight.sh': '162cff5e680f856245d968858964d41b70855e1913cfd2a84a04f8ddc6f081f0'}
-CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+opening_skipped() { case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）"; return 0 ;; esac; return 1; }',
+CLOSEOUT_SH_2_DIGESTS = {'entry-preflight.sh': '525fdbb5516ad6d95149b9c6c6255068d15f22b4dc30c788ab5964848a57b451'}
+CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"',
+        '-  printf \'%s %s\\n\' "$name" "$([ "$rc" = 0 ] && echo passed || echo failed)" >> "$OUT/results.txt"',
+        '-  if [ "$rc" = 0 ]; then',
+        '+  local status=failed',
+        '+  if [ "$rc" = 0 ]; then if [ -f "$OUT/$name.skipped" ]; then status=skipped; else status=passed; fi; fi',
+        '+  printf \'%s %s\\n\' "$name" "$status" >> "$OUT/results.txt"',
+        '+  if [ "$status" = skipped ]; then',
+        '+    echo "已跳过 ${name}（未做检查，不是通过；理由见 $OUT/$name.skipped）"',
+        '+  elif [ "$rc" = 0 ]; then',
+        '+opening_skipped() {',
+        '+  case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) ;; *) return 1 ;; esac',
+        '+  local reason="${OPENING_CHECKS_SKIP_REASON:-}"',
+        '+  if [ -z "${reason//[[:space:]]/}" ]; then',
+        '+    echo "拒绝跳过 $1：OPENING_CHECKS_SKIP 里列了它，却没写 OPENING_CHECKS_SKIP_REASON（理由必填）；这一项按未通过处理"',
+        '+    return 2',
+        '+  fi',
+        '+  printf \'%s\\n\' "$reason" > "$OUT/$1.skipped"',
+        '+  echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）；理由：$reason"',
+        '+  return 0',
+        '+}',
         '+model_availability() {',
-        '+  local rc=0',
-        '+  opening_skipped model-availability && return 0',
+        '+  local rc=0 skip=0',
+        '+  opening_skipped model-availability || skip=$?',
+        '+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi',
         '+  python3 -B "$DRV/opening_checks.py" models --models "${MAIN_MODEL},${LITE_MODEL}" ${MODEL_PROBE_MINIMAL:+--minimal} || rc=$?',
-        '+  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并写明理由"; fi',
+        '+  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并同时写 OPENING_CHECKS_SKIP_REASON"; fi',
         '+  return "$rc"',
         '+}',
         '+main_security_scan() {',
-        '+  local rc=0',
-        '+  opening_skipped main-security-scan && return 0',
+        '+  local rc=0 skip=0',
+        '+  opening_skipped main-security-scan || skip=$?',
+        '+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi',
         '+  python3 -B "$DRV/opening_checks.py" security-scan ${SECURITY_SCAN_REPO:+--repo "$SECURITY_SCAN_REPO"} || rc=$?',
-        '+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并写明理由"; fi',
+        '+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并同时写 OPENING_CHECKS_SKIP_REASON"; fi',
         '+  return "$rc"',
         '+}',
+        '-python3 -B - "$OUT/results.txt" "$OUT/summary.json" <<\'PY\'',
+        '-import json, sys',
         '+check model-availability model_availability',
-        '+check main-security-scan main_security_scan']}
+        '+check main-security-scan main_security_scan',
+        '+python3 -B - "$OUT/results.txt" "$OUT/summary.json" "$OUT" <<\'PY\'',
+        '+import json, os, sys',
+        '-failed = [name for name, status in checks.items() if status != "passed"]',
+        '+failed = [name for name, status in checks.items() if status not in ("passed", "skipped")]',
+        '+skipped = {}',
+        '+for name, status in checks.items():',
+        '+    if status == "skipped":',
+        '+        with open(os.path.join(sys.argv[3], name + ".skipped"), encoding="utf-8") as handle:',
+        '+            skipped[name] = handle.read().strip()',
+        '-           "checks": checks, "failed": failed}',
+        '+           "checks": checks, "failed": failed, "skipped": skipped}',
+        '+  if grep -q \' skipped$\' "$OUT/results.txt"; then echo "注意：有被显式跳过的检查项（未做检查，不是通过）：$(grep \' skipped$\' "$OUT/results.txt" | cut -d\' \' -f1 | tr \'\\n\' \' \')"; fi']}
+CLOSEOUT_SH_3_BASELINE = 'c14cba3cd62d7ea6bcd02b4abf43e0b19f460ad7'
+CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '4189a5e0d9929b81f985e7c4c9e5c7337e93fc7ddad14f3c3aea55aaaef7da4d'}
+CLOSEOUT_SH_3_RESIDUALS = {'env.example.sh': []}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),
@@ -1182,6 +1220,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     # >>> 收尾登记行（自动生成，勿手改）
     ('收尾登记 entry-gates.sh', CLOSEOUT_SH_1_BASELINE, CLOSEOUT_SH_1_DIGESTS, CLOSEOUT_SH_1_RESIDUALS),
     ('收尾登记 entry-preflight.sh', CLOSEOUT_SH_2_BASELINE, CLOSEOUT_SH_2_DIGESTS, CLOSEOUT_SH_2_RESIDUALS),
+    ('收尾登记 env.example.sh', CLOSEOUT_SH_3_BASELINE, CLOSEOUT_SH_3_DIGESTS, CLOSEOUT_SH_3_RESIDUALS),
     # <<< 收尾登记行
 )
 

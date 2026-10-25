@@ -16,7 +16,8 @@
 #   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）；
 #   model-availability   模型可用性探测（优化第 14 项）：向中转拉一次模型列表，本轮的 MAIN_MODEL／LITE_MODEL 必须都在（模型被下线当场拦下）。探测地址与密钥文件取调用环境的
 #                        MODEL_PROBE_URL（含 /v1）与 MODEL_PROBE_KEY_FILE（0600 文件）；MODEL_PROBE_MINIMAL 非空时另发最小请求；没配置也算未通过，
-#                        确需跳过必须显式设 OPENING_CHECKS_SKIP=model-availability（写明理由）；
+#                        确需跳过必须显式设 OPENING_CHECKS_SKIP=model-availability 并同时写 OPENING_CHECKS_SKIP_REASON（理由必填，缺了拒绝）；
+#                        被跳过的项在 results.txt 与 summary.json 里记为 skipped（带理由），不是 passed；
 #   main-security-scan   main 上的 Security Scan 先核绿（优化第 14 项）：main 当前头对应的运行必须已完成、success、不超过 36 小时；仓库取调用环境的
 #                        SECURITY_SCAN_REPO（owner/name，本仓库的 gh 默认会查到上游，必须显式给），要有登录好的 gh；没配置同样算未通过，跳过同上。
 # 按客户端（Claude 升级 B5a-06、B5a-09）：必填参数、部署收据与五摘要、目标客户端的参数键与另核的容器、官方包的复核模块、
@@ -39,10 +40,16 @@ check() { # <名称> <函数>：各项互不依赖，一项失败不中断其余
   start=$(date +%s)
   echo "== ${name} $(utc_now)"
   # 放进子 shell：某一项引用了参数文件里缺的变量（set -u）或中途 exit，只算这一项失败，其余照查、汇总照写（E2-06 验收发现）。
+  rm -f "$OUT/$name.skipped"
   ( "$2" ) > "$OUT/$name.log" 2>&1 || rc=$?
   tail -n 6 "$OUT/$name.log" | cut -c1-300
-  printf '%s %s\n' "$name" "$([ "$rc" = 0 ] && echo passed || echo failed)" >> "$OUT/results.txt"
-  if [ "$rc" = 0 ]; then
+  # 显式跳过（opening_skipped 写下 $name.skipped 并让这一项返回 0）单独记为 skipped：没做检查就不能写成 passed。
+  local status=failed
+  if [ "$rc" = 0 ]; then if [ -f "$OUT/$name.skipped" ]; then status=skipped; else status=passed; fi; fi
+  printf '%s %s\n' "$name" "$status" >> "$OUT/results.txt"
+  if [ "$status" = skipped ]; then
+    echo "已跳过 ${name}（未做检查，不是通过；理由见 $OUT/$name.skipped）"
+  elif [ "$rc" = 0 ]; then
     echo "通过 ${name}（$(( $(date +%s) - start )) 秒）"
   else
     echo "未通过 ${name}（rc=${rc}，$(( $(date +%s) - start )) 秒，日志 $OUT/$name.log）"
@@ -180,21 +187,35 @@ environment_probe() {
 }
 
 # 开工检查补的两项外部事实检查（优化第 14 项，helper 是同目录的 opening_checks.py）：退出码 1＝检查没过，3＝没配置；两种都算未通过，要跳过必须显式写明。
-opening_skipped() { case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）"; return 0 ;; esac; return 1; }
+# 跳过的规矩（验收修正必修 3）：OPENING_CHECKS_SKIP 列出项目名、同时写 OPENING_CHECKS_SKIP_REASON（理由必填）才算跳过，且记为 skipped 不是 passed；
+# 列了项目却没写理由，拒绝跳过、这一项按未通过处理。返回 0＝已按声明跳过（写下 $OUT/<项目>.skipped，内容是理由）；1＝没有声明跳过；2＝声明了却没写理由。
+opening_skipped() {
+  case ",${OPENING_CHECKS_SKIP:-}," in *",$1,"*) ;; *) return 1 ;; esac
+  local reason="${OPENING_CHECKS_SKIP_REASON:-}"
+  if [ -z "${reason//[[:space:]]/}" ]; then
+    echo "拒绝跳过 $1：OPENING_CHECKS_SKIP 里列了它，却没写 OPENING_CHECKS_SKIP_REASON（理由必填）；这一项按未通过处理"
+    return 2
+  fi
+  printf '%s\n' "$reason" > "$OUT/$1.skipped"
+  echo "已按 OPENING_CHECKS_SKIP 显式跳过 $1（未做检查，不是通过）；理由：$reason"
+  return 0
+}
 
 model_availability() {
-  local rc=0
-  opening_skipped model-availability && return 0
+  local rc=0 skip=0
+  opening_skipped model-availability || skip=$?
+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi
   python3 -B "$DRV/opening_checks.py" models --models "${MAIN_MODEL},${LITE_MODEL}" ${MODEL_PROBE_MINIMAL:+--minimal} || rc=$?
-  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并写明理由"; fi
+  if [ "$rc" = 3 ]; then echo "模型可用性探测未配置：设 MODEL_PROBE_URL 与 MODEL_PROBE_KEY_FILE 后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=model-availability 并同时写 OPENING_CHECKS_SKIP_REASON"; fi
   return "$rc"
 }
 
 main_security_scan() {
-  local rc=0
-  opening_skipped main-security-scan && return 0
+  local rc=0 skip=0
+  opening_skipped main-security-scan || skip=$?
+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi
   python3 -B "$DRV/opening_checks.py" security-scan ${SECURITY_SCAN_REPO:+--repo "$SECURITY_SCAN_REPO"} || rc=$?
-  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并写明理由"; fi
+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并同时写 OPENING_CHECKS_SKIP_REASON"; fi
   return "$rc"
 }
 
@@ -208,18 +229,25 @@ check plan-audit plan_audit
 check environment-probe environment_probe
 check model-availability model_availability
 check main-security-scan main_security_scan
-python3 -B - "$OUT/results.txt" "$OUT/summary.json" <<'PY'
-import json, sys
+python3 -B - "$OUT/results.txt" "$OUT/summary.json" "$OUT" <<'PY'
+import json, os, sys
 checks = dict(line.split() for line in open(sys.argv[1], encoding="utf-8") if line.strip())
-failed = [name for name, status in checks.items() if status != "passed"]
+# 状态只有三种：passed（做了检查且通过）、skipped（显式跳过，带理由，没做检查）、failed。跳过不算失败，但永远不写成 passed。
+failed = [name for name, status in checks.items() if status not in ("passed", "skipped")]
+skipped = {}
+for name, status in checks.items():
+    if status == "skipped":
+        with open(os.path.join(sys.argv[3], name + ".skipped"), encoding="utf-8") as handle:
+            skipped[name] = handle.read().strip()
 summary = {"schema_version": "entry-preflight-summary/v1", "status": "failed" if failed else "passed",
-           "checks": checks, "failed": failed}
+           "checks": checks, "failed": failed, "skipped": skipped}
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     json.dump(summary, handle, ensure_ascii=False, indent=2)
 PY
 chmod 600 "$OUT/summary.json"
 if [ "${#FAILED[@]}" = 0 ]; then
   echo "ENTRY_PREFLIGHT_PASSED $(utc_now)"
+  if grep -q ' skipped$' "$OUT/results.txt"; then echo "注意：有被显式跳过的检查项（未做检查，不是通过）：$(grep ' skipped$' "$OUT/results.txt" | cut -d' ' -f1 | tr '\n' ' ')"; fi
   exit 0
 fi
 echo "ENTRY_PREFLIGHT_FAILED $(utc_now) 未通过：${FAILED[*]}"
