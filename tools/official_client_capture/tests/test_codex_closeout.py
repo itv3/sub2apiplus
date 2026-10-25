@@ -360,6 +360,24 @@ class CloseoutTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(closeout.CloseoutError):
                 closeout.check_gate_result(self.plan)
 
+    def test_a_client_plan_subset_cannot_pass_as_the_closeout_full_gates(self):
+        """优化第 9 项（拍板：收尾 full-gates 保持全集）：清单、总摘要、执行器汇总任何一处带按客户端筛选的标记（哪怕筛选时回退成了全集），都不是收尾全量通过。"""
+        self.prepare()
+        self.gate_result()
+        root = self.work / "gates"
+        self.assertTrue(closeout.check_gate_result(self.plan), "没有筛选标记：照常通过")
+        marker = {"schema_version": "unit-executor-gates-selection/v1", "client": "codex", "scope": "client-plan"}
+        for place, name, key in (("清单", "gates-manifest.json", "selection"), ("总摘要", "entry-gates.json", "client_selection"),
+                                 ("执行器汇总", "executor/summary.json", "client_selection")):
+            path = root / name
+            original = json.loads(path.read_text())
+            for scope in ("client-plan", "full"):
+                write_json(path, {**original, key: {**marker, "scope": scope}})
+                with self.subTest(place=place, scope=scope), self.assertRaisesRegex(closeout.CloseoutError, "按客户端筛选"):
+                    closeout.check_gate_result(self.plan)
+            write_json(path, original)
+        self.assertTrue(closeout.check_gate_result(self.plan))
+
     def make_retry_passed(self, unit="backend-go-test"):
         """把收尾门禁夹具里一个单元改成“首次失败、补跑通过”：两次日志落盘、标注与汇总／门禁记录一致（优化第 2 项）。"""
         from tools.ci import retry_policy

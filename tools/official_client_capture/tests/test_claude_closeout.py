@@ -401,6 +401,23 @@ class ClaudeCloseoutTests(unittest.TestCase):
         with self.assertRaisesRegex(closeout.CloseoutError, "本轮输入已变化"):
             closeout.prepare({**self.config, "terminal_relative": "docs/egress/maintenance/CLAUDE_CODE_997_TO_999_TERMINAL_STATE_RECEIPT.json"})
 
+    def test_a_client_plan_subset_cannot_pass_as_the_closeout_full_gates(self) -> None:
+        """优化第 9 项：Claude 收尾复用同一份校验，收尾全量门禁保持全集——任何一处带按客户端筛选的标记都不通过。"""
+        plan = closeout.prepare(self.config)
+        self.gate_result(plan)
+        root = self.work / "gates"
+        self.assertTrue(closeout.check_gate_result(plan))
+        marker = {"schema_version": "unit-executor-gates-selection/v1", "client": "codex", "scope": "client-plan"}
+        for place, name, key in (("清单", "gates-manifest.json", "selection"), ("总摘要", "entry-gates.json", "client_selection"),
+                                 ("执行器汇总", "executor/summary.json", "client_selection")):
+            path = root / name
+            original = json.loads(path.read_text())
+            write_json(path, {**original, key: marker})
+            with self.subTest(place=place), self.assertRaisesRegex(closeout.CloseoutError, "按客户端筛选"):
+                closeout.check_gate_result(plan)
+            write_json(path, original)
+        self.assertTrue(closeout.check_gate_result(plan))
+
     def test_gates_and_publish_are_idempotent(self) -> None:
         plan = closeout.prepare(self.config)
         gates = self.gate_result(plan)

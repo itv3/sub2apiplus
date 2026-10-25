@@ -755,6 +755,10 @@ def check_gate_result(plan):
     if (manifest.get("schema_version") != entry_gates.GATES_SCHEMA or manifest.get("profile") != "full-gates"
             or {r.get("gate_id") for r in manifest.get("gates", [])} != expected):
         raise CloseoutError("门禁执行清单不完整")
+    # 按客户端筛选（优化第 9 项）：收尾 full-gates 是发布前最后一道全量门禁，保持全集（拍板）。带筛选的运行只是某个客户端计划的子集，
+    # 清单里的 selection、总摘要里的 client_selection 任何一处出现都不能当作收尾全量通过——哪怕筛选时回退成了全集，收尾也要求干净地不带筛选。
+    if manifest.get("selection") is not None or entry.get("client_selection") is not None:
+        raise CloseoutError("收尾全量门禁是按客户端筛选的子集，不是全集：收尾必须全集重跑（不带 --gate-scope）")
     gate_retry_passed = set()
     for row in rows:
         if row.get("status") != "passed" or row.get("exit_code") != 0:
@@ -782,6 +786,8 @@ def check_gate_result(plan):
                    or row.get("missing") for row in summary.get("units", []))
             or not summary.get("units")):
         raise CloseoutError("执行器存在未运行、失败或承接单元")
+    if summary.get("client_selection") is not None:
+        raise CloseoutError("执行器汇总带按客户端筛选的标记：收尾全量门禁必须全集")
     # 失败单元补跑（优化第 2 项）：补跑通过的单元算通过，但必须带自洽的标注、两次日志都在盘上且摘要相符、汇总与门禁记录一致；
     # 不静默放行——任何一处对不上都按收尾门禁未通过处理。发布汇报从 gate_retry_summary 取单列的补跑通过名单。
     retry_problems = retry_policy.summary_problems(summary, require_files=True)
