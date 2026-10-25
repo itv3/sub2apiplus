@@ -304,7 +304,7 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "VC-5 阶段恢复链：失败批次对账、批准、重派",
         "VC-5", "阶段恢复（stage recovery）",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_stage_recovery"], timeout_seconds=1800),
-        kind="recovery", needs=("linux_root_unshare",),
+        kind="recovery",
         history=("记忆 vc5-reconcile-first-then-deploy-fix-limit-trap-1022",),
     ),
     Probe(
@@ -312,7 +312,7 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "官方证据复用与续跑（reuse 后继 Campaign）",
         "VC-1", "官方复用续跑",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_official_reuse_resume"], timeout_seconds=1800),
-        kind="recovery", needs=("linux_root_unshare",),
+        kind="recovery",
         history=("记忆 reuse-successor-campaign-checklist",),
     ),
     Probe(
@@ -327,7 +327,7 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "阶段预算到期后的延期与恢复（deadline_paused）",
         "VC-1", "阶段延期（deadline-extend）",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_deadline_extension"], timeout_seconds=1800),
-        kind="recovery", needs=("linux_root_unshare",),
+        kind="recovery",
         history=("记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021 第 7 处缺陷与阶段预算到期",),
     ),
     Probe(
@@ -354,32 +354,32 @@ CHAIN_STEPS: tuple[Probe, ...] = (
         "chain-vc2-vc5-validation-only", "VC-2 导入 → 三批分类 → 候选制品身份 → compare → builder → checker → accept → deliver",
         "VC-5", "连续 validation_only 链",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_full_chain"], timeout_seconds=3600),
-        kind="chain", needs=("linux_root_unshare", "arm64_docker_go"), requires_probes=("chain-vc1-capture",),
+        kind="chain", needs=("linux_root_unshare", "arm64_docker_go"),
     ),
     Probe(
         "chain-vc5-evaluation", "VC-5 真实评估链：compare／builder／accept 与 VC-5 completion",
         "VC-5", "评估链",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_evaluation_real_chain"], timeout_seconds=3600),
-        kind="chain", needs=("linux_root_unshare", "arm64_docker_go"), requires_probes=("chain-vc2-vc5-validation-only",),
+        kind="chain", needs=("linux_root_unshare", "arm64_docker_go"),
     ),
     Probe(
         "chain-vc5-build-revision", "VC-4／VC-5 候选构建修订链",
         "VC-5", "构建修订",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_build_revision"], timeout_seconds=3600),
-        kind="chain", needs=("arm64_docker_go",), requires_probes=("chain-vc5-evaluation",),
+        kind="chain", needs=("arm64_docker_go",),
     ),
     Probe(
         "chain-vc5-segment-reuse", "VC-5 段复用",
         "VC-5", "段复用",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_segment_reuse"], timeout_seconds=1800),
-        kind="chain", needs=("linux_root_unshare",), requires_probes=("chain-vc5-build-revision",),
+        kind="chain",
     ),
     Probe(
         "chain-vc6-canonical", "VC-5 canonical 交接与 VC-6 canonical／交付批次派发",
         "VC-6", "canonical 与 VC-6 批次",
         UnittestRunner([f"{TESTS}.test_codex_upgrade_canonical", f"{TESTS}.test_codex_upgrade_vc6_canonical_dispatch"],
                        timeout_seconds=1800),
-        kind="chain", requires_probes=("chain-vc5-segment-reuse",),
+        kind="chain",
     ),
 )
 

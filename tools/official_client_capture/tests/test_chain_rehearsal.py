@@ -494,6 +494,12 @@ class CommandLineTest(unittest.TestCase):
         data = json.loads((self.out / "full-chain.json").read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in data["rows"]], ["c3"])
 
+    def test_selection_pulls_in_required_predecessors_in_registration_order(self) -> None:
+        probes = [_probe("a"), _probe("b", requires_probes=("a",)), _probe("c", requires_probes=("b",)), _probe("d")]
+        selected = engine._select(probes, ["c"], None)
+        self.assertEqual([probe.probe_id for probe in selected], ["a", "b", "c"])
+        self.assertEqual([probe.probe_id for probe in engine._select(probes, None, ["VC-1"])], ["a", "b", "c", "d"])
+
     def test_unknown_probe_is_a_usage_error(self) -> None:
         code, _ = self.run_cli("round", "--probe", "nope", registry=self.registry())
         self.assertEqual(code, 2)

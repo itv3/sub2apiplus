@@ -967,7 +967,18 @@ def _select(probes: Sequence[Probe], ids: Sequence[str] | None, phases: Sequence
         selected = [probe for probe in selected if probe.probe_id in set(ids)]
     if phases:
         selected = [probe for probe in selected if probe.phase in set(phases)]
-    return selected
+    # 选中的探针依赖的前序探针一并带上（完整链里 chain-vc6-canonical 要求前面的步骤先通过；只挑后面的阶段跑也要把前序
+    # 先跑掉，否则它们永远是“前序步骤尚未执行”）。保持登记顺序。
+    by_id = {probe.probe_id: probe for probe in probes}
+    needed: set[str] = set()
+    stack = [probe.probe_id for probe in selected]
+    while stack:
+        current = stack.pop()
+        if current in needed:
+            continue
+        needed.add(current)
+        stack.extend(by_id[current].requires_probes)
+    return [probe for probe in probes if probe.probe_id in needed]
 
 
 def _print_progress(result: ProbeResult) -> None:
