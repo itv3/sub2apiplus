@@ -17,6 +17,12 @@
 #       --gate-scope client-plan --select-base <最近一次发版的 40 位提交> [--include-claude]（Codex 升级工具优化第 9 项）：只跑本客户端计划的采集工具测试（Codex 计划不跑
 #       不受改动影响的 Claude 重模块），原样交给入口门禁。结论是子集：要配 --no-dryrun，不沿用来源结论、不签 B-09 全集收据；Codex 计划的结论给 Codex 自己的
 #       准入用，Claude 一侧的 check-boundary／require-passed 与统一准入一律拒绝（防串用）。要全集结论先 stop 再不带本选项重新 start。
+#       缺省（Codex）：本命令对 Codex 缺省带 --gate-scope auto——由入口门禁自己决定，基点取测试树最近的发版 tag（或另给 --select-base <40 位提交>），任何一步不行
+#       （找不到发版 tag、归属表自己在改动里、选择器抛错……）回退全集，原因写进结论的 gate_scope_resolved 与运行日志。起跑时并不知道结论是子集还是全集：
+#       实际是子集的，check-boundary／require-passed 的提示与运行日志写明“按客户端筛选（… 不是全集）【子集：… 跳过 N/M 个测试模块 …】”，只给 Codex 准入用，
+#       通过后不自动接入口空跑（结论的 dryrun 记 skipped，要空跑另 entry-dryrun.sh start）；实际回退全集的是全集结论，两个客户端都认、照常接入口空跑。
+#       --gate-scope full 显式要全集（本验证与同提交已有 auto 结论的输入合同不同，须先 stop 再重新 start）；Claude 轮次（CLIENT 非 codex）不带 auto；
+#       与逐单元承接、B-09 全集收据、读集合同同用时 auto 在起跑就按全集处理（start 的输出里写明原因）。
 #   reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]
 #       同树重部署后沿用已通过的测试结论（优化第 5 项）：来源是同一提交的通过结论（带沿用绑定）；在来源的工作目录里用 entry-gates.sh --bind-only
 #       现算新部署上的绑定（含部署后核对，不跑测试），工具身份五摘要、提交、门禁集合、执行器、调度策略、输入清单、平台环境逐项相同且未过有效期（24 小时）
@@ -45,12 +51,15 @@ case "$command" in
     extra=(--then-dryrun)
     preflight_args=(--preflight on)
     reuse_args=(--reuse auto)
+    # 按客户端筛选（优化第 9 项）：Codex 缺省 --gate-scope auto，操作者自己给了 --gate-scope（含 =形式）就不再带；Claude 轮次不带，保持全集。
+    scope_args=(); if [ "$CT_CLIENT" = codex ]; then scope_args=(--gate-scope auto); fi
     rest=()
     for arg in "$@"; do
+      case "$arg" in --gate-scope|--gate-scope=*) scope_args=() ;; esac
       if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(--preflight off); elif [ "$arg" = --no-reuse ]; then reuse_args=(--reuse off); else rest+=("$arg"); fi
     done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
-      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${rest[@]+"${rest[@]}"} \
+      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${scope_args[@]+"${scope_args[@]}"} ${rest[@]+"${rest[@]}"} \
       ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   reuse)
     if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]" >&2; exit 2; fi

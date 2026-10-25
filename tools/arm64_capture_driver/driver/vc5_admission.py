@@ -324,11 +324,14 @@ class ManagedFacts:
             else:
                 raise AdmissionError("driver_run_active")
         # 后台验证与部署取本轮客户端的部署收据（B5b-01；Codex 即缺省 codex，与改造前相同）。
-        rc, _ = check(Path(c["RUNROOT"]), Path(c["D"]), require_passed=True, client=self.client)
+        rc, message = check(Path(c["RUNROOT"]), Path(c["D"]), require_passed=True, client=self.client)
         if rc:
             raise AdmissionError("background_validation_not_passed")
+        # 按客户端筛选（Codex 升级工具优化第 9 项）：依据的是本客户端计划的子集结论时，准入状态写明范围与跳过的模块数（全集结论没有这一项，
+        # 状态与改造前逐字相同）。check 的提示里 ``【子集：…】`` 是固定写法；它进状态也就进了环境指纹，子集与全集的准入键不会相同。
+        scope = re.search(r"【子集：([^】]*)】", message) if isinstance(message, str) else None
         return {**latest_deployment(Path(c["D"]), self.client), "supervisor_root": str(state_root),
-                "background_validation": "passed"}
+                "background_validation": "passed", **({"background_validation_scope": scope.group(1)} if scope else {})}
 
     def container(self) -> dict[str, Any]:
         c = self.config
@@ -406,7 +409,9 @@ class Admission:
         for name, operation in (("catalog", self.facts.catalog), ("state", self.facts.state), ("container", self.facts.container)):
             try:
                 values[name] = operation()
-                checks.append({"check": name, "status": "passed"})
+                # 依据子集结论的准入：state 检查项带一条说明（范围与跳过的模块数），准入报告里一眼可见；其余检查项与全集结论的形状不变。
+                note = values[name].get("background_validation_scope") if name == "state" and isinstance(values[name], dict) else None
+                checks.append({"check": name, "status": "passed", **({"note": f"依据的后台验证是子集：{note}"} if note else {})})
             except Exception as error:
                 checks.append({"check": name, "status": "blocked", "reason": str(error) if isinstance(error, AdmissionError) else f"{name}_replay_failed"})
         try:

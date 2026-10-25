@@ -121,6 +121,18 @@ class AdmissionTests(unittest.TestCase):
         admission.atomic_write(self.subject.profile, self.facts.profile_bytes)
         admission.atomic_write(self.subject.token, token(), mode)
 
+    def test_a_subset_background_conclusion_is_stated_in_the_report_and_changes_the_admission_key(self):
+        """Codex 升级工具优化第 9 项：依据子集结论的准入，报告的 state 检查项写明范围与跳过的模块数，准入键也不同；全集结论的报告形状不变。"""
+        full = self.subject.inspect()
+        self.assertNotIn("note", next(item for item in full["checks"] if item["check"] == "state"))
+        self.facts.state = lambda: {"deployment": self.facts.generation, "background_validation": "passed",
+                                    "background_validation_scope": "codex 计划，跳过 40/395 个测试模块，基点 bbbbbbbbbbbb"}
+        subset = self.subject.inspect()
+        state_check = next(item for item in subset["checks"] if item["check"] == "state")
+        self.assertEqual(state_check["status"], "passed")
+        self.assertEqual(state_check["note"], "依据的后台验证是子集：codex 计划，跳过 40/395 个测试模块，基点 bbbbbbbbbbbb")
+        self.assertNotEqual(subset["admission_key"], full["admission_key"], "子集与全集依据的准入键不会相同，子集准入的收据不能当全集的用")
+
     def test_dry_run_missing_assets_has_no_writes_or_issuance(self):
         before = self.snapshot()
         report = self.subject.inspect()
@@ -423,6 +435,47 @@ class ManagedReplayTests(unittest.TestCase):
                 supervisor._read_state.return_value = {"state": "prepared"}
                 with self.assertRaisesRegex(admission.AdmissionError, "supervisor_run_active"):
                     subject.state()
+
+    def test_state_carries_the_scope_of_a_subset_conclusion_and_nothing_for_a_full_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            state_root = root / "supervisor"
+            state_root.mkdir()
+            project_root = root / "project"
+            project_root.mkdir()
+            config = {"D": str(root), "NEW": "fixture", "TARGET_VERSION": "9.1.0", "RUNROOT": str(root / "round"), "EVIDENCE_DECISION": "recapture"}
+            subject = admission.ManagedFacts.__new__(admission.ManagedFacts)
+            subject.config = config
+            subject.upgrade = mock.Mock()
+            subject.upgrade._require_formal_campaign.return_value = {}
+            subject.upgrade._campaign_timing_ledger_dir.return_value = root / "timing"
+            project = mock.Mock()
+            project.find_project_ledger.return_value = project_root
+            project._load_plan.return_value = ({}, b"{}")
+            project._load_events.return_value = []
+            project._replay.return_value = {"blocked": False, "remaining_live_requests": 10}
+            project.root_causes_at_limit_for.return_value = []
+            ledger = mock.Mock()
+            ledger.inspect_ledger.return_value = {"status": "active", "evidence_decision": "recapture"}
+            supervisor = mock.Mock(ACTIVE_STATES={"prepared", "running"})
+            subset_message = ("后台验证通过（提交 aaaaaaaaaaaa，结论 /r.json，日志 /r.log；按客户端筛选（codex 计划的子集，不是全集）"
+                              "【子集：codex 计划，跳过 40/395 个测试模块，基点 bbbbbbbbbbbb，筛选摘要 ssssssssssss】）")
+            for message, expected in (("后台验证通过（提交 aaaaaaaaaaaa）", None),
+                                      ("后台验证通过（…；门禁范围 auto：全集（回退原因：x））", None),
+                                      (subset_message, "codex 计划，跳过 40/395 个测试模块，基点 bbbbbbbbbbbb，筛选摘要 ssssssssssss")):
+                with self.subTest(message=message[:30]):
+                    modules = {"tools.official_client_capture.codex_upgrade_project_ledger": project,
+                               "tools.official_client_capture.codex_upgrade_timing_ledger": ledger,
+                               "tools.official_client_capture.codex_upgrade_supervisor": supervisor,
+                               "background_validation": mock.Mock(check=mock.Mock(return_value=(0, message)),
+                                                                  latest_deployment=mock.Mock(return_value={"deployment": "fixture"}))}
+                    with mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, {"VC_STATE_DIR": str(state_root)}):
+                        state = subject.state()
+                    self.assertEqual(state["background_validation"], "passed")
+                    if expected is None:
+                        self.assertNotIn("background_validation_scope", state, "全集结论的准入状态与改造前逐字相同")
+                    else:
+                        self.assertEqual(state["background_validation_scope"], expected)
 
     def test_catalog_replays_vc3_and_vc4_and_separates_content_and_file_digests(self):
         from tools.official_client_capture import codex_upgrade as upgrade
