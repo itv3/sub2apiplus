@@ -37,6 +37,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import site
 import subprocess
 import sys
@@ -53,6 +54,7 @@ from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import upgrade_client_adapter
+from tools.official_client_capture.tests import claude_gate_reader_memo as gate_reader_memo
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
 from tools.official_client_capture.tests import claude_typed_vc6_fixture as vc6_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
@@ -474,6 +476,18 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
     def setUp(self) -> None:
         with vc6_fixture.retain_setup_world():
             super().setUp()
+        # 整条链共 200 多次「新开独立 reader 进程重放同一份门禁材料」，输入只有 3 种（实测 203 次逐字相同，合计占
+        # 用例墙钟约 17%～21%）。这里让测试进程、守卫进程（fork 自测试进程）与动作子进程（经环境变量）共用一份
+        # 结果目录：第一次真实启动，之后逐字相同的输入由产品自己的 prior_replays 路径复核后复用，复核失败即回退真实
+        # reader。论证与范围见 claude_gate_reader_memo 模块说明；本链的断言不依赖「每次都新开 reader 进程」。
+        self.reader_memo_dir = Path(tempfile.mkdtemp(prefix="vc6-gate-reader-memo-"))
+        self.addCleanup(shutil.rmtree, self.reader_memo_dir, ignore_errors=True)
+        environment = mock.patch.dict(os.environ, gate_reader_memo.environment(self.reader_memo_dir))
+        environment.start()
+        self.addCleanup(environment.stop)
+        memo = gate_reader_memo.gate_reader_memo(self.reader_memo_dir)
+        memo.__enter__()
+        self.addCleanup(memo.__exit__, None, None, None)
 
     def vc5_complete_world(self) -> dict[str, Any]:
         world = self.vc5_world(typed_official_source=True)

@@ -39,6 +39,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign, QualifiedFileRuntime, fixture_projection
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_capture.tests import claude_fault_chain_world as stops
+from tools.official_client_capture.tests import claude_gate_reader_memo as gate_reader_memo
 from tools.official_client_control import delivery_execution as execution
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes, sha256_file
 
@@ -1021,6 +1022,11 @@ def install(control_path: str) -> None:
     stack = contextlib.ExitStack()
     try:
         stack.enter_context(source_scope(Path(control_path)))
+        # 调用方（test_claude_upgrade_vc6_batch）显式给出缓存目录时，动作子进程与测试进程、守卫共用
+        # 「相同输入的独立 reader 结果」复用；没有这个环境变量（其他所有测试）则完全不启用，见 claude_gate_reader_memo。
+        memo_directory = os.environ.get(gate_reader_memo.MEMO_ENV)
+        if memo_directory:
+            stack.enter_context(gate_reader_memo.gate_reader_memo(Path(memo_directory)))
     except BaseException:
         stack.close()
         raise
