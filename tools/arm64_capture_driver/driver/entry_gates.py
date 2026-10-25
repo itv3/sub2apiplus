@@ -2637,6 +2637,13 @@ def export_records(
             evidence.update(schema_version=P0_EVIDENCE_SCHEMA_V2, **v2_fields("test-capture-tools", CAPTURE_GROUP),
                             executed_as=f"入口门禁一次运行（{inherit_label}）：测试组全集由本次执行的单元与承接以往运行正式执行记录的单元"
                                         "合成，逐单元引用运行清单里的执行记录")
+        subset = manifest.get("selection")
+        if isinstance(subset, dict) and subset.get("scope") == GATE_SCOPE_CLIENT_PLAN:
+            # 按客户端筛选的运行：证据的说明字段（自由文本，不改字段集合）如实写明这不是测试组全集，P0 收据的读者看得到 VC-0 的含义变窄了（设计风险 1）。
+            skipped_modules = sum(1 for state in (subset.get("modules") or {}).values() if state == "skip")
+            evidence["executed_as"] = (f"{evidence['executed_as']}；注意：按客户端筛选，只执行 {subset.get('client')} 计划的测试模块"
+                                       f"（共 {len(subset.get('modules') or {})} 个，跳过 {skipped_modules} 个、并入 {len(subset.get('pulled') or [])} 个），"
+                                       f"不是测试组全集；筛选摘要 {str(subset.get('selection_sha256'))[:12]}")
         p0["test-capture-tools"] = _write(out / "p0" / "test-capture-tools.json", evidence)
     if "check-egress-spec" in records and "check-egress-spec" not in withheld:
         record = records["check-egress-spec"]

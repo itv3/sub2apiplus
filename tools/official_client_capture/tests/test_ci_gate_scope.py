@@ -399,10 +399,17 @@ class GateScopeExportTests(unittest.TestCase):
             for name in ("full-gates-summary.json", "preflight.json"):
                 with self.subTest(name):
                     self.assertEqual(json.loads((out / name).read_text(encoding="utf-8"))["client_selection"], echoed)
+            evidence = json.loads((out / "p0" / "test-capture-tools.json").read_text(encoding="utf-8"))
+            self.assertIn("按客户端筛选，只执行 codex 计划的测试模块（共 2 个，跳过 1 个、并入 0 个），不是测试组全集", evidence["executed_as"],
+                          "P0 证据如实写明这是子集（自由文本字段，字段集合不变）")
+            self.assertIn(selection["selection_sha256"][:12], evidence["executed_as"])
 
     def test_without_a_selection_the_records_are_exactly_as_before(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             entry, out = self.export(Path(directory).resolve(), None)
+            evidence = json.loads((out / "p0" / "test-capture-tools.json").read_text(encoding="utf-8"))
+            self.assertNotIn("筛选", evidence["executed_as"])
+            self.assertIn("测试组全集", evidence["executed_as"])
             self.assertNotIn("client_selection", entry)
             for name in ("full-gates-summary.json", "preflight.json", "entry-gates.json"):
                 payload = json.loads((out / name).read_text(encoding="utf-8"))
