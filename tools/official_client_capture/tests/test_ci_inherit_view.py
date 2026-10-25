@@ -753,6 +753,37 @@ class ViewPropertyTests(NarrowedWorld):
         print(f"[T36] 3538 条合成条目的视图构造 {elapsed * 1000:.1f} 毫秒（视图 {len(view)} 条）")
 
 
+class ExecutorManifestTests(NarrowedWorld):
+    """执行器真实的 ``_unit_manifest``：窄化承接项带 inherit_check（当前侧视图摘要与测试树坐标），旧口径承接项不带。"""
+
+    def manifest_entry(self, record: dict, current: ur.Current) -> dict:
+        unit = ue.Unit(self.UNIT, "test_alpha", ("test_alpha.AlphaTests.test_a",), ue.Quota(1, 128), False, 1)
+        path = self.world.store.record_path(self.UNIT, record["record_sha256"])
+        decision = ur.Decision(record, path, [])
+        outcome = ue._inherited_outcome(unit, decision, self.world.store)
+        manifest = ue._unit_manifest(
+            ur, run_id="exec-manifest", mode=ur.UNIT_INHERIT, max_age=168.0, store=self.world.store, out_dir=self.world.root / "out",
+            decided_at=fixture.stamp(fixture.T0), policy=self.world.policy, environment=self.world.environment, executor=self.world.executor,
+            units=[unit], gates=[], group_units={}, expected={}, currents={self.UNIT: current}, decisions={self.UNIT: decision},
+            outcomes=[outcome], diagnostic=[])
+        return manifest["units"][0]
+
+    def test_narrowed_inherited_entries_carry_the_current_side_view_digest_and_the_coordinate(self) -> None:
+        record = self.publish()
+        problems, current = self.check(record)
+        self.assertAccepted(problems)
+        entry = self.manifest_entry(record, current)
+        self.assertEqual(entry["disposition"], "inherited")
+        self.assertEqual(entry["inherit_check"], {"schema_version": ra.INHERIT_VIEW_SCHEMA, "repo_root": str(self.tree),
+                                                  "inherit_inputs_sha256": ra.inherit_current_digest(record, current.inputs)})
+        self.assertEqual(entry["inherit_check"]["inherit_inputs_sha256"], record["read_audit"]["inherit_inputs_sha256"])
+
+    def test_old_format_inherited_entries_have_no_inherit_check(self) -> None:
+        legacy = self.world.records[self.UNIT]
+        current = self.world.current(self.UNIT)
+        self.assertNotIn("inherit_check", self.manifest_entry(legacy, current))
+
+
 class ExecutorWritesTests(NarrowedWorld):
     """T26：执行器写入——严格闭合单元封存的视图摘要等于重算值；v2／control 单元的记录键集合与改动前完全相同。"""
 

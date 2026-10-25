@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
+import io
 import json
 import os
 import tempfile
@@ -146,8 +148,10 @@ class SealTests(InterruptedRunBase):
             self.seal()
 
     def test_the_command_line_seals_and_refuses_with_the_right_exit_code(self) -> None:
-        self.assertEqual(seal.main(["seal", "--store", str(self.store.root), "--run-dir", str(self.run_dir), "--origin-state", "vanished",
-                                    "--state-dir", str(self.state)]), 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = seal.main(["seal", "--store", str(self.store.root), "--run-dir", str(self.run_dir), "--origin-state", "vanished",
+                              "--state-dir", str(self.state)])
+        self.assertEqual(code, 0)
         self.assertEqual(self.store.manifest(RUN_ID)["origin_state"], "vanished")
 
 
