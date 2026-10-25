@@ -834,6 +834,40 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   目标 attempt 重新对账，不存在"暂停后被跳过"；它们的 deadline 暂停同样从 pre-extend 续跑。永久停线、需审核与命令
   失败不进 revisit，行为不变。
 
+## 恢复链一条命令（`driver/recovery-plan.sh`）
+
+* 用途：失败（或被截停）之后的"campaign-resume → 工具演进登记 → 对账 → 恢复预览 → 批准／授权 → 续跑"此前由人逐条串联；
+  本命令在这些**既有受管命令**之上，从现场状态推出每一步做没做、跳过已完成的、按序补做其余。它与 `fix-and-continue.sh` 的分工：
+  fix-and-continue 是"一轮修复（部署、回归、后台验证……）加续跑"，靠轮次参数文件与自己的步骤记录；恢复计划不部署、不跑门禁，
+  只管账本与对账链，判定只看现场（账本状态、工具演进状态、对账收据、恢复预览、批准收据、后继 attempt、续跑标记），对任意中断点都成立。
+* 用法（采集主机 root）：`bash driver/recovery-plan.sh <参数文件>` 是只读计划预览（`--json` 输出 JSON）；
+  `setsid -f bash driver/recovery-plan.sh <参数文件> --apply > <日志> 2>&1 < /dev/null` 执行。参数模板
+  `driver/recovery-plan.example.params`（与驱动参数文件交叉核对数据根、RUNROOT、Campaign、候选；目标 attempt 在官方还是候选目录下
+  由它所在位置判定，不必另写阶段）。
+* 计划预览（只读，不写任何文件、不改任何账本）列出：七步各自的状态（已完成／待执行／等前序／阻塞／不适用）与对应命令；
+  **保留**（预览里只读复用的作业）、**重验**（恢复预览是否仍基于当前有效演进、批准收据是否绑定预览摘要、演进登记、账本停线、
+  环境连续性与隔离）、**重采**（预览执行集合及原因：失败／结果不确定／尚未执行／被演进作废／已完成但不可复用）；尚无预览时按
+  attempt 当前作业状态列并标明最终清单待对账。同一现场两次预览得到同一个 `plan_sha256`。
+* 执行：先把计划按摘要落盘，再按序循环"重新判定 → 执行第一个未完成步骤 → 再判定"。动作只调既有受管命令（campaign-resume、
+  tool-evolution、reconcile-supervisor-run、reconcile-attempt 对账／批准／授权）与既有续跑脚本（候选采集 `vc5-recover.sh <预览>`；
+  官方首批 `entry.sh --approve-sha256 <预览摘要> --approved-by <批准人>`，批准、授权与派发恢复批次由收口模块一次完成，所以官方首批
+  的批准／授权两步标"不适用"）。预览过期（受管工具报"必须重新对账"）时回到对账重新出预览，每次运行最多回退一次。
+* 批准：campaign-resume、工具演进登记、批准恢复预览、授权、官方首批续跑各消费一份**人工提交的专项批准**（同
+  `fix_safety.require_approval`：绑定操作、对象摘要、参数与文件摘要，0600、批准人与参数 APPROVER 一致、有效期内），批准目录默认
+  `$RUNROOT/recovery-plan-approvals/<轮次>/`；缺失时只写意向（`approval-intents/`）并停下（退出码 4），**从不代签**。批准恢复预览与
+  授权共用同一个预览摘要，意向一次写全，人工一次提交两份。
+* 从不做：accounting-resolve、environment-isolate、request-budget-extend、deadline-extend、record-root-cause-repair、任何 `--force`、
+  重装出口守护；对账判账务、环境、请求预算、截止或项目总账根因达上限暂停时停下，打印要执行的受管命令；处理后重新执行同一条命令。
+  工具演进预览显示 wire 闭包变化或策略演进时也停下（会让失败 attempt 对账判永久停线，须人按后继流程处理）。
+* 重复执行与打断：每步前重新判定，已完成的跳过；被打断（kill -9、断电）后再执行同一条命令，终态与写动作序列与不打断相同。唯一
+  产生真实采集请求的是续跑派发：先写不可覆盖的占位，再起进程，再写启动记录（进程尾部带 `exit=<码>` 结束标记）；这个 attempt 已有
+  任何派发记录、或目标之后已有后继 attempt，一律不再派发。占位存在而启动记录缺失、进程消失而无结束标记、进程以非零结束，都按
+  "结果不确定"停下（退出码 4），**不自动重派**，人工核对后换新轮次。
+* 步骤记录在 `$RUNROOT/recovery-plan/<轮次>/`：`steps/<步骤>.json`（最近一次）、`history.ndjson`、`receipts/`（不可覆盖的历史）、
+  `plans/<摘要>.json`（执行前的计划）、`raw/`（受管命令原始输出）、`continue/`（续跑占位与启动记录）、`approval-intents/`。
+  同一轮次只允许一个实例（`.round.lock`）。目前只支持 Codex 升级；恢复段（`--recovery-revision ar<k>`）失败仍走手工入口。
+* 退出码：0 完成（续跑已派发／在跑／已结束）或预览成功；1 失败；2 参数或用法错误；3 本轮已有实例在跑；4 需要人工处理。
+
 ## B-09 全集收据与开工准入
 
 后台验证使用 `re-execute`。可附带 `--full-set-context <JSON> --full-set-clock <JSON>` 与

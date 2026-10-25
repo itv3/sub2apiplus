@@ -128,6 +128,25 @@ def campaign_dir():
     return DATA / "evidence" / "campaigns" / scenario()["campaign"]
 
 
+def recorded():
+    """真实现场回放：scenario["recorded"] 给出一份真实 Campaign 记录的目录与文件名，命令执行时原样写出它们。"""
+    return scenario().get("recorded")
+
+
+def rec_file(name):
+    return Path(recorded()["dir"]) / name
+
+
+def copy_recorded(name, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(rec_file(name).read_bytes())
+    destination.chmod(0o600)
+
+
+def resume_sha():
+    return recorded()["resume_sha"] if recorded() else RESUME_SHA
+
+
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -200,6 +219,8 @@ def build_preview(st, attempt_id, index):
 def reconcile(st, attempt_id, argv):
     directory = attempt_dir(attempt_id)
     receipt = directory / "attempt-reconciliation.json"
+    if recorded() and not receipt.exists():
+        copy_recorded(recorded()["receipt_name"], receipt)
     if not receipt.exists():
         write_json(receipt, {"attempt_id": attempt_id, "attempt_status": scenario().get("attempt_status", "failed"),
                              "campaign_ledger": {"status": st["ledger_status"], "head_sequence": st.get("ledger_seq", 10)},
@@ -209,9 +230,13 @@ def reconcile(st, attempt_id, argv):
         return emit(paused, 3)
     path, latest = latest_preview(attempt_id)
     key = preview_key(st)
-    fresh = latest is not None and latest["review_sha256"] == sha([attempt_id, latest["index"], key])
+    fresh = latest is not None and (bool(recorded()) or latest["review_sha256"] == sha([attempt_id, latest["index"], key]))
     if "--approve-recovery-sha256" in argv or "--authorize-recovery-preview" in argv:
         pass
+    elif recorded() and latest is None:
+        path = directory / recorded()["preview_name"]
+        copy_recorded(recorded()["preview_name"], path)
+        latest = json.loads(path.read_text(encoding="utf-8"))
     elif not fresh:
         index = (latest["index"] if latest else 0) + 1
         path = directory / f"recovery-preview-{index:02d}.json"
@@ -253,13 +278,16 @@ def cli(argv):
             return emit(None, 1, f"升级审计失败：Campaign 计时账本状态为 {st['ledger_status']}，不是停线，无需 campaign-resume。")
         approve = option(argv, "--approve-sha256")
         if approve is None:
-            return emit({"status": "approval_required", "review_sha256": RESUME_SHA, "root_cause_id": "rc1-fixture",
+            return emit({"status": "approval_required", "review_sha256": resume_sha(), "root_cause_id": "rc1-fixture",
                          "next_command": "campaign-resume --approve-sha256 <review_sha256> --approved-by <批准人>"})
-        if approve != RESUME_SHA or not option(argv, "--approved-by"):
+        if approve != resume_sha() or not option(argv, "--approved-by"):
             return emit(None, 1, "升级审计失败：批准摘要与重算的 campaign-resume 预览不一致；重新预览后再批准。")
-        receipt = campaign_dir() / "control" / "resume" / f"resume-{RESUME_SHA}.json"
-        write_json(receipt, {"approved_sha256": RESUME_SHA, "approved_by": option(argv, "--approved-by"), "approved_at_utc": now(),
-                             "root_cause_id": "rc1-fixture", "preview": {"review_sha256": RESUME_SHA}})
+        receipt = campaign_dir() / "control" / "resume" / f"resume-{resume_sha()}.json"
+        if recorded():
+            copy_recorded(recorded()["resume_name"], receipt)
+        else:
+            write_json(receipt, {"approved_sha256": RESUME_SHA, "approved_by": option(argv, "--approved-by"), "approved_at_utc": now(),
+                                 "root_cause_id": "rc1-fixture", "preview": {"review_sha256": RESUME_SHA}})
         st["ledger_status"] = "recovery_required"
         st["ledger_seq"] = st.get("ledger_seq", 10) + 1
         save_state(st)
@@ -283,7 +311,7 @@ def cli(argv):
                 st["ledger_seq"] = st.get("ledger_seq", 10) + 1
                 save_state(st)
                 return emit(None, 1, "升级审计失败：恢复批准消费前 Campaign 账本 head 已推进，必须重新对账")
-            if data["review_sha256"] != sha([attempt_id, data["index"], preview_key(st)]):
+            if not recorded() and data["review_sha256"] != sha([attempt_id, data["index"], preview_key(st)]):
                 return emit(None, 1, "升级审计失败：恢复预览生成后工具身份已变化，必须重新对账生成新预览")
             if not (attempt_dir(attempt_id) / f"recovery-approval-{data['index']:02d}.json").exists():
                 return emit(None, 1, "升级审计失败：恢复预览尚未批准")
@@ -301,12 +329,18 @@ def cli(argv):
             path, latest = latest_preview(attempt_id)
             if latest is None or approve != latest["review_sha256"]:
                 return emit(None, 1, "升级审计失败：批准摘要与任何恢复预览都不一致")
-            if latest["review_sha256"] != sha([attempt_id, latest["index"], preview_key(st)]):
+            if not recorded() and latest["review_sha256"] != sha([attempt_id, latest["index"], preview_key(st)]):
                 return emit(None, 1, "升级审计失败：恢复预览批准后工具身份已变化，必须重新对账")
-            write_json(attempt_dir(attempt_id) / f"recovery-approval-{latest['index']:02d}.json",
-                       {"approved_sha256": approve, "preview_index": latest["index"], "index": latest["index"],
-                        "preview_sha256": "x" * 64, "approved_at_utc": now(), "schema_version": "recovery-approval/v1"})
-            payload["recovery_approval"] = {"index": latest["index"], "approved_sha256": approve, "preview_index": latest["index"]}
+            if recorded():
+                copy_recorded(recorded()["approval_name"], attempt_dir(attempt_id) / recorded()["approval_name"])
+                real = json.loads(rec_file(recorded()["approval_name"]).read_text(encoding="utf-8"))
+                payload["recovery_approval"] = {"index": real["index"], "approved_sha256": real["approved_sha256"],
+                                                "preview_index": real["preview_index"]}
+            else:
+                write_json(attempt_dir(attempt_id) / f"recovery-approval-{latest['index']:02d}.json",
+                           {"approved_sha256": approve, "preview_index": latest["index"], "index": latest["index"],
+                            "preview_sha256": "x" * 64, "approved_at_utc": now(), "schema_version": "recovery-approval/v1"})
+                payload["recovery_approval"] = {"index": latest["index"], "approved_sha256": approve, "preview_index": latest["index"]}
         return emit(payload, 0)
     return emit(None, 99, f"替身不认识的调用：{argv}")
 '''
@@ -365,8 +399,9 @@ _STUB_DISPATCH = r'''#!/bin/bash
 echo "{name} $*" >> "{world}/dispatch.log"
 if [ -f "{world}/dispatch.mode" ] && [ "$(cat "{world}/dispatch.mode")" = sleep ]; then sleep 60; fi
 if [ -f "{world}/dispatch.mode" ] && [ "$(cat "{world}/dispatch.mode")" = fail ]; then echo "dispatch failed"; exit 7; fi
-mkdir -p "{successor_root}/20990101T000000Z-successor0000000000"
-echo '{{"status": "awaiting_receipts", "results": []}}' > "{successor_root}/20990101T000000Z-successor0000000000/attempt.json"
+mkdir -p "{successor_root}/{successor_name}"
+if [ -n "{successor_source}" ] && [ -f "{successor_source}" ]; then cp "{successor_source}" "{successor_root}/{successor_name}/attempt.json"
+else echo '{{"status": "awaiting_receipts", "results": []}}' > "{successor_root}/{successor_name}/attempt.json"; fi
 echo "RUN_BATCH_DONE" > "{runroot}/vc5-run-batch.out"
 echo "{name} done"
 '''
@@ -388,6 +423,8 @@ class World:
         self.candidate = self.fixture.cand
         self.campaign_dir = self.fixture.newdir
         self.attempt = "20261021T135838Z-70aa3c8b45478aec"
+        self.successor_name = "20990101T000000Z-successor0000000000"
+        self.successor_source = ""
         self.stub = self.data / ".stub"
         self.stub.mkdir(mode=0o700)
         (self.stub / "calls.jsonl").touch()
@@ -429,10 +466,11 @@ class World:
 
     def _install_driver(self) -> None:
         driver = self.driver_target / "driver"
-        driver.mkdir(parents=True)
+        driver.mkdir(parents=True, exist_ok=True)
         for name in ("vc5-recover.sh", "entry.sh"):
             write(driver / name, _STUB_DISPATCH.format(name=name, world=self.root, runroot=self.runroot,
-                                                       successor_root=self.attempts_dir()), 0o700)
+                                                       successor_root=self.attempts_dir(), successor_name=self.successor_name,
+                                                       successor_source=self.successor_source), 0o700)
 
     def set_state(self, **values: Any) -> None:
         state = json.loads((self.stub / "state.json").read_text(encoding="utf-8"))

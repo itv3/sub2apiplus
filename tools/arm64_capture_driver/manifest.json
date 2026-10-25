@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "751b67babff7c085094511a1e553ddb8623894f1ce536f301412b2a2631e33c7",
+      "sha256": "2d5058b9c1e1fe957cb11c7fc0945bba0543d51ff002960a07da0d9a2fce3de3",
       "mode": "0600",
-      "bytes": 124243
+      "bytes": 129176
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -418,9 +418,9 @@
     },
     {
       "path": "driver/recovery-plan.example.params",
-      "sha256": "ea62162824a133d168c03e5d9f3597d777e0422bc017ebc87b00a62754ceb997",
+      "sha256": "25b3715e4888697d2cec8a27ec30d096a4d4d591c0287736d0f0061c524ae7ba",
       "mode": "0600",
-      "bytes": 2347
+      "bytes": 2502
     },
     {
       "path": "driver/recovery-plan.sh",
@@ -741,5 +741,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "613f412fe1b3fce9790b857a066a95d044e2591fd821f507ea7ae5085ec4ef0c"
+  "manifest_sha256": "8dde5532319b5c9b5e06a778ca73c15b0710c107c9901fecd5c889402e1ed5f3"
 }
