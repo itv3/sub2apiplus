@@ -593,7 +593,7 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_RewriteCountIndependentOfHits
 	smallAllocs := testing.AllocsPerRun(2, func() {
 		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(small)
 	})
-	largeAllocs := testing.AllocsPerRun(2, func() {
+	largeAllocs := testing.AllocsPerRun(2, func() { // time-threshold: allow 分配次数上限 200 对应干净环境实测约 17 次，已留 10 倍余量，上限是为了锁住“与命中数无关”的复杂度，注释里写明了取值依据
 		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(large)
 	})
 

@@ -563,7 +563,7 @@ func TestOpenAIWSConnReaderLoop_ReadTimeoutAbortsWithoutCloseHandshake(t *testin
 	_, err = conn.readMessageWithTimeout(20 * time.Millisecond)
 	elapsed := time.Since(started)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, elapsed, 500*time.Millisecond, "读超时后关闭不应等待关闭握手")
+	require.Less(t, elapsed, 2500*time.Millisecond, "读超时后关闭不应等待关闭握手") // time-threshold: allow 被保护的是约 5s 的关闭握手，上界取其一半，区分“直接关闭”与“等握手”
 	requireConnClosed(t, conn)
 }
 
@@ -582,7 +582,7 @@ func TestOpenAIWSConnPingDoesNotBlockWrite(t *testing.T) {
 
 	started := time.Now()
 	require.NoError(t, conn.writeJSONWithTimeout(context.Background(), map[string]any{"type": "response.create"}, time.Second))
-	require.Less(t, time.Since(started), 300*time.Millisecond, "写请求不应等待 ping 的 pong")
+	require.Less(t, time.Since(started), 2500*time.Millisecond, "写请求不应等待 ping 的 pong") // time-threshold: allow 被保护的是 ping 等 pong 的 5s，上界取其一半，区分“写不被阻塞”与“等 pong”
 	require.EqualValues(t, 1, fake.pinging.Load(), "写完成时 ping 仍应在等待 pong")
 }
 

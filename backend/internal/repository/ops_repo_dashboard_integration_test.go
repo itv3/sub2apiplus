@@ -114,7 +114,7 @@ func TestOpsOutputTPSQueryDeadline(t *testing.T) {
 	tx := testTx(t)
 	_, err := tx.ExecContext(context.Background(), "LOCK TABLE usage_logs IN ACCESS EXCLUSIVE MODE")
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	repo := requireType[*opsRepository](t, NewOpsRepository(integrationDB))
 	now := time.Now().UTC()

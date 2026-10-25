@@ -142,7 +142,7 @@ func TestAccountHandlerCreateUsesSinglePrivacyEnsureAndPersistsCooldown(t *testi
 	require.NotEmpty(t, extra["privacy_rollout_key"])
 	require.Equal(t, 1, updateCalls)
 
-	require.Never(t, func() bool {
+	require.Never(t, func() bool { // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		_, calls := accountRepo.privacyState()
 		return settingsCalls.Load() > 1 || calls > 1
 	}, 200*time.Millisecond, 10*time.Millisecond, "通用创建不得在 Ensure 后再次 Force")
@@ -201,7 +201,7 @@ func TestBatchCreateDoesNotForcePrivacyAfterServiceCreate(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "batch-create-no-force")
 	router.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Never(t, func() bool { return adminService.forceCalls() > 0 }, 150*time.Millisecond, 10*time.Millisecond)
+	require.Never(t, func() bool { return adminService.forceCalls() > 0 }, 150*time.Millisecond, 10*time.Millisecond) // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 }
 
 func TestImportDataDoesNotForcePrivacyAfterServiceCreate(t *testing.T) {
@@ -222,5 +222,5 @@ func TestImportDataDoesNotForcePrivacyAfterServiceCreate(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "import-data-no-force")
 	router.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Never(t, func() bool { return adminService.forceCalls() > 0 }, 150*time.Millisecond, 10*time.Millisecond)
+	require.Never(t, func() bool { return adminService.forceCalls() > 0 }, 150*time.Millisecond, 10*time.Millisecond) // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 }

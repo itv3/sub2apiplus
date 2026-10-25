@@ -70,11 +70,11 @@ func TestEvaluateHTTPAndTimeoutDoNotExposePayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(100 * time.Millisecond): // time-threshold: allow 测试替身里模拟的耗时，不是断言上限
 		}
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	_, _, err := Evaluate(ctx, server.Client(), server.URL, "test-secret", Request{})
 	require.ErrorIs(t, err, context.DeadlineExceeded)

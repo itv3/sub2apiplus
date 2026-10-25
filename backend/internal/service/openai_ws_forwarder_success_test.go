@@ -1568,7 +1568,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		Schedulable: true,
 	}
 	conn := newOpenAIWSConn("prewarm_ctx_conn", account.ID, &openAIWSBlockingConn{
-		readDelay: 200 * time.Millisecond,
+		readDelay: 3 * time.Second,
 	}, nil)
 	lease := &openAIWSConnLease{
 		accountID: account.ID,
@@ -1579,7 +1579,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		"model": "gpt-5.4",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	start := time.Now()
 	err := svc.performOpenAIWSGeneratePrewarm(
@@ -1596,7 +1596,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 	elapsed := time.Since(start)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "prewarm_read_event")
-	require.Less(t, elapsed, 180*time.Millisecond, "预热读取应受父 context 取消控制，不应阻塞到 read_timeout")
+	require.Less(t, elapsed, 1500*time.Millisecond, "预热读取应受父 context 取消控制，不应阻塞到 read_timeout") // time-threshold: allow 阻塞读替身的读延迟是 3s，上界 1.5s 区分“受父 context 取消控制（约 40ms）”与“读满 3s”
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_TurnMetadataInPayloadOnConnReuse(t *testing.T) {

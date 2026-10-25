@@ -244,7 +244,7 @@ func TestContentModerationRuntimeSnapshotUpdateWinsOverInitialLoad(t *testing.T)
 	case updateErr := <-updateDone:
 		require.NoError(t, updateErr)
 		t.Fatal("configuration update completed before the initial load released its lock")
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 
 	close(releaseRefresh)
@@ -400,7 +400,7 @@ func TestContentModerationRuntimeSnapshotUpdateWinsOverInFlightRefresh(t *testin
 	case updateErr := <-updateDone:
 		require.NoError(t, updateErr)
 		t.Fatal("configuration update completed before the in-flight refresh released its lock")
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 
 	close(releaseRefresh)

@@ -166,7 +166,7 @@ func TestAccountUsageService_PersistOpenAICodexProbeSnapshotOnlyUpdatesExtra(t *
 	select {
 	case got := <-repo.rateLimitCh:
 		t.Fatalf("不应将探测快照写入运行时限流状态: %v", got)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 
@@ -202,7 +202,7 @@ func TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(
 	select {
 	case got := <-repo.rateLimitCh:
 		t.Fatalf("不应将已耗尽的 codex extra 持久化为运行时限流状态: %v", got)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 }
 

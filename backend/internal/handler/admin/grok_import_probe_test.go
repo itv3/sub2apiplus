@@ -162,7 +162,7 @@ func TestGrokImportProbeSchedulerQueuesBatchWithoutPerTaskGoroutines(t *testing.
 	select {
 	case id := <-prober.started:
 		t.Fatalf("probe %d started before a concurrency slot was released", id)
-	case <-time.After(75 * time.Millisecond):
+	case <-time.After(75 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	close(release)
 	for i := 0; i < taskCount; i++ {
@@ -255,7 +255,7 @@ func TestGrokImportProbeSchedulerSkipsMissingServiceAndNonGrokAccounts(t *testin
 	select {
 	case id := <-prober.started:
 		t.Fatalf("unexpected probe for account %d", id)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	calls, _, _ := prober.snapshot()
 	require.Empty(t, calls)

@@ -207,7 +207,7 @@ func TestHTTPUpstreamCancellationReleasesAttempt(t *testing.T) {
 			defer srv.Close()
 			defer srv.CloseClientConnections()
 			s, do := lifecycleClient(t, srv, false)
-			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
 			require.NoError(t, err)

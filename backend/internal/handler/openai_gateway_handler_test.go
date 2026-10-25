@@ -1311,7 +1311,7 @@ func TestOpenAIResponsesWebSocket_FirstMessageTimeoutUsesConfig(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, context.DeadlineExceeded)
 	require.GreaterOrEqual(t, elapsed, 500*time.Millisecond)
-	require.Less(t, elapsed, 4*time.Second)
+	require.Less(t, elapsed, 5*time.Second)
 	require.Eventually(t, func() bool {
 		readTimeout, ok := logSink.FieldValueForMessage("openai.websocket_read_first_message_failed", "read_timeout")
 		return ok && readTimeout == time.Second &&

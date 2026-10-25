@@ -547,7 +547,7 @@ func TestOpenAIWSPassthroughTurnLifecycle_SerializesTerminalCommitAndNextTurn(t 
 	select {
 	case <-admitted:
 		t.Fatal("next response.create was admitted before terminal commit completed")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 
 	lifecycle.finishTerminalWrite(true, clientFrameConn.markTurnCompleted)
@@ -736,7 +736,7 @@ func TestPassthroughLifecycle_ActiveTurnActivityRefreshesReadTimeout(t *testing.
 			`{"type":"response.output_text.delta","response_id":"resp_active_refresh","delta":"three"}`,
 			`{"type":"response.completed","response":{"id":"resp_active_refresh","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":3}}}`,
 		} {
-			timer := time.NewTimer(600 * time.Millisecond)
+			timer := time.NewTimer(600 * time.Millisecond) // time-threshold: allow 测试替身里模拟的耗时，不是断言上限
 			<-timer.C
 			timer.Stop()
 			upstream.Send(event)

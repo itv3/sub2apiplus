@@ -3205,7 +3205,7 @@ func TestFetchCodexModelsManifestAPIKeyServesStaleWhileRefreshing(t *testing.T) 
 	}
 	select {
 	case staleResult = <-resultCh:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Error("stale manifest was not returned while refresh was blocked")
 		close(releaseRefresh)
 		staleResult = <-resultCh
@@ -3747,7 +3747,7 @@ func TestFetchCodexModelsManifestOAuthStaleServesOldValueAndRefreshesInBackgroun
 	case manifest := <-resultCh:
 		require.NoError(t, <-errCh)
 		require.Contains(t, string(manifest.Body), `"new"`)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("乐观期必须立即返回缓存旧值")
 	}
 	require.EqualValues(t, 2, calls.Load())

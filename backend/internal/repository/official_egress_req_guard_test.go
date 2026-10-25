@@ -211,7 +211,7 @@ func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {
 		if guarded {
 			client = instrumentReqClientWithGuard(client, guard, nil)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 		_, sendErr := client.R().SetContext(ctx).Get(slow.URL)
 		cancel()
 		require.ErrorIs(t, sendErr, context.DeadlineExceeded)

@@ -84,7 +84,7 @@ func TestModerationConfigWriteRejectsGroupDeletedAfterValidation(t *testing.T) {
 	select {
 	case err := <-finished:
 		t.Fatalf("config write passed a locked group before deletion: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE groups SET deleted_at=NOW() WHERE id=$1", group.ID)
 	require.NoError(t, err)

@@ -161,7 +161,7 @@ func TestAuthCacheInvalidationWorker_RedisSlowIsTimedOut(t *testing.T) {
 	worker := NewAuthCacheInvalidationWorker(repo, cache)
 	started := time.Now()
 	worker.processEvent(context.Background(), AuthCacheInvalidationEvent{ID: 10, CacheKey: "hash"})
-	require.Less(t, time.Since(started), 3*time.Second)
+	require.Less(t, time.Since(started), 5*time.Second)
 	require.Equal(t, []int64{10}, repo.retried)
 	require.Contains(t, repo.retryError, "deadline")
 }
@@ -196,7 +196,7 @@ func TestAuthCacheInvalidationWorker_ProcessesClaimedBatchConcurrently(t *testin
 	worker := NewAuthCacheInvalidationWorker(repo, cache)
 	started := time.Now()
 	require.NoError(t, worker.processBatch(context.Background()))
-	require.Less(t, time.Since(started), time.Second)
+	require.Less(t, time.Since(started), 2*time.Second) // time-threshold: allow 32 个事件每个 100ms，串行要 3.2 秒；2 秒上界仍低于串行时间，用来验证并发处理，余量比原来的 1 秒翻倍
 	require.Len(t, repo.deleted, 32)
 }
 

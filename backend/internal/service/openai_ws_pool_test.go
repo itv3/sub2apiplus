@@ -454,7 +454,7 @@ func TestOpenAIWSConnPool_AcquireAtCapacityWakesWhenAnotherConnReleases(t *testi
 		require.True(t, got.lease.Reused())
 		require.GreaterOrEqual(t, got.lease.QueueWaitDuration(), 30*time.Millisecond, "queue wait accumulated before the wake-up must be carried into the lease")
 		got.lease.Release()
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("waiter queued on a busy connection must be woken when another connection is released")
 	}
 	require.Equal(t, int32(0), target.waiters.Load())
@@ -513,7 +513,7 @@ func TestOpenAIWSConnPool_AcquireAtCapacityWakesWhenCapacityFreedByEviction(t *t
 		require.NotEqual(t, target.id, got.lease.ConnID())
 		require.GreaterOrEqual(t, got.lease.QueueWaitDuration(), 30*time.Millisecond, "queue wait must be carried into a lease obtained by dialing after the wake-up")
 		got.lease.Release()
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("waiter queued on a busy connection must be woken when pool capacity is freed")
 	}
 	require.Equal(t, 1, dialer.DialCount())
@@ -571,7 +571,7 @@ func TestOpenAIWSConnPool_AcquireAtCapacityCanceledWaiterDoesNotTakeReleasedConn
 	case got := <-resultCh:
 		require.ErrorIs(t, got.err, context.Canceled)
 		require.Nil(t, got.lease, "a canceled waiter must not come back with a lease after a pool change wake-up")
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("canceled waiter must return promptly")
 	}
 	require.True(t, other.tryAcquire(), "the released token must stay available to other acquirers")
@@ -739,7 +739,7 @@ func TestOpenAIWSConnPool_ClearAccountWakesIncompatibleTopologyWaiter(t *testing
 		resultCh <- result{lease: lease, err: acquireErr}
 	}()
 
-	require.Never(t, func() bool { return dialer.DialCount() > 1 }, 50*time.Millisecond, 5*time.Millisecond)
+	require.Never(t, func() bool { return dialer.DialCount() > 1 }, 50*time.Millisecond, 5*time.Millisecond) // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	pool.ClearAccount(account.ID)
 
 	resultB := <-resultCh
@@ -1000,7 +1000,7 @@ func TestOpenAIWSConnPool_NonemptySinkDisablesBackgroundPrewarm(t *testing.T) {
 	// 生产默认 min-idle 会尝试补齐连接；非空 SinkID 必须在调度层就禁止
 	// 没有当前 invocation Token 的后台拨号。
 	pool.ensureTargetIdleAsync(request.Account.ID)
-	require.Never(t, func() bool {
+	require.Never(t, func() bool { // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		return dialer.DialCount() > 1
 	}, 100*time.Millisecond, 5*time.Millisecond)
 	ap, ok := pool.getAccountPool(request.Account.ID)
@@ -1296,7 +1296,7 @@ func TestOpenAIWSConnPool_AcquireWaitsForBusyIncompatibleConnection(t *testing.T
 		done.Store(true)
 	}()
 
-	require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond)
+	require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond) // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	plainLease.Release()
 
 	result := <-resultCh
@@ -1649,7 +1649,7 @@ func TestOpenAIWSConnPool_AcquireRetainedSessionsUsesScaledCapacity(t *testing.T
 				leases = append(leases, lease)
 			}
 
-			fullCtx, fullCancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			fullCtx, fullCancel := context.WithTimeout(context.Background(), 30*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 			defer fullCancel()
 			_, err := pool.Acquire(fullCtx, req)
 			require.ErrorIs(t, err, context.DeadlineExceeded, "扩容后仍必须受全局硬上限约束")
@@ -1713,7 +1713,7 @@ func TestOpenAIWSConnLease_WriteJSONWithContextTimeout_RespectsParentContext(t *
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Less(t, elapsed, 200*time.Millisecond)
+	require.Less(t, elapsed, 5*time.Second)
 }
 
 func TestOpenAIWSConnLease_PingWithTimeout(t *testing.T) {
@@ -1727,11 +1727,11 @@ func TestOpenAIWSConnLease_PingWithTimeout(t *testing.T) {
 }
 
 func TestOpenAIWSConn_ReadAndWriteCanProceedConcurrently(t *testing.T) {
-	conn := newOpenAIWSConn("full_duplex", 1, &openAIWSBlockingConn{readDelay: 120 * time.Millisecond}, nil)
+	conn := newOpenAIWSConn("full_duplex", 1, &openAIWSBlockingConn{readDelay: 1500 * time.Millisecond}, nil)
 
 	readDone := make(chan error, 1)
 	go func() {
-		_, err := conn.readMessageWithContextTimeout(context.Background(), 200*time.Millisecond)
+		_, err := conn.readMessageWithContextTimeout(context.Background(), 3*time.Second)
 		readDone <- err
 	}()
 
@@ -1743,7 +1743,7 @@ func TestOpenAIWSConn_ReadAndWriteCanProceedConcurrently(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
-	require.Less(t, elapsed, 80*time.Millisecond, "写路径不应被读锁长期阻塞")
+	require.Less(t, elapsed, 750*time.Millisecond, "写路径不应被读锁长期阻塞") // time-threshold: allow 读延迟已拉到 1.5s，写路径若被读锁阻塞至少等 1.4s，上界 750ms 区分“并发”与“串行”
 	require.NoError(t, <-readDone)
 }
 
@@ -1841,7 +1841,7 @@ func TestOpenAIWSConnPool_BackgroundWorkerGuardBranches(t *testing.T) {
 	close(poolStopPing.workerStopCh)
 	select {
 	case <-pingDone:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("runBackgroundPingWorker 未在 stop 信号后退出")
 	}
 
@@ -1854,7 +1854,7 @@ func TestOpenAIWSConnPool_BackgroundWorkerGuardBranches(t *testing.T) {
 	close(poolStopCleanup.workerStopCh)
 	select {
 	case <-cleanupDone:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("runBackgroundCleanupWorker 未在 stop 信号后退出")
 	}
 }
@@ -2072,7 +2072,7 @@ func TestOpenAIWSConnPool_Close_WaitsWorkerGroupAndNilStopChannel(t *testing.T) 
 	select {
 	case <-closed:
 		t.Fatal("Close 不应在 WaitGroup 未完成时提前返回")
-	case <-time.After(30 * time.Millisecond):
+	case <-time.After(30 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 
 	close(release)

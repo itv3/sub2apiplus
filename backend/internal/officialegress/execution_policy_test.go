@@ -42,7 +42,7 @@ func TestExecutionPolicyControllerAppliesConcurrencyLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	waitContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 	_, err = controller.acquire(waitContext, "account:1", "usage-probe", policy)
 	if !errors.Is(err, context.DeadlineExceeded) {

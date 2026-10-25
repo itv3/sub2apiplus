@@ -56,7 +56,7 @@ func (s *batchDeleteAdminService) DeleteAccount(ctx context.Context, id int64) e
 		s.active--
 		s.mu.Unlock()
 		return ctx.Err()
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond): // time-threshold: allow 测试替身里模拟的耗时，不是断言上限
 	}
 
 	s.mu.Lock()

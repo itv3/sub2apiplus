@@ -145,7 +145,7 @@ func TestOllamaCloudUsageRateLimitProbeNotExhaustedNoCallback(t *testing.T) {
 	select {
 	case <-called:
 		t.Fatal("not-exhausted usage must not invoke the callback")
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	require.Equal(t, int64(1), upstream.calls.Load(), "a fresh probe must still refresh once")
 }
@@ -215,7 +215,7 @@ func TestOllamaCloudUsageRateLimitProbeSkipsMissingCookieAndNonOllamaAccount(t *
 	select {
 	case <-called:
 		t.Fatal("ineligible accounts must be skipped quietly")
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	require.Zero(t, upstream.calls.Load(), "no upstream fetch for ineligible accounts")
 }
@@ -244,7 +244,7 @@ func TestOllamaCloudUsageRateLimitProbeRespectsFailureBackoff(t *testing.T) {
 	select {
 	case <-called:
 		t.Fatal("a model 429 must not bypass scrape-429 backoff")
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	require.Zero(t, upstream.calls.Load(), "no fetch while the snapshot is in failure backoff")
 }
@@ -353,7 +353,7 @@ func TestOllamaCloudUsageRateLimitProbeSlowFetchDoesNotReportExpiredReset(t *tes
 	select {
 	case <-called:
 		t.Fatal("a reset that already rolled over during the fetch must not be reported")
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(400 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	require.Equal(t, int64(1), upstream.calls.Load(), "the slow probe must still fetch once")
 

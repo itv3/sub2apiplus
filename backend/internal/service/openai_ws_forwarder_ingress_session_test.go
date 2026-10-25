@@ -68,7 +68,7 @@ func TestOpenAIWSDownstreamWriteContext_CancellationOwnership(t *testing.T) {
 		select {
 		case <-writeCtx.Done():
 			t.Fatalf("lease loss unexpectedly canceled downstream write: %v", writeCtx.Err())
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(20 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		}
 
 		clientDisconnected := errors.New("client disconnected")

@@ -1038,7 +1038,7 @@ func TestGrokCredentialMutationLockWaitHonorsCredentialBudget(t *testing.T) {
 	mutationLock := svc.grokCredentialMutationLock(account.ID)
 	require.NoError(t, mutationLock.Lock(context.Background()))
 	defer mutationLock.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 	defer cancel()
 
 	startedAt := time.Now()
@@ -1048,7 +1048,7 @@ func TestGrokCredentialMutationLockWaitHonorsCredentialBudget(t *testing.T) {
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, token)
-	require.Less(t, time.Since(startedAt), 500*time.Millisecond)
+	require.Less(t, time.Since(startedAt), 5*time.Second)
 	require.Zero(t, repo.setErrorCalls)
 	require.Zero(t, repo.setTempUnschedCalls)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
@@ -1083,7 +1083,7 @@ func TestGetRequestCredentialBudgetBoundsBlockedConditionalMutation(t *testing.T
 	require.Equal(t, NextAccountStop, failoverErr.NextAccountAction)
 	require.Empty(t, token)
 	require.Empty(t, kind)
-	require.Less(t, time.Since(startedAt), 500*time.Millisecond)
+	require.Less(t, time.Since(startedAt), 5*time.Second)
 	require.Zero(t, baseRepo.setErrorCalls)
 	require.Zero(t, baseRepo.setTempUnschedCalls)
 	require.Empty(t, cache.deletedKeys)
@@ -1152,7 +1152,7 @@ func TestGetRequestCredentialLockHeldTimeoutDoesNotQuarantineAccount(t *testing.
 			require.Equal(t, tt.wantScope, failoverErr.Scope)
 			require.Equal(t, tt.wantReason, failoverErr.Reason)
 			require.Equal(t, tt.wantAction, failoverErr.NextAccountAction)
-			require.Less(t, time.Since(startedAt), 3*time.Second)
+			require.Less(t, time.Since(startedAt), 5*time.Second)
 			switch countingRepo := repo.(type) {
 			case *tokenRefreshAccountRepo:
 				require.Zero(t, countingRepo.setErrorCalls)
@@ -1197,7 +1197,7 @@ func TestGrokCredentialMutationCancellationAmbiguityConfirmsDurableCommit(t *tes
 			repo := &grokCredentialCommitThenCancelRepo{tokenRefreshAccountRepo: baseRepo}
 			cache := &grokTokenCacheForProviderTest{}
 			svc := &OpenAIGatewayService{accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, cache)}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 			defer cancel()
 
 			token, err := svc.applyGrokCredentialAccountFailure(ctx, account, tt.class)

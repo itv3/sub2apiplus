@@ -290,7 +290,7 @@ func TestLegacyExchangeThenGenericCreateCannotDoubleSendPrivacySettings(t *testi
 	})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return settingsCalls.Load() == 1 }, time.Second, 10*time.Millisecond)
-	require.Never(t, func() bool { return settingsCalls.Load() > 1 }, 150*time.Millisecond, 10*time.Millisecond,
+	require.Never(t, func() bool { return settingsCalls.Load() > 1 }, 150*time.Millisecond, 10*time.Millisecond, // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		"普通 exchange-code 已无 settings 副作用，通用创建后的 Ensure 最多只能发送一次")
 }
 
@@ -319,6 +319,6 @@ func TestCreateAccountWithPersistedCooldownDoesNotImmediatelyRetryPrivacy(t *tes
 		},
 	})
 	require.NoError(t, err)
-	require.Never(t, func() bool { return privacyFactoryCalls.Load() > 0 }, 150*time.Millisecond, 10*time.Millisecond,
+	require.Never(t, func() bool { return privacyFactoryCalls.Load() > 0 }, 150*time.Millisecond, 10*time.Millisecond, // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		"首次失败状态已随账号创建持久化，异步 Ensure 必须读取冷却并跳过")
 }

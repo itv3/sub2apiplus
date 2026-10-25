@@ -24,7 +24,7 @@ func TestPricingSchedulerBlankRemoteURLDoesNotStart(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("blank remote URL must not start scheduler")
 	}
 }

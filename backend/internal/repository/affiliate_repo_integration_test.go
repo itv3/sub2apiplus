@@ -661,7 +661,7 @@ func TestAffiliateRepository_WithdrawQuota_SameOperationWaitsForInFlightRegistra
 			select {
 			case got := <-waiting:
 				t.Fatalf("same operation must wait for the in-flight registration, got result=%+v err=%v", got.result, got.err)
-			case <-time.After(300 * time.Millisecond):
+			case <-time.After(300 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 			}
 
 			if commitFirst {

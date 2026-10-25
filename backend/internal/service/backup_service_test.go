@@ -1292,7 +1292,7 @@ func TestGracefulShutdown(t *testing.T) {
 	select {
 	case <-done:
 		t.Fatal("Stop returned before backup finished")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 		// 预期：Stop 还在等待
 	}
 

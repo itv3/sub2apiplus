@@ -309,7 +309,7 @@ func TestHTTPUpstreamGuardPreservesDeadlineAndURLError(t *testing.T) {
 		{name: "after", stack: afterStack},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond) // time-threshold: allow 被测对象就是超时或取消语义，上下文截止时间本身是输入，机器变慢只会让超时更早触发
 			defer cancel()
 			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
 			require.NoError(t, requestErr)

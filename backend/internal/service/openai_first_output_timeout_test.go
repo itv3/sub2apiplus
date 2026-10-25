@@ -42,7 +42,7 @@ func (u *blockingOpenAIResponseHeaderUpstream) Do(req *http.Request, _ string, _
 	case <-req.Context().Done():
 		u.once.Do(func() { close(u.canceled) })
 		return nil, req.Context().Err()
-	case <-time.After(1500 * time.Millisecond):
+	case <-time.After(6 * time.Second):
 		return nil, errors.New("test upstream was not canceled before response headers")
 	}
 }
@@ -85,7 +85,7 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 	require.Equal(t, http.StatusGatewayTimeout, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "first_output_timeout")
 	require.True(t, failoverErr.SafeToFailoverAfterWrite)
-	require.Less(t, time.Since(started), 1300*time.Millisecond)
+	require.Less(t, time.Since(started), 3500*time.Millisecond) // time-threshold: allow 首包超时配置为 1s，上游替身的兜底等待是 6s，上界 3.5s 区分“按 1s 触发”与“没有触发”
 	require.Empty(t, rec.Body.String())
 	select {
 	case <-upstream.canceled:

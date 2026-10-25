@@ -170,7 +170,7 @@ func TestPassthroughIngressBeforeTurnRejectionDoesNotForwardFollowUp(t *testing.
 	select {
 	case payload := <-upstream.writes:
 		t.Fatalf("rejected response.create was forwarded upstream: %s", payload)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 	select {
 	case err = <-serverErr:

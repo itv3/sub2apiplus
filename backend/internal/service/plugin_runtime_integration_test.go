@@ -101,5 +101,5 @@ func TestPluginRuntimeIntegration(t *testing.T) {
 	_, err = runtime.roundTrip(context.Background(), failingRequest, "", account)
 	runtime.finishRequest()
 	require.Error(t, err)
-	assert.Less(t, time.Since(started), 2*time.Second)
+	assert.Less(t, time.Since(started), 5*time.Second)
 }

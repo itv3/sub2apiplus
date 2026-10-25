@@ -528,7 +528,7 @@ func TestRelay_JoinsUpstreamReaderBeforeReturning(t *testing.T) {
 	select {
 	case <-resultCh:
 		t.Fatal("Relay returned before the upstream reader exited")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond): // time-threshold: allow 反向窗口检查：窗口内不应发生，机器变慢只会让检查更宽松，不会抖红
 	}
 
 	close(upstreamConn.allowReturn)
