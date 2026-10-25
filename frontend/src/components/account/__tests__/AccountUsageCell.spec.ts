@@ -234,7 +234,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(false)
   })
 
-  it('自定义多协议平台指向非 Ollama 地址的账号不渲染 Ollama 单元格，额度与余额单元格都不可见（回落 `-` 占位符）', async () => {
+  it('自定义多协议平台指向非 Ollama 地址的账号不渲染 Ollama 单元格，也不走供应商额度／余额分支（无数据时回落普通 `-`）', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
@@ -256,9 +256,13 @@ describe('AccountUsageCell', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="embedded-ollama"]').exists()).toBe(false)
-    // 额度 / 余额子单元格在测试里被 stub 成恒渲染，可见性由 AccountUsageCell 的占位符判定体现：
-    // 两者都不可见时才显示 `-` 占位符。
-    expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(true)
+    // custom 改走普通 API Key 账号分支（showsProviderUsageWindow 排除 custom）：
+    // 不渲染 CN 额度 / 余额子单元格，也不再显示「该平台暂无余额查询接口」的占位符；
+    // 没有今日统计与额度上限时只是普通的 `-`（今日统计行与额度进度条见 AccountUsageCell.custom.spec.ts）。
+    expect(wrapper.find('[data-test="cn-quota-cell"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cn-balance-cell"]').exists()).toBe(false)
+    expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(false)
+    expect(wrapper.text().trim()).toBe('-')
   })
 
   it('CN 平台 Ollama Cloud eligible 账号的用量更新经 account-updated 透传', async () => {
