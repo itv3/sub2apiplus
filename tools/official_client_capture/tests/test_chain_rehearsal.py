@@ -491,12 +491,28 @@ class SignatureMatchingTest(unittest.TestCase):
         outcome = Outcome("fail", "x", "stderr: 拒绝原因 ABC", [{"id": "t", "outcome": "fail", "detail": "AssertionError: 2 != 0"}])
         self.assertTrue(engine._signature_hit(self._probe("拒绝原因 ABC"), outcome))
 
+    def test_command_probe_output_is_matched_without_traceback_frames(self) -> None:
+        output = ('终结器标准错误：拒绝原因 ABC\nTraceback (most recent call last):\n'
+                  '  File "/x/t.py", line 9, in test_the_method_name\n    do()\nAssertionError: 2 != 0')
+        outcome = Outcome("fail", "退出码 1", output)
+        self.assertTrue(engine._signature_hit(self._probe("拒绝原因 ABC"), outcome))
+        self.assertFalse(engine._signature_hit(self._probe("test_the_method_name"), outcome))
+
     def test_failure_excerpts_carry_the_message_for_the_summary(self) -> None:
         outcome = Outcome("fail", "x", "", [{"id": "pkg.Cls.test_a", "outcome": "fail", "detail": self.TRACEBACK},
                                             {"id": "pkg.Cls.test_b", "outcome": "ok", "detail": ""}])
         excerpts = engine.failure_excerpts(outcome)
         self.assertEqual([item["id"] for item in excerpts], ["pkg.Cls.test_a"])
         self.assertIn("4 != 3", excerpts[0]["message"])
+
+
+class FailureExcerptCommandTest(unittest.TestCase):
+    def test_command_probe_failures_keep_the_tail_of_the_output(self) -> None:
+        outcome = Outcome("fail", "退出码 1", "前面的噪声\n" * 50 + "错误：工具的拒绝原因 XYZ")
+        excerpts = engine.failure_excerpts(outcome)
+        self.assertEqual(len(excerpts), 1)
+        self.assertIn("工具的拒绝原因 XYZ", excerpts[0]["message"])
+        self.assertLessEqual(len(excerpts[0]["message"]), 800)
 
 
 class MiniTreeReplayTest(unittest.TestCase):

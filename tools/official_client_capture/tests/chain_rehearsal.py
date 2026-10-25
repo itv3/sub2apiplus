@@ -649,8 +649,8 @@ def signature_haystack(outcome: Outcome) -> str:
         # （含全部用例 id 与报错）在 UnittestRunner 里已经剔除。
         failing = "\n".join(exception_text(str(item.get("detail", ""))) for item in outcome.tests
                             if item.get("outcome") in {"fail", "error"})
-        return failing + "\n" + outcome.output
-    return outcome.detail + "\n" + outcome.output
+        return failing + "\n" + exception_text(outcome.output)
+    return exception_text(outcome.detail + "\n" + outcome.output)
 
 
 def _signature_hit(probe: Probe, outcome: Outcome) -> bool:
@@ -658,9 +658,11 @@ def _signature_hit(probe: Probe, outcome: Outcome) -> bool:
     return any(fragment in haystack for fragment in probe.signature)
 
 
-def failure_excerpts(outcome: Outcome, limit: int = 5, width: int = 500) -> list[dict[str, str]]:
-    """失败现象摘录（汇总里留痕，也是挑缺陷签名的依据）：失败用例的 id 与异常消息，或加载错误正文。"""
+def failure_excerpts(outcome: Outcome, limit: int = 5, width: int = 800) -> list[dict[str, str]]:
+    """失败现象摘录（汇总里留痕，也是挑缺陷签名的依据）：失败用例的 id 与异常消息，加载错误正文，或命令探针的输出尾部。"""
 
+    if outcome.tests is None and not outcome.load_error:
+        return [{"id": "（命令输出）", "message": (outcome.detail + "\n" + outcome.output).strip()[-width:]}]
     if outcome.load_error:
         return [{"id": "（加载失败）", "message": exception_text(item)[:width]} for item in (outcome.load_errors or [])[:limit]]
     return [{"id": str(item.get("id", "")), "message": exception_text(str(item.get("detail", "")))[:width]}
