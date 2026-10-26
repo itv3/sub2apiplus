@@ -88,9 +88,9 @@ from tools.official_client_capture import codex_upgrade_tool_identity_policy as 
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 # 当前基线对应的 Codex 目标版本；重封换新文件名，旧基线原样保留（见模块说明第二节）。
-BASELINE_CODEX_VERSION = "0.163.0"
-BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "codex_identity_conservation_baseline_0_163_0.json"
-BASELINE_SHA256 = "d8276420c63ec5e43b9a38df90440f068e4f336b7508c62bae20337694475904"
+BASELINE_CODEX_VERSION = "0.164.0"
+BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "codex_identity_conservation_baseline_0_164_0.json"
+BASELINE_SHA256 = "621dea76cd1901dd2f673210103ece52776db4579bbccb9eb2393024567f03d6"
 BASELINE_SCHEMA = "codex-identity-conservation-baseline/v1"
 # 基线的 17 个顶层键及其次序（与旧基线同构）：封存入口按这个次序写，测试按这个集合与次序校验。
 BASELINE_KEYS = (
@@ -116,12 +116,7 @@ TEMP_ROOT = "/private/tmp" if Path("/private/tmp").is_dir() else None
 
 # Codex 受管树相对当前基线的 control 层变化：受管树相对路径 → 工作项与理由。新增、删除、修改都要登记，且只能落在 control 层。
 # 被 Codex 策略忽略的文件（``claude_`` 前缀等 Claude 专属文件）不影响 Codex 身份，无须登记。基线重封时清空（见模块说明第二节）。
-REGISTERED_CONTROL_CHANGES: dict[str, str] = {
-    # 承接输入收窄（Codex 升级工具优化第 10a／11／16／17 项，随版本登记并入）：承接验证器 unit_records.py／read_audit.py／target_platform_gate.py
-    # 加了承接视图、测试树坐标守卫、部分完成清单与收尾逐单元承接，它们的摘要被本文件的 TARGET_VERIFIER_SHA256S 钉住，所以钉住值要同步。
-    # 钉住值进了 compare／accept 读侧闭包，评估器读侧摘要（compare_reader_sha256、accept_reader_sha256）随之变化，基线要在同一个版本登记里重封。
-    "codex_upgrade_gate_receipt.py": "第 10a 项承接输入收窄：同步 target_platform_gate／unit_records／read_audit 三个验证器的钉住值（见 opt/reg-0164-inherit）",
-}
+REGISTERED_CONTROL_CHANGES: dict[str, str] = {}
 
 
 # ----------------------------------------------------------------------
