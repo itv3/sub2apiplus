@@ -21,29 +21,25 @@ func imagesBundleWithTurnHeaders(t *testing.T, endpointID string, imageTurnID, t
 	return syntheticCodexBundle(t, base, func(doc *profilecontract.SnapshotDoc) {
 		endpoint := syntheticSnapshotEndpoint(t, doc, endpointID)
 		kept := make([]profilecontract.SnapshotHeaderSlot, 0, len(endpoint.Headers)+2)
-		maxSlot := 0
 		for _, slot := range endpoint.Headers {
 			if slot.Name == "x-codex-image-turn-id" || slot.Name == "x-codex-turn-metadata" {
 				continue
 			}
-			if slot.Slot > maxSlot {
-				maxSlot = slot.Slot
-			}
 			kept = append(kept, slot)
 		}
-		// 新槽位放在 originator 之前即可；位置不影响取值，线序由登记时的画像决定。
-		next := func(name string) profilecontract.SnapshotHeaderSlot {
-			maxSlot++
+		// 官方实采（informal-capture/images）的请求头顺序：version、x-codex-image-turn-id、
+		// x-codex-turn-metadata、authorization……两个新头落在 version（Slot 10）与 authorization（Slot 30）之间。
+		next := func(slotNumber int, name string) profilecontract.SnapshotHeaderSlot {
 			return profilecontract.SnapshotHeaderSlot{
-				Slot: maxSlot, Name: name, WireName: name,
+				Slot: slotNumber, Name: name, WireName: name,
 				Source: string(profilecontract.SourceTurn), Condition: string(profilecontract.ConditionAlways),
 			}
 		}
 		if imageTurnID {
-			kept = append(kept, next("x-codex-image-turn-id"))
+			kept = append(kept, next(20, "x-codex-image-turn-id"))
 		}
 		if turnMetadata {
-			kept = append(kept, next("x-codex-turn-metadata"))
+			kept = append(kept, next(25, "x-codex-turn-metadata"))
 		}
 		endpoint.Headers = kept
 	})

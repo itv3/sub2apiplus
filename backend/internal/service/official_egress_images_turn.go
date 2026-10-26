@@ -1,12 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 )
@@ -74,52 +78,268 @@ func officialCodexGeneratedUUIDLikeValue(identitySeed, suffix string) string {
 	)
 }
 
-// marshalOfficialImagesTurnMetadata 生成 images 工具请求的 turn metadata JSON。
+// ---------------------------------------------------------------------------
+// x-codex-turn-metadata（images 工具请求形态）
 //
-// 官方形态来自 current_meta_value_for_extension_request：与 Responses 的 turn metadata 不同，
-// 它没有 request_kind、installation_id、window_id，去掉 agent_name、parent_turn_id、root_turn_id，
-// 并追加 codex_version。这里只写有可信取值的键：session_id、thread_id、turn_id、thread_source、
-// sandbox（常量与既有 Responses 兜底一致）和 codex_version（取画像版本，官方为编译期
-// CARGO_PKG_VERSION）。
+// 官方 images 请求的 turn metadata 来自 current_meta_value_for_extension_request：与同一回合
+// Responses 请求共用同一份回合状态，取值逐项相同（20 次实采全部一致），只是装配过程不同——
+// 先按 CodexTurnMetadataPayload 声明序排好有值的键，再接 extra（按键名字典序，默认只有 model、
+// reasoning_effort），然后依次 swap_remove agent_name、parent_turn_id、root_turn_id（serde_json 启用
+// preserve_order 时 Map::remove 是换位删除：把末尾元素搬到被删位置），最后追加 codex_version。
+// 所以键序不是声明序，而是这套机械过程的结果；这里按同一过程实现，不写死任何一种键序。
 //
-// 已知差距（需 0.164 生图实采校准，不在没有实采时臆造取值）：官方还会写 auto_review_enabled、
-// node_repl_auto_review_required、node_repl_disabled、turn_started_at_unix_ms、model、
-// reasoning_effort 等键，且键序取决于 serde_json 是否启用 preserve_order 以及 Map::remove 的换位语义。
-func marshalOfficialImagesTurnMetadata(sessionID, threadID, turnID, codexVersion string) (string, error) {
-	if strings.TrimSpace(turnID) == "" {
-		return "", errors.New("images turn metadata 缺少 turn_id")
+// 本网关的做法是“复用 Responses 回合事实，再按官方规则重排”，不另起一套事实：
+//   - 入站已带 Responses 形态的 turn metadata（同一官方客户端回合）→ 取其中的共有键与取值；
+//   - 否则 → 用与 Responses 兜底相同的基础键值（officialCodexFallbackTurnMetadataBaseValues
+//     与画像 TurnMetadata 节），再补官方 CLI 默认路径上与模型无关的常量。
+
+// officialImagesTurnMetadataPayloadOrder 是 CodexTurnMetadataPayload 的字段声明序。
+var officialImagesTurnMetadataPayloadOrder = []string{
+	"installation_id", "session_id", "thread_id", "agent_name", "turn_id", "window_id", "window_number",
+	"context_window_id", "request_kind", "history_initialization", "forked_from_thread_id",
+	"forked_from_ordinal_exclusive", "parent_thread_id", "parent_turn_id", "root_turn_id", "subagent_kind",
+	"thread_source", "turn_trigger", "sandbox", "sandbox_mode", "auto_review_enabled",
+	"node_repl_auto_review_required", "node_repl_disabled", "workspaces", "tool_namespaces_info",
+	"turn_started_at_unix_ms", "history_ingest_requested", "analytics_enabled", "compaction",
+}
+
+// officialImagesTurnMetadataResponsesOnlyKeys 是 Responses 请求才有、images 工具请求里恒无值的键
+// （扩展请求模板没有请求种类与窗口身份，也不带 analytics 与压缩信息）。
+var officialImagesTurnMetadataResponsesOnlyKeys = map[string]bool{
+	"installation_id": true, "window_id": true, "window_number": true, "context_window_id": true,
+	"request_kind": true, "history_initialization": true, "history_ingest_requested": true,
+	"analytics_enabled": true, "compaction": true, "tool_namespaces_info": true,
+}
+
+// officialImagesTurnMetadataRemovedKeys 是官方按顺序 swap_remove 的三个键。
+var officialImagesTurnMetadataRemovedKeys = []string{"agent_name", "parent_turn_id", "root_turn_id"}
+
+// officialCodexImagesTurnStartedAtMs 取回合开始毫秒时间；包级变量只为让测试固定时间。
+var officialCodexImagesTurnStartedAtMs = func() int64 { return time.Now().UnixMilli() }
+
+// orderOfficialImagesTurnMetadataKeys 按官方装配过程给出 images 请求 turn metadata 的最终键序。
+// keys 是除 codex_version 外将出现在最终 JSON 里的键；agent_name 与 root_turn_id 在官方里恒存在、
+// 随后被删，所以函数内部把它们当作“删除前存在”处理，它们的存在会影响换位结果。
+// userInputRequested 为真时在末尾追加 user_input_requested_during_turn（官方：触发过
+// request_user_input 的回合）。
+func orderOfficialImagesTurnMetadataKeys(keys []string, userInputRequested bool) []string {
+	present := map[string]bool{"agent_name": true, "root_turn_id": true}
+	for _, key := range keys {
+		present[key] = true
 	}
-	raw, err := json.Marshal(struct {
-		SessionID    string `json:"session_id"`
-		ThreadID     string `json:"thread_id"`
-		TurnID       string `json:"turn_id"`
-		ThreadSource string `json:"thread_source"`
-		Sandbox      string `json:"sandbox"`
-		CodexVersion string `json:"codex_version,omitempty"`
-	}{
-		SessionID: sessionID, ThreadID: threadID, TurnID: turnID,
-		ThreadSource: "user", Sandbox: "seccomp", CodexVersion: codexVersion,
-	})
-	if err != nil {
-		return "", err
+	structured := make(map[string]bool, len(officialImagesTurnMetadataPayloadOrder))
+	ordered := make([]string, 0, len(present)+1)
+	for _, key := range officialImagesTurnMetadataPayloadOrder {
+		structured[key] = true
+		if present[key] {
+			ordered = append(ordered, key)
+		}
 	}
-	return string(raw), nil
+	extras := make([]string, 0, len(keys))
+	for key := range present {
+		if !structured[key] {
+			extras = append(extras, key)
+		}
+	}
+	sort.Strings(extras)
+	ordered = append(ordered, extras...)
+	for _, removed := range officialImagesTurnMetadataRemovedKeys {
+		for index, key := range ordered {
+			if key == removed {
+				ordered[index] = ordered[len(ordered)-1]
+				ordered = ordered[:len(ordered)-1]
+				break
+			}
+		}
+	}
+	ordered = append(ordered, "codex_version")
+	if userInputRequested {
+		ordered = append(ordered, "user_input_requested_during_turn")
+	}
+	return ordered
+}
+
+// asciiJSON 把一段合法 JSON 压成紧凑形式，并把非 ASCII 字符转成 \uXXXX（官方 to_ascii_json_string）。
+// 合法 JSON 里的非 ASCII 字符只会出现在字符串内，所以对整段逐字符转义是安全的。
+func asciiJSON(raw []byte) ([]byte, error) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	for rest := compact.Bytes(); len(rest) > 0; {
+		r, size := utf8.DecodeRune(rest)
+		switch {
+		case r < 0x80:
+			out.WriteByte(rest[0])
+		case r >= 0x10000:
+			r -= 0x10000
+			fmt.Fprintf(&out, "\\u%04x\\u%04x", 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+		default:
+			fmt.Fprintf(&out, "\\u%04x", r)
+		}
+		rest = rest[size:]
+	}
+	return out.Bytes(), nil
+}
+
+// marshalOfficialImagesTurnMetadata 把回合事实（顶层键 → JSON 值）装配成官方 images 请求的
+// x-codex-turn-metadata。Responses 专有键与 codex_version 会被丢弃，codex_version 恒由参数给出。
+// session_id、thread_id、turn_id 必须有值。
+func marshalOfficialImagesTurnMetadata(
+	values map[string]json.RawMessage,
+	codexVersion string,
+) (string, error) {
+	kept := make(map[string]json.RawMessage, len(values))
+	keys := make([]string, 0, len(values))
+	userInputRequested := false
+	for key, value := range values {
+		switch {
+		case officialImagesTurnMetadataResponsesOnlyKeys[key], key == "codex_version",
+			key == "agent_name", key == "root_turn_id":
+			continue
+		case key == "user_input_requested_during_turn":
+			userInputRequested = strings.TrimSpace(string(value)) == "true"
+			continue
+		}
+		kept[key] = value
+		keys = append(keys, key)
+	}
+	for _, required := range []string{"session_id", "thread_id", "turn_id"} {
+		if strings.TrimSpace(string(kept[required])) == "" || string(kept[required]) == `""` {
+			return "", fmt.Errorf("images turn metadata 缺少 %s", required)
+		}
+	}
+	if strings.TrimSpace(codexVersion) != "" {
+		version, err := json.Marshal(codexVersion)
+		if err != nil {
+			return "", err
+		}
+		kept["codex_version"] = version
+	}
+	var out bytes.Buffer
+	out.WriteByte('{')
+	first := true
+	for _, key := range orderOfficialImagesTurnMetadataKeys(keys, userInputRequested) {
+		value, exists := kept[key]
+		switch {
+		case key == "codex_version" && !exists:
+			continue
+		case key == "user_input_requested_during_turn":
+			value = json.RawMessage("true")
+		case !exists:
+			continue
+		}
+		encodedKey, err := asciiJSON(imagesTurnJSONString(key))
+		if err != nil {
+			return "", err
+		}
+		encodedValue, err := asciiJSON(value)
+		if err != nil {
+			return "", fmt.Errorf("images turn metadata 键 %s 的值不是合法 JSON：%w", key, err)
+		}
+		if !first {
+			out.WriteByte(',')
+		}
+		first = false
+		out.Write(encodedKey)
+		out.WriteByte(':')
+		out.Write(encodedValue)
+	}
+	out.WriteByte('}')
+	return out.String(), nil
+}
+
+func imagesTurnJSONString(value string) json.RawMessage {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
+// officialImagesTurnMetadataFromResponses 把同一回合的 Responses 形态 turn metadata 转成 images 请求形态：
+// 保留共有键的原始取值字节，丢弃 Responses 专有键，再按官方过程重排。
+func officialImagesTurnMetadataFromResponses(responsesMetadata, codexVersion string) (string, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(responsesMetadata), &values); err != nil {
+		return "", fmt.Errorf("解析 Responses turn metadata：%w", err)
+	}
+	return marshalOfficialImagesTurnMetadata(values, codexVersion)
+}
+
+// officialImagesSynthesizedTurnMetadataValues 在入站没有回合事实时，从 Responses 兜底的基础键值出发，
+// 补官方 CLI 默认路径上与模型无关的常量。
+//
+// 刻意不写 model、reasoning_effort：它们是会话模型的取值，网关的 images 请求里没有可信来源
+// （images 请求体的 model 是 gpt-image-2，不是会话模型），沿用“没有可信取值就省略”的约定。
+// node_repl_auto_review_required 取 false（非 Lite 模型的目录值）。入站带了同回合 Responses 事实时，
+// 这些键都从该事实取，不走这里。
+func officialImagesSynthesizedTurnMetadataValues(
+	facts *officialegress.CodexIdentityFacts,
+	sessionID string,
+	profileMode string,
+	memoryGeneration bool,
+) (map[string]json.RawMessage, error) {
+	tmp := *facts
+	tmp.SessionID, tmp.ThreadID = mustIdentityValue(sessionID), mustIdentityValue(sessionID)
+	base := officialCodexFallbackTurnMetadataBaseValues(&tmp)
+	if section := officialCodexOptionalSectionsForMode(profileMode).TurnMetadata; section != nil {
+		if err := applyOfficialCodexTurnMetadataSection(base, section, officialCodexTurnMetadataExtension{
+			TurnTrigger: officialCodexTurnTrigger(facts.ProcessSurface.Value, facts.Subagent.Value, memoryGeneration),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	base["sandbox_mode"] = "read-only"
+	base["auto_review_enabled"] = false
+	base["node_repl_auto_review_required"] = false
+	base["node_repl_disabled"] = false
+	base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
+	values := make(map[string]json.RawMessage, len(base))
+	for key, value := range base {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		values[key] = raw
+	}
+	return values, nil
+}
+
+func mustIdentityValue(value string) officialegress.CodexIdentityValue {
+	return officialegress.CodexIdentityValue{
+		Value: value, Source: officialegress.IdentitySourceInvocation, Lifecycle: officialegress.IdentityLifecycleSession,
+	}
 }
 
 // completeOfficialCodexImagesTurnFacts 为 images 端点补齐画像声明的回合头所需的身份事实。
-// 已由结构化身份或调用登记提供的事实原样保留，只补缺失的。
+// 已由结构化身份或调用登记提供的事实原样保留，只补缺失的；已有的 Responses 形态 turn metadata
+// 会被转成 images 请求形态。
 func completeOfficialCodexImagesTurnFacts(
 	facts *officialegress.CodexIdentityFacts,
 	endpointID string,
 	identitySeed string,
-	profileMode string,
+	fallback officialCodexFallbackTurnMetadataInput,
 ) error {
 	if facts == nil {
 		return errors.New("Codex 身份事实为空")
 	}
-	imageTurnID, turnMetadata, version := officialCodexImagesHeaderDeclarations(profileMode, endpointID)
+	imageTurnID, turnMetadata, version := officialCodexImagesHeaderDeclarations(fallback.profileMode, endpointID)
 	if !imageTurnID && !turnMetadata {
 		return nil
+	}
+	if facts.TurnID.Value == "" && facts.TurnMetadata.Value != "" {
+		// 入站回合事实已带 turn_id：两个头必须同源，取它。
+		var inbound struct {
+			TurnID string `json:"turn_id"`
+		}
+		if json.Unmarshal([]byte(facts.TurnMetadata.Value), &inbound) == nil && strings.TrimSpace(inbound.TurnID) != "" {
+			turnID, err := officialegress.NewCodexIdentityValue(
+				inbound.TurnID, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn,
+			)
+			if err != nil {
+				return err
+			}
+			facts.TurnID = turnID
+		}
 	}
 	if facts.TurnID.Value == "" {
 		turnID, err := officialegress.NewCodexIdentityValue(
@@ -131,18 +351,28 @@ func completeOfficialCodexImagesTurnFacts(
 		}
 		facts.TurnID = turnID
 	}
-	if !turnMetadata || facts.TurnMetadata.Value != "" {
+	if !turnMetadata {
 		return nil
 	}
-	sessionID := facts.SessionID.Value
-	if sessionID == "" {
-		sessionID = officialCodexGeneratedUUIDLikeValue(identitySeed, "session")
+	var metadata string
+	var err error
+	if facts.TurnMetadata.Value != "" {
+		metadata, err = officialImagesTurnMetadataFromResponses(facts.TurnMetadata.Value, version)
+	} else {
+		sessionID := facts.SessionID.Value
+		if sessionID == "" {
+			sessionID = officialCodexGeneratedUUIDLikeValue(identitySeed, "session")
+		}
+		var values map[string]json.RawMessage
+		values, err = officialImagesSynthesizedTurnMetadataValues(
+			facts, sessionID, fallback.profileMode, fallback.memoryGeneration,
+		)
+		if err == nil {
+			// turn_id 以事实为准（上面可能取了入站值），与 x-codex-image-turn-id 同源。
+			values["turn_id"] = imagesTurnJSONString(facts.TurnID.Value)
+			metadata, err = marshalOfficialImagesTurnMetadata(values, version)
+		}
 	}
-	threadID := facts.ThreadID.Value
-	if threadID == "" {
-		threadID = officialCodexGeneratedUUIDLikeValue(identitySeed, "thread")
-	}
-	metadata, err := marshalOfficialImagesTurnMetadata(sessionID, threadID, facts.TurnID.Value, version)
 	if err != nil {
 		return err
 	}

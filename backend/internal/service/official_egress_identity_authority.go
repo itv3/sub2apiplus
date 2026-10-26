@@ -596,7 +596,7 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	if officialCodexEndpointIsImages(endpointID) {
 		// images 端点没有 Responses 会话身份；回合头只在画像声明了对应槽位时才补事实。
 		return completeOfficialCodexImagesTurnFacts(
-			facts, endpointID, identitySeed, fallbackTurnMetadata.profileMode,
+			facts, endpointID, identitySeed, fallbackTurnMetadata,
 		)
 	}
 	needsResponsesSession := officialCodexEndpointUsesResponsesSession(endpointID)
@@ -649,12 +649,7 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		if section := fallbackTurnMetadata.section(); section != nil {
 			// 画像声明 TurnMetadata 节：与旧结构同一组基础键，外加节中声明且有可信取值
 			// 的新键；model 与 reasoning_effort 取语义请求体。
-			values := map[string]any{
-				"installation_id": facts.InstallationID.Value,
-				"session_id":      facts.SessionID.Value, "thread_id": facts.ThreadID.Value,
-				"turn_id": facts.TurnID.Value, "window_id": facts.WindowID.Value,
-				"request_kind": "turn", "thread_source": "user", "sandbox": "seccomp",
-			}
+			values := officialCodexFallbackTurnMetadataBaseValues(facts)
 			var body []byte
 			if fallbackTurnMetadata.semanticBody != nil {
 				body = fallbackTurnMetadata.semanticBody()
@@ -705,6 +700,18 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		}
 	}
 	return nil
+}
+
+// officialCodexFallbackTurnMetadataBaseValues 是兜底生成 Responses turn metadata 的基础键值
+// （画像声明 TurnMetadata 节的分支）。独立 images 端点的回合头也从这份回合事实出发，再按官方
+// 扩展请求的规则重排，所以抽成函数共用。
+func officialCodexFallbackTurnMetadataBaseValues(facts *officialegress.CodexIdentityFacts) map[string]any {
+	return map[string]any{
+		"installation_id": facts.InstallationID.Value,
+		"session_id":      facts.SessionID.Value, "thread_id": facts.ThreadID.Value,
+		"turn_id": facts.TurnID.Value, "window_id": facts.WindowID.Value,
+		"request_kind": "turn", "thread_source": "user", "sandbox": "seccomp",
+	}
 }
 
 // officialCodexEndpointUsesResponsesSession 判断端点是否携带 Responses 会话身份
