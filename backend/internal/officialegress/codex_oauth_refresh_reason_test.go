@@ -13,10 +13,25 @@ import (
 // 没声明（旧画像）时多发字段会被封闭 Body 拒绝，旧语义 Body 的最终字节保持不变。
 // 语义 Body 字面量与 service 包 openai_oauth_refresh_reason_test.go 的字面量一致。
 
+// 官方 0.164.0 实采（非正式，ARM64，informal-capture 的 s1／s3／s5／s6 场景）的刷新请求体原文：
+// 四个 refresh_reason 取值都实采到，键序恒为 client_id, grant_type, refresh_reason, refresh_token。
+// 用例的期望字节直接取自实采，不是推导值。
 const (
-	oauthRefreshLegacySemanticBody = `{"client_id":"client-id","grant_type":"refresh_token"}`
-	oauthRefreshLegacyWireBody     = `{"client_id":"client-id","grant_type":"refresh_token","refresh_token":"synthetic-refresh-token"}`
+	oauthRefreshCapturedClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
+	oauthRefreshCapturedRefreshToken = "rt_informal_seed"
+
+	oauthRefreshLegacySemanticBody = `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token"}`
+	// 0.163 画像（无 refresh_reason）的最终字节，同一套实采基线对照（b163-s1）。
+	oauthRefreshLegacyWireBody = `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_token":"rt_informal_seed"}`
 )
+
+// oauthRefreshCapturedBodies：reason → 实采到的完整请求体。
+var oauthRefreshCapturedBodies = map[string]string{
+	"proactive_expiry":      `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_reason":"proactive_expiry","refresh_token":"rt_informal_seed"}`,
+	"scheduled":             `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_reason":"scheduled","refresh_token":"rt_informal_seed"}`,
+	"unauthorized_recovery": `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_reason":"unauthorized_recovery","refresh_token":"rt_informal_seed"}`,
+	"forced":                `{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_reason":"forced","refresh_token":"rt_informal_seed"}`,
+}
 
 // oauthRefreshBundleWithReasonField 以 Active 画像为底稿，把 oauth_refresh 封闭 Body 改写成
 // “声明 / 不声明 refresh_reason”两种形态（refresh_reason 紧挨 refresh_token 之前）。
@@ -45,6 +60,13 @@ func compileOAuthRefreshTestBody(t *testing.T, bundle ReleaseBundle, semanticBod
 	target := staticClosureLegalTarget(plan.template)
 	egressPlan := staticClosureEgressPlan(t, bundle, plan, target, "oauth-refresh-reason")
 	egressPlan.Body = NewReplayableRequestBody([]byte(semanticBody))
+	authentication, err := NewAttemptAuthentication(AttemptAuthenticationInput{
+		BearerToken: "static-closure-token", RefreshToken: oauthRefreshCapturedRefreshToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	egressPlan.Authentication = authentication
 	execution, err := NewCompiler().Compile(context.Background(), bundle, egressPlan, EndpointDynamicInputs{})
 	if err != nil {
 		return "", err
@@ -58,27 +80,24 @@ func compileOAuthRefreshTestBody(t *testing.T, bundle ReleaseBundle, semanticBod
 
 func TestCompilerOAuthRefreshReasonKeyOrder(t *testing.T) {
 	declared := oauthRefreshBundleWithReasonField(t, true)
-	for _, reason := range []string{"proactive_expiry", "scheduled", "unauthorized_recovery", "forced"} {
+	for reason, captured := range oauthRefreshCapturedBodies {
 		wire, err := compileOAuthRefreshTestBody(t, declared,
-			`{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"`+reason+`"}`)
+			`{"client_id":"`+oauthRefreshCapturedClientID+`","grant_type":"refresh_token","refresh_reason":"`+reason+`"}`)
 		if err != nil {
 			t.Fatalf("声明 refresh_reason 的画像应能编译（%s）：%v", reason, err)
 		}
-		want := `{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"` + reason +
-			`","refresh_token":"synthetic-refresh-token"}`
-		if wire != want {
-			t.Fatalf("refresh_reason=%s 最终字节不符\n got: %s\nwant: %s", reason, wire, want)
+		if wire != captured {
+			t.Fatalf("refresh_reason=%s 最终字节与官方实采不符\n got: %s\nwant: %s", reason, wire, captured)
 		}
 	}
 	// 语义 Body 里字段顺序不同，最终仍由画像字段序决定。
 	wire, err := compileOAuthRefreshTestBody(t, declared,
-		`{"refresh_reason":"forced","grant_type":"refresh_token","client_id":"client-id"}`)
+		`{"refresh_reason":"forced","grant_type":"refresh_token","client_id":"`+oauthRefreshCapturedClientID+`"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"forced","refresh_token":"synthetic-refresh-token"}`
-	if wire != want {
-		t.Fatalf("字段序必须由画像决定\n got: %s\nwant: %s", wire, want)
+	if wire != oauthRefreshCapturedBodies["forced"] {
+		t.Fatalf("字段序必须由画像决定\n got: %s\nwant: %s", wire, oauthRefreshCapturedBodies["forced"])
 	}
 	// 画像声明字段为必填：旧语义 Body（缺 refresh_reason）必须被拒绝，不能静默少发。
 	if _, err := compileOAuthRefreshTestBody(t, declared, oauthRefreshLegacySemanticBody); err == nil {
@@ -96,7 +115,7 @@ func TestCompilerOAuthRefreshLegacyProfileRejectsReasonAndKeepsLegacyBytes(t *te
 		t.Fatalf("旧画像最终字节必须不变\n got: %s\nwant: %s", wire, oauthRefreshLegacyWireBody)
 	}
 	if _, err := compileOAuthRefreshTestBody(t, legacy,
-		`{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"forced"}`); err == nil {
+		`{"client_id":"`+oauthRefreshCapturedClientID+`","grant_type":"refresh_token","refresh_reason":"forced"}`); err == nil {
 		t.Fatal("旧画像封闭 Body 未声明 refresh_reason，多发该字段必须被拒绝")
 	}
 }

@@ -50,15 +50,21 @@ func TestOpenAIOAuthRefreshReasonLiteralsMatchOfficial(t *testing.T) {
 	}
 }
 
+// 官方 0.164.0 实采（informal-capture 的 s1／s3／s5／s6）刷新请求体里的 client_id。
+// 实采的完整请求体 = 本测试的语义 Body 去掉末尾 "}" 后追加 ,"refresh_token":"rt_informal_seed"}，
+// 最终字节由 officialegress 包 TestCompilerOAuthRefreshReasonKeyOrder 对着实采原文验证。
+const openAIOAuthRefreshCapturedClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
 func TestOpenAIOAuthRefreshSemanticBodyBytes(t *testing.T) {
+	require.Equal(t, openai.ClientID, openAIOAuthRefreshCapturedClientID)
 	for _, reason := range openAIOAuthRefreshAllReasons {
-		body, err := buildOpenAIOAuthRefreshSemanticBody("client-id", reason, true)
+		body, err := buildOpenAIOAuthRefreshSemanticBody(openAIOAuthRefreshCapturedClientID, reason, true)
 		require.NoError(t, err)
 		// 语义 Body 不含 refresh_token（由 compiler 追加）；refresh_reason 紧跟 grant_type。
-		require.Equal(t,
-			`{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"`+
-				openAIOAuthRefreshOfficialReasonLiterals[reason]+`"}`,
-			string(body))
+		captured := `{"client_id":"` + openAIOAuthRefreshCapturedClientID +
+			`","grant_type":"refresh_token","refresh_reason":"` + openAIOAuthRefreshOfficialReasonLiterals[reason] +
+			`","refresh_token":"rt_informal_seed"}`
+		require.Equal(t, captured[:len(captured)-len(`,"refresh_token":"rt_informal_seed"}`)]+"}", string(body))
 	}
 }
 
