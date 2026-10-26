@@ -296,7 +296,7 @@ FROZEN_MAPPING_SHA256 = (
 # 验收契约现算 706df763…→96a80d6f…：dual_wire=25／candidate_profile=18 不变，各规则分组不变（BODY-006 仍是 dual_wire，新增三条判据官方侧也执行），
 # expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002、SPEC-BODY-006、SPEC-EP-022 四项多出上述新检查 ID。
 FROZEN_PROFILE_SHA256 = (
-    "0fe3979798b537620febbbd2549f39281b71e2fde975c03353848e00ef4ceee5"
+    "2d5d0669cfab53678cb447c7fc5922e565a0f4723f22e7ea5182df7c0105d085"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
