@@ -634,14 +634,25 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough(t *testi
 			require.True(t, passthrough.Exists(), index)
 			p2RequirePassthroughExceptTurnID(t, gjson.Parse(passthroughRaw), passthrough, index)
 			require.Equal(t, embedded, passthrough.Get("turn_id").String(), index)
+			require.Equal(t, gjson.GetBytes(sent, "client_metadata.turn_id").String(), passthrough.Get("turn_id").String(),
+				"%s：逐项 turn_id、出站 client_metadata.turn_id、turn metadata 里的 turn_id 三者相同", index)
 			require.NotContains(t, passthrough.Raw, officialCodexStashedInputPassthroughKey)
 		}
 		require.NotContains(t, string(sent), officialCodexStashedInputPassthroughKey)
 	})
-	t.Run("画像不声明 uuidv7：照旧剥离", func(t *testing.T) {
+	t.Run("画像不声明 uuidv7：照旧剥离，client_metadata.turn_id 行为与改动前一致", func(t *testing.T) {
 		withOfficialCodexSyntheticProfile(t, nil)
 		sent := forward(t)
 		require.NotContains(t, string(sent), p2PassthroughKey)
+		// 旧画像（0.163 一类，已封存）的出站字节不变：没有结构化 turn_id、请求体也没有 turn_id 时，client_metadata.turn_id
+		// 仍按 invocation 种子现生成——与 x-codex-turn-metadata 内的 turn_id 不同，且每次调用不同（这正是改动前的行为）。
+		embedded := gjson.Parse(gjson.GetBytes(sent, "client_metadata.x-codex-turn-metadata").String()).Get("turn_id").String()
+		first := gjson.GetBytes(sent, "client_metadata.turn_id").String()
+		require.NotEmpty(t, embedded)
+		require.NotEmpty(t, first)
+		require.NotEqual(t, embedded, first)
+		second := gjson.GetBytes(forward(t), "client_metadata.turn_id").String()
+		require.NotEqual(t, first, second)
 	})
 }
 

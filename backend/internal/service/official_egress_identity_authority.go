@@ -440,8 +440,11 @@ func buildOfficialCodexIdentityFacts(
 	}
 	// 没有结构化 turn_id、请求体里也没有 turn_id 时，turn_id 取自本次请求登记的 turn metadata：官方请求里 client_metadata.turn_id
 	// 与 x-codex-turn-metadata 内的 turn_id 是同一个值。此前这种情况会走“按 invocation 种子生成”，两处各是一个值，互相对不上。
+	// 只在画像声明 BaseInstructions.IDScheme=uuidv7 时生效（即较新版本画像）：已封存的旧画像出站字节必须保持不变。
 	turnIDFallbacks := []string{metadata["turn_id"]}
-	if strings.TrimSpace(structuredIdentity.TurnID) == "" && strings.TrimSpace(metadata["turn_id"]) == "" {
+	if hasEgressContext &&
+		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).BaseInstructions.UsesUUIDv7IDs() &&
+		strings.TrimSpace(structuredIdentity.TurnID) == "" && strings.TrimSpace(metadata["turn_id"]) == "" {
 		turnIDFallbacks = append(turnIDFallbacks, strings.TrimSpace(gjson.Get(turnMetadata, "turn_id").String()))
 	}
 	turnID, err := resolveStructured("turn_id", structuredIdentity.TurnID, turnIDFallbacks...)
