@@ -186,8 +186,32 @@ type BaseInstructionsSection struct {
 	ContentItemKind string `json:"ContentItemKind"`
 	// EndpointIDs：适用的 Responses 端点（排序去重，取值 responses_http、responses_ws，必须存在于同一画像）。
 	EndpointIDs []string `json:"EndpointIDs"`
-	// IDPrefix：消息 id 的前缀；id = 前缀_UUIDv5(UUIDv5(NAMESPACE_OID, thread_id), 指令正文)。
+	// IDPrefix：消息 id 的前缀。id 的生成规则由 IDScheme 决定：缺省时 id = 前缀_UUIDv5(UUIDv5(NAMESPACE_OID, thread_id), 指令正文)。
 	IDPrefix string `json:"IDPrefix"`
+	// IDScheme：消息 id 方案与前缀承载形态，缺省表示旧方案；目前只支持 uuidv7。
+	//
+	// 旧方案（缺省）：每个请求现场拼装前缀，基础指令消息的 id 由线程与正文确定性算出；WS 上前缀随预热帧发送，
+	// 业务帧不重复。
+	//
+	// uuidv7：较新版本的客户端对 Lite 模型默认走“增量工具窗口”——工具目录（additional_tools）与基础指令消息
+	// 在窗口开头作为历史项记录一次，id 是记录时随机生成的 前缀_UUIDv7，之后随历史原样重放；WS 预热帧的
+	// input 为空，前缀改由首个业务帧携带。声明本方案后：
+	//   - 入站已是官方形态的基础指令消息（Codex 客户端自带）原样保留，不重算 id、不改 passthrough；
+	//   - 入站没有官方形态消息（第三方客户端）时才合成：id 是按 (线程, 内容) 稳定复用的 UUIDv7，passthrough 按官方
+	//     键序带 turn_id、create_time、content_item_kinds、content_item_metadata；同一线程同一内容在各请求上逐字节相同，
+	//     上游前缀缓存不会被 id 或时间戳的随机性破坏；
+	//   - additional_tools 项同理：入站已带 id 的原样保留，没有 id 的补 at_ 加稳定 UUIDv7，键序固定为 type,id,role,tools；
+	//   - WS 上 additional_tools 项不补 passthrough（官方该项没有这个字段）。
+	// 非 Lite 模型不走增量窗口，仍按旧方案处理。本字段只改变上述行为，不改变任何请求头、字段闭集或摘要口径。
+	IDScheme string `json:"IDScheme,omitempty"`
+}
+
+// BaseInstructionsIDSchemeUUIDv7 是 BaseInstructionsSection.IDScheme 目前唯一支持的取值。
+const BaseInstructionsIDSchemeUUIDv7 = "uuidv7"
+
+// UsesUUIDv7IDs 报告本节是否声明了 uuidv7 方案（见 IDScheme）。接收者为 nil 时返回 false。
+func (s *BaseInstructionsSection) UsesUUIDv7IDs() bool {
+	return s != nil && s.IDScheme == BaseInstructionsIDSchemeUUIDv7
 }
 
 // AccessProgramsSection 声明请求体条件字段 access_programs 的出站值域。
@@ -285,6 +309,11 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		if name == SectionAccessPrograms {
 			if value, declared := fields["DefaultCyberProgram"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 DefaultCyberProgram 存在时不得为空串", name)
+			}
+		}
+		if name == SectionBaseInstructions {
+			if value, declared := fields["IDScheme"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 IDScheme 存在时不得为空串", name)
 			}
 		}
 	}
@@ -431,6 +460,9 @@ func validateOptionalSection(name string, value any) error {
 		}
 		if !messageIDPrefixPattern.MatchString(section.IDPrefix) {
 			return fmt.Errorf("IDPrefix 必须是 2 到 8 位小写字母，实际 %q", section.IDPrefix)
+		}
+		if section.IDScheme != "" && section.IDScheme != BaseInstructionsIDSchemeUUIDv7 {
+			return fmt.Errorf("IDScheme 只支持 %s（缺省表示旧方案），实际 %q", BaseInstructionsIDSchemeUUIDv7, section.IDScheme)
 		}
 		return nil
 	case *AccessProgramsSection:
