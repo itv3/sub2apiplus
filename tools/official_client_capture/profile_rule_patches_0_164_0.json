@@ -92,6 +92,19 @@
     },
     {
       "rule_ids": [
+        "SPEC-EP-022"
+      ],
+      "op": "add",
+      "path": "/TurnMetadata/SessionDefaults",
+      "before": null,
+      "after": {
+        "Model": "gpt-6.1-sol",
+        "ReasoningEffort": "low",
+        "NodeReplAutoReviewRequired": true
+      }
+    },
+    {
+      "rule_ids": [
         "SPEC-BODY-003",
         "SPEC-BODY-006",
         "SPEC-WS-005"

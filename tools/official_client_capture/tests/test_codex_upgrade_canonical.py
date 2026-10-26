@@ -1025,7 +1025,7 @@ class CanonicalImportTests(unittest.TestCase):
         """0.164.0 补丁清单绑定当前 active 的 0.163.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），
         并把差异报告里确认要改画像的三处逐条登记成 v2 补丁（开工前定稿，建 Campaign 之后改它属于证据语义层演进）：
         ① OAuth 刷新体新增 refresh_reason（SPEC-EP-002）；② 图像生成与编辑端点新增 x-codex-image-turn-id、x-codex-turn-metadata 两个头
-        （SPEC-EP-022）；③ 基础指令消息的 id 方案声明为 uuidv7（SPEC-BODY-006，同一字段也决定前缀所在帧，所以同时绑 SPEC-BODY-003、SPEC-WS-005）。三条传输画像只改 ID 里的版本号，补丁里不得出现传输字段。
+        （SPEC-EP-022）；③ 图像端点 turn metadata 的默认会话模型 SessionDefaults（SPEC-EP-022）；④ 基础指令消息的 id 方案声明为 uuidv7（SPEC-BODY-006，同一字段也决定前缀所在帧，所以同时绑 SPEC-BODY-003、SPEC-WS-005）。三条传输画像只改 ID 里的版本号，补丁里不得出现传输字段。
         """
 
         active_profile = (
@@ -1057,6 +1057,7 @@ class CanonicalImportTests(unittest.TestCase):
                 ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-image-turn-id", ("SPEC-EP-022",)),
                 ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-turn-metadata", ("SPEC-EP-022",)),
                 ("add", "/BaseInstructions/IDScheme", ("SPEC-BODY-003", "SPEC-BODY-006", "SPEC-WS-005")),
+                ("add", "/TurnMetadata/SessionDefaults", ("SPEC-EP-022",)),
             ]),
         )
         affected = sorted({rule for patch in patches for rule in patch["rule_ids"]})
@@ -1076,6 +1077,10 @@ class CanonicalImportTests(unittest.TestCase):
                 [field["Name"] for field in endpoints_before["oauth_refresh"]["Body"]["Fields"]],
             )
             self.assertNotIn("IDScheme", active_payload["BaseInstructions"])
+            self.assertNotIn("SessionDefaults", active_payload["TurnMetadata"])
+            # SessionDefaults 存在时画像契约要求 Keys 含 model、reasoning_effort（W2 的 validateTurnMetadataSessionDefaults）。
+            self.assertIn("model", active_payload["TurnMetadata"]["Keys"])
+            self.assertIn("reasoning_effort", active_payload["TurnMetadata"]["Keys"])
             for endpoint in ("images_generations", "images_edits"):
                 names = [header["Name"] for header in endpoints_before[endpoint]["Headers"]]
                 self.assertNotIn("x-codex-image-turn-id", names)
@@ -1103,6 +1108,9 @@ class CanonicalImportTests(unittest.TestCase):
                         )
                     )
             target_payload["BaseInstructions"]["IDScheme"] = "uuidv7"
+            target_payload["TurnMetadata"]["SessionDefaults"] = next(
+                p["after"] for p in patches if p["path"] == "/TurnMetadata/SessionDefaults"
+            )
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -1145,7 +1153,13 @@ class CanonicalImportTests(unittest.TestCase):
                 result["rule_field_paths"]["SPEC-EP-002"],
                 ["/Endpoints/ID=oauth_refresh/Body/Fields/Name=refresh_reason"],
             )
-            self.assertEqual(len(result["rule_field_paths"]["SPEC-EP-022"]), 4)
+            self.assertEqual(len(result["rule_field_paths"]["SPEC-EP-022"]), 5)
+            # 默认会话模型取自 0.164.0 官方内置模型目录排第一的 list 模型（priority 1）。
+            session_defaults = next(p["after"] for p in patches if p["path"] == "/TurnMetadata/SessionDefaults")
+            self.assertEqual(
+                session_defaults,
+                {"Model": "gpt-6.1-sol", "ReasoningEffort": "low", "NodeReplAutoReviewRequired": True},
+            )
             # 图像头槽位按 0.164.0 非正式实采：两个新头落在 version(10) 与 authorization(30) 之间，image-turn-id(20) 在前、turn-metadata(25) 在后。
             for endpoint in ("images_generations", "images_edits"):
                 slots = {
