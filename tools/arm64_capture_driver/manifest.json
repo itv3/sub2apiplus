@@ -370,9 +370,9 @@
     },
     {
       "path": "driver/opening_checks.py",
-      "sha256": "8da63dfc9f689fc00df7562443eda171428ce30bcb5bee6037119e7926ac526c",
+      "sha256": "077391c30e5670ead83eaeee57f5b6ea92c63a1501e01df33e3b17a1a70de2d4",
       "mode": "0700",
-      "bytes": 11996
+      "bytes": 14658
     },
     {
       "path": "driver/parse_env.py",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "f89d3b923b62745f15362b4a0b4dd119f8f6d7463da50b76c5d6b3b2c24a9481"
+  "manifest_sha256": "c79bdc9e514de5e2ab32026a257fb4e61a3fed15f66087ec8b6cb4ae9e6c1fd7"
 }

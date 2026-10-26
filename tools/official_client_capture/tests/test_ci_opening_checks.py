@@ -5,6 +5,7 @@
 
 * 模型探测用本机 http.server 当中转：列表里有模型时通过，模型被下线（列表里没有）、列表拉不到、最小请求被拒都不通过；密钥文件权限不对拒绝读取；
 * Security Scan：``gh`` 注入替身，红／没跑完／过期／对应的不是 main 当前头／查不到都不通过，绿且新鲜才通过；
+  本机没装 gh、gh 起不来、调用超时同样不通过，原因是看得懂的中文（真实起子进程复现：ARM64 现场没装 gh 时原来是一屏 Python 回溯），退出码仍是失败关闭的 1；
 * atomic-double：步骤记录通过且输入没变时，窗口内沿用，超窗口改为重做并写明原因；窗口取自 VC-1 阶段预算减去签发余量，测试核对与计时账本的预算表一致；
 * 入口便宜检查脚本 ``entry-preflight.sh`` 接入这两项检查，没配置也算未通过（要跳过必须显式写明）。
 """
@@ -17,12 +18,15 @@ import json
 import os
 import re
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import entry_steps as es
 from tools.ci import opening_checks as oc
@@ -170,6 +174,82 @@ class SecurityScanTests(unittest.TestCase):
         self.assertEqual(oc.main(["security-scan", "--repo", ""]), oc.EXIT_UNCONFIGURED)
 
 
+class GhUnavailableTests(unittest.TestCase):
+    """gh 没装／起不来／超时（ARM64 现场验收发现：没装 gh 时开工检查是一屏 Python 回溯、退出码 1，失败关闭但看不懂）。
+
+    三种都是“检查不通过”：原因是中文、写明怎么办（装好并登录 gh，或显式跳过并写理由），退出码仍是失败关闭的 1。全部真实起子进程，PATH 指向临时目录里的假环境。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+
+    @staticmethod
+    def path(value: str):
+        return mock.patch.dict(os.environ, {"PATH": value})
+
+    def test_a_missing_gh_is_a_readable_not_passed_with_the_way_out(self) -> None:
+        with self.path(str(self.bin)):   # PATH 里只有一个空目录：找不到 gh
+            problems = oc.check_security_scan("itv3/sub2apiplus")
+        self.assertEqual(len(problems), 1, problems)
+        for needle in ("本机没有 gh", "Security Scan 一项无法核对", "装好并登录 gh", "OPENING_CHECKS_SKIP=main-security-scan",
+                       "OPENING_CHECKS_SKIP_REASON", "写明在别处核对过"):
+            self.assertIn(needle, problems[0])
+
+    def test_the_command_line_prints_the_reason_and_keeps_the_failure_exit_code(self) -> None:
+        out = io.StringIO()
+        with self.path(str(self.bin)), contextlib.redirect_stdout(out):
+            code = oc.main(["security-scan", "--repo", "itv3/sub2apiplus"])
+        self.assertEqual(code, oc.EXIT_FAILED, "未通过是 1，不是“没配置”的 3；仍然失败关闭")
+        self.assertIn("本机没有 gh", out.getvalue())
+
+    def test_the_field_reproduction_prints_no_traceback(self) -> None:
+        """ARM64 现场的原样复现：PATH 里没有 gh 时直接运行脚本——退出码 1，标准输出是中文原因，标准错误里没有回溯。"""
+
+        completed = subprocess.run([sys.executable, "-B", str(REPO_ROOT / "tools" / "ci" / "opening_checks.py"), "security-scan", "--repo", "itv3/sub2apiplus"],
+                                   env={"PATH": str(self.bin), "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True,
+                                   stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("本机没有 gh", completed.stdout)
+        self.assertEqual(completed.stderr, "", "标准错误里没有回溯")
+
+    def test_a_gh_that_hangs_is_reported_with_the_timeout_seconds(self) -> None:
+        (self.bin / "gh").write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
+        (self.bin / "gh").chmod(0o755)
+        started = time.monotonic()
+        with self.path(f"{self.bin}:/bin:/usr/bin"), mock.patch.object(oc, "GH_TIMEOUT_SECONDS", 0.5):   # 假 gh 用 exec sleep 卡住，PATH 里要找得到 sleep
+            problems = oc.check_security_scan("itv3/sub2apiplus")
+        self.assertLess(time.monotonic() - started, 20, "超时后进程被杀，不会等满 30 秒")
+        self.assertEqual(len(problems), 1, problems)
+        for needle in ("gh run list", "超时", "0.5 秒", "OPENING_CHECKS_SKIP=main-security-scan", "OPENING_CHECKS_SKIP_REASON"):
+            self.assertIn(needle, problems[0])
+
+    def test_a_gh_that_cannot_be_executed_is_reported_too(self) -> None:
+        (self.bin / "gh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        (self.bin / "gh").chmod(0o644)   # 在 PATH 里但没有执行权限
+        with self.path(str(self.bin)):
+            problems = oc.check_security_scan("itv3/sub2apiplus")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("gh 运行不起来", problems[0])
+        self.assertIn("OPENING_CHECKS_SKIP=main-security-scan", problems[0])
+
+    def test_an_unavailable_gh_is_a_problem_on_either_call(self) -> None:
+        """两次 gh 调用（运行列表、当前头提交）哪一次不可用都转成“没过”，不往外抛。"""
+
+        def first_call(argv):
+            raise oc.GhUnavailable("第一次调用不可用")
+
+        def second_call(argv):
+            if argv[0] == "run":
+                return 0, json.dumps([scan_run()])
+            raise oc.GhUnavailable("第二次调用超时")
+
+        self.assertEqual(oc.check_security_scan("itv3/sub2apiplus", gh=first_call), ["第一次调用不可用"])
+        self.assertEqual(oc.check_security_scan("itv3/sub2apiplus", gh=second_call, now=SecurityScanTests.NOW), ["第二次调用超时"])
+
+
 class AtomicReuseWindowTests(unittest.TestCase):
     def test_the_window_table_matches_the_ledger_stage_budgets(self) -> None:
         from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
@@ -265,6 +345,17 @@ class PreflightScriptTests(unittest.TestCase):
     def test_unconfigured_checks_fail_unless_explicitly_skipped(self) -> None:
         self.assertIn("OPENING_CHECKS_SKIP", self.text)
         self.assertIn("未配置", self.text)
+
+    def test_the_gh_unavailable_hint_names_the_switches_the_script_really_honours(self) -> None:
+        """gh 不可用时告诉操作员的跳过办法，必须是本脚本里真实生效的开关与项目名（改了一边没改另一边就红）。"""
+
+        self.assertIn("opening_skipped main-security-scan", self.text)
+        self.assertIn("OPENING_CHECKS_SKIP_REASON", self.text)
+        with tempfile.TemporaryDirectory() as empty, mock.patch.dict(os.environ, {"PATH": empty}):
+            problems = oc.check_security_scan("itv3/sub2apiplus")
+        self.assertEqual(len(problems), 1, problems)
+        for switch in ("OPENING_CHECKS_SKIP=main-security-scan", "OPENING_CHECKS_SKIP_REASON"):
+            self.assertIn(switch, problems[0])
 
     def test_driver_carries_identical_copies(self) -> None:
         driver = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"

@@ -9,7 +9,8 @@
   都在列表里；可选再发一个最小请求（``--minimal``，``POST <基地址>/responses``，``max_output_tokens`` 取最小）确认模型真的能用。模型不在列表、列表拉不到、
   最小请求被拒（4xx／5xx）都算不通过——“模型已下线”当场拦下。密钥只从文件读（0600 普通文件），不进命令行、不写日志。
 * ``security-scan``：main 上最近一次已完成的 Security Scan 运行（``gh run list``）必须是 success，且对应的提交就是 main 当前的头（有新提交就要先等它的扫描
-  跑完），且不早于时效窗口（缺省 36 小时）；红了、还没跑完、过期、查不到都不通过——“有红先修”。
+  跑完），且不早于时效窗口（缺省 36 小时）；红了、还没跑完、过期、查不到都不通过——“有红先修”。本机没装 ``gh``、``gh`` 起不来或调用超时，同样是“不通过”
+  （原因写明怎么办：装好并登录 gh，或显式跳过），不抛 Python 回溯。
 
 退出码：0 通过，1 不通过（原因打印到标准输出，逐条中文），3 没有配置（入口便宜检查把它也算未通过，要跳过必须显式写明，见 ``entry-preflight.sh``）。
 本模块只依赖标准库；网络与 ``gh`` 调用都可注入，测试不碰真实网络。
@@ -32,6 +33,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 DEFAULT_SCAN_MAX_AGE_HOURS = 36.0
 DEFAULT_TIMEOUT_SECONDS = 20.0
+# gh 单次调用的超时秒数（查运行列表与查头提交各调一次）；放在模块级，测试可以改小。
+GH_TIMEOUT_SECONDS = 60.0
 EXIT_OK, EXIT_FAILED, EXIT_UNCONFIGURED = 0, 1, 3
 
 
@@ -41,6 +44,10 @@ class CheckError(RuntimeError):
 
 class FetchError(RuntimeError):
     """请求没送达（连不上、超时）：属于“检查不通过”（退出码 1），不是配置问题。"""
+
+
+class GhUnavailable(RuntimeError):
+    """gh 没法用（没装、起不来、调用超时）：属于“检查不通过”（退出码 1），不是配置问题。消息就是写给操作员看的中文原因与处置办法。"""
 
 
 Fetch = Callable[[str, str, Mapping[str, str], bytes | None, float], tuple[int, bytes]]
@@ -128,14 +135,39 @@ def check_models(base_url: str, key: str, models: Sequence[str], *, minimal: boo
 
 
 def default_gh(argv: Sequence[str]) -> tuple[int, str]:
-    completed = subprocess.run(["gh", *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60, check=False)
+    """调用 ``gh``，返回（退出码，成功时的标准输出／失败时的标准错误）。
+
+    gh 没装、起不来、超时不让 Python 回溯漏出去（ARM64 没装 gh，原来日志是一屏回溯、看不懂），统一抛 ``GhUnavailable``，消息是中文原因加处置办法；
+    跳过办法与 ``entry-preflight.sh`` 的规矩一致：``OPENING_CHECKS_SKIP`` 列项目名 main-security-scan，同时写 ``OPENING_CHECKS_SKIP_REASON``。"""
+
+    skip = "确需跳过就用 OPENING_CHECKS_SKIP=main-security-scan 加 OPENING_CHECKS_SKIP_REASON 写明在别处核对过"
+    try:
+        completed = subprocess.run(["gh", *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=GH_TIMEOUT_SECONDS, check=False)
+    except FileNotFoundError as error:
+        raise GhUnavailable("本机没有 gh：Security Scan 一项无法核对，要么装好并登录 gh，要么用 OPENING_CHECKS_SKIP=main-security-scan "
+                            "加 OPENING_CHECKS_SKIP_REASON 写明在别处核对过") from error
+    except subprocess.TimeoutExpired as error:
+        raise GhUnavailable(f"gh {' '.join(argv[:2])} 超时（{GH_TIMEOUT_SECONDS:g} 秒没有返回）：Security Scan 一项无法核对；"
+                            f"先查本机到 GitHub 的网络和 gh 的登录状态再重跑，{skip}") from error
+    except OSError as error:   # 例如 gh 在 PATH 里但没有执行权限、不是本机架构的可执行文件
+        raise GhUnavailable(f"gh 运行不起来（{error}）：Security Scan 一项无法核对；先修好 gh（安装是否完整、有没有执行权限），{skip}") from error
     return completed.returncode, completed.stdout if completed.returncode == 0 else completed.stderr
 
 
 def check_security_scan(repo: str, *, branch: str = "main", workflow: str = "security-scan.yml", max_age_hours: float = DEFAULT_SCAN_MAX_AGE_HOURS,
                         gh: Callable[[Sequence[str]], tuple[int, str]] = default_gh, now: float | None = None) -> list[str]:
-    """main 头上最近一次已完成的 Security Scan 必须 success 且不过期。仓库一律显式给（本仓库的 gh 默认会查到上游，见 -R 约定）。"""
+    """main 头上最近一次已完成的 Security Scan 必须 success 且不过期。仓库一律显式给（本仓库的 gh 默认会查到上游，见 -R 约定）。
 
+    返回不通过的原因（空列表＝通过）。gh 没装、起不来、超时（``GhUnavailable``）也是“没过”，原因就是它的中文消息，不抛回溯。"""
+
+    try:
+        return _security_scan_problems(repo, branch=branch, workflow=workflow, max_age_hours=max_age_hours, gh=gh, now=now)
+    except GhUnavailable as error:
+        return [str(error)]
+
+
+def _security_scan_problems(repo: str, *, branch: str, workflow: str, max_age_hours: float, gh: Callable[[Sequence[str]], tuple[int, str]],
+                            now: float | None) -> list[str]:
     now = time.time() if now is None else now
     code, output = gh(["run", "list", "-R", repo, "--workflow", workflow, "--branch", branch, "--limit", "10",
                        "--json", "status,conclusion,headSha,createdAt,databaseId,url"])
