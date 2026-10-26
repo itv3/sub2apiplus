@@ -68,16 +68,53 @@ beforeEach(() => {
 
 describe('OpenAIQuotaResetCell — Codex 点数', () => {
   const points = (wrapper: ReturnType<typeof mount>) => wrapper.get('[data-testid="codex-credits"]')
+  // 按钮内只有「点数」文案和一个数值 span；断言取 span 的完整文本，比 toContain 更严，能发现多显示了小数。
+  const pointsValue = (wrapper: ReturnType<typeof mount>) => points(wrapper).get('span').text()
   const balance = { has_credits: true, unlimited: false, balance: '12345678901234567890.0123' }
+  // 页面只显示整数部分：小数点及其后内容直接舍去，不四舍五入；整数部分超过 2^53 也必须保持完整。
+  const balanceInteger = '12345678901234567890'
 
-  it.each([
-    { name: 'decimal precision', credits: balance, expected: balance.balance },
+  // 余额字符串到页面显示的对照表，同时驱动「实时查询」和「缓存回显」两条路径。
+  const balanceCases = [
+    { name: '示例值 57333.8597510000 舍去小数', balance: '57333.8597510000', expected: '57333' },
+    { name: '0.9 舍去后是 0，不四舍五入成 1', balance: '0.9', expected: '0' },
+    { name: '1.9999 不进位', balance: '1.9999', expected: '1' },
+    { name: '0.0000 显示 0', balance: '0.0000', expected: '0' },
+    { name: '没有小数点的整数原样显示', balance: '42', expected: '42' },
+    { name: '超长整数部分保持完整', balance: '12345678901234567890.0123', expected: balanceInteger },
+    { name: '超过 2^53 的整数不丢精度（Number 会变成 ...992）', balance: '9007199254740993', expected: '9007199254740993' },
+    { name: '超长整数部分加超长小数部分', balance: '99999999999999999999999999999999.99999999999999999999', expected: '99999999999999999999999999999999' },
+    { name: '前后空白先被去掉', balance: '  57333.85  ', expected: '57333' },
+    { name: '整数部分为空的 .9 显示 0', balance: '.9', expected: '0' },
+    { name: '小数点后为空的 5. 显示 5', balance: '5.', expected: '5' },
+    { name: '带正号的 +7.8 去掉正号', balance: '+7.8', expected: '7' },
+    { name: '多余前导零 007.5 规整为 7', balance: '007.5', expected: '7' },
+    { name: '负零 -0.0 显示 0（通过非负检查的唯一负号写法）', balance: '-0.0', expected: '0' },
+    { name: '负数仍走「可用」', balance: '-1.5', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+    { name: '科学计数法无法按字符串截断，走「可用」', balance: '1.5e3', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+    { name: '十六进制写法走「可用」', balance: '0x10', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+  ]
+
+  // 非金额的状态值必须原样显示，不受取整影响。
+  const stateCases = [
     { name: 'zero', credits: { has_credits: false, unlimited: false, balance: '0' }, expected: '0' },
+    { name: 'zero with a leftover fraction string', credits: { has_credits: false, unlimited: false, balance: '3.7' }, expected: '0' },
     { name: 'unlimited takes precedence', credits: { has_credits: false, unlimited: true, balance: null }, expected: 'admin.accounts.openaiQuotaReset.pointsUnlimited' },
+    { name: 'unlimited ignores a numeric balance', credits: { has_credits: true, unlimited: true, balance: '88.5' }, expected: 'admin.accounts.openaiQuotaReset.pointsUnlimited' },
     { name: 'hidden balance', credits: { has_credits: true, unlimited: false, balance: null }, expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+    { name: 'empty balance', credits: { has_credits: true, unlimited: false, balance: '   ' }, expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
     { name: 'invalid balance', credits: { has_credits: true, unlimited: false, balance: 'NaN' }, expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
     { name: 'absent credits', credits: undefined, expected: '—' },
     { name: 'null credits', credits: null, expected: '—' },
+  ]
+
+  it.each([
+    ...balanceCases.map(({ name, balance: value, expected }) => ({
+      name,
+      credits: { has_credits: true, unlimited: false, balance: value },
+      expected,
+    })),
+    ...stateCases,
   ])('queries and displays $name independently of reset cards', async ({ credits, expected }) => {
     vi.mocked(refreshOpenAIQuota).mockResolvedValue({
       credits, fetched_at: 1770000000, cache_persisted: false, credits_cache_persisted: true,
@@ -87,9 +124,48 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     await points(wrapper).trigger('click')
     await flushPromises()
     expect(refreshOpenAIQuota).toHaveBeenCalledWith(1)
-    expect(points(wrapper).text()).toContain(expected)
+    expect(pointsValue(wrapper)).toBe(expected)
     expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
     expect(resetOpenAIQuota).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // 缓存回显：从账号 extra 里的快照直接水合，不发上游请求；显示规则必须与实时查询一致。
+  it.each([
+    ...balanceCases.map(({ name, balance: value, expected }) => ({
+      name,
+      credits: { has_credits: true, unlimited: false, balance: value },
+      expected,
+    })),
+    ...stateCases.filter((item) => item.credits != null),
+  ])('rehydrates and displays $name from the cached snapshot', ({ credits, expected }) => {
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({
+      extra: { codex_credits_snapshot: { credits: credits as typeof balance, fetched_at: 1770000000 } },
+    }) } })
+    expect(pointsValue(wrapper)).toBe(expected)
+    expect(refreshOpenAIQuota).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // 只改页面显示：缓存快照和接口返回里的原始点数字符串必须保持完整精度，不被组件改写。
+  it('keeps the raw points string untouched in the cached snapshot and in the query result', async () => {
+    const snapshotCredits = { has_credits: true, unlimited: false, balance: '57333.8597510000' }
+    const account = makeAccount({
+      extra: { codex_credits_snapshot: { credits: snapshotCredits, fetched_at: 1770000000 } },
+    })
+    const queried = { has_credits: true, unlimited: false, balance: '0.9' }
+    const result = { credits: queried, fetched_at: 1770000001, cache_persisted: false, credits_cache_persisted: true }
+    vi.mocked(refreshOpenAIQuota).mockResolvedValue(result)
+    const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
+    expect(pointsValue(wrapper)).toBe('57333')
+    expect(account.extra?.codex_credits_snapshot?.credits?.balance).toBe('57333.8597510000')
+
+    await points(wrapper).trigger('click')
+    await flushPromises()
+    expect(pointsValue(wrapper)).toBe('0')
+    expect(result.credits.balance).toBe('0.9')
+    // 按钮提示里也不应出现带小数的点数
+    expect(points(wrapper).attributes('title')).not.toContain('8597510000')
     wrapper.unmount()
   })
 
@@ -97,7 +173,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({
       extra: { codex_credits_snapshot: { credits: balance, fetched_at: 1770000000 } },
     }) } })
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(pointsValue(wrapper)).toBe(balanceInteger)
     expect(points(wrapper).attributes('title')).toContain('admin.accounts.openaiQuotaReset.pointsUpdatedAt:')
     expect(refreshOpenAIQuota).not.toHaveBeenCalled()
     expect(resetButton(wrapper).attributes('disabled')).toBeDefined()
@@ -111,14 +187,14 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     vi.mocked(refreshOpenAIQuota).mockRejectedValueOnce(new Error('network unavailable'))
     await points(wrapper).trigger('click')
     await flushPromises()
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(pointsValue(wrapper)).toBe(balanceInteger)
     expect(wrapper.text()).toContain('network unavailable')
 
     vi.mocked(refreshOpenAIQuota).mockResolvedValueOnce({ fetched_at: 1770000001, cache_persisted: true, credits_cache_persisted: true })
     await points(wrapper).trigger('click')
     await flushPromises()
     expect(points(wrapper).text()).toContain('—')
-    expect(wrapper.text()).not.toContain(balance.balance)
+    expect(wrapper.text()).not.toContain(balanceInteger)
     wrapper.unmount()
   })
 
@@ -129,7 +205,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({}) } })
     await points(wrapper).trigger('click')
     await flushPromises()
-    expect(points(wrapper).text()).toContain(balance.balance)
+    expect(pointsValue(wrapper)).toBe(balanceInteger)
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.pointsCachePersistFailed')
     wrapper.unmount()
   })
@@ -353,7 +429,8 @@ describe('OpenAIQuotaResetCell — 外审 F6:影子禁用重置', () => {
 
     expect(resetOpenAIQuota).toHaveBeenCalledWith(1)
     expect(refreshOpenAIQuota).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('999.25')
+    // 重置响应里的余额 999.25 也只显示整数部分
+    expect(wrapper.get('[data-testid="codex-credits"] span').text()).toBe('999')
     expect(wrapper.text()).not.toContain('admin.accounts.openaiQuotaReset.expiresAt:')
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.resetSuccess')
     expect(wrapper.emitted('account-updated')).toEqual([[recoveredAccount]])

@@ -225,14 +225,38 @@ const readCachedCredits = (account: Account) => {
   return { credits, fetched_at: snapshot.fetched_at }
 }
 const creditsData = ref(readCachedCredits(props.account))
+
+// 普通十进制字符串：可带一个正负号，整数部分和小数部分都允许为空（如 ".9"、"5."）。
+// 科学计数法（1e3）、十六进制（0x10）等写法不匹配，交给调用方按「可用」处理。
+const plainDecimalPattern = /^[+-]?(\d*)(?:\.\d*)?$/
+
+// 点数只显示整数部分：直接舍去小数点及其后的内容，不做四舍五入。
+// 全程按字符串处理，不转成 Number，因为超过 2^53 的整数部分转 Number 会丢精度。
+// 这里只决定页面上怎么显示；接口返回、缓存快照里的原始点数字符串不会被改写，仍是完整精度。
+// 无法按普通十进制解析时返回 null。
+const toIntegerPoints = (balance: string): string | null => {
+  const match = plainDecimalPattern.exec(balance)
+  if (!match) return null
+  // 去掉多余的前导零（"007" -> "7"），但至少保留一位；整数部分为空（".9"）时显示 "0"。
+  // 正负号一律丢弃：到这里时数值已经通过非负检查，出现 "-" 只可能是 "-0" 这种负零。
+  const integerPart = match[1].replace(/^0+(?=\d)/, '')
+  return integerPart === '' ? '0' : integerPart
+}
+
 const creditsDisplay = computed(() => {
   const credits = creditsData.value?.credits
+  // 还没有任何点数数据（未查询且无缓存）
   if (!credits) return '—'
+  // 无限、可用、0 这几种状态原样显示，不做取整
   if (credits.unlimited) return t('admin.accounts.openaiQuotaReset.pointsUnlimited')
   if (!credits.has_credits) return '0'
   const balance = credits.balance?.trim()
-  // Keep the upstream decimal string intact, including fractional points.
-  if (balance && Number.isFinite(Number(balance)) && Number(balance) >= 0) return balance
+  // 有效值检查保持不变：非空、能解析成有限数、且不为负。Number 只用来做这个检查，不参与显示。
+  if (balance && Number.isFinite(Number(balance)) && Number(balance) >= 0) {
+    // 能按普通十进制取整就只显示整数部分；科学计数法、十六进制等写法无法安全地按字符串截断，按「可用」处理。
+    const integerPoints = toIntegerPoints(balance)
+    if (integerPoints !== null) return integerPoints
+  }
   return t('admin.accounts.openaiQuotaReset.pointsAvailable')
 })
 const creditsButtonTitle = computed(() => {
