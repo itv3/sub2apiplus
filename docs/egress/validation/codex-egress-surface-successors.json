@@ -75,6 +75,13 @@
       "reason": "Codex 0.157.0 候选（VC-4）：共享 Cookie jar 名单改读画像 CookieJar 节（officialCodexCookiePolicy），由合并缝新增命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准。"
     },
     {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "file_type": "regular",
+      "kind": "scope_addition",
+      "scope": "strict_surface",
+      "reason": "Codex 0.164.0 登记（W1b）：OAuth 兼容层按画像 BaseInstructions 节（IDScheme=uuidv7）与官方形态判定决定是否原样保留 Codex 入站逐项 internal_chat_message_metadata_passthrough（官方出站＋Lite＋画像 uuidv7＋官方形态四条件，非 Lite 保留三键形态），直接决定官方出站请求体 input 项的形态，由此新命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准。"
+    },
+    {
       "path": "backend/internal/service/openai_legacy_compact_release_gate.go",
       "file_type": "regular",
       "kind": "surface_addition",
