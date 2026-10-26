@@ -44,6 +44,12 @@
       "reason": "Codex 0.164.0 登记（W1）：画像 BaseInstructions 节 IDScheme=uuidv7 且本请求走 Lite 时的增量窗口前缀——判定入站 additional_tools／基础指令消息是否已是官方形态并原样保留，第三方入站才合成 at_／msg_＋进程内按种子稳定复用的 UUIDv7，WS 预热帧 input 为空、首个业务帧保留前缀，HTTP 与 WS 的安装入口；画像不声明 uuidv7 时不被调用，直接决定官方出站请求体与 WS 帧形态。"
     },
     {
+      "path": "backend/internal/service/official_egress_openai_input_passthrough.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.164.0 登记（W1b）：入站 input 逐项 internal_chat_message_metadata_passthrough 的保真判定——官方出站账号、画像 BaseInstructions 节 IDScheme=uuidv7、按项官方形态（Lite 可带 content_item_metadata，非 Lite 是 turn_id／create_time／content_item_kinds 三键）三条同时满足才原样保留，否则仍整体剥离；WS 入站的客户端 turn_id 校验后清空、由定型回填网关值，HTTP 定型里把当前回合与历史各段 turn_id 改写成网关本轮值与网关按线程和段锚点派生的稳定值；画像不声明 uuidv7（含 0.163.0）时判定恒为否、行为不变，直接决定官方出站请求体与 WS 帧里逐项 passthrough 的形态。"
+    },
+    {
       "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
       "file_type": "regular",
       "kind": "surface_addition",
