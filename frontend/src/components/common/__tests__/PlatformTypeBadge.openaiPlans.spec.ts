@@ -102,12 +102,20 @@ describe('new Codex subscription labels', () => {
     ['business', 'Enterprise', 'bg-indigo-100'],
     ['edu_plus', 'Edu Plus', 'bg-indigo-100'],
     ['edu_pro', 'Edu Pro', 'bg-indigo-100'],
-    ['sci', 'Academic Researchers', ''],
-    ['sci_plus', 'Academic Researchers Plus', '']
+    ['sci', 'Academic Researchers', 'bg-indigo-100'],
+    ['sci_plus', 'Academic Researchers Plus', 'bg-indigo-100']
   ])('displays %s', (sku, label, color) => {
     const wrapper = mountPlan('openai', sku)
     expect(wrapper.text()).toContain(label)
     if (color) expect(wrapper.html()).toContain(color)
+  })
+
+  it('colors the academic plans like the other workspace plans, but only on the OpenAI platform', () => {
+    for (const planType of ['sci', 'sci_plus', 'sciplus', 'SCI-PLUS']) {
+      expect(mountPlan('openai', planType).html()).toContain('bg-indigo-100')
+    }
+    // 其它平台的 sci 不是 ChatGPT 套餐，不能套用这个配色
+    expect(mountPlan('antigravity', 'sci').html()).not.toContain('bg-indigo-100')
   })
 
   it('does not mix up the two academic plans', () => {
