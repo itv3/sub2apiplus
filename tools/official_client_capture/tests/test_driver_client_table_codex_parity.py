@@ -1107,7 +1107,7 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_SH_1_BASELINE = '5fcdf0b6b6ba847e86f42452c975cd841832e606'
-CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '632db239a95f5d35f619b2ad8283d99261fcfbd1fab4051ecb730067619ac782'}
+CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '81c176d329af13b0d2d5ca8db6ec681465b4e1dfc65e6977d37f189cb7948c03'}
 CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
         '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
@@ -1170,7 +1170,9 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+    if [[ "$PRE_A3_PARENT" != /* ]]; then echo "ENTRY_GATES_ABORTED：--pre-a3-staging-parent 必须是绝对路径：${PRE_A3_PARENT}" >&2; exit 3; fi',
         '-    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" \\',
         '+    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$PRE_A3_PARENT" --output "$UNITS" \\',
+        '-EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")',
         '+if [ -n "${UNIT_EXECUTOR_RETRY_LEDGER:-}" ]; then EXEC_ENV+=("UNIT_EXECUTOR_RETRY_LEDGER=$UNIT_EXECUTOR_RETRY_LEDGER"); fi',
+        '+EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_SPEC_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")',
         '+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \\',
         '+if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS+=(--identity-memo off); fi',
         '+if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi',
@@ -1246,6 +1248,18 @@ CLOSEOUT_SH_4_DIGESTS = {'vc0-gate-target.sh': 'b1d173a477b03009cfa6abde600bc819
 CLOSEOUT_SH_4_RESIDUALS = {'vc0-gate-target.sh': ['-bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?',
         '+GATE_SCOPE_ARGS=(); if [ codex = codex ]; then GATE_SCOPE_ARGS=(--gate-scope auto); fi',
         '+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"} "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?']}
+CLOSEOUT_SH_5_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
+CLOSEOUT_SH_5_DIGESTS = {'lib.sh': '6cd7928a180ed4149921673f7470ae72e1f6ad4f4bf9b7a8215a747628bd7df8'}
+CLOSEOUT_SH_5_RESIDUALS = {'lib.sh': ['-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\',
+        '+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\']}
+CLOSEOUT_SH_6_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
+CLOSEOUT_SH_6_DIGESTS = {'vc5-gate-target.sh': '310387f836cfded54248f851ba4b8d423efff11d32fddaa2b3db9d792e83ce94'}
+CLOSEOUT_SH_6_RESIDUALS = {'vc5-gate-target.sh': ['-ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT',
+        '+ATT="$1"; GATE="$2"; T="$3"; SRC_SPEC=$HISTORICAL_SOURCE_ROOT',
+        '-export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"',
+        '+export CODEX_SPEC_SOURCE_ROOT="$SRC_SPEC"',
+        '-    --pycache "$PYC" --historical-source "$SRC1491" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"',
+        '+    --pycache "$PYC" --historical-source "$SRC_SPEC" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"']}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),
@@ -1267,6 +1281,8 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ('收尾登记 entry-preflight.sh', CLOSEOUT_SH_2_BASELINE, CLOSEOUT_SH_2_DIGESTS, CLOSEOUT_SH_2_RESIDUALS),
     ('收尾登记 env.example.sh', CLOSEOUT_SH_3_BASELINE, CLOSEOUT_SH_3_DIGESTS, CLOSEOUT_SH_3_RESIDUALS),
     ('收尾登记 vc0-gate-target.sh', CLOSEOUT_SH_4_BASELINE, CLOSEOUT_SH_4_DIGESTS, CLOSEOUT_SH_4_RESIDUALS),
+    ('收尾登记 lib.sh', CLOSEOUT_SH_5_BASELINE, CLOSEOUT_SH_5_DIGESTS, CLOSEOUT_SH_5_RESIDUALS),
+    ('收尾登记 vc5-gate-target.sh', CLOSEOUT_SH_6_BASELINE, CLOSEOUT_SH_6_DIGESTS, CLOSEOUT_SH_6_RESIDUALS),
     # <<< 收尾登记行
 )
 
