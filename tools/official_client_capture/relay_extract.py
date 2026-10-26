@@ -243,8 +243,88 @@ def input_head_summary(items) -> dict | None:
     return head or None
 
 
+# 逐项 internal_chat_message_metadata_passthrough 的整体形态（0.164.0 登记新增，LR2）。入站是官方形态时网关原样保留逐项 passthrough（含键序），
+# 只把其中的 turn_id 改写成网关派生值；判据要看的是“保留了没有、键序对不对、当前回合的项级 turn_id 是否同出站 client_metadata.turn_id、
+# 同 turn metadata 里的 turn_id”。这些都不需要取值：只记键序串、携带者 type 枚举、计数，以及“相等与否”的布尔结论——UUID、对话内容一概不进摘要。
+# 键序串用“,”连接的键名（如 ``turn_id,create_time,content_item_kinds,content_item_metadata``）；出现过的各种键序去重、按字典序排好后用“|”连成**一个字符串**
+# （不是出现次序，也不是列表）：判据用 ``all_match`` 正则做闭集判定——官方 passthrough 的键可以带 cell_id、executed_tool_calls、tool_calls_complete
+# （工具调用项由客户端自己写入），合法键序是 7 个官方键的有序子集（128 种），逐个列举不现实，正则表达“有序子集”最短。
+_TURN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+INPUT_PASSTHROUGH_SUMMARY_LIMIT = 16
+
+
+def _turn_metadata_turn_id(client_metadata) -> str | None:
+    """client_metadata["x-codex-turn-metadata"]（一行 JSON 对象字符串）里的 turn_id；取不到返回 None。"""
+
+    if not isinstance(client_metadata, dict):
+        return None
+    raw = client_metadata.get(TURN_METADATA_HEADER)
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    turn_id = parsed.get("turn_id") if isinstance(parsed, dict) else None
+    return turn_id if isinstance(turn_id, str) and turn_id else None
+
+
+def input_passthrough_summary(items, client_metadata) -> dict | None:
+    """``input`` 数组逐项 passthrough 的形态摘要；``input`` 里没有任何对象项时返回 None。
+
+    - ``key_orders``：出现过的 passthrough 键序串（去重、字典序、“|”连成一个字符串，没有任何携带者时为空串）；``assistant_key_orders``：同样的格式，只统计助手消息；
+    - ``carrier_types``：带 passthrough 的项 type（去重、字典序）；``messages_without``：没带 passthrough 的 message 项个数（被剥离时非 0）；
+    - ``turn_id_forms``：项级 turn_id 的形态（去重、字典序）``uuid``（规范小写 UUID）或 ``other``（不是字符串或不规范）；
+    - ``tail_turn_id_matches_client``：最后一个带 turn_id 的项（请求尾部总属于当前回合）的 turn_id 是否等于 ``client_metadata.turn_id``；
+    - ``client_turn_id_matches_turn_metadata``：``client_metadata.turn_id`` 是否等于 ``client_metadata["x-codex-turn-metadata"]`` 里的 turn_id。
+    后两个布尔值在任一侧取不到时为 False（判据要求 True，取不到即失败关闭）。
+    """
+
+    key_orders: set[str] = set()
+    assistant_orders: set[str] = set()
+    carrier_types: set[str] = set()
+    turn_forms: set[str] = set()
+    messages_without = 0
+    tail_turn_id = None
+    seen_object = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        seen_object = True
+        passthrough = item.get(INPUT_PASSTHROUGH_FIELD)
+        if not isinstance(passthrough, dict):
+            if item.get("type") == "message":
+                messages_without += 1
+            continue
+        order = ",".join(list(passthrough.keys())[:12])
+        key_orders.add(order)
+        if isinstance(item.get("type"), str):
+            carrier_types.add(item["type"])
+        if item.get("type") == "message" and item.get("role") == "assistant":
+            assistant_orders.add(order)
+        if "turn_id" in passthrough:
+            turn_id = passthrough["turn_id"]
+            turn_forms.add("uuid" if isinstance(turn_id, str) and _TURN_ID_RE.match(turn_id) else "other")
+            if isinstance(turn_id, str):
+                tail_turn_id = turn_id
+    if not seen_object:
+        return None
+    client_turn_id = client_metadata.get("turn_id") if isinstance(client_metadata, dict) else None
+    client_ok = isinstance(client_turn_id, str) and bool(client_turn_id)
+    limit = INPUT_PASSTHROUGH_SUMMARY_LIMIT
+    return {
+        "key_orders": "|".join(sorted(key_orders)[:limit]),
+        "assistant_key_orders": "|".join(sorted(assistant_orders)[:limit]),
+        "carrier_types": sorted(carrier_types)[:limit],
+        "messages_without": messages_without,
+        "turn_id_forms": sorted(turn_forms),
+        "tail_turn_id_matches_client": bool(client_ok and tail_turn_id == client_turn_id),
+        "client_turn_id_matches_turn_metadata": bool(client_ok and _turn_metadata_turn_id(client_metadata) == client_turn_id),
+    }
+
+
 def shape_top_level(parsed: dict) -> dict:
-    """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head``。
+    """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head`` 与逐项 passthrough 整体形态 ``_passthrough``。
 
     summarize_body、WS 帧解析和 mitm 派生三处共用，保证三条路径对同一份请求体给出同构摘要。
     """
@@ -255,6 +335,9 @@ def shape_top_level(parsed: dict) -> dict:
         head = input_head_summary(items)
         if head is not None:
             shape["input"]["_head"] = head
+        passthrough = input_passthrough_summary(items, parsed.get("client_metadata"))
+        if passthrough is not None:
+            shape["input"]["_passthrough"] = passthrough
     return shape
 
 

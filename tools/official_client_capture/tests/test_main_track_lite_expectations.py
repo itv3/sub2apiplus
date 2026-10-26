@@ -580,6 +580,94 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertEqual(len(reverted["rules"]), len(old["rules"]))
 
 
+class InputPassthroughSummaryTests(unittest.TestCase):
+    """relay_extract 给 input 附的逐项 passthrough 整体形态 ``_passthrough``（0.164.0 LR2）：只记结构与相等结论，不记任何取值。
+
+    三条摘要路径（summarize_body、WS 帧、mitm 派生）共用 shape_top_level，所以这里直接测它，再测 summarize_body 与派生器同构。
+    """
+
+    TURN_A = "01a17935-c8dc-7cb2-8b5b-c9b98611bb03"
+    TURN_B = "01a17935-0000-7cb2-8b5b-c9b98611bb99"
+    FOUR = ["turn_id", "create_time", "content_item_kinds", "content_item_metadata"]
+
+    @staticmethod
+    def item(kind: str, role: str | None, keys, *, turn_id: str | None = None) -> dict:
+        passthrough = {key: ([] if key != "turn_id" else turn_id) for key in keys}
+        entry: dict = {"type": kind, "content": []}
+        if role:
+            entry["role"] = role
+        if passthrough:
+            entry["internal_chat_message_metadata_passthrough"] = passthrough
+        return entry
+
+    def body(self, items: list, *, client_turn=None, metadata_turn=None, with_metadata=True) -> dict:
+        client_metadata: dict = {}
+        if client_turn is not None:
+            client_metadata["turn_id"] = client_turn
+        if with_metadata:
+            client_metadata["x-codex-turn-metadata"] = json.dumps({"turn_id": metadata_turn if metadata_turn is not None else client_turn})
+        return {"model": "gpt-6.1-sol", "input": items, "client_metadata": client_metadata}
+
+    def summary(self, body: dict) -> dict:
+        return relay_extract.shape_top_level(body)["input"]["_passthrough"]
+
+    def test_official_lite_request_summary(self) -> None:
+        items = [
+            {"type": "additional_tools", "id": "at_x", "role": "developer", "tools": []},
+            self.item("message", "developer", self.FOUR, turn_id=self.TURN_A),
+            self.item("message", "user", self.FOUR, turn_id=self.TURN_A),
+            self.item("message", "assistant", ["turn_id", "content_item_kinds"], turn_id=self.TURN_B),
+            self.item("function_call", None, self.FOUR, turn_id=self.TURN_A),
+        ]
+        summary = self.summary(self.body(items, client_turn=self.TURN_A))
+        self.assertEqual(summary, {
+            "key_orders": "|".join(sorted([",".join(self.FOUR), "turn_id,content_item_kinds"])),
+            "assistant_key_orders": "turn_id,content_item_kinds",
+            "carrier_types": ["function_call", "message"],
+            "messages_without": 0,
+            "turn_id_forms": ["uuid"],
+            "tail_turn_id_matches_client": True,
+            "client_turn_id_matches_turn_metadata": True,
+        })
+
+    def test_stripped_or_inconsistent_requests_are_visible(self) -> None:
+        # passthrough 被整体剥离：message 项没有 passthrough，计数非 0，键序为空。
+        stripped = self.summary(self.body([self.item("message", "user", []), self.item("message", "user", [])], client_turn=self.TURN_A))
+        self.assertEqual(stripped["messages_without"], 2)
+        self.assertEqual(stripped["key_orders"], "")
+        self.assertFalse(stripped["tail_turn_id_matches_client"])
+        # 尾项 turn_id 不是当前回合（保留了客户端旧值没改写）：布尔为 False。
+        stale = self.summary(self.body([self.item("message", "user", self.FOUR, turn_id=self.TURN_B)], client_turn=self.TURN_A))
+        self.assertFalse(stale["tail_turn_id_matches_client"])
+        # client_metadata.turn_id 与 turn metadata 里的 turn_id 不一致（既有缺陷 cbdf22345 修的就是它）。
+        split = self.summary(self.body([self.item("message", "user", self.FOUR, turn_id=self.TURN_A)], client_turn=self.TURN_A, metadata_turn=self.TURN_B))
+        self.assertTrue(split["tail_turn_id_matches_client"])
+        self.assertFalse(split["client_turn_id_matches_turn_metadata"])
+        # 没有 client_metadata 或 turn metadata 不是 JSON：失败关闭为 False。
+        self.assertFalse(self.summary({"input": [self.item("message", "user", self.FOUR, turn_id=self.TURN_A)]})["tail_turn_id_matches_client"])
+        broken = self.body([self.item("message", "user", self.FOUR, turn_id=self.TURN_A)], client_turn=self.TURN_A)
+        broken["client_metadata"]["x-codex-turn-metadata"] = "{not json"
+        self.assertFalse(self.summary(broken)["client_turn_id_matches_turn_metadata"])
+        # turn_id 不是规范 UUID 或不是字符串：形态为 other。
+        odd = self.summary(self.body([self.item("message", "user", self.FOUR, turn_id="not-a-uuid"), {
+            "type": "message", "role": "user", "internal_chat_message_metadata_passthrough": {"turn_id": 7}}], client_turn=self.TURN_A))
+        self.assertEqual(odd["turn_id_forms"], ["other"])
+
+    def test_summary_carries_no_values_and_is_shared_by_all_summarizers(self) -> None:
+        body = self.body([self.item("message", "user", self.FOUR, turn_id=self.TURN_A)], client_turn=self.TURN_A)
+        summary = relay_extract.summarize_body(json.dumps(body).encode(), "", "application/json")
+        serialized = json.dumps(summary["shape"]["input"]["_passthrough"])
+        for secret in (self.TURN_A, "01a17935"):
+            self.assertNotIn(secret, serialized)
+        self.assertEqual(relay_extract.shape_top_level(body), summary["shape"])
+        from tools.official_client_capture import derive_official_observations as derive
+
+        self.assertEqual(derive._mitm_body_summary({"json": body})["shape"], summary["shape"])
+        # 空 input、没有对象项的 input、没有 input 都不产生 _passthrough。
+        for empty in ({"input": []}, {"input": ["x"]}, {"model": "m"}):
+            self.assertNotIn("_passthrough", json.dumps(relay_extract.shape_top_level(empty)))
+
+
 class MainTrackLiteExpectation0164Tests(MainTrackLiteExpectationTests):
     """0.164.0 候选期望清单（由 0.163.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
 
