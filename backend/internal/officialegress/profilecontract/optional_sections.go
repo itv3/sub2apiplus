@@ -102,6 +102,23 @@ type TurnMetadataSection struct {
 	CompactionImplementations []string `json:"CompactionImplementations"`
 	// CompactionPhases：compaction.phase 允许的取值（排序去重）。
 	CompactionPhases []string `json:"CompactionPhases"`
+	// SessionDefaults：官方 CLI 默认路径的会话模型取值（可选）。独立 images 端点的 turn metadata 里，
+	// model 是会话模型（不是请求体里的图像模型），reasoning_effort 是该会话的生效推理强度；入站没有同一回合的
+	// Responses 回合事实（非 Codex 客户端直接调图像接口）时，网关没有别的可信来源，就取这里登记的默认值。
+	// 缺省表示不补这几个键（旧画像行为，字节与摘要不变）。
+	SessionDefaults *TurnMetadataSessionDefaults `json:"SessionDefaults,omitempty"`
+}
+
+// TurnMetadataSessionDefaults 是目标版本客户端默认会话模型的 turn metadata 取值，登记时取自该版本官方内置
+// 模型目录里的默认模型（排第一的 list 模型）。三项都属于同一条目录记录，所以放在一起声明，避免各处分别硬编码。
+type TurnMetadataSessionDefaults struct {
+	// Model：默认会话模型 slug。
+	Model string `json:"Model"`
+	// ReasoningEffort：该模型的默认推理强度（目录 default_reasoning_level）；为空表示没有生效强度，
+	// 此时 turn metadata 不写 reasoning_effort。
+	ReasoningEffort string `json:"ReasoningEffort"`
+	// NodeReplAutoReviewRequired：该模型目录条目的 node_repl_auto_review_required。
+	NodeReplAutoReviewRequired bool `json:"NodeReplAutoReviewRequired"`
 }
 
 // ClientMetadataSection 声明请求体 client_metadata 中客户端固定写入的常量键。
@@ -260,8 +277,35 @@ var (
 	}
 )
 
+// sessionModelSlugPattern 约束默认会话模型 slug：小写字母、数字、点、下划线、连字符，首字符为字母或数字。
+var sessionModelSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
 // responsesEndpointIDs 是基础指令载体与 access_programs 所约束的两个 Responses 端点（已排序）。
 var responsesEndpointIDs = []string{"responses_http", "responses_ws"}
+
+// validateTurnMetadataSessionDefaults 校验会话默认值：模型 slug 与强度的形态，且对应的键必须出现在节 Keys 里，
+// 否则执行层会因为键未声明而静默丢弃取值。
+func validateTurnMetadataSessionDefaults(section *TurnMetadataSection) error {
+	defaults := section.SessionDefaults
+	if defaults == nil {
+		return nil
+	}
+	if !sessionModelSlugPattern.MatchString(defaults.Model) {
+		return fmt.Errorf("SessionDefaults.Model 非法: %q", defaults.Model)
+	}
+	if !slices.Contains(section.Keys, "model") {
+		return errors.New("SessionDefaults 存在时 Keys 必须包含 model")
+	}
+	if defaults.ReasoningEffort != "" {
+		if !sectionTokenPattern.MatchString(defaults.ReasoningEffort) {
+			return fmt.Errorf("SessionDefaults.ReasoningEffort 非法: %q", defaults.ReasoningEffort)
+		}
+		if !slices.Contains(section.Keys, "reasoning_effort") {
+			return errors.New("SessionDefaults.ReasoningEffort 非空时 Keys 必须包含 reasoning_effort")
+		}
+	}
+	return nil
+}
 
 // DecodeOptionalSection 严格解码并校验一个可选节；未知节名、未知字段或非法取值均返回错误。
 func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
@@ -365,7 +409,10 @@ func validateOptionalSection(name string, value any) error {
 		if err := requireSortedUnique("CompactionImplementations", section.CompactionImplementations, sectionTokenPattern); err != nil {
 			return err
 		}
-		return requireSortedUnique("CompactionPhases", section.CompactionPhases, sectionTokenPattern)
+		if err := requireSortedUnique("CompactionPhases", section.CompactionPhases, sectionTokenPattern); err != nil {
+			return err
+		}
+		return validateTurnMetadataSessionDefaults(section)
 	case *ClientMetadataSection:
 		if len(section.Constants) == 0 {
 			return errors.New("Constants 不能为空")

@@ -4,6 +4,7 @@ package service
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,6 +20,25 @@ import (
 // withImagesTurnHeaderSlots 以正式目录 active 画像为底稿，给 images 两个端点按需声明回合头槽位，
 // 并临时替换 service 读取画像的包级入口。用例结束自动恢复；使用本夹具的用例不得并行执行。
 func withImagesTurnHeaderSlots(t *testing.T, imageTurnID, turnMetadata bool) profilecontract.ExecutableProfile {
+	t.Helper()
+	return withImagesTurnHeaderSlotsAndDefaults(t, imageTurnID, turnMetadata, officialImagesTurnTestSessionDefaults())
+}
+
+// officialImagesTurnTestSessionDefaults 是 0.164.0 画像应登记的默认会话模型：官方内置模型目录排第一的 gpt-6.1-sol
+// （default_reasoning_level=low、node_repl_auto_review_required=true），与 images 实采样本 i1／i7／i8 一致。
+func officialImagesTurnTestSessionDefaults() *profilecontract.TurnMetadataSessionDefaults {
+	return &profilecontract.TurnMetadataSessionDefaults{
+		Model: "gpt-6.1-sol", ReasoningEffort: "low", NodeReplAutoReviewRequired: true,
+	}
+}
+
+// withImagesTurnHeaderSlotsAndDefaults 同 withImagesTurnHeaderSlots，并把 TurnMetadata 节的 SessionDefaults
+// 设为 defaults（nil 表示画像不声明默认会话模型）。当前 active 画像（0.163.0）没有该字段，所以这里显式写入。
+func withImagesTurnHeaderSlotsAndDefaults(
+	t *testing.T,
+	imageTurnID, turnMetadata bool,
+	defaults *profilecontract.TurnMetadataSessionDefaults,
+) profilecontract.ExecutableProfile {
 	t.Helper()
 	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
 	require.NoError(t, err)
@@ -47,6 +67,10 @@ func withImagesTurnHeaderSlots(t *testing.T, imageTurnID, turnMetadata bool) pro
 		}
 		endpoint.Headers = kept
 	}
+	var section profilecontract.TurnMetadataSection
+	require.NoError(t, json.Unmarshal(doc.TurnMetadata, &section), "active 画像必须声明 TurnMetadata 节")
+	section.SessionDefaults = defaults
+	doc.TurnMetadata = syntheticServiceRawSection(t, section)
 	spec, err := profilecontract.NewProfileSpec(doc)
 	require.NoError(t, err)
 	executable, err := profilecontract.CompileExecutableProfile(spec)
@@ -129,22 +153,146 @@ func TestImagesTurnFactsFollowDeclaredSlots(t *testing.T) {
 		require.Equal(t, turnID, facts.TurnID.Value)
 		require.Equal(t, officialegress.IdentitySourceInvocation, facts.TurnID.Source)
 		require.Equal(t, officialegress.IdentityLifecycleTurn, facts.TurnID.Lifecycle)
-		// 入站没有回合事实时，从 Responses 兜底的基础键值出发，按官方 swap_remove 过程重排。
-		// 这里没有 model／reasoning_effort（没有可信来源，不写）：初始序
-		// [session_id, thread_id, agent_name, turn_id, root_turn_id, thread_source, turn_trigger, sandbox,
-		//  sandbox_mode, 三个布尔, turn_started_at_unix_ms]，删 agent_name 时末尾的 turn_started_at_unix_ms
-		// 换到第 3 位，删 root_turn_id 时末尾的 node_repl_disabled 换到第 5 位。
-		require.Equal(t,
-			`{"session_id":"`+sessionID+`","thread_id":"`+sessionID+`","turn_started_at_unix_ms":1793036419096,`+
-				`"turn_id":"`+turnID+`","node_repl_disabled":false,"thread_source":"user","turn_trigger":"exec",`+
-				`"sandbox":"seccomp","sandbox_mode":"read-only","auto_review_enabled":false,`+
-				`"node_repl_auto_review_required":false,"codex_version":"`+profile.Version()+`"}`,
+		// 入站没有回合事实时，从 Responses 兜底的基础键值出发，补默认会话模型，按官方 swap_remove 过程重排：
+		// 期望值取实采 i1（exec、gpt-6.1-sol、low）的 images 头原文，只把会话／回合标识与开始时间换成本次生成值。
+		require.Equal(t, officialImagesTurnDefaultPathExpectation(t, sessionID, turnID, 1793036419096, profile.Version()),
 			facts.TurnMetadata.Value)
+		var decoded map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(facts.TurnMetadata.Value), &decoded))
+		require.Len(t, decoded, 14, "默认路径必须是 14 键，与官方一致")
 		require.NoError(t, facts.Validate())
 		// 生成的会话标识只进入 turn metadata，不写进会话事实，避免影响 Conditions。
 		require.Empty(t, facts.SessionID.Value)
 		require.Empty(t, facts.ThreadID.Value)
 	}
+}
+
+// officialImagesTurnDefaultPathExpectation 以实采 i1 的 images 头原文为模板，换入本次的标识、开始时间与版本。
+// 模板里 session_id 与 thread_id 同值，turn_id 单独一个值。
+func officialImagesTurnDefaultPathExpectation(
+	t *testing.T,
+	sessionID, turnID string,
+	startedAtMs int64,
+	version string,
+) string {
+	t.Helper()
+	var template string
+	for _, sample := range officialImagesTurnMetadataSamples {
+		if strings.HasPrefix(sample.name, "i1-") {
+			template = sample.image
+		}
+	}
+	require.NotEmpty(t, template, "缺少实采 i1 样本")
+	const (
+		sampleSession = "01a1794c-7ff8-77a1-a7b0-c82436e27910"
+		sampleTurn    = "01a1794c-8017-7560-8816-ae77f473a5ee"
+		sampleStarted = `"turn_started_at_unix_ms":1793036419096`
+	)
+	expected := strings.ReplaceAll(template, sampleSession, sessionID)
+	expected = strings.ReplaceAll(expected, sampleTurn, turnID)
+	expected = strings.Replace(expected, sampleStarted, `"turn_started_at_unix_ms":`+strconv.FormatInt(startedAtMs, 10), 1)
+	return strings.Replace(expected, `"codex_version":"0.164.0"`, `"codex_version":"`+version+`"`, 1)
+}
+
+// 默认会话模型的来源是画像 SessionDefaults，取值要与服务层冷启动能力表里的同名条目一致，
+// 防止登记时两处各填各的。
+func TestImagesTurnSessionDefaultsAgreeWithBundledCapabilities(t *testing.T) {
+	defaults := officialImagesTurnTestSessionDefaults()
+	capability, ok := bundledOpenAIModelCapabilities[defaults.Model]
+	require.True(t, ok, "冷启动能力表缺少默认会话模型 %s", defaults.Model)
+	require.Equal(t, defaults.ReasoningEffort, capability.DefaultReasoningLevel)
+}
+
+// 没有同回合 Responses 事实时按默认会话模型补 model／reasoning_effort／node_repl_auto_review_required；
+// 每种入口（exec／TUI）、两个端点都要是 14 键，键序与官方默认路径一致。
+func TestImagesTurnFactsSynthesizedCarryDefaultSessionModel(t *testing.T) {
+	profile := withImagesTurnHeaderSlots(t, true, true)
+	withFixedImagesTurnStart(t, 1793036581084)
+	turnID := officialCodexGeneratedUUIDLikeValue("images-seed", "turn")
+	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	for _, endpointID := range []string{officialCodexEndpointImagesGenerations, officialCodexEndpointImagesEdits} {
+		facts := completeImagesTurnFactsForTest(t, endpointID, officialClientProfileModeActive, withExecSurface)
+		require.Equal(t, officialImagesTurnDefaultPathExpectation(t, sessionID, turnID, 1793036581084, profile.Version()),
+			facts.TurnMetadata.Value, endpointID)
+		// 图像请求体里的 model 是 gpt-image-2，会话模型不能被它污染：turn metadata 只会出现默认会话模型。
+		require.NotContains(t, facts.TurnMetadata.Value, "gpt-image-2")
+		require.Contains(t, facts.TurnMetadata.Value, `"model":"gpt-6.1-sol"`)
+		require.Contains(t, facts.TurnMetadata.Value, `"reasoning_effort":"low"`)
+		require.Contains(t, facts.TurnMetadata.Value, `"node_repl_auto_review_required":true`)
+	}
+	// TUI 入口：turn_trigger 为 user，其余键序不变（实采 i7 的 trigger 取值）。
+	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive,
+		func(f *officialegress.CodexIdentityFacts) {
+			f.ProcessSurface = officialegress.CodexIdentityValue{
+				Value: officialCodexSurfaceTUI, Source: officialegress.IdentitySourceProcess,
+				Lifecycle: officialegress.IdentityLifecycleProcess,
+			}
+		})
+	require.Contains(t, facts.TurnMetadata.Value, `"turn_trigger":"user"`)
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(facts.TurnMetadata.Value), &decoded))
+	require.Len(t, decoded, 14)
+}
+
+// 默认会话模型没有生效推理强度（强度为空）：整个 reasoning_effort 键不出现，键序按官方 swap_remove 过程
+// （extra 里只剩 model）重排，与 TestImagesTurnMetadataKeyOrderFollowsSwapRemove 的缺失用例一致。
+func TestImagesTurnFactsSynthesizedWithoutDefaultReasoningEffort(t *testing.T) {
+	profile := withImagesTurnHeaderSlotsAndDefaults(t, true, true, &profilecontract.TurnMetadataSessionDefaults{
+		Model: "gpt-5.5", ReasoningEffort: "", NodeReplAutoReviewRequired: false,
+	})
+	withFixedImagesTurnStart(t, 5)
+	turnID := officialCodexGeneratedUUIDLikeValue("images-seed", "turn")
+	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive, withExecSurface)
+	require.Equal(t,
+		`{"session_id":"`+sessionID+`","thread_id":"`+sessionID+`","model":"gpt-5.5","turn_id":"`+turnID+`",`+
+			`"turn_started_at_unix_ms":5,"thread_source":"user","turn_trigger":"exec","sandbox":"seccomp",`+
+			`"sandbox_mode":"read-only","auto_review_enabled":false,"node_repl_auto_review_required":false,`+
+			`"node_repl_disabled":false,"codex_version":"`+profile.Version()+`"}`,
+		facts.TurnMetadata.Value)
+}
+
+// 画像不声明默认会话模型（SessionDefaults 缺省）：没有可信来源，model 与 reasoning_effort 不写，
+// node_repl_auto_review_required 取 false，即第一版的 12 键结果。这是旧画像声明了 images 回合头槽位、
+// 却没有登记默认会话模型时的兜底，登记时应补上 SessionDefaults。
+func TestImagesTurnFactsSynthesizedWithoutSessionDefaultsKeepsTwelveKeys(t *testing.T) {
+	profile := withImagesTurnHeaderSlotsAndDefaults(t, true, true, nil)
+	withFixedImagesTurnStart(t, 1793036419096)
+	turnID := officialCodexGeneratedUUIDLikeValue("images-seed", "turn")
+	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive, withExecSurface)
+	require.Equal(t,
+		`{"session_id":"`+sessionID+`","thread_id":"`+sessionID+`","turn_started_at_unix_ms":1793036419096,`+
+			`"turn_id":"`+turnID+`","node_repl_disabled":false,"thread_source":"user","turn_trigger":"exec",`+
+			`"sandbox":"seccomp","sandbox_mode":"read-only","auto_review_enabled":false,`+
+			`"node_repl_auto_review_required":false,"codex_version":"`+profile.Version()+`"}`,
+		facts.TurnMetadata.Value)
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(facts.TurnMetadata.Value), &decoded))
+	require.Len(t, decoded, 12)
+}
+
+// 入站带同回合 Responses 事实时，默认会话模型不得覆盖入站的 model／reasoning_effort（官方 gpt-5.5 样本）。
+func TestImagesTurnFactsInboundModelWinsOverSessionDefaults(t *testing.T) {
+	withImagesTurnHeaderSlots(t, true, true)
+	var gpt55 officialImagesTurnMetadataSample
+	for _, sample := range officialImagesTurnMetadataSamples {
+		if strings.HasPrefix(sample.name, "i5-") {
+			gpt55 = sample
+		}
+	}
+	require.NotEmpty(t, gpt55.name)
+	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive,
+		func(f *officialegress.CodexIdentityFacts) {
+			var err error
+			f.TurnMetadata, err = officialegress.NewCodexIdentityValue(
+				gpt55.responses, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn,
+			)
+			require.NoError(t, err)
+		})
+	require.Contains(t, facts.TurnMetadata.Value, `"model":"gpt-5.5"`)
+	require.Contains(t, facts.TurnMetadata.Value, `"reasoning_effort":"medium"`)
+	require.Contains(t, facts.TurnMetadata.Value, `"node_repl_auto_review_required":false`)
 }
 
 func TestImagesTurnFactsSynthesizedWithoutTurnTriggerWhenSurfaceUnknown(t *testing.T) {

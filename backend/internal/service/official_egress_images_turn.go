@@ -91,7 +91,8 @@ func officialCodexGeneratedUUIDLikeValue(identitySeed, suffix string) string {
 // 本网关的做法是“复用 Responses 回合事实，再按官方规则重排”，不另起一套事实：
 //   - 入站已带 Responses 形态的 turn metadata（同一官方客户端回合）→ 取其中的共有键与取值；
 //   - 否则 → 用与 Responses 兜底相同的基础键值（officialCodexFallbackTurnMetadataBaseValues
-//     与画像 TurnMetadata 节），再补官方 CLI 默认路径上与模型无关的常量。
+//     与画像 TurnMetadata 节），再补官方 CLI 默认路径的常量，以及画像 SessionDefaults 登记的默认会话模型
+//     （model、reasoning_effort、node_repl_auto_review_required）。
 
 // officialImagesTurnMetadataPayloadOrder 是 CodexTurnMetadataPayload 的字段声明序。
 var officialImagesTurnMetadataPayloadOrder = []string{
@@ -271,13 +272,14 @@ func officialImagesTurnMetadataFromResponses(responsesMetadata, codexVersion str
 	return marshalOfficialImagesTurnMetadata(values, codexVersion)
 }
 
-// officialImagesSynthesizedTurnMetadataValues 在入站没有回合事实时，从 Responses 兜底的基础键值出发，
-// 补官方 CLI 默认路径上与模型无关的常量。
+// officialImagesSynthesizedTurnMetadataValues 在入站没有回合事实时（非 Codex 客户端直接调图像接口），
+// 从 Responses 兜底的基础键值出发，补官方 CLI 默认路径上的常量与会话模型取值。
 //
-// 刻意不写 model、reasoning_effort：它们是会话模型的取值，网关的 images 请求里没有可信来源
-// （images 请求体的 model 是 gpt-image-2，不是会话模型），沿用“没有可信取值就省略”的约定。
-// node_repl_auto_review_required 取 false（非 Lite 模型的目录值）。入站带了同回合 Responses 事实时，
-// 这些键都从该事实取，不走这里。
+// model、reasoning_effort、node_repl_auto_review_required 是会话模型的取值，不是 images 请求体里的图像模型
+// （gpt-image-2）：取画像 TurnMetadata 节 SessionDefaults 登记的默认会话模型及其目录条目，三项来自同一条
+// 目录记录，不在服务层另行硬编码。画像没有声明 SessionDefaults 时没有可信来源，model 与 reasoning_effort
+// 不写，node_repl_auto_review_required 取 false（与未声明会话模型时的旧结果一致）。
+// 入站带了同回合 Responses 事实时，这些键都从该事实取，不走这里。
 func officialImagesSynthesizedTurnMetadataValues(
 	facts *officialegress.CodexIdentityFacts,
 	sessionID string,
@@ -287,16 +289,23 @@ func officialImagesSynthesizedTurnMetadataValues(
 	tmp := *facts
 	tmp.SessionID, tmp.ThreadID = mustIdentityValue(sessionID), mustIdentityValue(sessionID)
 	base := officialCodexFallbackTurnMetadataBaseValues(&tmp)
+	nodeReplAutoReviewRequired := false
 	if section := officialCodexOptionalSectionsForMode(profileMode).TurnMetadata; section != nil {
-		if err := applyOfficialCodexTurnMetadataSection(base, section, officialCodexTurnMetadataExtension{
+		extension := officialCodexTurnMetadataExtension{
 			TurnTrigger: officialCodexTurnTrigger(facts.ProcessSurface.Value, facts.Subagent.Value, memoryGeneration),
-		}); err != nil {
+		}
+		if defaults := section.SessionDefaults; defaults != nil {
+			extension.Model = defaults.Model
+			extension.ReasoningEffort = defaults.ReasoningEffort
+			nodeReplAutoReviewRequired = defaults.NodeReplAutoReviewRequired
+		}
+		if err := applyOfficialCodexTurnMetadataSection(base, section, extension); err != nil {
 			return nil, err
 		}
 	}
 	base["sandbox_mode"] = "read-only"
 	base["auto_review_enabled"] = false
-	base["node_repl_auto_review_required"] = false
+	base["node_repl_auto_review_required"] = nodeReplAutoReviewRequired
 	base["node_repl_disabled"] = false
 	base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
 	values := make(map[string]json.RawMessage, len(base))
