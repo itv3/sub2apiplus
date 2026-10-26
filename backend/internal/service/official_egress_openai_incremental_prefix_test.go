@@ -355,6 +355,7 @@ func finalizeIncrementalHTTP(
 	final, _, err := finalizeOfficialOpenAIHTTPBody(normalizedBody, contract, identity, officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
 			ProfileMode: officialClientProfileModePrevious, UseResponsesLite: lite, SupportsParallelTools: true, ThreadID: identity.threadID,
+			TurnID: identity.turnID,
 		})
 	require.NoError(t, err)
 	return final, identity

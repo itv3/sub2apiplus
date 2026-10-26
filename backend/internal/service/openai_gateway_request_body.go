@@ -1347,12 +1347,13 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 }
 
 func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, error) {
-	return normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(body, false)
+	return normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(body, false, false)
 }
 
-// preserveOfficialInputPassthrough 为真时（官方出站、Lite、画像声明 uuidv7，由调用方判定，见
+// preserveOfficialInputPassthrough 为真时（官方出站、画像声明 uuidv7，由调用方判定，见
 // official_egress_openai_input_passthrough.go），官方形态的 input 项 passthrough 原样保留；其余项与其余情况照旧剥离。
-func normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(body []byte, preserveOfficialInputPassthrough bool) ([]byte, bool, error) {
+// 官方形态按 lite 判：非 Lite 不带 content_item_metadata。
+func normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(body []byte, preserveOfficialInputPassthrough bool, lite bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
@@ -1397,7 +1398,7 @@ func normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(body []byte, pres
 			return true
 		}
 		if preserveOfficialInputPassthrough &&
-			isOfficialCodexInputPassthroughForm(item.Get("type").String(), item.Get("internal_chat_message_metadata_passthrough")) {
+			isOfficialCodexInputPassthroughForm(item.Get("type").String(), item.Get("internal_chat_message_metadata_passthrough"), lite) {
 			return true
 		}
 		next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", index.Int()))
@@ -1521,7 +1522,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body []byte, ac
 	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
 		ResponsesLite:                    responsesLite,
 		IndexOut:                         indexOut,
-		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(nil, account, responsesLite),
+		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(nil, account),
 	})
 }
 
@@ -1529,7 +1530,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg *config.Co
 	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
 		Config:                           cfg,
 		ResponsesLite:                    responsesLite,
-		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(cfg, account, responsesLite),
+		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(cfg, account),
 	})
 }
 
@@ -1539,7 +1540,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndIndex(cfg *c
 		Config:                           cfg,
 		ResponsesLite:                    responsesLite,
 		IndexOut:                         indexOut,
-		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(cfg, account, responsesLite),
+		PreserveOfficialInputPassthrough: officialCodexWSInputPassthroughPreserved(cfg, account),
 	})
 }
 
@@ -1552,7 +1553,7 @@ type openAIResponsesCompatibilityOptions struct {
 	// IndexOut 非空时，若最终正文仍与构建过的只读索引一致则回填该索引，供随后 bridge 准备复用。
 	IndexOut **officialJSONRawIndex
 	// PreserveOfficialInputPassthrough 为真时，官方形态的 input 项 internal_chat_message_metadata_passthrough
-	// 不被剥离（官方出站、Lite、画像声明 uuidv7 三条由调用方判定；官方形态由逐项判定），见
+	// 不被剥离（官方出站、画像声明 uuidv7 由调用方判定；官方形态按 Lite 与否逐项判定），见
 	// official_egress_openai_input_passthrough.go。只有 WS 入口会置真，HTTP 透传等入口保持剥离。
 	PreserveOfficialInputPassthrough bool
 }
@@ -1610,7 +1611,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 		}
 	}
 	if account != nil && account.IsOpenAIOAuthLike() {
-		oauthBody, oauthChanged, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(normalized, opts.PreserveOfficialInputPassthrough)
+		oauthBody, oauthChanged, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(normalized, opts.PreserveOfficialInputPassthrough, responsesLite)
 		if err != nil {
 			return body, false, err
 		}

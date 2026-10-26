@@ -676,6 +676,7 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			UserAgent:             officialOpenAIInboundUserAgent(c),
 			ProfileMode:           egressContext.ProfileMode(),
 			ThreadID:              identity.threadID,
+			TurnID:                identity.turnID,
 		},
 	)
 	if err != nil {
@@ -802,6 +803,9 @@ type officialOpenAIHTTPBodyOptions struct {
 	// ThreadID 是本次请求派生出的官方线程 ID，只用于画像声明基础指令载体时计算消息 id；
 	// 画像没有声明该载体时不被读取。
 	ThreadID string
+	// TurnID 是本次请求派生出的官方 turn_id（identity.turnID）。画像声明 uuidv7 方案时，入站官方形态的逐项 passthrough.turn_id
+	// 据此改写（见 rewriteOfficialOpenAIHTTPInputTurnIDs）；为空（例如 WS 到 HTTP 的桥接，输入已是网关定型过的帧）时不改写。
+	TurnID string
 }
 
 func finalizeOfficialOpenAIHTTPBody(
@@ -998,6 +1002,16 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	}
 	if err != nil {
 		return false, err
+	}
+	// 画像声明 uuidv7 方案时，兼容层保留了入站官方形态的逐项 passthrough；其中客户端自带的 turn_id 校验后改写成网关的值。
+	if !isCompact && carrierActive && carrier.UsesUUIDv7IDs() && options.TurnID != "" {
+		turnRewritten, err := rewriteOfficialOpenAIHTTPInputTurnIDs(payload, carrier, options.TurnID, options.ThreadID)
+		if err != nil {
+			return false, err
+		}
+		if turnRewritten {
+			modified = true
+		}
 	}
 	allowedTopLevel, err := officialOpenAITopLevelAllowSetForMode(
 		options.ProfileMode,

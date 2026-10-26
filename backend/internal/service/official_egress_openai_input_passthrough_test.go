@@ -73,12 +73,12 @@ func TestOfficialCodexInputPassthroughFormMatchesRealFrames(t *testing.T) {
 				continue
 			}
 			seen++
-			require.True(t, isOfficialCodexInputPassthroughForm(itemType, passthrough), "%s input.%d", name, index)
+			require.True(t, isOfficialCodexInputPassthroughForm(itemType, passthrough, true), "%s input.%d", name, index)
 			var decoded map[string]any
 			decoder := json.NewDecoder(strings.NewReader(passthrough.Raw))
 			decoder.UseNumber()
 			require.NoError(t, decoder.Decode(&decoded))
-			require.True(t, isOfficialCodexInputPassthroughFormMap(itemType, decoded), "%s input.%d（map）", name, index)
+			require.True(t, isOfficialCodexInputPassthroughFormMap(itemType, decoded, true), "%s input.%d（map）", name, index)
 		}
 		require.Greater(t, seen, 0, name)
 	}
@@ -104,19 +104,44 @@ func TestOfficialCodexInputPassthroughFormRejectsNonOfficialShapes(t *testing.T)
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			require.False(t, isOfficialCodexInputPassthroughForm(item.itemType, gjson.Parse(item.raw)))
+			require.False(t, isOfficialCodexInputPassthroughForm(item.itemType, gjson.Parse(item.raw), true))
 			var decoded any
 			require.NoError(t, json.Unmarshal([]byte(item.raw), &decoded))
-			require.False(t, isOfficialCodexInputPassthroughFormMap(item.itemType, decoded))
+			require.False(t, isOfficialCodexInputPassthroughFormMap(item.itemType, decoded, true))
 		})
 	}
 	require.True(t, isOfficialCodexInputPassthroughForm("message", gjson.Parse(
-		`{"turn_id":"01a17935-d08d-77c1-a5d1-3302aa7d65be","create_time":1793034932.5,"content_item_kinds":["a"],"content_item_metadata":[{}]}`)))
+		`{"turn_id":"01a17935-d08d-77c1-a5d1-3302aa7d65be","create_time":1793034932.5,"content_item_kinds":["a"],"content_item_metadata":[{}]}`), true))
 	require.True(t, isOfficialCodexInputPassthroughForm("function_call_output", gjson.Parse(
-		`{"turn_id":"01a17935-d08d-77c1-a5d1-3302aa7d65be","cell_id":"c","executed_tool_calls":[],"tool_calls_complete":true}`)))
+		`{"turn_id":"01a17935-d08d-77c1-a5d1-3302aa7d65be","cell_id":"c","executed_tool_calls":[],"tool_calls_complete":true}`), true))
 }
 
-// 四个条件逐条检查（兼容层判定部分：官方出站、Lite、画像 uuidv7）。
+// 非 Lite 的官方形态是 turn_id、create_time、content_item_kinds 三个键，不带 content_item_metadata。
+func TestOfficialCodexInputPassthroughFormForNonLite(t *testing.T) {
+	frame := loadCodex0164Frame(t, "s7_http_nonlite")
+	seen := 0
+	for index, item := range gjson.GetBytes(frame, "input").Array() {
+		passthrough := item.Get(p2PassthroughKey)
+		require.True(t, passthrough.Exists(), "input.%d", index)
+		seen++
+		require.False(t, passthrough.Get("content_item_metadata").Exists(), "真实非 Lite 官方请求不带 content_item_metadata")
+		require.True(t, isOfficialCodexInputPassthroughForm(item.Get("type").String(), passthrough, false), "input.%d", index)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal([]byte(passthrough.Raw), &decoded))
+		require.True(t, isOfficialCodexInputPassthroughFormMap(item.Get("type").String(), decoded, false), "input.%d（map）", index)
+	}
+	require.Equal(t, 4, seen)
+
+	withMetadata := gjson.Parse(`{"turn_id":"01a17935-d08d-77c1-a5d1-3302aa7d65be","create_time":1793034932.5,"content_item_kinds":["a"],"content_item_metadata":[{}]}`)
+	require.True(t, isOfficialCodexInputPassthroughForm("message", withMetadata, true), "Lite 可以带")
+	require.False(t, isOfficialCodexInputPassthroughForm("message", withMetadata, false), "非 Lite 带 content_item_metadata 不是官方形态")
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(withMetadata.Raw), &decoded))
+	require.True(t, isOfficialCodexInputPassthroughFormMap("message", decoded, true))
+	require.False(t, isOfficialCodexInputPassthroughFormMap("message", decoded, false))
+}
+
+// 条件逐条检查（兼容层判定部分：官方出站、画像 uuidv7；Lite 与否只影响逐项的官方形态）。
 func TestOfficialCodexInputPassthroughPreservedGate(t *testing.T) {
 	official := newOfficialOpenAIHTTPTestAccount(9401)
 	setupToken := newOfficialOpenAIHTTPTestAccount(9402)
@@ -126,19 +151,17 @@ func TestOfficialCodexInputPassthroughPreservedGate(t *testing.T) {
 
 	t.Run("画像声明 uuidv7", func(t *testing.T) {
 		withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
-		require.True(t, officialCodexWSInputPassthroughPreserved(p2Config(), official, true), "四条件满足")
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), official, false), "非 Lite")
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), setupToken, true), "SetupToken 不走官方出站")
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), apiKey, true), "API Key 不走官方出站")
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), nil, true))
-		require.True(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, official, true))
-		require.False(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, official, false), "非 Lite")
-		require.False(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, setupToken, true))
+		require.True(t, officialCodexWSInputPassthroughPreserved(p2Config(), official), "官方出站＋画像 uuidv7")
+		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), setupToken), "SetupToken 不走官方出站")
+		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), apiKey), "API Key 不走官方出站")
+		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), nil))
+		require.True(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, official))
+		require.False(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, setupToken))
 	})
 	t.Run("画像不声明 uuidv7（0.163 一类的旧画像）", func(t *testing.T) {
 		withOfficialCodexSyntheticPreviousProfile(t, nil)
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), official, true))
-		require.False(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, official, true))
+		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), official))
+		require.False(t, officialCodexHTTPInputPassthroughPreserved(officialClientProfileModePrevious, official))
 	})
 	t.Run("画像声明基础指令节但没有 uuidv7", func(t *testing.T) {
 		withOfficialCodexSyntheticPreviousProfile(t, func(doc *profilecontract.SnapshotDoc) {
@@ -147,7 +170,7 @@ func TestOfficialCodexInputPassthroughPreservedGate(t *testing.T) {
 			section.IDScheme = ""
 			doc.BaseInstructions = syntheticServiceRawSection(t, *section)
 		})
-		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), official, true))
+		require.False(t, officialCodexWSInputPassthroughPreserved(p2Config(), official))
 	})
 }
 
@@ -188,11 +211,26 @@ func TestWSCompatibilityLayerPreservesOfficialItemPassthroughOnlyWhenAllConditio
 			require.Equal(t, original[index].Raw, got[index].Raw, "input.%d", index)
 		}
 	})
-	t.Run("非 Lite：整体剥离，不留 content_item_metadata", func(t *testing.T) {
+	t.Run("非 Lite：带 content_item_metadata 的项不是官方形态，整个 passthrough 被剥", func(t *testing.T) {
 		withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
 		candidate := p2Normalize(t, frame, official, false)
 		require.NotContains(t, string(candidate), p2PassthroughKey)
 		require.NotContains(t, string(candidate), "content_item_metadata")
+	})
+	t.Run("非 Lite 三键官方形态：原样保留；带 content_item_metadata 的项单独被剥", func(t *testing.T) {
+		withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
+		nonLite := loadCodex0164Frame(t, "s7_http_nonlite")
+		wantRaws := passthroughRaws(p2Passthroughs(nonLite))
+		candidate := p2Normalize(t, nonLite, official, false)
+		require.Equal(t, wantRaws, passthroughRaws(p2Passthroughs(candidate)), "非 Lite 三键形态逐项逐字节保留")
+		tampered, err := setRawJSON(nonLite, "input.2."+p2PassthroughKey+".content_item_metadata", `[{"provenance":{"type":"harness","hook":false}}]`)
+		require.NoError(t, err)
+		candidate = p2Normalize(t, tampered, official, false)
+		got := p2Passthroughs(candidate)
+		require.False(t, got[2].Exists(), "非 Lite 带 content_item_metadata 的项被剥")
+		for _, index := range []int{0, 1, 3} {
+			require.Equal(t, wantRaws[index], got[index].Raw, "input.%d", index)
+		}
 	})
 	t.Run("SetupToken 账号：整体剥离", func(t *testing.T) {
 		withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
@@ -382,17 +420,21 @@ func TestNeutralizeOfficialOpenAIWSClientTurnIDsValidatesThenBlanks(t *testing.T
 
 // HTTP：字段路径与字节路径都按项保留官方形态，缺条件照旧剥离；对真实 0.164 HTTP 请求，定型后逐项 passthrough 与入站逐字节相同。
 func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
-	for _, name := range []string{"s2_http_lite", "r1_http_legacy_window"} {
+	for _, tc := range []struct {
+		name string
+		lite bool
+	}{{"s2_http_lite", true}, {"r1_http_legacy_window", true}, {"s7_http_nonlite", false}} {
+		name, lite := tc.name, tc.lite
 		t.Run(name, func(t *testing.T) {
 			withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
 			inbound := loadCodex0164Frame(t, name)
 			want := p2Passthroughs(inbound)
 
 			// 字节路径
-			kept, _, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(inbound, true)
+			kept, _, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(inbound, true, lite)
 			require.NoError(t, err)
 			require.Equal(t, passthroughRaws(want), passthroughRaws(p2Passthroughs(kept)), "字节路径逐项保留")
-			stripped, _, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(inbound, false)
+			stripped, _, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(inbound, false, lite)
 			require.NoError(t, err)
 			require.NotContains(t, string(stripped), p2PassthroughKey)
 
@@ -412,7 +454,7 @@ func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
 			}
 			require.NotEmpty(t, wantMaps)
 			transformed := decode()
-			require.True(t, stashOfficialInputPassthroughForTransform(transformed))
+			require.True(t, stashOfficialInputPassthroughForTransform(transformed, lite))
 			result := applyCodexOAuthTransformWithOptions(transformed, codexOAuthTransformOptions{
 				SkipDefaultInstructions: true, PreserveToolCallIDs: true,
 			})
@@ -434,11 +476,112 @@ func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
 				require.NotContains(t, item.(map[string]any), p2PassthroughKey)
 			}
 
-			// 定型：官方形态入站经 HTTP 定型后，逐项 passthrough 仍与入站逐字节相同。
-			final, _ := finalizeIncrementalHTTP(t, true, inbound, kept)
-			require.Equal(t, passthroughRaws(want), passthroughRaws(p2Passthroughs(final)), "HTTP 定型后逐项 passthrough 逐字节相同")
+			// 定型：基础指令消息逐字节原样；其余项除 turn_id 外逐字节相同，turn_id 改写成网关本轮的 turn_id
+			// （identity.turnID，与出站 x-codex-turn-metadata 里的 turn_id 同一个值），不再是客户端的。
+			final, identity := finalizeIncrementalHTTP(t, lite, inbound, kept)
+			require.NotEmpty(t, identity.turnID)
+			got := p2Passthroughs(final)
+			require.Len(t, got, len(want))
+			rewritten, lastRewritten := 0, -1
+			for index := range want {
+				if !want[index].Exists() {
+					continue
+				}
+				if strings.Contains(want[index].Raw, "model.base_instructions") || !want[index].Get("turn_id").Exists() {
+					require.Equal(t, want[index].Raw, got[index].Raw, "input.%d：基础指令消息／无 turn_id 的 passthrough 原样", index)
+					continue
+				}
+				p2RequirePassthroughExceptTurnID(t, want[index], got[index], fmt.Sprintf("input.%d", index))
+				_, parseErr := uuid.Parse(got[index].Get("turn_id").String())
+				require.NoError(t, parseErr, "input.%d", index)
+				require.NotEqual(t, want[index].Get("turn_id").String(), got[index].Get("turn_id").String(), "input.%d 不再留着客户端的 turn_id", index)
+				lastRewritten = index
+				require.Equal(t, "turn_id", jsonTopLevelKeys(t, got[index].Raw)[0])
+				rewritten++
+			}
+			require.Greater(t, rewritten, 0, "样本里应有被改写 turn_id 的项")
+			require.Equal(t, identity.turnID, got[lastRewritten].Get("turn_id").String(), "末项（当前回合）等于网关本轮 turn_id")
+			if name != "r1_http_legacy_window" {
+				for index := range got {
+					if got[index].Exists() && got[index].Get("turn_id").Exists() && !strings.Contains(got[index].Raw, "model.base_instructions") {
+						require.Equal(t, identity.turnID, got[index].Get("turn_id").String(), "单回合样本：各项都等于网关 turn_id")
+					}
+				}
+			}
 		})
 	}
+}
+
+// HTTP 多回合历史：当前回合各项等于网关本轮 turn_id；历史各段是网关按线程与该段末条用户消息派生的稳定值——
+// 公式与当前回合 turn_id 的派生相同，所以同一段历史在后续请求里（它不再是当前回合）得到的值，就是它当年作为当前回合时出站的值。
+func TestHTTPHistoricalTurnIDsAreGatewayDerivedAndStable(t *testing.T) {
+	withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
+	replay := loadCodex0164Frame(t, "m1_ws_model_switch_replay")
+	inputs := gjson.GetBytes(replay, "input").Array()
+	require.Equal(t, 15, len(inputs))
+	clientTurns := map[string]bool{}
+	for _, item := range inputs {
+		if turn := item.Get(p2PassthroughKey + ".turn_id"); turn.Exists() {
+			clientTurns[turn.String()] = true
+		}
+	}
+	require.GreaterOrEqual(t, len(clientTurns), 2)
+
+	build := func(count int) []byte {
+		raws := make([]string, 0, count)
+		for _, item := range inputs[:count] {
+			raws = append(raws, item.Raw)
+		}
+		return officialIncrementalHTTPBody(raws...)
+	}
+	// 完整历史（15 项）与只到上一回合末条用户消息的前缀作对照。
+	lastUser := -1
+	for index, item := range inputs {
+		if item.Get("role").String() == "user" && item.Get("content.0.text").Exists() {
+			lastUser = index
+		}
+	}
+	require.Greater(t, lastUser, 2)
+
+	full := build(len(inputs))
+	normalized, _, err := normalizeOpenAIOAuthResponsesCompatibilityBodyWithOptions(full, true, true)
+	require.NoError(t, err)
+	final, identity := finalizeIncrementalHTTP(t, true, full, normalized)
+	got := p2Passthroughs(final)
+	turns := map[string]int{}
+	for index, item := range got {
+		if !item.Exists() || strings.Contains(item.Raw, "model.base_instructions") || !item.Get("turn_id").Exists() {
+			continue
+		}
+		turn := item.Get("turn_id").String()
+		_, parseErr := uuid.Parse(turn)
+		require.NoError(t, parseErr, "input.%d", index)
+		require.False(t, clientTurns[turn], "input.%d 不应再留着客户端的 turn_id", index)
+		turns[turn]++
+	}
+	require.GreaterOrEqual(t, len(turns), 2, "历史各段有各自的网关 turn_id")
+	require.Greater(t, turns[identity.turnID], 0, "当前回合的项等于网关本轮 turn_id")
+	// 最后一项属于当前回合。
+	require.Equal(t, identity.turnID, got[len(got)-1].Get("turn_id").String())
+
+	// 再定型一次（链式重放同一历史）：结果逐字节不变，即历史段的值是稳定的。
+	again, _ := finalizeIncrementalHTTP(t, true, full, normalized)
+	require.Equal(t, passthroughRaws(got), passthroughRaws(p2Passthroughs(again)))
+}
+
+// 非 UUID 的客户端 turn_id：与 WS 一样失败关闭，不放宽。
+func TestHTTPRewriteRejectsNonUUIDClientTurnID(t *testing.T) {
+	section := incrementalPrefixSection()
+	payload := map[string]any{"input": []any{
+		map[string]any{"type": "message", "role": "user", "content": "x", p2PassthroughKey: map[string]any{"turn_id": "not-a-uuid"}},
+	}}
+	_, err := rewriteOfficialOpenAIHTTPInputTurnIDs(payload, section, "01a17935-d08d-77c1-a5d1-3302aa7d65be", "01a17935-c8ae-7882-9b88-60f5c3ad6e5b")
+	require.ErrorContains(t, err, "turn_id must be UUID")
+	payload = map[string]any{"input": []any{
+		map[string]any{"type": "message", "role": "user", "content": "x", p2PassthroughKey: map[string]any{"turn_id": 7}},
+	}}
+	_, err = rewriteOfficialOpenAIHTTPInputTurnIDs(payload, section, "01a17935-d08d-77c1-a5d1-3302aa7d65be", "t")
+	require.ErrorContains(t, err, "must be a string")
 }
 
 func passthroughRaws(values []gjson.Result) []string {
@@ -449,53 +592,8 @@ func passthroughRaws(values []gjson.Result) []string {
 	return out
 }
 
-// HTTP 官方出站：保留下来的逐项 turn_id 与 client_metadata.turn_id 用同一个函数作用域化，当前回合各项仍等于 client_metadata.turn_id。
-func TestApplyCodexAccountIdentityInputTurnIDsMapMatchesClientMetadataScoping(t *testing.T) {
-	withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
-	section := incrementalPrefixSection()
-	isBase := func(item map[string]any) bool { return isOfficialCodexBaseInstructionsItem(section, item) }
-	account := newOfficialOpenAIHTTPTestAccount(9430)
-	const apiKeyID = int64(77)
-	const currentTurn = "01a17935-d08d-77c1-a5d1-3302aa7d65be"
-	const oldTurn = "01a17935-d1b8-7dc0-8cbd-0c67d81f4828"
-	build := func() map[string]any {
-		return map[string]any{
-			"client_metadata": map[string]any{"turn_id": currentTurn},
-			"input": []any{
-				map[string]any{"type": "additional_tools", "id": "at_x", "role": "developer", "tools": []any{}},
-				map[string]any{"type": "message", "role": "developer", p2PassthroughKey: map[string]any{
-					"turn_id": oldTurn, "content_item_kinds": []any{"model.base_instructions"}}},
-				map[string]any{"type": "message", "role": "user", p2PassthroughKey: map[string]any{"turn_id": oldTurn, "create_time": json.Number("1.5")}},
-				map[string]any{"type": "message", "role": "user", p2PassthroughKey: map[string]any{"turn_id": currentTurn}},
-				map[string]any{"type": "message", "role": "user"},
-			},
-		}
-	}
-	body := build()
-	require.True(t, applyCodexAccountIdentityClientMetadataMap(body, account, apiKeyID))
-	require.True(t, applyCodexAccountIdentityInputTurnIDsMap(body, account, apiKeyID, isBase))
-	scopedCurrent := body["client_metadata"].(map[string]any)["turn_id"].(string)
-	require.NotEqual(t, currentTurn, scopedCurrent)
-	items := body["input"].([]any)
-	turnOf := func(index int) string {
-		return items[index].(map[string]any)[p2PassthroughKey].(map[string]any)["turn_id"].(string)
-	}
-	require.Equal(t, oldTurn, turnOf(1), "基础指令消息不改写")
-	require.Equal(t, scopedCurrent, turnOf(3), "当前回合各项等于 client_metadata.turn_id")
-	require.Equal(t, scopeCodexAccountIdentityValue(account, apiKeyID, "turn", oldTurn), turnOf(2), "历史回合同函数改写")
-	require.NotEqual(t, oldTurn, turnOf(2))
-	require.Equal(t, json.Number("1.5"), items[2].(map[string]any)[p2PassthroughKey].(map[string]any)["create_time"], "其余键不动")
-
-	// 无账号命名空间（没有 chatgpt_account_id 等）时恒等。
-	bare := newOfficialOpenAIHTTPTestAccount(9431)
-	bare.Credentials = map[string]any{"access_token": "t"}
-	untouched := build()
-	require.False(t, applyCodexAccountIdentityInputTurnIDsMap(untouched, bare, apiKeyID, isBase))
-	require.Equal(t, build(), untouched)
-}
-
 // HTTP 整条转发链路：官方出站 Lite、画像声明 uuidv7 时，上游收到的逐项 passthrough 保留（除 turn_id 外逐字节相同），
-// turn_id 经账号作用域改写（与入站身份值同一函数）；缺条件（画像不声明 uuidv7）时照旧全部剥离。
+// turn_id 改写成网关本轮的 turn_id；缺条件（画像不声明 uuidv7）时照旧全部剥离。
 func TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough(t *testing.T) {
 	const passthroughRaw = `{"turn_id":"` + testOfficialOpenAITurnID + `","create_time":1793034932.5448666,` +
 		`"content_item_kinds":["model.contextual"],"content_item_metadata":[{"provenance":{"type":"harness","hook":false}}]}`
@@ -522,18 +620,18 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough(t *testi
 		return upstream.bodies[0]
 	}
 
-	t.Run("四条件满足", func(t *testing.T) {
+	t.Run("条件满足", func(t *testing.T) {
 		withOfficialCodexSyntheticProfile(t, syntheticIncrementalPrefixMutation(t))
 		sent := forward(t)
-		// 逐项 turn_id 按账号命名空间作用域化（与入站身份值的处理同一函数）；网关对出站 client_metadata.turn_id 另行重新派生，
-		// 两者目前并不相等，这是 HTTP 侧已知差距（见交回报告），这里只锁定当前行为。
-		wantTurn := scopeCodexAccountIdentityValue(newOfficialOpenAIHTTPTestAccount(94), 0, "turn", testOfficialOpenAITurnID)
-		require.NotEqual(t, testOfficialOpenAITurnID, wantTurn)
+		// 逐项 turn_id 被改写成网关本轮的 turn_id，也就是出站 x-codex-turn-metadata 里的 turn_id（identity.turnID）。
+		embedded := gjson.Parse(gjson.GetBytes(sent, "client_metadata.x-codex-turn-metadata").String()).Get("turn_id").String()
+		require.NotEmpty(t, embedded)
+		require.NotEqual(t, testOfficialOpenAITurnID, embedded)
 		for _, index := range []string{"input.1", "input.2"} {
 			passthrough := gjson.GetBytes(sent, index+"."+p2PassthroughKey)
 			require.True(t, passthrough.Exists(), index)
 			p2RequirePassthroughExceptTurnID(t, gjson.Parse(passthroughRaw), passthrough, index)
-			require.Equal(t, wantTurn, passthrough.Get("turn_id").String(), index)
+			require.Equal(t, embedded, passthrough.Get("turn_id").String(), index)
 			require.NotContains(t, passthrough.Raw, officialCodexStashedInputPassthroughKey)
 		}
 		require.NotContains(t, string(sent), officialCodexStashedInputPassthroughKey)
@@ -543,4 +641,51 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough(t *testi
 		sent := forward(t)
 		require.NotContains(t, string(sent), p2PassthroughKey)
 	})
+}
+
+// 非 Lite WS：三键官方形态（不带 content_item_metadata）原样保留，客户端 turn_id 改写成网关值；业务帧不报冲突。
+// 样本：把 0.164 Lite 业务帧里每项的 content_item_metadata 去掉，得到非 Lite 官方客户端的同形帧。
+func TestWSNonLiteThreeKeyPassthroughIsPreservedAndTurnRewritten(t *testing.T) {
+	prewarmFrame := loadCodex0164Frame(t, "s1_ws_prewarm")
+	liteFrame := loadCodex0164Frame(t, "s1_ws_business")
+	frame := liteFrame
+	for index := range gjson.GetBytes(liteFrame, "input").Array() {
+		path := fmt.Sprintf("input.%d.%s.content_item_metadata", index, p2PassthroughKey)
+		if gjson.GetBytes(frame, path).Exists() {
+			var err error
+			frame, err = sjson.DeleteBytes(frame, path)
+			require.NoError(t, err)
+		}
+	}
+	require.NotContains(t, string(frame), "content_item_metadata")
+
+	withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
+	ctx, _ := incWSOfficialContext(t, false, prewarmFrame)
+	account := newOfficialOpenAIHTTPTestAccount(94)
+	candidate := p2Normalize(t, frame, account, false)
+	require.Equal(t, passthroughRaws(p2Passthroughs(frame)), passthroughRaws(p2Passthroughs(candidate)), "兼容层：三键形态逐项保留")
+	final, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, frame, candidate, "", false)
+	require.NoError(t, err)
+	currentTurn := gjson.GetBytes(final, "client_metadata.turn_id").String()
+	want, got := p2Passthroughs(frame), p2Passthroughs(final)
+	rewritten := 0
+	for index := range want {
+		if !want[index].Exists() || !want[index].Get("turn_id").Exists() || strings.Contains(want[index].Raw, "model.base_instructions") {
+			continue
+		}
+		p2RequirePassthroughExceptTurnID(t, want[index], got[index], fmt.Sprintf("input.%d", index))
+		require.Equal(t, currentTurn, got[index].Get("turn_id").String(), "input.%d", index)
+		require.NotEqual(t, want[index].Get("turn_id").String(), got[index].Get("turn_id").String())
+		rewritten++
+	}
+	require.Greater(t, rewritten, 0)
+	require.NotContains(t, string(final), "content_item_metadata")
+}
+
+// 0.163 一类旧画像：非 Lite 三键形态与以前一样整体剥离（行为不变）。
+func TestWSNonLiteThreeKeyPassthroughIsStrippedUnderLegacyProfile(t *testing.T) {
+	frame := loadCodex0164Frame(t, "s7_http_nonlite")
+	withOfficialCodexSyntheticPreviousProfile(t, nil)
+	candidate := p2Normalize(t, frame, newOfficialOpenAIHTTPTestAccount(94), false)
+	require.NotContains(t, string(candidate), p2PassthroughKey)
 }

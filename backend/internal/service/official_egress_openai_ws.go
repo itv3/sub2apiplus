@@ -671,10 +671,10 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）：入站官方形态的基础指令消息要原样保留，所以在入站帧原文里
 	// 先找出它（候选帧里的 passthrough 已被兼容层剥掉，只能看原文）；正文与实际使用的不同时不采用。
 	incrementalPrefix := officialCodexIncrementalPrefix(baseInstructionsSection, egressContext.responsesLite)
-	// 兼容层在同一条件下（官方出站、Lite、画像 uuidv7、项是官方形态）保留了入站逐项 passthrough。客户端自带的 turn_id
+	// 兼容层在同一条件下（官方出站、画像 uuidv7、项按 Lite 与否是官方形态）保留了入站逐项 passthrough（Lite 与非 Lite 都适用）。客户端自带的 turn_id
 	// 属于客户端自己的轮次命名空间，先校验再清空，由下面的逐项 turn_id 定型按网关的线程身份改写成网关的 turn_id；
 	// 其余键（create_time、content_item_kinds、content_item_metadata 等）原样保留。
-	if incrementalPrefix {
+	if baseInstructionsSection.UsesUUIDv7IDs() {
 		if _, err := neutralizeOfficialOpenAIWSClientTurnIDs(payload, func(item map[string]any) bool {
 			return isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item)
 		}); err != nil {
