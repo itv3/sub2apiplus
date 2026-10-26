@@ -46,7 +46,8 @@ class GuideTests(unittest.TestCase):
         before = (root / closeout.GUIDE).read_text()
         changed = before.replace(closeout.PART2, closeout.PART2 + "\n\n测试新增说明。", 1)
         updates = closeout.source_updates(root, changed)
-        self.assertEqual(len(updates), 17)
+        # 17 + 登记新增的两份 0.164.0 清单（场景、期望，都绑当前第二章摘要）= 19：指南 1、清单 16、检查器 2。
+        self.assertEqual(len(updates), 19)
         self.assertNotIn("tools/official_client_capture/candidate_rule_expectations_0_145_0.json", updates)
         self.assertNotIn("tools/official_client_capture/candidate_rule_expectations_0_147_0.json", updates)
         self.assertEqual((root / closeout.GUIDE).read_text(), before)
