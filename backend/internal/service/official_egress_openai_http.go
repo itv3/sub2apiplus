@@ -80,6 +80,8 @@ type officialOpenAIHTTPBodyContract struct {
 type officialOpenAIHTTPTaggedMessage struct {
 	kinds []string
 	text  string
+	// raw 是该项在入站 input 里的原文（复制）；只在画像声明增量窗口方案时用于原样放行官方形态的基础指令消息。
+	raw json.RawMessage
 }
 
 type officialOpenAIHTTPIdentity struct {
@@ -982,9 +984,16 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	}
 	var modified bool
 	var err error
-	if carrier, carrierActive := officialCodexBaseInstructionsCarrier(options.ProfileMode, endpointID); carrierActive {
+	carrier, carrierActive := officialCodexBaseInstructionsCarrier(options.ProfileMode, endpointID)
+	// 画像声明 uuidv7 方案且本请求走 Lite 时，前缀按增量窗口形态处理：入站官方形态原样保留，只有第三方入站才合成稳定
+	// UUIDv7 id（见 official_egress_openai_incremental_prefix.go）。其余情况与引入该方案之前逐字节相同。
+	incrementalPrefix := carrierActive && officialCodexIncrementalPrefix(carrier, useResponsesLite)
+	switch {
+	case incrementalPrefix:
+		modified, err = applyOfficialCodexIncrementalBaseInstructionsCarrier(payload, contract, carrier, options.ThreadID)
+	case carrierActive:
 		modified, err = applyOfficialCodexBaseInstructionsCarrier(payload, contract, carrier, options.ThreadID)
-	} else {
+	default:
 		modified, err = finalizeLegacyOfficialOpenAIHTTPInstructions(payload, contract, useResponsesLite)
 	}
 	if err != nil {
@@ -1029,6 +1038,17 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 		}
 		if profileModified {
 			modified = true
+		}
+		// 增量窗口形态下，网关合成的 additional_tools 项（第三方入站的工具目录）补稳定的 at_ 加 UUIDv7 id；
+		// 入站自带 id 的项原样保留。必须在工具迁入 input 之后做。
+		if incrementalPrefix {
+			idsModified, err := ensureOfficialCodexAdditionalToolsIDs(payload, options.ThreadID)
+			if err != nil {
+				return false, err
+			}
+			if idsModified {
+				modified = true
+			}
 		}
 	}
 	// access_programs：画像声明了 AccessPrograms 节时，入站取值只有落在节的子集内才允许出站，其余整字段删除并告警；
@@ -1594,6 +1614,10 @@ func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
 // moveOfficialOpenAIAdditionalToolsFirst 把所有 additional_tools 稳定移动到
 // input 首位，工具项和其余消息各自的相对顺序均保持不变。纯 namespace 请求在
 // Lite 规范化后已经没有顶层 tools，因此排序不能依赖顶层工具是否仍然存在。
+//
+// 例外：已带 id 的 additional_tools 项出现在对话内容之后（不在开头那一串工具项里）时原地不动。这是官方增量窗口里
+// 工具集中途变化时追加的增量项，位置本身是语义（"后面的定义替换前面的"，且前面还有一条提示消息），不能提到最前面；
+// 没有 id 的项是第三方入站的工具声明，仍然移到首位。
 func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any) bool {
 	input, ok := payload["input"].([]any)
 	if !ok || len(input) < 2 {
@@ -1602,15 +1626,21 @@ func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any) bool {
 	additional := make([]any, 0, 1)
 	remaining := make([]any, 0, len(input))
 	firstAdditionalIndex := -1
+	leadingTools := true
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if ok && officialOpenAIString(item, "type") == "additional_tools" {
 			if firstAdditionalIndex < 0 {
 				firstAdditionalIndex = len(additional) + len(remaining)
 			}
+			if id, _ := item["id"].(string); strings.TrimSpace(id) != "" && !leadingTools {
+				remaining = append(remaining, rawItem)
+				continue
+			}
 			additional = append(additional, rawItem)
 			continue
 		}
+		leadingTools = false
 		remaining = append(remaining, rawItem)
 	}
 	if len(additional) == 0 || firstAdditionalIndex == 0 {

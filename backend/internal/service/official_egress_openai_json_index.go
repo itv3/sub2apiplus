@@ -1171,6 +1171,7 @@ func officialJSONAppendObject(index *officialJSONRawIndex, out []byte, payload m
 	}
 	sort.Strings(additional)
 	keys = append(keys, additional...)
+	keys = orderOfficialAdditionalToolsKeys(payload, keys)
 
 	out = append(out, '{')
 	for i, key := range keys {
@@ -1193,6 +1194,34 @@ func officialJSONAppendObject(index *officialJSONRawIndex, out []byte, payload m
 		}
 	}
 	return append(out, '}'), nil
+}
+
+// officialAdditionalToolsKeyOrder 是官方 AdditionalTools 项的固定键序：serde 按结构体声明顺序输出，type 是枚举标签排最前，
+// 其后依次是 id、role、tools。
+var officialAdditionalToolsKeyOrder = [...]string{"type", "id", "role", "tools"}
+
+// orderOfficialAdditionalToolsKeys 在重编码 additional_tools 项时把键序固定为官方序（其余键保持相对顺序、排在后面）。
+// 只作用于带 id 的项：带 id 是新形态（Codex 增量窗口自带，或网关合成时补上），其官方键序是确定的；没有 id 的旧形态
+// 保持原有编码行为不变。未被改动的项直接引用原文字节，不经过这里，所以官方客户端自带的项永远保持它原有的字节。
+func orderOfficialAdditionalToolsKeys(payload map[string]any, keys []string) []string {
+	if itemType, _ := payload["type"].(string); itemType != "additional_tools" {
+		return keys
+	}
+	if _, hasID := payload["id"]; !hasID {
+		return keys
+	}
+	ordered := make([]string, 0, len(keys))
+	for _, key := range officialAdditionalToolsKeyOrder {
+		if _, exists := payload[key]; exists {
+			ordered = append(ordered, key)
+		}
+	}
+	for _, key := range keys {
+		if key != "type" && key != "id" && key != "role" && key != "tools" {
+			ordered = append(ordered, key)
+		}
+	}
+	return ordered
 }
 
 // officialJSONAppendArray 重编码被改动的数组：每个元素先按内容匹配原始元素，匹配不到

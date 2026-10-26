@@ -668,6 +668,10 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	// 顶层 instructions 不在该画像的 WS 字段表里，留着会被闭集静默剔除；官方形态消息在逐项 turn_id 补写之后才安装。
 	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
 	baseInstructionsText, baseInstructionsSourced := "", false
+	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）：入站官方形态的基础指令消息要原样保留，所以在入站帧原文里
+	// 先找出它（候选帧里的 passthrough 已被兼容层剥掉，只能看原文）；正文与实际使用的不同时不采用。
+	incrementalPrefix := officialCodexIncrementalPrefix(baseInstructionsSection, egressContext.responsesLite)
+	var officialBaseInstructions json.RawMessage
 	if baseInstructionsSection != nil {
 		baseInstructionsText, baseInstructionsSourced, err = officialCodexWSBaseInstructionsSource(
 			originalPayload, payload, baseInstructionsSection,
@@ -676,6 +680,11 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 			return nil, result, err
 		}
 		delete(payload, "instructions")
+		if incrementalPrefix && baseInstructionsSourced {
+			officialBaseInstructions = officialCodexInboundOfficialBaseInstructionsFromFrame(
+				original, baseInstructionsSection, baseInstructionsText,
+			)
+		}
 	}
 
 	originalCallIDs := collectOfficialOpenAICallIDs(payload)
@@ -742,6 +751,16 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	); err != nil {
 		return nil, result, err
 	}
+	// 增量窗口形态：网关合成的 additional_tools 项（第三方入站的工具目录）补稳定的 at_ 加 UUIDv7 id，入站自带 id 的项原样保留。
+	if incrementalPrefix {
+		threadID, err := requiredOfficialEgressFieldValue(egressContext, OfficialEgressFieldThreadID)
+		if err != nil {
+			return nil, result, err
+		}
+		if _, err := ensureOfficialCodexAdditionalToolsIDs(payload, threadID); err != nil {
+			return nil, result, err
+		}
+	}
 	// access_programs：校验与默认生成，与 HTTP 定型共用同一个函数。预热帧（generate=false）不绑定回合程序，只校验不生成；
 	// 其余帧（首帧、增量帧、工具续接的完整历史帧）都生成。链帧与工具续接收敛帧由本函数的输出改写而来，原样继承这里的取值；
 	// 网关补出的预热帧要去掉继承来的取值（见 buildDerivedOpenAIOfficialEgressWSPrewarmFrame）。画像没有该节时是恒等操作。
@@ -771,10 +790,18 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 		if err != nil {
 			return nil, result, err
 		}
-		if err := applyOfficialCodexWSBaseInstructions(
-			payload, egressContext.openAIWSDerived, baseInstructionsSection, threadID,
-			baseInstructionsText, baseInstructionsSourced,
-		); err != nil {
+		if incrementalPrefix {
+			err = applyOfficialCodexWSIncrementalBaseInstructions(
+				payload, egressContext.openAIWSDerived, baseInstructionsSection, threadID,
+				baseInstructionsText, baseInstructionsSourced, officialBaseInstructions,
+			)
+		} else {
+			err = applyOfficialCodexWSBaseInstructions(
+				payload, egressContext.openAIWSDerived, baseInstructionsSection, threadID,
+				baseInstructionsText, baseInstructionsSourced,
+			)
+		}
+		if err != nil {
 			return nil, result, err
 		}
 	}
@@ -1022,25 +1049,30 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
 	input, _ := payload["input"].([]any)
 	prewarmInput := make([]any, 0, len(input))
-	for _, rawItem := range input {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			continue
-		}
-		itemType := strings.TrimSpace(officialOpenAIString(item, "type"))
-		role := strings.TrimSpace(officialOpenAIString(item, "role"))
-		switch {
-		case itemType == officialOpenAIAdditionalToolsType:
-			prewarmInput = append(prewarmInput, item)
-		case baseInstructionsSection != nil:
-			if isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
+	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）：官方预热帧的 input 就是空数组，工具目录和基础指令消息由首个业务帧携带
+	// （见 chainDerivedOpenAIOfficialEgressWSBusinessFrame），所以这里不从业务帧里挑前缀，也不要求有 developer 上下文。
+	incrementalPrefix := officialCodexIncrementalPrefix(baseInstructionsSection, egressContext.responsesLite)
+	if !incrementalPrefix {
+		for _, rawItem := range input {
+			item, ok := rawItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			itemType := strings.TrimSpace(officialOpenAIString(item, "type"))
+			role := strings.TrimSpace(officialOpenAIString(item, "role"))
+			switch {
+			case itemType == officialOpenAIAdditionalToolsType:
+				prewarmInput = append(prewarmInput, item)
+			case baseInstructionsSection != nil:
+				if isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
+					prewarmInput = append(prewarmInput, item)
+				}
+			case role == "developer":
 				prewarmInput = append(prewarmInput, item)
 			}
-		case role == "developer":
-			prewarmInput = append(prewarmInput, item)
 		}
 	}
-	if len(prewarmInput) == 0 {
+	if len(prewarmInput) == 0 && !incrementalPrefix {
 		return nil, false, errors.New(
 			"OpenAI official egress WebSocket prewarm requires developer context",
 		)
@@ -1105,16 +1137,19 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		)
 	}
 	// 画像声明基础指令载体节时，官方形态的基础指令消息与 additional_tools 一样已在预热帧登记，正式帧不再重复。
+	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）相反：预热帧是空的，前缀由这一帧携带，原样保留。
 	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
+	incrementalPrefix := officialCodexIncrementalPrefix(baseInstructionsSection, egressContext.responsesLite)
 	input, _ := payload["input"].([]any)
 	businessInput := make([]any, 0, len(input))
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
-		if ok &&
+		if ok && !incrementalPrefix &&
 			strings.TrimSpace(officialOpenAIString(item, "type")) == officialOpenAIAdditionalToolsType {
 			continue
 		}
-		if ok && baseInstructionsSection != nil && isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
+		if ok && !incrementalPrefix && baseInstructionsSection != nil &&
+			isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
 			continue
 		}
 		businessInput = append(businessInput, rawItem)
@@ -1563,11 +1598,12 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(
 		turnID := currentTurnID
 		if segmentIndex < len(segments)-1 {
 			var err error
-			turnID, err = resolveOfficialOpenAIWSHistoricalTurnID(
+			turnID, err = resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase(
 				input,
 				segment,
 				sessionID,
 				segmentIndex,
+				baseInstructions,
 			)
 			if err != nil {
 				return false, err
@@ -1583,6 +1619,13 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(
 			}
 			// 官方形态的基础指令消息的 passthrough 只带 content_item_kinds，不补 turn_id，也不校验。
 			if baseInstructions != nil && isOfficialCodexBaseInstructionsItem(baseInstructions, item) {
+				continue
+			}
+			// 官方 additional_tools（AdditionalTools{id, role, tools}）、compaction_trigger、configuration_update 这几种项没有
+			// internal_chat_message_metadata_passthrough 字段，补 turn_id 会让它们多出官方不会发的成员。画像声明 uuidv7 方案的
+			// 版本才修正；旧画像保持原行为。
+			if baseInstructions.UsesUUIDv7IDs() &&
+				officialCodexItemTypeHasNoTurnMetadata(strings.TrimSpace(officialOpenAIString(item, "type"))) {
 				continue
 			}
 			itemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]
@@ -1623,6 +1666,16 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(
 	return modified, nil
 }
 
+// officialCodexItemTypeHasNoTurnMetadata 判断 input 项类型在官方客户端里是否根本没有 passthrough 字段
+// （ResponseItem 里这几种变体不带 internal_chat_message_metadata_passthrough，序列化出来就只有各自的固有成员）。
+func officialCodexItemTypeHasNoTurnMetadata(itemType string) bool {
+	switch itemType {
+	case officialOpenAIAdditionalToolsType, "compaction_trigger", "configuration_update":
+		return true
+	}
+	return false
+}
+
 // splitOfficialOpenAIWSInputTurnSegments 以“助手输出后的下一条用户消息”为
 // 新轮次边界。Responses 工具调用项由助手产生，但通常不携带 role=assistant，
 // 因此必须把工具调用本身也视为助手已输出；否则“历史工具调用/输出 + 新用户消息”
@@ -1656,6 +1709,18 @@ func resolveOfficialOpenAIWSHistoricalTurnID(
 	sessionID string,
 	segmentIndex int,
 ) (string, error) {
+	return resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase(input, segment, sessionID, segmentIndex, nil)
+}
+
+// resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase 同 resolveOfficialOpenAIWSHistoricalTurnID，另在画像声明 uuidv7
+// 方案时让基础指令消息不参与历史回合的一致性判定（baseInstructions 为 nil 时与前者逐字相同）。
+func resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase(
+	input []any,
+	segment []int,
+	sessionID string,
+	segmentIndex int,
+	baseInstructions *profilecontract.BaseInstructionsSection,
+) (string, error) {
 	existingTurnID := ""
 	var lastUserAnchor officialOpenAIUserAnchor
 	lastUserFound := false
@@ -1666,6 +1731,11 @@ func resolveOfficialOpenAIWSHistoricalTurnID(
 				"OpenAI official egress WebSocket input item %d must be object",
 				itemIndex,
 			)
+		}
+		// 增量窗口形态下基础指令消息带着客户端（或网关合成时）自己的 turn_id，它属于“窗口第一个回合”，不代表这一段历史的
+		// 回合归属；让它参与一致性判定会把任何多回合历史误判为 turn_id 冲突。additional_tools 项没有 passthrough，无需处理。
+		if baseInstructions.UsesUUIDv7IDs() && isOfficialCodexBaseInstructionsItem(baseInstructions, item) {
+			continue
 		}
 		if role := strings.TrimSpace(officialOpenAIString(item, "role")); role == "user" {
 			// 只保留用户文本的摘要与下标，用户全文不再拼入种子。

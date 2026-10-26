@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -109,15 +110,36 @@ func renderOfficialCodexBaseInstructionsItem(
 	if strings.TrimSpace(threadID) == "" {
 		return nil, errors.New("OpenAI official egress base instructions require a thread id")
 	}
-	out := make([]byte, 0, len(text)+256)
+	return renderOfficialCodexBaseInstructionsItemWithID(
+		section, officialCodexBaseInstructionsID(section, threadID, text), text,
+	), nil
+}
+
+// renderOfficialCodexBaseInstructionsItemWithID 按给定的 id 生成官方形态的基础指令消息（预编码 JSON）。
+// id 的来源由调用方决定：旧方案按线程与正文算 UUIDv5，增量窗口方案用稳定的 UUIDv7（见
+// official_egress_openai_incremental_prefix.go）。passthrough 只带 content_item_kinds，这是旧方案的官方形态。
+func renderOfficialCodexBaseInstructionsItemWithID(
+	section *profilecontract.BaseInstructionsSection,
+	id string,
+	text string,
+) json.RawMessage {
+	passthrough := append([]byte(`{"content_item_kinds":[`), appendOfficialCodexJSONString(nil, section.ContentItemKind)...)
+	passthrough = append(passthrough, `]}`...)
+	return renderOfficialCodexBaseInstructionsItemWithPassthrough(id, text, passthrough)
+}
+
+// renderOfficialCodexBaseInstructionsItemWithPassthrough 生成官方形态的基础指令消息，passthrough 是调用方已经编码好的
+// internal_chat_message_metadata_passthrough 对象原文。键序固定：type、id、role、content、passthrough。
+func renderOfficialCodexBaseInstructionsItemWithPassthrough(id, text string, passthrough []byte) json.RawMessage {
+	out := make([]byte, 0, len(text)+len(passthrough)+160)
 	out = append(out, `{"type":"message","id":`...)
-	out = appendOfficialCodexJSONString(out, officialCodexBaseInstructionsID(section, threadID, text))
+	out = appendOfficialCodexJSONString(out, id)
 	out = append(out, `,"role":"developer","content":[{"type":"input_text","text":`...)
 	out = appendOfficialCodexJSONString(out, text)
-	out = append(out, `}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":[`...)
-	out = appendOfficialCodexJSONString(out, section.ContentItemKind)
-	out = append(out, `]}}`...)
-	return out, nil
+	out = append(out, `}],"internal_chat_message_metadata_passthrough":`...)
+	out = append(out, passthrough...)
+	out = append(out, '}')
+	return out
 }
 
 // officialCodexInputItemString 读取 input 项的字符串成员；项可以是已解码的对象，也可以是预编码字节。
@@ -428,6 +450,11 @@ func collectOfficialOpenAIInboundTaggedMessagesFromIndex(
 			continue
 		}
 		if message, found := officialCodexTaggedDeveloperMessage(decoded); found {
+			// 同时保留原文：画像声明增量窗口方案时，官方形态的基础指令消息要原样放行（见
+			// officialCodexInboundBaseInstructionsRawLimit）；其他方案不使用。超限的原文不复制。
+			if raw := index.raw(item); len(raw) <= officialCodexInboundBaseInstructionsRawLimit {
+				message.raw = bytes.Clone(raw)
+			}
 			messages = append(messages, message)
 		}
 	}
