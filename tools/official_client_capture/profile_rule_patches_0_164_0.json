@@ -26,7 +26,7 @@
       "path": "/Endpoints/ID=images_generations/Headers/Name=x-codex-image-turn-id",
       "before": null,
       "after": {
-        "Slot": 60,
+        "Slot": 20,
         "Sequence": 0,
         "Name": "x-codex-image-turn-id",
         "WireName": "x-codex-image-turn-id",
@@ -44,7 +44,7 @@
       "path": "/Endpoints/ID=images_generations/Headers/Name=x-codex-turn-metadata",
       "before": null,
       "after": {
-        "Slot": 75,
+        "Slot": 25,
         "Sequence": 0,
         "Name": "x-codex-turn-metadata",
         "WireName": "x-codex-turn-metadata",
@@ -62,7 +62,7 @@
       "path": "/Endpoints/ID=images_edits/Headers/Name=x-codex-image-turn-id",
       "before": null,
       "after": {
-        "Slot": 60,
+        "Slot": 20,
         "Sequence": 0,
         "Name": "x-codex-image-turn-id",
         "WireName": "x-codex-image-turn-id",
@@ -80,7 +80,7 @@
       "path": "/Endpoints/ID=images_edits/Headers/Name=x-codex-turn-metadata",
       "before": null,
       "after": {
-        "Slot": 75,
+        "Slot": 25,
         "Sequence": 0,
         "Name": "x-codex-turn-metadata",
         "WireName": "x-codex-turn-metadata",

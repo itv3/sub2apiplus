@@ -219,7 +219,7 @@ class Expectation0164WireChecksTests(unittest.TestCase):
     - SPEC-EP-002：OAuth 刷新体多一个 refresh_reason（键序 client_id, grant_type, refresh_reason, refresh_token，取值四选一）。
     这四条规则（EP-002、WS-005、BODY-003、EP-022）都含读内部记录类型的判据，整条是 candidate_profile，不在官方侧离线判据门里执行。
     - SPEC-WS-005：incremental_tools 默认开启后，generate=false 的预热帧 input 是空数组，additional_tools 前缀由第一条业务帧带出。
-    - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata。
+    - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata（紧跟 version）。
     样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
     """
 
@@ -347,19 +347,21 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
 
-    def test_image_header_order_lists_the_two_new_headers_around_originator(self) -> None:
+    def test_image_header_order_lists_the_two_new_headers_right_after_version(self) -> None:
         _, check = self.check("SPEC-EP-022", "image-header-order")
         order = check["assertion"]["value"]
         self.assertEqual(
             order,
-            ["version", "authorization", "chatgpt-account-id", "content-type", "x-codex-image-turn-id", "originator",
-             "x-codex-turn-metadata", "user-agent", "accept", "cookie", "host", "content-length"],
+            ["version", "x-codex-image-turn-id", "x-codex-turn-metadata", "authorization", "chatgpt-account-id",
+             "content-type", "originator", "user-agent", "accept", "cookie", "host", "content-length"],
         )
-        # 官方 image_request_headers 的插入顺序是 image-turn-id、originator、turn-metadata；画像按槽位排序时
-        # image-turn-id 在 originator 之前、turn-metadata 在 originator 之后，user-agent 仍在 accept 之前。
-        self.assertLess(order.index("x-codex-image-turn-id"), order.index("originator"))
-        self.assertLess(order.index("originator"), order.index("x-codex-turn-metadata"))
-        self.assertLess(order.index("x-codex-turn-metadata"), order.index("user-agent"))
+        # IMG 路 0.164.0 非正式实采（20 条请求）：两个新头紧跟 version、在 authorization 之前，image-turn-id 在前；
+        # 默认路径下官方不写 originator 头（线程 originator 等于进程 originator），由 HTTP 客户端默认头补在 content-type 之后，
+        # 所以 originator 不在两个新头之间；user-agent 仍在 accept 之前。
+        self.assertEqual(order[:3], ["version", "x-codex-image-turn-id", "x-codex-turn-metadata"])
+        self.assertLess(order.index("x-codex-turn-metadata"), order.index("authorization"))
+        self.assertLess(order.index("content-type"), order.index("originator"))
+        self.assertLess(order.index("user-agent"), order.index("accept"))
 
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
         """差异报告只落了四条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""

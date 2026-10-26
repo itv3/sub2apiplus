@@ -3815,12 +3815,12 @@
             "path": "data.header_names_in_order",
             "value": [
               "version",
+              "x-codex-image-turn-id",
+              "x-codex-turn-metadata",
               "authorization",
               "chatgpt-account-id",
               "content-type",
-              "x-codex-image-turn-id",
               "originator",
-              "x-codex-turn-metadata",
               "user-agent",
               "accept",
               "cookie",
@@ -3828,7 +3828,7 @@
               "content-length"
             ]
           },
-          "description": "generation 与 edit 的 Header 线序一致且精确（x-codex-image-turn-id 在 originator 之前、x-codex-turn-metadata 在 originator 之后，accept 位于 originator、user-agent 之后）",
+          "description": "generation 与 edit 的 Header 线序一致且精确（0.164.0 起 x-codex-image-turn-id、x-codex-turn-metadata 紧跟 version、排在 authorization 之前，默认路径下官方不写 originator 头，由 HTTP 客户端默认头补在 content-type 之后；accept 位于 originator、user-agent 之后）",
           "id": "image-header-order",
           "select": {
             "record_type": "http_request",

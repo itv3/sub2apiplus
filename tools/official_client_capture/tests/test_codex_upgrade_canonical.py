@@ -1143,6 +1143,14 @@ class CanonicalImportTests(unittest.TestCase):
                 ["/Endpoints/ID=oauth_refresh/Body/Fields/Name=refresh_reason"],
             )
             self.assertEqual(len(result["rule_field_paths"]["SPEC-EP-022"]), 4)
+            # 图像头槽位按 0.164.0 非正式实采：两个新头落在 version(10) 与 authorization(30) 之间，image-turn-id(20) 在前、turn-metadata(25) 在后。
+            for endpoint in ("images_generations", "images_edits"):
+                slots = {
+                    p["after"]["Name"]: p["after"]["Slot"]
+                    for p in patches
+                    if p["path"].startswith(f"/Endpoints/ID={endpoint}/Headers/")
+                }
+                self.assertEqual(slots, {"x-codex-image-turn-id": 20, "x-codex-turn-metadata": 25}, endpoint)
             self.assertEqual(
                 result["rule_field_paths"]["SPEC-BODY-006"],
                 ["/BaseInstructions/IDScheme"],
