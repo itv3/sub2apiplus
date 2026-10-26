@@ -21,7 +21,7 @@ DEFAULT_SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 DEFAULT_ANCHOR_MANIFEST = ROOT / "tools" / "spec_ref_anchors.json"
 DEFAULT_DEPENDENCY_MANIFEST = ROOT / "tools" / "spec_source_deps" / "manifest.json"
 # 换版时只需改这个版本号（并重建 tools/spec_ref_anchors.json、tools/spec_source_deps/manifest.json）。
-CODEX_SOURCE_VERSION = "0.163.0"
+CODEX_SOURCE_VERSION = "0.164.0"
 
 
 def _default_source_root() -> pathlib.Path:

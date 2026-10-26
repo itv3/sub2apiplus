@@ -60,8 +60,8 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 （Campaign `c01570-formal-vc1-r2-20260926t084354z` 的 attempt `20260926T094510Z-ce907a4fa1d25931`）是历史佐证；
 “候选断言”指 `c01630-formal-vc1-r2-20261020t131500z` canonical 链中的 `assert-SPEC-*`（评估基线 b2，evidence_level
 均为 full）。本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.163.0
-官方样本（`gpt-5.5` 已在采集账号下线），相关结论以 0.163.0 源码为准。源码字段的行号锚点以本地固化的 0.163.0 源码为准
-（`tools/spec_ref_anchors.json`，源码树 `local-analysis/sources/codex-cli-0.163.0`）；正文里 0.157.0 与 0.160.0 的
+官方样本（`gpt-5.5` 已在采集账号下线），相关结论以 0.163.0 源码为准。源码字段的行号锚点以本地固化的 0.164.0 源码为准
+（`tools/spec_ref_anchors.json`，源码树 `local-analysis/sources/codex-cli-0.164.0`；0.163.0 到 0.164.0 之间有变化的引用已逐条复核，行为有差异处在对应规则里以“0.164.0 复核”标出）；正文里 0.157.0 与 0.160.0 的
 “文件 第 N 行”坐标只是历史对照，不再由门禁复核。
 
 ## 2.1 规则证据与准入标准
@@ -176,7 +176,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：自定义 CA 条件分支；HTTP。
 - **规则**：`CODEX_CA_CERTIFICATE` 或 `SSL_CERT_FILE` 指向非空、可读且可解析的
   CA bundle 时切换到 rustls；实测为 10 cipher，ALPN 依次 offer `h2`、`http/1.1`。
-- **源码**：[L1] `http-client/src/custom_ca.rs:296-320`、`http-client/src/custom_ca.rs:398`；
+- **源码**：[L1] `http-client/src/custom_ca.rs:300-324`、`http-client/src/custom_ca.rs:402`；
   默认客户端失败回退见 `login/src/auth/default_client.rs:425-430`。
 - **实测**：`audit-tls002-ca-n0-20260730a`（P）验证 ClientHello；
   `official-h2-20260727T131936Z`（J）验证协商为 h2。
@@ -195,7 +195,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   使用；Responses WS 仍经 `WebSocketConnector::new` 走 `ExplicitCodexTls`，即 rustls）。
 - **实测**：`oauth-20260727T091556Z-noplugins`（P）取得四种扩展排列；0.157.0 官方 direct 抓包的 4 份 rustls
   ClientHello（chatgpt.com 3、api.openai.com 1）扩展集合与上列一致、排列各不相同，signature_algorithms 为上列 13 项；
-  候选断言 `assert-SPEC-TLS-003` 通过。0.157.0 的 rustls 为 0.23.45（`Cargo.lock` 第 13362 行；0.163.0 仍为 0.23.45，见第 13565 行），provider 仍由
+  候选断言 `assert-SPEC-TLS-003` 通过。0.157.0 的 rustls 为 0.23.45（`Cargo.lock` 第 13362 行；0.163.0 仍为 0.23.45，见第 13565 行；0.164.0 升到 0.23.46，见第 13553 行，同时 rustls-webpki 0.103.15→0.103.16、webpki-roots 1.0.5→1.0.10，
+ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `utils/rustls-provider/src/lib.rs` 安装 aws-lc-rs。
 - **实现**：使用等价 rustls 行为并按传输画像发送 signature_algorithms；不要求每次都产生全新的排列，也不把有限样本
   外推为全局集合。
@@ -209,7 +210,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **规则**：ClientHello 不含 ALPN 扩展，因此该条件下使用 HTTP/1.1；决定因素是
   自定义 CA 条件，不是直连或代理。
 - **源码**：[L3] 无直接源码常量；CA 分支选择机制见
-  `http-client/src/custom_ca.rs:296-320`。
+  `http-client/src/custom_ca.rs:300-324`。
 - **实测**：`oauth-20260727T091556Z-noplugins`（P）中 41 个 ClientHello 均无扩展 16。
 - **实现**：默认分支不得固定 offer h2；启用有效 CA 后转入 SPEC-TLS-002／H2 分支。
 - **状态**：✅ 源码无／不适用；抓包充分。
@@ -219,11 +220,12 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：内置 OpenAI OAuth。
 - **规则**：`supports_websockets=true` 时先走 WS；可重试错误（含 `slow_down`）耗尽重试预算并设置
   `force_http_fallback` 后，同一上层调用改走 HTTP POST；受控 426 同样降级到 HTTP。
-- **源码**：[L1] `model-provider-info/src/lib.rs:199`、
-  `core/src/client.rs:719`、`core/src/client.rs:1106`、
+- **源码**：[L1] `model-provider-info/src/lib.rs:201`、
+  `core/src/client.rs:739`、`core/src/client.rs:1146`、
   `core/src/responses_retry.rs:120-139`。0.163.0 复核：降级触发条件未变（重试预算耗尽后切换，同一上层调用改走 HTTP）；
-  变化只在重试判定与等待：判定改由 `protocol/src/error.rs` 第 410-460 行的 `CodexErr::retry_delay` 给出（`ServerOverloaded`
-  与 `RetryLimit` 只在服务端给出 retry-after 时才可重试），切换到 HTTP 之前若服务端给出 retry-after，会先等到该时刻
+  变化只在重试判定与等待：判定改由 `protocol/src/error.rs` 第 413-464 行的 `CodexErr::retry_delay` 给出（`ServerOverloaded`
+  与 `RetryLimit` 只在服务端给出 retry-after 时才可重试；0.164.0 新增的 `GatewayLoginRequired` 与其他需用户处理的错误一样不重试，
+  只出现在自定义网关登录失效时，不影响内置 OpenAI OAuth），切换到 HTTP 之前若服务端给出 retry-after，会先等到该时刻
   （`core/src/responses_retry.rs` 第 126-129 行）。`unbounded_connection_retries` 在 0.149.1 已存在，对 HTTP 传输层连接失败
   的采样请求无限重试、不触发降级，本轮未变。
 - **实测**：`official-httpfb3-20260727T234853Z`（J）记录自然重试耗尽；
@@ -240,8 +242,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **规则**：不同上层 API 调用各自新建 `reqwest::Client`，正常跨调用不复用 TCP；
   同一次调用的 retry 共享 Client，存活连接可复用，断连后由同一 Client 新建 TCP。
 - **源码**：[L1] `login/src/auth/default_client.rs:217-219`、
-  `core/src/client.rs:1258-1280`、`codex-api/src/endpoint/session.rs:80-154`、
-  `model-provider/src/models_endpoint.rs:271-291`、`ext/image-generation/src/backend.rs:79-97`、
+  `core/src/client.rs:1298-1320`、`codex-api/src/endpoint/session.rs:80-154`、
+  `model-provider/src/models_endpoint.rs:272-292`、`ext/image-generation/src/backend.rs:80-98`、
   `ext/web-search/src/tool.rs:113-119`。0.163.0 复核：各端点改由 `login/src/auth/default_client.rs:258-306` 与
   `login/src/auth/default_client.rs:379-410` 的路由感知构造函数取得 Client；默认配置（未启用受管网络策略、出站代理策略为
   `ReqwestDefault`）下仍逐次调用新建 Client，只有受管网络策略或非默认代理策略才改用 `RouteAwareClientPool` 按路由复用，
@@ -305,9 +307,9 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `x-codex-turn-metadata` 值更长，不影响线序。
 - **源码**：[L2] `tools/spec_source_deps/http-1.4.0/src/header/map.rs:923-928`、
   `tools/spec_source_deps/http-1.4.0/src/header/map.rs:1572-1602`；各端点的构造顺序由
-  L1 `core/src/client.rs:1448-1478`、`core/src/client.rs:1841-1850`、
-  `core/src/client.rs:2480-2486` 调用链决定；WS 握手头的构造见 `core/src/client.rs:1380-1414`。
-  http 1.4.0 仍是锁定依赖（`Cargo.lock` 第 8892-8893 行）。
+  L1 `core/src/client.rs:1488-1518`、`core/src/client.rs:1883-1892`、
+  `core/src/client.rs:2514-2520` 调用链决定；WS 握手头的构造见 `core/src/client.rs:1420-1454`。
+  http 1.4.0 仍是锁定依赖（0.164.0 的 `Cargo.lock` 第 8885-8886 行）。
 - **实测**：`c1491-r14-f-lite-http-response/relay/conn005.client_to_upstream.bin`（R）验证冷启动 Lite Responses
   的原始线序。0.163.0 官方样本（Campaign `c01630-formal-vc1-r2-20261020t131500z`，attempt
   `20261021T003916Z-24ff3483a4288709`；场景 A01、A03；匹配数不是去重请求数）：models 默认头线序（`variant=no_cookie`）
@@ -433,7 +435,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：自定义 provider；仅当 `http_headers` 注入对应头。
 - **规则**：WS 握手中 `origin` 输出为 `Origin`，
   `sec-websocket-protocol` 输出为 `Sec-WebSocket-Protocol`；普通 HTTP 仍为小写。
-- **源码**：[L1] 注入入口 `model-provider-info/src/lib.rs:174`；[L2]
+- **源码**：[L1] 注入入口 `model-provider-info/src/lib.rs:176`；[L2]
   `tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs:190-206`。
 - **实测**：`relay-wshdr3`（R）在同一运行取得 WS 正例与 HTTP 对照。
 - **实现**：固定 OpenAI OAuth 上游无需实现；兼容 Codex 自定义 provider 时才实现。
@@ -460,7 +462,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   只在既有响应前缀可复用时出现，连接键或账号 owner 变化、迟到的 tool-result metadata 都会使前缀不可复用。
   `access_programs` 的取值与出现条件见 SPEC-BODY-001。
 - **源码**：[L1] `codex-api/src/common.rs:331-357`、
-  `core/src/client.rs:2085-2158`、`core/src/client.rs:1077`。续接前缀的判定由 `prepare_websocket_request`
+  `core/src/client.rs:2119-2192`、`core/src/client.rs:1117`。续接前缀的判定由 `prepare_websocket_request`
   返回 `Result<Continuation, Failure>` 给出（0.163.0 起复用失败原因逐项记录，只影响遥测，不改变字段）。
 - **实测**：`clean-tool-20260728T132346Z`（R）覆盖 Lite；
   `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧；这两份 R 类样本采集版本早于 0.163.0，字段顺序以
@@ -488,9 +490,9 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **源码**：[L1] `codex-api/src/endpoint/session.rs:48`、
   `codex-api/src/endpoint/session.rs:80-154`、
   `login/src/auth/default_client.rs:416-430`、
-  `core/src/client.rs:1196-1205`、`core/src/client.rs:1240-1256`、
-  `core/src/client.rs:1397-1398`、`core/src/client.rs:1841-1850`、
-  `core/src/client.rs:2019-2024`、`core/src/client.rs:2448-2452`（guardian 审阅请求判定）。
+  `core/src/client.rs:1236-1245`、`core/src/client.rs:1280-1296`、
+  `core/src/client.rs:1437-1438`、`core/src/client.rs:1883-1892`、
+  `core/src/client.rs:2059-2064`、`core/src/client.rs:2482-2486`（guardian 审阅请求判定）。
 - **实测**：0.149.1 HTTP Main、WS Main 与 WS Lite 主采样均验证 model-only 线序；tier、`null`、重复键、非法 Header
   字节与非 OAuth 身份由源码闭环和本地负例覆盖。wire 只能证明最终集合与线序，不能单独反推内部调用顺序。候选断言
   `assert-SPEC-HDR-001` 核对组装阶段顺序、retry 最后认证与 guardian 审阅请求不生成 routing hint；guardian 判定见
@@ -509,14 +511,14 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   （models、alpha-search、images、realtime calls、OAuth 刷新）因此是
   `…, originator, user-agent, x-openai-internal-codex-residency?, accept, cookie?, host, …`。backend-client 形态的
   WHAM 请求（含 `accounts/check`、`settings/user`）只带自身的 `user-agent`，不带 `originator` 与 residency。
-- **源码**：[L1] `model-provider-info/src/lib.rs:49-64`、
+- **源码**：[L1] `model-provider-info/src/lib.rs:51-66`、
   `login/src/auth/default_client.rs:46-47`、
   `login/src/auth/default_client.rs:456-469`、
-  `config/src/config_requirements.rs:1073`、
-  `exec/src/lib.rs:654`、`tui/src/startup_orchestration.rs:755`、
+  `config/src/config_requirements.rs:1075`、
+  `exec/src/lib.rs:654`、`tui/src/startup_orchestration.rs:800`、
   `app-server/src/request_processors/initialize_processor.rs:191`。0.163.0 复核：residency 全局状态与读写函数迁入
   `model-provider-info`（`login` 以别名重新导出），`ModelProviderInfo::to_api_provider` 另会把同一取值写入 provider 头
-  （`model-provider-info/src/lib.rs:447-453`），结果头集合不变（0.149.1 由 `enforce_managed_residency` 做同样的事）。
+  （`model-provider-info/src/lib.rs:449-455`），结果头集合不变（0.149.1 由 `enforce_managed_residency` 做同样的事）。
 - **实测**：`official-body2-20260728T000549Z`（J）验证默认集合；
   `audit-hdr002-residency-20260730a`（R）验证 `us` 正向分支。候选断言 `assert-SPEC-HDR-002` 核对默认身份头与
   residency 正反例；默认头集合见 0.157.0 `login/src/auth/default_client.rs` 第 433-446 行，合并时机见
@@ -529,8 +531,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：内置 OpenAI OAuth。
 - **规则**：Codex 自身只在 WS 握手发送
   `openai-beta: responses_websockets=2026-02-06`；HTTP responses 和 images 不发送。
-- **源码**：[L1] `core/src/client.rs:160`、`core/src/client.rs:1404`、
-  `cli/src/doctor.rs:112`、`cli/src/doctor.rs:2359`。
+- **源码**：[L1] `core/src/client.rs:161`、`core/src/client.rs:1444`、
+  `cli/src/doctor.rs:112`、`cli/src/doctor.rs:2360`。
 - **实测**：`clean-tool-20260728T132346Z`（R）为 WS 正例；
   `audit-body002-plain-20260730a`（HTTP responses）、
   `clean-image-20260728T132405Z`（generations）、
@@ -550,7 +552,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **源码**：[L1] `login/src/auth/default_client.rs:41`、
   `login/src/auth/default_client.rs:152`、
   `app-server/src/request_processors/initialize_processor.rs:131-192`、
-  `cloud-tasks/src/util.rs:13`、`exec/src/lib.rs:263`。
+  `cloud-tasks/src/util.rs:13`、`exec/src/lib.rs:268`。
 - **实测**：`clean-search-20260728T132311Z`（exec）、`clean-legacy-20260728T132509Z`
   （TUI）、`audit-ep019-wham-consume-safe-20260730a`（`codex_exec` originator、
   `unknown` 终端标识）均为 R。0.163.0 官方 VC-1（Campaign `c01630-formal-vc1-r2-20261020t131500z`，attempt
@@ -578,11 +580,15 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 
 - **范围**：内置 OpenAI OAuth；普通 Responses（HTTP 与 WS 握手）。
 - **规则**：发送小写连字符形式 `session-id`、`thread-id`；不发送 `session_id` 或 `conversation-id`。`session-id`
-  取缓存亲和键：根会话取 `prompt_cache_key`（临时 fork 为源会话的 session_id），非根 agent 取自身 session_id。
-  realtime 的 `x-session-id` 是独立分支；alpha-search 不发送会话头。
+  取缓存亲和键：根会话取源会话 id 覆盖（临时 fork 为源会话的 session_id，guardian 审阅会话为 `guardian:{父线程}`），其次内部会话的
+  `{来源}:{父线程}`，否则自身 session_id；非根 agent 取自身 session_id。0.164.0 复核：该取值改由 `session_derived_cache_key` 计算
+  （`core/src/client.rs:666-678`、`core/src/client.rs:682-688`），不再等同于请求体 `prompt_cache_key`——后者受 `PromptCacheKey` 策略控制，
+  策略只改请求体、不改这两个头；默认策略下两者取值与 0.163.0 相同。
+  realtime 的 `x-session-id` 是独立分支（0.164.0 起 realtime 握手头在 `x-session-id` 之后另有 `voice-session-id`，仅当调用方给出语音会话 id 时发送；
+  Sub2API 不实现 realtime 握手，不构成当前偏差）；alpha-search 不发送会话头。
 - **源码**：[L1] `codex-api/src/requests/headers.rs:8`、
   `codex-api/src/requests/headers.rs:11`；realtime 见
-  `core/src/realtime_conversation.rs:1973`。
+  `core/src/realtime_conversation.rs:1979`、`core/src/realtime_conversation.rs:1982-1986`。
 - **实测**：`audit-h1raw-20260730a`（responses）与 `clean-search-20260728T132311Z`（alpha-search 不发送）均为 R；
   0.157.0 官方普通 Responses 8 条均带 `session-id` 与 `thread-id`。候选断言 `assert-SPEC-HDR-007` 核对普通 Responses
   均含两头、所有请求不含 `session_id` 与 `conversation-id`、realtime 第一跳使用 `x-session-id`；取值见 0.157.0
@@ -600,8 +606,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `x-codex-parent-thread-id` 来自父线程；
   `x-responsesapi-include-timing-metrics: true` 来自 `runtime_metrics`。
 - **源码**：[L1] `core/src/responses_metadata.rs:382-474`、
-  `core/src/client.rs:850-883`、`core/src/client.rs:1396-1411`、
-  `features/src/lib.rs:1268-1272`。
+  `core/src/client.rs:873-906`、`core/src/client.rs:1436-1451`、
+  `features/src/lib.rs:1306-1310`。
 - **实测**：`relay-review4`、`audit-hdr008-guardian-20260730a`、
   `audit-hdr008-memgen-20260730a`、`relay-rtmetrics1`（R）。
 - **实现**：按条件插入；`x-openai-subagent` 的 `Other(label)` 不得实现成封闭枚举。
@@ -614,7 +620,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `x-openai-account-routing-override`；默认工作区路由（`NO_CONSTRAINT`）下 HTTP Responses 与 WS 握手都不携带该头。
 - **源码**：[L1] 头名定义于 `model-provider/src/workspace_routing.rs:12`；`apply_workspace_routing` 在 `us`／`us_cr` 时写入该头、
   `NO_CONSTRAINT` 时移除（`model-provider/src/workspace_routing.rs:59-75`）；带该头的 provider 一律禁止跟随重定向
-  （`core/src/client.rs:1264-1271`）。该机制在 0.149.1 不存在（对头名 0 命中）。
+  （`core/src/client.rs:1304-1311`）。该机制在 0.149.1 不存在（对头名 0 命中）。
 - **实测**：0.157.0 官方 A03（HTTP）与 A05（WS）默认路由样本均不带该头；候选断言 `assert-SPEC-HDR-009` 核对两类默认
   样本都不发送。`us`／`us_cr` 分支需要对应工作区账号，由官方源码闭环。
 - **实现**：网关首期只做发现与失败关闭，画像在 WorkspaceRouting 记录头名与接受值。
@@ -626,9 +632,9 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **规则**：guardian 审阅请求走普通 `/responses`，携带 `x-codex-guardian: reviewer`，不带 `x-codex-routing-hint`，
   请求体不带 `service_tier`；WS 握手中该头位于 `openai-beta` 之后、`sec-websocket-extensions` 之前。普通 Responses
   请求（HTTP 与 WS 握手）不携带 `x-codex-guardian`。
-- **源码**：[L1] 头由 guardian 审阅会话作为 Responses 附加头注入（`ext/guardian-v2/src/sync_reviewer/mod.rs:98-105`，取值 `reviewer`），
-  核心客户端按它判定：HTTP 的 `core/src/client.rs:1838-1850` 清空 `service_tier` 并跳过 routing hint，WS 的
-  `core/src/client.rs:2010-2024` 同理，判定函数见 `core/src/client.rs:2448-2452`。0.163.0 另有取值 `classifier`
+- **源码**：[L1] 头由 guardian 审阅会话作为 Responses 附加头注入（`ext/guardian-v2/src/sync_reviewer/mod.rs:101-108`，取值 `reviewer`），
+  核心客户端按它判定：HTTP 的 `core/src/client.rs:1880-1892` 清空 `service_tier` 并跳过 routing hint，WS 的
+  `core/src/client.rs:2050-2064` 同理，判定函数见 `core/src/client.rs:2482-2486`。0.163.0 另有取值 `classifier`
   （GuardianV2 异步评分器，`ext/guardian-v2/src/async_scorer/sampler/connection_pool.rs:409-411`），GuardianV2 是开发中特性、默认关闭。
   该机制在 0.149.1 不存在；0.163.0 官方样本未覆盖 guardian 审阅请求，头序与取值沿用 0.157.0 官方样本。
 - **实测**：0.157.0 官方 guardian 审阅 WS 握手为 `…x-codex-turn-metadata, x-codex-parent-thread-id,
@@ -673,9 +679,9 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **规则**：`enable_request_compression` 为 Stable 特性且默认开启：ChatGPT 认证下普通 Responses 默认使用 zstd
   （`content-encoding: zstd`）；官方显式关闭压缩时明文，不发送 `content-encoding`。其余端点均不压缩（见 SPEC-EP-005）。
   0.163.0 复核：压缩条件未变，压缩前字节因请求体形态变化而不同，策略不变。
-- **源码**：[L1] `features/src/lib.rs:1424-1427`、
-  `core/src/session/session.rs:1784`、`http-client/src/request.rs:41-43`、
-  `core/src/client.rs:1728-1737`（压缩判定：特性开启、Codex 后端认证且 OpenAI 提供方才用 zstd）。
+- **源码**：[L1] `features/src/lib.rs:1462-1465`、
+  `core/src/session/session.rs:1814`、`http-client/src/request.rs:41-43`、
+  `core/src/client.rs:1769-1778`（压缩判定：特性开启、Codex 后端认证且 OpenAI 提供方才用 zstd）。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（zstd responses）与 `audit-body002-plain-20260730a`（关闭压缩），
   均为 R。0.163.0 官方样本（Campaign `c01630-formal-vc1-r2-20261020t131500z`，attempt
   `20261021T003916Z-24ff3483a4288709`；匹配数不是去重请求数）：场景 A03 默认压缩的 Responses POST 带
@@ -694,8 +700,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **规则**：instructions/tools 迁入 `input.additional_tools`；
   `reasoning.context=all_turns`；`parallel_tool_calls=false`。WS 增量帧不重复发送
   已复用的 additional_tools 前缀。
-- **源码**：[L1] `core/src/client.rs:934-953`、
-  `core/src/client.rs:980-995`、`core/src/client.rs:1077`。0.163.0 源码另有两点：`additional_tools` 项只在 `prompt.tools` 非空时加入；
+- **源码**：[L1] `core/src/client.rs:957-976`、
+  `core/src/client.rs:1015-1030`、`core/src/client.rs:1117`。0.163.0 与 0.164.0 源码另有两点：`additional_tools` 项只在 `prompt.tools` 非空时加入；
   项 `id` 为 `at_` 加 UUIDv5（命名空间为 `UUIDv5(NAMESPACE_OID, thread_id)`，名称为该项 `tools` 的 JSON 序列化字节），0.149.1 无 `id`
   且总是加入。已核实为线上偏差：官方 0.163.0 样本（HTTP 7 条、WS 预热帧 1 条）的 `additional_tools` 项全部带 `at_` id，按上述规则重算逐字节一致，
   键序为 `type, id, role, tools`；网关没有实现该 id（Codex 入站原样放行但线程身份被网关重派生，非 Codex 入站合成的项没有 id），
@@ -713,7 +719,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   turn-state，下一请求不回送。
 - **源码**：[L1] `codex-api/src/sse/responses.rs:66-74`、
   `codex-api/src/endpoint/responses_websocket.rs:849-852`、
-  `core/src/client.rs:2077-2084`、`core/src/client.rs:2460-2476`。
+  `core/src/client.rs:2111-2118`、`core/src/client.rs:2494-2510`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a` 与 `audit-body004-ws-turnstate-20260730a`（R）完成 HTTP、WS
   两条输入→保存→回送闭环。候选断言 `assert-SPEC-BODY-004` 核对回送值不变、两条通道均闭环、owner 变化后不回送；
   清空见 0.157.0 `core/src/client.rs` 第 1538-1542 行。
@@ -724,7 +730,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 
 - **范围**：内置 OpenAI OAuth；HTTP 与 WS。
 - **规则**：`tool_choice` 为 JSON 字符串，当前值 `"auto"`，不是对象。
-- **源码**：[L1] `codex-api/src/common.rs:289`、`core/src/client.rs:1076`。
+- **源码**：[L1] `codex-api/src/common.rs:289`、`core/src/client.rs:1116`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`、`audit-body002-plain-20260730a`、
   `clean-tool-20260728T132346Z`、`audit-ws005-nonlite-20260730a`（R）。
 - **实现**：所有传输和 Lite／非 Lite 分支均序列化为字符串。
@@ -743,10 +749,16 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   解析的自定义值时发 JSON 字符串；自定义档位能按 u64 解析时（如 `"3"`）发 JSON 整数，HTTP 与 WS `response.create` 共用同一
   结构体、形态相同；`x-codex-turn-metadata` 的 `reasoning_effort` 仍记字符串。默认内置模型目录的档位全是字符串，
   整数形态只在用户配置或远端目录给出纯数字自定义档位时出现。0.163.0 起主线模型 gpt-6.1-sol 是 Responses Lite。
+  0.164.0 复核：字段全集与顺序未变，请求体另有三处变化——① 开启 `reasoning_effort` 覆盖时，`input` 中连续的 `ConfigurationUpdate` 项只保留最后一条
+  （`core/src/client.rs:990-1006`）；② Lite 请求里带来源归因的 `input` 消息，其 `internal_chat_message_metadata_passthrough` 在
+  `content_item_kinds` 之外另带逐项对齐的 `content_item_metadata` 数组（基础指令消息为 `[{"provenance":{"type":"harness","hook":false}}]`），
+  非 Lite 请求在发出前清除该数组（`core/src/client.rs:1042-1047`），所以下文非 Lite 基础指令消息的 `passthrough` 仍只带 `content_item_kinds`；
+  ③ 请求体 `prompt_cache_key` 改由 `PromptCacheKey` 策略决定（默认 `SessionDerived`，取值与 0.163.0 相同；宿主可配 `Custom` 或 `Omit`，`Omit` 时整字段省略，
+  `core/src/client.rs:658-664`），官方 CLI 默认路径不受影响。上述 ① ② 在 0.164.0 官方样本里的形态未经核实。
 - **源码**：[L1] `codex-api/src/common.rs:278-304`、
-  `core/src/client.rs:934-1090`（`build_responses_request` 从第 956 行起，对任何模型都不再产生顶层 `instructions`）、
+  `core/src/client.rs:957-1130`、`core/src/client.rs:990-1006`、`core/src/client.rs:1042-1047`、`core/src/client.rs:658-664`（`build_responses_request` 从第 979 行起，对任何模型都不再产生顶层 `instructions`）、
   `codex-api/src/common.rs:170-183`（数字档位序列化，内容与 0.160.0 一致）。Lite 分支的端到端断言见
-  `core/tests/suite/responses_lite.rs` 第 92-150 行（测试代码，仅作旁证）。turn metadata 字符串化见 0.160.0
+  `core/tests/suite/responses_lite.rs` 第 92-157 行（测试代码，仅作旁证）。turn metadata 字符串化见 0.160.0
   `core/src/turn_metadata.rs` 第 83-93 行。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（Lite）与
   `audit-body002-plain-20260730a`（非 Lite），均为 R；这两份 R 类样本采集版本早于 0.163.0，其非 Lite 样本里的顶层
@@ -788,8 +800,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `mcp_attribution`（字符串 `{"status":"none"}`）；guardian 审阅请求同样写入 `mcp_attribution`。
 - **源码**：[L1] `mcp_attribution` 的键常量与写入见 `core/src/responses_metadata.rs:48`、`core/src/responses_metadata.rs:366-377`，
   `guardian_credits_requested` 作为保留键见 `core/src/responses_metadata.rs:68-70`，写入条件（非 guardian 审阅、ChatGPT 认证、
-  Codex 后端路由）见 `core/src/client.rs:1207-1238`。该机制在 0.149.1 不存在（对 `guardian_credits_requested` 0 命中）。
-  0.163.0 起 `client_metadata` 里的内部元数据只发给 `api.openai.com` 与 ChatGPT 允许主机（`model-provider/src/provider.rs:113-121`），
+  Codex 后端路由）见 `core/src/client.rs:1247-1278`。该机制在 0.149.1 不存在（对 `guardian_credits_requested` 0 命中）。
+  0.163.0 起 `client_metadata` 里的内部元数据只发给 `api.openai.com` 与 ChatGPT 允许主机（`model-provider/src/provider.rs:121-129`），
   自定义 provider 默认不带。
 - **实测**：0.157.0 官方 HTTP Responses 请求体 `client_metadata.mcp_attribution` 为字符串 `{"status":"none"}`、
   `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。候选断言
@@ -809,7 +821,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **源码**：[L1] 键常量见 `core/src/responses_metadata.rs:46-47`（`analytics_enabled`、`history_initialization`）与
   `core/src/responses_metadata.rs:58`（`turn_trigger`），`model` 与 `reasoning_effort` 键见 `core/src/turn_metadata.rs:47-49`；
   载荷字段与出站顺序见 `core/src/responses_metadata.rs:412-461`，`history_initialization` 的取值与来源见
-  `history/src/initialization.rs:12-34`、`core/src/session/session.rs:754-758`；端到端断言见
+  `history/src/initialization.rs:12-34`、`core/src/session/session.rs:779-783`；端到端断言见
   `core/tests/suite/direct_tool_metadata.rs` 第 921-952 行（测试代码，仅作旁证）。`turn_trigger` 在 0.149.1 不存在。
 - **实测**：候选断言 `assert-SPEC-BODY-009` 核对：键为 22 键的有序子集、必含上列 14 键，默认配置
   `analytics_enabled=true`。13 个既有必含键与默认 `analytics_enabled=true` 的官方依据沿用 0.157.0 官方样本的封存断言
@@ -828,10 +840,11 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：内置 OpenAI OAuth；模型支持图像生成时。
 - **规则**：非 Lite 可在顶层 `tools` 中发送 namespace `image_gen`／工具
   `imagegen`；Lite 将能力放入 `input.additional_tools` 的 exec 工具目录。
-  模型调用后由客户端请求独立 `images/generations` 或 `images/edits`。
+  模型调用后由客户端请求独立 `images/generations` 或 `images/edits`。0.164.0 复核：该独立请求的 header 另带
+  `x-codex-turn-metadata`（值为当前 turn 的元数据 JSON，`image_request_headers` 在有 turn 元数据时插入），0.163.0 没有；线序位置未经官方样本核实。
 - **源码**：[L1] `core/src/tools/spec_plan.rs:103-104`、
-  `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:79-129`、
-  `codex-api/src/endpoint/images.rs:62-98`。
+  `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:80-132`、
+  `ext/image-generation/src/backend.rs:135-155`、`codex-api/src/endpoint/images.rs:62-98`。
 - **实测**：`audit-body002-plain-20260730a`（非 Lite）、
   `clean-image-20260728T132405Z`（Lite + generations）、
   `relay-imgedit1`（edits），均含 R。
@@ -854,11 +867,11 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `pdf_c2pa_create_request`，其值与本次 create 请求 JSON 等值。`status=retry` 复用 finalize invocation
   轮询。成功响应含
   `file_size_bytes` 时以它为最终大小，缺失时回退到请求大小。
-- **源码**：[L1] `model-provider-info/src/lib.rs:526-529`、
-  `login/src/auth/manager.rs:212`、`core/src/realtime_conversation.rs:1375-1392`、
-  `core/src/mcp_tool_call.rs:500-508`、`core/src/mcp_openai_file.rs:191-250`、
-  `codex-api/src/files.rs:29-42`、`codex-api/src/files.rs:126-200`、`codex-api/src/files.rs:201-351`、
-  `codex-api/src/files.rs:353-430`。
+- **源码**：[L1] `model-provider-info/src/lib.rs:528-531`、
+  `login/src/auth/manager.rs:223`、`core/src/realtime_conversation.rs:1375-1392`、
+  `core/src/mcp_tool_call.rs:521-529`、`core/src/mcp_openai_file.rs:191-250`、
+  `codex-api/src/files.rs:29-42`、`codex-api/src/files.rs:128-202`、`codex-api/src/files.rs:203-353`、
+  `codex-api/src/files.rs:355-432`。
 - **实测**：`oauth-ep002-allhosts`、`oauth-ep002-refresh`（P）；
   `audit-ep012-sideband-synth-20260730a`、
   `audit-ep002-file-upload-full2-20260730a`（R）；0.149.1 hosted 三元字段与大小优先级由官方源码测试、
@@ -893,9 +906,10 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：内置 OpenAI OAuth。
 - **规则**：`GET {base}/models?client_version=0.163.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
   的值随 CLI 版本；exec 新增 `model/list`（`OnlineIfUncached`），可能使冷 home 的首个 `/models` 提前发出并变为同步等待，
-  请求形态不变。
-- **源码**：[L1] `codex-api/src/endpoint/models.rs:33-46`、`codex-api/src/endpoint/models.rs:103-115`；请求在 `model-provider/src/models_endpoint.rs:152-156` 经路由感知 transport 发出，
-  `model/list` 的触发见 `app-server/src/request_processors/catalog_processor.rs:289-293` 与 `exec/src/daybreak.rs:41-50`。
+  请求形态不变。0.164.0 复核：`model/list` 改为用 catalog 当前快照里的 config 与 models_manager 取列表
+  （`list_models_from_snapshot`），刷新策略仍是 `OnlineIfUncached`，URL、方法、query 不变。
+- **源码**：[L1] `codex-api/src/endpoint/models.rs:33-46`、`codex-api/src/endpoint/models.rs:103-115`；请求在 `model-provider/src/models_endpoint.rs:153-157` 经路由感知 transport 发出，
+  `model/list` 的触发见 `app-server/src/request_processors/catalog_processor.rs:296-304` 与 `exec/src/daybreak.rs:41-50`。
   0.163.0 另在 `codex-api/src/endpoint/models.rs:48-67` 增加 `model_catalog_url`（自定义 provider 专用）的 URL 构造，内置
   provider 不受影响。
 - **实测**：`audit-h1raw-20260730a`（R）验证 URL、方法与 query 形态。0.163.0 官方样本（Campaign
@@ -933,13 +947,14 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   建立 sideband，并发送 `openai-alpha: quicksilver=v1`。
 - **源码**：[L1] `codex-api/src/endpoint/realtime_call.rs:213-224`、
   `core/src/realtime_conversation.rs:1375`、
-  `core/src/realtime_conversation.rs:1442-1461`、
-  `core/src/realtime_conversation.rs:1962`、
-  `codex-api/src/endpoint/realtime_websocket/methods.rs:884-1020`、
-  `codex-api/src/endpoint/realtime_websocket/methods.rs:1174-1260`、
+  `core/src/realtime_conversation.rs:1442-1463`、
+  `core/src/realtime_conversation.rs:1968`、
+  `codex-api/src/endpoint/realtime_websocket/methods.rs:1038-1174`、
+  `codex-api/src/endpoint/realtime_websocket/methods.rs:1328-1414`、
   `core/src/realtime_conversation/sideband.rs:60-87`。0.163.0 复核：第一跳成功后的 sideband 链未变；另增“附着已有通话”路径
-  （`ConversationStartTransport::ExistingCall`，通话由客户端创建、Codex 不发第一跳，`codex-api/src/endpoint/realtime_websocket/methods.rs:904-934`
+  （`ConversationStartTransport::ExistingCall`，通话由客户端创建、Codex 不发第一跳，`codex-api/src/endpoint/realtime_websocket/methods.rs:1058-1088`
   在 404 时按 100／300／800 ms 重试），sideband URL 的 call_id 改为按路径段追加并拒绝 `.`／`..`；该路径不属于本条范围。
+  0.164.0 复核：sideband 链未变，仅 `methods.rs` 内部转写缓冲改为按帧序淘汰（不影响握手与第一跳），握手头另有 `voice-session-id`（见 SPEC-HDR-007）。
 - **实测**：`webrtc-20260728T134028Z`（R）自然第一跳返回 400；
   `live2-20260728T140403Z`、`audit-ep012-realtime-20260730a`（R）自然第一跳返回 403；
   `audit-ep012-sideband-synth-20260730a`（R）以受控 200 触发官方客户端第二跳。
@@ -953,7 +968,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   添加 `client_version=0.163.0`，realtime/calls 添加 `intent` 与 `architecture`，
   普通 responses 不带 query。0.163.0 复核：行为不变，provider 级 `query_params` 仍为 `None`。
 - **源码**：[L1] `codex-client/src/provider.rs:55`、
-  `model-provider-info/src/lib.rs:538`、
+  `model-provider-info/src/lib.rs:540`、
   `codex-api/src/endpoint/realtime_call.rs:213-224`。上列 `model-provider-info` 的引用即 `query_params: None`；
   `Provider` 与 `url_for_path` 在 0.163.0 移入 `codex-client`（原 `codex-api/src/provider.rs`）；models 的 `client_version`
   由 `codex-api/src/endpoint/models.rs:37-46` 追加，realtime/calls 的 query 见 `codex-api/src/endpoint/realtime_call.rs:221-222`。
@@ -976,6 +991,8 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `commands` 随检索阶段变化。
 - **源码**：[L1] `codex-api/src/search.rs:9-21`、
   `ext/web-search/src/tool.rs:120-130`、`ext/web-search/src/tool.rs:195-205`。
+  0.164.0 复核：线序与 body 未变；`x-codex-turn-metadata` 的值改由 `current_meta_value_for_extension_request` 生成（`core/src/turn_metadata.rs:282-289`），
+  在原先的 MCP 模板之外带上已配置的 Responses 元数据（该元数据由嵌入宿主经 `Config` 传入，官方 CLI 默认为空），默认下键集合与 0.163.0 相同（未经官方样本核实）。
 - **实测**：`clean-search-20260728T132311Z`（R）在同一运行取得两次请求和两种 commands；0.157.0 官方
   alpha-search 样本线序为上列十一项。候选断言 `assert-SPEC-EP-015` 核对两次请求线序一致、body 顶层字段与两阶段
   command 不同；请求构造见 0.157.0 `ext/web-search/src/tool.rs` 第 113-119 行与第 193-205 行。
@@ -1029,7 +1046,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   `x-codex-beta-features: remote_compaction_v2`。TUI 压缩走 WS 时触发项位于 `response.create` 帧中。
 - **源码**：[L1] `core/src/compact_remote_v2_attempt.rs:172`、
   `model-provider/src/capabilities.rs:19-41`、
-  `features/src/lib.rs:2051-2056`、`core/src/tasks/compact.rs:63-76`。0.163.0 复核：`RemoteCompactionSupport` 只剩 `V2` 与 `Unsupported`（V1 与 `/responses/compact`
+  `features/src/lib.rs:2113-2118`、`core/src/tasks/compact.rs:63-76`。0.163.0 复核：`RemoteCompactionSupport` 只剩 `V2` 与 `Unsupported`（V1 与 `/responses/compact`
   路径已移除），默认能力为 `Unsupported`，仅 OpenAI 与 Azure Responses 提供方在 `ProviderCapabilities::from_config`
   （上列 `capabilities.rs` 第 30-41 行）里提升为 `V2`；内置 OpenAI OAuth 不受影响，自定义 provider 默认改走本地压缩。
 - **实测**：`relay-tui-recap-20260728T112358Z`（manual）与
@@ -1053,9 +1070,13 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
   user-agent, accept, cookie, host, content-length`。
 - **源码**：[L1] `codex-api/src/images.rs:6-31`、
   `codex-api/src/endpoint/images.rs:62-98`、
-  `ext/image-generation/src/tool.rs:414-557`（`request_for_call_args` 在第 419-423 行选 background，`recent_images`、
-  `output_images` 取按数量引用的图片），图片引用类型见 `protocol/src/models.rs:910-916`（`ImageReference`，untagged）。
+  `ext/image-generation/src/tool.rs:484-636`（`request_for_call_args` 在第 489-493 行选 background，`recent_images`、
+  `output_images` 取按数量引用的图片），图片引用类型见 `protocol/src/models.rs:929-935`（`ImageReference`，untagged）。
   0.163.0 另在响应头读取 `x-codex-imagegen-request-id` 供界面条目使用（`codex-api/src/endpoint/images.rs:101-116`），不影响出站。
+  0.164.0 复核：请求体（generations／edits 的字段与取值、`images` 的两种引用形态）未变，`request_for_call_args` 只是多返回入参图片的路径与 sha256 供界面使用；
+  出站变化有二：header 另带 `x-codex-turn-metadata`（见 SPEC-EP-001，线序位置未核实）；生成结果会交给附件库上传（`UploadResult::File` 时界面条目引用 file_id，失败时退回内联，
+  `ext/image-generation/src/tool.rs:259-292`），这是 0.164.0 新增的出站面，是否经 Files 端点及其形态未经官方样本核实，不改变 images 请求本身。另外 `ext/image-generation/src/backend.rs:141-143`
+  在 0.163.0 已有 `x-codex-image-turn-id` header，上面的线序来自 0.160.0 官方样本、没有它，该 header 在官方样本里的有无与位置未核实。
 - **实测**：`clean-image-20260728T132405Z`（generations）与 `relay-imgedit1`
   （edits），均含 R；0.160.0 官方 generations 与 edits 样本线序为上列十项，generations 默认 `background=opaque`
   （2 条）、要求透明时为 `transparent`（1 条），edits 首项为 file_id（1 条）或 image_url（2 条），background 均为
@@ -1076,12 +1097,12 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **源码**：[L1] `analytics/src/facts.rs:461-473`、
   `core/src/tasks/compact.rs:53-96`、
   `core/src/compact_token_budget.rs:16-68`、
-  `core/src/session/turn.rs:1371-1593`、
+  `core/src/session/turn.rs:1377-1599`、
   `core/src/compact_model_fallback.rs:43-52`、
   `core/src/compact_remote_v2_attempt.rs:172`。0.163.0 复核：四种 reason 与两种遥测 implementation 标签（`responses`、
   `responses_compaction_v2`）未变，`ResponsesCompact` 标签已随 V1 移除；预压缩新增异步压缩候选
-  （`async_compaction`，开发中特性、默认关闭；`core/src/session/turn.rs:1383-1400`，候选就绪即按 `ContextLimit` 触发），
-  模型降档与 `comp_hash` 变化合并为同一 reason 分派（`core/src/session/turn.rs:1416-1498`）。新增的稳定特性
+  （`async_compaction`，开发中特性、默认关闭；`core/src/session/turn.rs:1389-1406`，候选就绪即按 `ContextLimit` 触发），
+  模型降档与 `comp_hash` 变化合并为同一 reason 分派（`core/src/session/turn.rs:1422-1504`）。新增的稳定特性
   `compaction_image_budget`（默认开）在压缩后重装历史时按预算保留图片（`core/src/compact_remote_v2_installation.rs:192-202`），
   只影响后续请求 `input` 的内容，不改变字段结构，本轮未评估对仿真的影响。
 - **实测**：`relay-tui-recap-20260728T112358Z`（user_requested）、
@@ -1098,7 +1119,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **范围**：采集与观测记录。
 - **记录**：TUI 将 `/compact` 解析为手动压缩；`codex exec '/compact'` 将其作为普通
   user message 发送，不产生 compaction_trigger 或 legacy compact 请求。
-- **源码**：[L1] `tui/src/slash_command.rs:40`、
+- **源码**：[L1] `tui/src/slash_command.rs:41`、
   `tui/src/chatwidget/slash_dispatch.rs:332`。
 - **实测**：`relay-tui-recap-20260728T112358Z`（TUI 正例）与
   `audit-ep024-exec-negative-clean-20260730a`（exec 负例），均为 R。
