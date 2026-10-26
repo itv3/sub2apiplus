@@ -911,7 +911,7 @@ CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': ['* 跑：``env -i`` 干净
         '            "bash", str(payload["entry"]), "--to", payload["to"]]',
         '        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode']}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'afcb81b9a00b54816e09de5bd7c8ea7c0de13787d92de1c047b880501c07abd6'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '5c0d689da6b67ede2674041bd003bc15bf34b2f68aed4d73fd4dfab098d60629'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""',
         '            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
