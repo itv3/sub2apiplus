@@ -58,7 +58,7 @@ from tools.official_client_capture.relay_extract import (  # noqa: E402
     parse_ws_frames,
     redact,
     redact_query,
-    shape_value,
+    shape_top_level,
 )
 
 DERIVED_PREFIX = "derived/"
@@ -336,7 +336,7 @@ def _mitm_body_summary(body: Any) -> dict[str, Any] | None:
         return {"top_level_type": type(parsed).__name__}
     return {
         "top_level_fields_in_order": list(parsed.keys()),
-        "shape": {key: shape_value(value) for key, value in parsed.items()},
+        "shape": shape_top_level(parsed),
     }
 
 

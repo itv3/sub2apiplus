@@ -220,6 +220,8 @@ class Expectation0164WireChecksTests(unittest.TestCase):
     这四条规则（EP-002、WS-005、BODY-003、EP-022）都含读内部记录类型的判据，整条是 candidate_profile，不在官方侧离线判据门里执行。
     - SPEC-WS-005：incremental_tools 默认开启后，generate=false 的预热帧 input 是空数组，additional_tools 前缀由第一条业务帧带出。
     - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata（紧跟 version）。
+    - SPEC-BODY-006：Lite 前缀两项的形态（additional_tools 键序与 id 形态、基础指令消息 id 形态与 passthrough 键序，不核对 UUID 版本位）；
+      依赖 relay_extract 给 input 附的头两项形态 ``_head``。
     样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
     """
 
@@ -347,6 +349,94 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
 
+    # ---- SPEC-BODY-006 前缀两项形态（依赖 relay_extract.shape_top_level 给 input 附的 _head） ----
+
+    V7_AT = "at_01a17935-5c98-7f51-995d-9105098f672a"
+    V7_MSG = "msg_01a17935-5c98-7f51-995d-9110469c51d5"
+    V5_AT = "at_2b6266ff-2d0f-5660-9fdb-a206367297ef"
+    V5_MSG = "msg_e938c4f7-c15e-5d89-a7a7-7492156931d4"
+
+    def prefix_body(self, *, at_id=V7_AT, msg_id=V7_MSG, passthrough_keys=("turn_id", "create_time", "content_item_kinds", "content_item_metadata"),
+                    first_type="additional_tools") -> dict:
+        passthrough = {key: [] for key in passthrough_keys}
+        return {
+            "model": "gpt-6.1-sol",
+            "input": [
+                {"type": first_type, "id": at_id, "role": "developer", "tools": [{"type": "function", "name": "shell"}]},
+                {"type": "message", "id": msg_id, "role": "developer", "content": [{"type": "input_text", "text": "x"}],
+                 "internal_chat_message_metadata_passthrough": passthrough},
+                {"type": "message", "role": "user", "content": []},
+            ],
+        }
+
+    def http_observation(self, body: dict):
+        summary = relay_extract.summarize_body(json.dumps(body).encode(), "", "application/json")
+        return candidate_rule_assertion.Observation(
+            record_id="A04-lite", scenario_id="A04", record_type="http_request",
+            artifact_path="relay/conn001.client_to_upstream.bin", evidence_paths=("relay/conn001.client_to_upstream.bin",),
+            labels={"transport": "http", "mode": "lite", "provider": "openai_oauth", "track": "main"},
+            data={"method": "POST", "path": "/backend-api/codex/responses", "body": summary},
+        )
+
+    def run_prefix_checks(self, body: dict) -> dict:
+        return {
+            check_id: self.run_check("SPEC-BODY-006", check_id, [self.http_observation(body)])
+            for check_id in ("main-additional-tools-item-form", "main-base-instructions-item-form",
+                             "main-base-instructions-passthrough-keys")
+        }
+
+    def test_lite_prefix_items_in_the_0164_form_pass(self) -> None:
+        self.assertEqual(set(self.run_prefix_checks(self.prefix_body()).values()), {True})
+        # 压缩后的新窗口：基础指令消息缺 create_time（官方 0.164.0 实采 c1 第 4 帧），仍是有序子集。
+        self.assertEqual(
+            set(self.run_prefix_checks(self.prefix_body(passthrough_keys=("turn_id", "content_item_kinds", "content_item_metadata"))).values()),
+            {True},
+        )
+        # 旧窗口续聊（0.163 建的会话由 0.164 续聊，r1 样本）：id 仍是 UUIDv5，passthrough 只有 content_item_kinds、content_item_metadata。
+        # 判据不核对 UUID 版本位，所以通过。
+        self.assertEqual(
+            set(self.run_prefix_checks(self.prefix_body(
+                at_id=self.V5_AT, msg_id=self.V5_MSG, passthrough_keys=("content_item_kinds", "content_item_metadata"))).values()),
+            {True},
+        )
+
+    def test_lite_prefix_items_in_the_0163_form_or_malformed_fail(self) -> None:
+        # 0.163 形态：基础指令消息 passthrough 只有 content_item_kinds，缺 content_item_metadata。
+        results = self.run_prefix_checks(self.prefix_body(passthrough_keys=("content_item_kinds",)))
+        self.assertTrue(results["main-additional-tools-item-form"])
+        self.assertFalse(results["main-base-instructions-passthrough-keys"])
+        # 键序错（content_item_kinds 在 turn_id 前）失败。
+        self.assertFalse(self.run_prefix_checks(
+            self.prefix_body(passthrough_keys=("content_item_kinds", "content_item_metadata", "turn_id")))["main-base-instructions-passthrough-keys"])
+        # id 不是 <前缀>_规范 UUID：additional_tools 项、基础指令消息各自失败。
+        self.assertFalse(self.run_prefix_checks(self.prefix_body(at_id="at_not-a-uuid"))["main-additional-tools-item-form"])
+        self.assertFalse(self.run_prefix_checks(self.prefix_body(msg_id="msg_1234"))["main-base-instructions-item-form"])
+        # id 前缀错（把基础指令消息的 id 写成 at_）失败。
+        self.assertFalse(self.run_prefix_checks(self.prefix_body(msg_id=self.V7_AT))["main-base-instructions-item-form"])
+        # 首项不是 additional_tools（前缀被挤走）失败。
+        self.assertFalse(self.run_prefix_checks(self.prefix_body(first_type="message"))["main-additional-tools-item-form"])
+
+    def test_input_head_summary_is_structure_only_and_shared_by_all_summarizers(self) -> None:
+        body = self.prefix_body()
+        summary = relay_extract.summarize_body(json.dumps(body).encode(), "", "application/json")
+        head = summary["shape"]["input"]["_head"]
+        self.assertEqual(head["0"], {"keys": ["type", "id", "role", "tools"], "type": "additional_tools", "id_form": "at_uuid"})
+        self.assertEqual(head["1"]["id_form"], "msg_uuid")
+        self.assertEqual(head["1"]["passthrough_keys"], ["turn_id", "create_time", "content_item_kinds", "content_item_metadata"])
+        self.assertNotIn("2", head)
+        # 摘要里没有 UUID 本身，也没有版本位，更没有对话内容。
+        serialized = json.dumps(summary)
+        for secret in (self.V7_AT, self.V7_MSG, "01a17935"):
+            self.assertNotIn(secret, serialized)
+        # 空 input 与没有 input 的请求体不产生 _head。
+        self.assertNotIn("_head", json.dumps(relay_extract.summarize_body(b'{"input": []}', "", "application/json")))
+        self.assertNotIn("_head", json.dumps(relay_extract.summarize_body(b'{"model": "x"}', "", "application/json")))
+        # 三条路径同构：shape_top_level（summarize_body 与 WS 帧）和 mitm 派生用同一个函数。
+        self.assertEqual(relay_extract.shape_top_level(body), summary["shape"])
+        from tools.official_client_capture import derive_official_observations as derive
+
+        self.assertEqual(derive._mitm_body_summary({"json": body})["shape"], summary["shape"])
+
     def test_first_business_frame_chains_the_warmup_response(self) -> None:
         tools = [{"type": "function", "name": "shell"}]
         prefix = [{"type": "additional_tools", "role": "developer", "tools": tools}]
@@ -377,7 +467,7 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertLess(order.index("user-agent"), order.index("accept"))
 
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
-        """差异报告只落了四条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""
+        """差异报告只落了五条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""
 
         raw = (TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8")
         reverted = json.loads(raw.replace("0.164.0", "0.163.0").replace(r"0\\.164\\.0", r"0\\.163\\.0"))
@@ -385,7 +475,7 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         changed = sorted(
             new["rule_id"] for new, before in zip(reverted["rules"], old["rules"]) if new != before
         )
-        self.assertEqual(changed, ["SPEC-BODY-003", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"])
+        self.assertEqual(changed, ["SPEC-BODY-003", "SPEC-BODY-006", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"])
         self.assertEqual(len(reverted["rules"]), len(old["rules"]))
 
 

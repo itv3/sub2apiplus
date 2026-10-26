@@ -164,7 +164,7 @@ def summarize_body(raw: bytes, encoding: str, ctype: str) -> dict | None:
     if not isinstance(parsed, dict):
         return {"top_level_type": type(parsed).__name__}
     return {"top_level_fields_in_order": list(parsed.keys()),
-            "shape": {k: shape_value(v) for k, v in parsed.items()}}
+            "shape": shape_top_level(parsed)}
 
 
 def shape_value(v, depth: int = 2):
@@ -210,6 +210,52 @@ def shape_value(v, depth: int = 2):
             return {k: shape_value(sub, depth - 1) for k, sub in list(v.items())[:12]}
         return "object:{" + ",".join(sorted(v.keys())[:10]) + "}"
     return "null"
+
+
+# input 数组头两项的形态摘要（0.164.0 登记新增）。Lite 的 input 最前面是前缀：[0] additional_tools、[1] 基础指令消息，
+# 它们的 id 方案与逐项 passthrough 键序决定官方形态是否被保真；原有 ``_first`` 只展开首项且 id（39～40 字符）只剩 ``<len=N>``，
+# 看不到 id 前缀与键序。这里只记结构：键序、type、id 的 ``<前缀>_uuid`` 形态（不记 UUID 本身，也不记版本位——旧窗口续聊是 UUIDv5，
+# 新窗口是 UUIDv7，判据不得依赖它）、passthrough 的键序。不含对话内容，也不含任何随机取值。
+INPUT_HEAD_ITEMS = 2
+INPUT_PASSTHROUGH_FIELD = "internal_chat_message_metadata_passthrough"
+_ID_FORM_RE = re.compile(
+    r"^([a-z]{1,8})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def input_head_summary(items) -> dict | None:
+    """``input`` 数组前两项的形态：{"0": {"keys": [...], "type": ..., "id_form": ..., "passthrough_keys": [...]}, ...}。"""
+
+    head: dict = {}
+    for index, item in enumerate(items[:INPUT_HEAD_ITEMS]):
+        if not isinstance(item, dict):
+            continue
+        entry: dict = {"keys": list(item.keys())[:12]}
+        if isinstance(item.get("type"), str):
+            entry["type"] = item["type"]
+        if isinstance(item.get("id"), str):
+            matched = _ID_FORM_RE.match(item["id"])
+            entry["id_form"] = f"{matched.group(1)}_uuid" if matched else "other"
+        passthrough = item.get(INPUT_PASSTHROUGH_FIELD)
+        if isinstance(passthrough, dict):
+            entry["passthrough_keys"] = list(passthrough.keys())[:12]
+        head[str(index)] = entry
+    return head or None
+
+
+def shape_top_level(parsed: dict) -> dict:
+    """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head``。
+
+    summarize_body、WS 帧解析和 mitm 派生三处共用，保证三条路径对同一份请求体给出同构摘要。
+    """
+
+    shape = {k: shape_value(v) for k, v in parsed.items()}
+    items = parsed.get("input")
+    if isinstance(items, list) and isinstance(shape.get("input"), dict):
+        head = input_head_summary(items)
+        if head is not None:
+            shape["input"]["_head"] = head
+    return shape
 
 
 H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -356,7 +402,7 @@ def parse_ws_frames(data: bytes) -> list[dict]:
                     if "type" in obj:
                         entry["event_type"] = obj["type"]
                     # body 字段只记结构，payload 里含对话内容
-                    entry["shape"] = {k: shape_value(v) for k, v in obj.items()}
+                    entry["shape"] = shape_top_level(obj)
             except ValueError:
                 entry["note"] = "非 JSON TEXT 消息"
         entry["message_complete"] = True

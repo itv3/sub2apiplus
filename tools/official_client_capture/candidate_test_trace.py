@@ -275,8 +275,8 @@ FROZEN_MAPPING_SHA256 = (
 # （收尾后的现状，摘要 a8b0ed45…）复制并逐字替换版本号。载荷逐项审核：2112 个叶子里差异共 12 处且全是版本号（codex_version 1、官方原始字节
 # 描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.163.0 版
 # 逐字节相同；验收契约现算新旧画像载荷逐项相等，仍为 706df763…（dual_wire=25／candidate_profile=18）。0.163.0 画像文件保留不动。
-# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 125a1f58…。载荷逐项审核（把版本号换回 0.163.0 后与
-# 0.163.0 版比较）：只有四条规则变化，其余 39 条规则逐字不变，规则数 43、场景、source_spec 不变——
+# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 17944144…。载荷逐项审核（把版本号换回 0.163.0 后与
+# 0.163.0 版比较）：只有五条规则变化，其余 38 条规则逐字不变，规则数 43、场景、source_spec 不变——
 # ①SPEC-EP-002 新增 oauth-refresh-body-keys、oauth-refresh-reason-closed-set（ChatGPT 令牌刷新请求体新增 refresh_reason，键序 client_id, grant_type,
 #   refresh_reason, refresh_token；取值闭集 proactive_expiry／scheduled／unauthorized_recovery／forced；EP-002 本来就是 candidate_profile，分组不变）；
 # ②SPEC-WS-005 新增 warmup-input-empty（generate=false 的预热帧 input 为空数组）、first-business-frame-carries-prefix（候选侧按帧标签
@@ -284,11 +284,15 @@ FROZEN_MAPPING_SHA256 = (
 #   response.create 帧即如此）、first-business-frame-chains-warmup（同帧 previous_response_id 指向预热响应；W1 确认网关对第三方首帧仍补预热帧，帧序 预热→首个业务帧）——对应
 #   incremental_tools 默认开启；
 # ③SPEC-BODY-003 的 incremental-no-repeat 只改 description（收窄到首个业务帧之后，判据不变）；画像补丁里 /BaseInstructions/IDScheme 同时绑 BODY-003、BODY-006、WS-005；
+# ③b SPEC-BODY-006 新增 main-additional-tools-item-form、main-base-instructions-item-form、main-base-instructions-passthrough-keys（A04 主线 Lite 的 HTTP Responses POST，
+#   input 头两项形态：additional_tools 键序 type,id,role,tools 与 at_＋规范 UUID，基础指令消息键序与 msg_＋规范 UUID，passthrough 键序为 turn_id, create_time,
+#   content_item_kinds, content_item_metadata 的有序子集且必含后两个；不核对 UUID 版本位，旧窗口续聊是 UUIDv5）——依赖 relay_extract.shape_top_level 新给 input 附的 _head；
 # ④SPEC-EP-022 的 image-header-order 期望线序加入 x-codex-image-turn-id、x-codex-turn-metadata 两个头，紧跟 version、排在 authorization 之前（IMG 路 0.164.0 非正式实采
 #   20 条请求头序一致；originator 默认路径下由 HTTP 客户端默认头补在 content-type 之后，不在两个新头之间；画像槽位 20、25）。
-# 验收契约现算 706df763…→0b9c397e…：dual_wire=25／candidate_profile=18 不变，expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002 两项多出上述新检查 ID。
+# 验收契约现算 706df763…→bca66917…：dual_wire=25／candidate_profile=18 不变，各规则分组不变（BODY-006 仍是 dual_wire，新增三条判据官方侧也执行），
+# expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002、SPEC-BODY-006 三项多出上述新检查 ID。
 FROZEN_PROFILE_SHA256 = (
-    "125a1f58ac3e9c35f28598c8eef83d96be8fa4ee29964d14b554b09e641a82ba"
+    "1794414471107ff19f647dd577aa2a3761e1764a180446470b32b84f762b9bdc"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
