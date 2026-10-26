@@ -157,6 +157,10 @@ class PartialRecoveryProjectionDriver(transient.ClaudeTransientChainDriver):
             self.retain_setup_active = False
         transient._write(self.relay_control, {"bad_probes": [transient.FAILED_PROBE, SECOND_PROBE]})
 
+    def candidate_build_root(self) -> Path:
+        """候选源码仓放进宿主数据根：严格 subject 读者只接受数据根内的候选源码根（受管来源合同）。"""
+        return self.data / "candidate-build"
+
     def install_relay_source(self) -> None:
         super().install_relay_source()
         relay = self.runtime.tool_copy / "claude_fw_e_relay.py"
@@ -241,7 +245,29 @@ class PartialRecoveryProjectionDriver(transient.ClaudeTransientChainDriver):
                 revision=1, expected_client_requests=2, capture_layout=layout)
             side = world["official"]
             self.bind_two_scene_official_input(side)
-            return worlds.prepare_delivery_sources(self, world)
+            world = worlds.prepare_delivery_sources(self, world)
+            self.rebase_official_capture_bindings(world)
+            return world
+
+    def rebase_official_capture_bindings(self, world: Mapping[str, Any]) -> None:
+        """把物化官方来源里的 capture_manifest／capture_index 两个绑定改成宿主数据根坐标。
+
+        生产 ``official_evaluation_source`` 取这两个绑定自 Store 完整性清单，路径相对宿主数据根；
+        严格 subject 读者（``qualification_gate_subject``）也按数据根坐标读它们。共享夹具
+        ``materialize_official_source`` 为兼容交付归档读者，把这两个绑定写成相对 Campaign 的路径
+        （inventory 在生产里本就相对 Campaign，不动）。本专项要走严格 subject 读者，所以在首次 compare 前、
+        来源配置第一次被消费之前，只在本专项的来源文件里改这两个路径；文件字节（摘要、字节数）与共享夹具、
+        其它测试都不受影响。
+        """
+        config = json.loads(world["config_path"].read_bytes())
+        source_path = Path(config["official_source"])
+        source = json.loads(source_path.read_bytes())
+        prefix = world["campaign"].relative_to(self.data).as_posix()
+        for name in ("capture_manifest", "capture_index"):
+            binding = source[name]
+            if binding["path"].startswith("seam/official/"):
+                binding["path"] = f"{prefix}/{binding['path']}"
+        sources._write_json(source_path, source)
 
     @staticmethod
     def bind_two_scene_official_input(side: evaluator.SideEvidence) -> Mapping[str, Any]:

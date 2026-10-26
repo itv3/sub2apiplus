@@ -638,6 +638,14 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         head = project_ledger.replay_head(self.project_root)
         self.assertEqual((head["precise_total"], head["estimated_total"]), (0, 0))
 
+    def candidate_build_root(self) -> Path:
+        """候选构建夹具（候选源码仓、构建树、制品）所在目录，默认在测试根下的 build。
+
+        严格 subject 读者要求构建收据里的候选源码根位于宿主数据根内；需要走严格读者的专项
+        （如真实链的恢复前缀来源投影）覆盖本方法，把目录放进数据根。其它用例保持默认位置不变。
+        """
+        return self.root / "build"
+
     def drive_vc3_vc4_to_candidate_sealed(self) -> Path:
         """原VC-3/VC-4形成方法按既有动作保存停点；不另建Campaign或重置序号。"""
 
@@ -703,7 +711,7 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         if state.get("fixture_fields"):
             for binding in state.get("fixture_bindings", []):
                 stops.read_cut(binding)
-            fixture = build_fixture.CandidateBuildFixture(self.root / "build", campaign, candidate_id,
+            fixture = build_fixture.CandidateBuildFixture(self.candidate_build_root(), campaign, candidate_id,
                 run_main=lambda args: direct("fixture-source-plan", args))
             for field, value in state["fixture_fields"].items():
                 setattr(fixture, field, value)
@@ -804,7 +812,7 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
             # 候选源码链（基线 → 纳入暂存 Release 与门禁映射 → 门禁计划）、构建实物、source transition 与实现测试收据。
             code, preview, stderr = direct("plan-candidate-preview", ["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", candidate_id])
             self.assertEqual(code, 2, stderr)
-            fixture = build_fixture.CandidateBuildFixture(self.root / "build", campaign, candidate_id,
+            fixture = build_fixture.CandidateBuildFixture(self.candidate_build_root(), campaign, candidate_id,
                 run_main=lambda args: direct("fixture-source-plan", args))
             for field, value in state.get("fixture_fields", {}).items():
                 setattr(fixture, field, value)
