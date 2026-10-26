@@ -240,6 +240,26 @@ def write_vc_control(campaign: Path, *, deadline_at_utc: str = "2026-12-31T00:00
     """VC-0 收口产物的最小替身：VC 总计划与 VC-0 checkpoint，并把 ``vc_control.campaign_plan`` 绑定写进总计划。"""
 
     manifest = json.loads((campaign / "campaign.json").read_text(encoding="utf-8"))
+    # 总计划已带齐真实布局的 Formal 控制收据（计时、ARM64 环境、P0 门禁、发布认证，见
+    # claude_bootstrap_controls_fixture）时，VC 总计划冻结它们的真实摘要，VC-0 阶段收据就是 P0 门禁收据的绝对坐标，
+    # 与 VC-0 收口建立的 Formal 一致；否则沿用占位摘要与最小替身，其它用例的世界字节不变。
+    controls = manifest.get("control_receipts") or {}
+    faithful = all(name in controls for name in ("upgrade_timing", "arm64_environment", "p0_gate", "release_certification"))
+    if faithful:
+        p0_receipt = Path(controls["p0_gate"]["evidence_root"]) / controls["p0_gate"]["receipt"]["path"]
+        digests = {
+            "timing_checkpoint_sha256": controls["upgrade_timing"]["receipt"]["sha256"],
+            "arm64_environment_sha256": controls["arm64_environment"]["receipt"]["sha256"],
+            "job_rehearsal_sha256": "3" * 64,
+            "p0_gate_sha256": controls["p0_gate"]["receipt"]["sha256"],
+        }
+        stage_receipt = {"path": str(p0_receipt), "sha256": digests["p0_gate_sha256"]}
+    else:
+        digests = {
+            "timing_checkpoint_sha256": "1" * 64, "arm64_environment_sha256": "2" * 64,
+            "job_rehearsal_sha256": "3" * 64, "p0_gate_sha256": "4" * 64,
+        }
+        stage_receipt = None
     vc_plan = vc_artifacts.build_campaign_plan(
         campaign_id=manifest["campaign_id"],
         campaign_mode=manifest["campaign_mode"],
@@ -248,19 +268,18 @@ def write_vc_control(campaign: Path, *, deadline_at_utc: str = "2026-12-31T00:00
         target_version=manifest["target_version"],
         created_at_utc=manifest["created_at_utc"],
         original_deadline_at_utc=deadline_at_utc,
-        timing_checkpoint_sha256="1" * 64,
-        arm64_environment_sha256="2" * 64,
-        job_rehearsal_sha256="3" * 64,
-        p0_gate_sha256="4" * 64,
+        **digests,
     )
     plan_path = _write_json(campaign / "control" / "vc" / "campaign-plan.json", vc_plan)
-    receipt = _write_json(campaign / "control" / "vc" / "vc0-closeout-receipt.json", {"result": "synthetic-vc0-closeout"})
+    if stage_receipt is None:
+        receipt = _write_json(campaign / "control" / "vc" / "vc0-closeout-receipt.json", {"result": "synthetic-vc0-closeout"})
+        stage_receipt = {"path": "control/vc/vc0-closeout-receipt.json", "sha256": codex_upgrade.file_sha256(receipt)}
     checkpoint = vc_artifacts.build_vc_checkpoint(
         campaign_plan=vc_plan,
         phase="VC-0",
         status="complete",
         predecessor_checkpoint=None,
-        stage_receipt={"path": "control/vc/vc0-closeout-receipt.json", "sha256": codex_upgrade.file_sha256(receipt)},
+        stage_receipt=stage_receipt,
         completed_at_utc="2026-10-07T00:10:00Z",
         execute_item_ids=[],
         reuse_item_ids=[],

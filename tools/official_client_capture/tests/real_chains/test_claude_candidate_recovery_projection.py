@@ -157,6 +157,9 @@ class PartialRecoveryProjectionDriver(transient.ClaudeTransientChainDriver):
             self.retain_setup_active = False
         transient._write(self.relay_control, {"bad_probes": [transient.FAILED_PROBE, SECOND_PROBE]})
 
+    # 本专项要走严格 subject 读者，世界必须带齐真实布局的 Formal 控制收据与 bootstrap 控制副本。
+    real_bootstrap_controls = True
+
     def candidate_build_root(self) -> Path:
         """候选源码仓放进宿主数据根：严格 subject 读者只接受数据根内的候选源码根（受管来源合同）。"""
         return self.data / "candidate-build"

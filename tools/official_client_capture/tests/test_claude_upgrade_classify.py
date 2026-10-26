@@ -179,8 +179,13 @@ class _ClassifyCase(unittest.TestCase):
         vc1_sealed: bool = True,
         configuration: Mapping[str, Any] | None = None,
         deadline_at_utc: str = "2026-12-31T00:00:00Z",
+        bootstrap_control_copies: Mapping[str, bytes] | None = None,
     ) -> Path:
-        """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
+        """``bootstrap_control_copies``：文件名 → 字节。给出时按真实 ``create_campaign`` 的布局，把这些控制收据副本写进
+        ``<Campaign>/inputs/store-bootstrap/``，并登记进 Store bootstrap 的 ``fw_c_receipts``（须在 bootstrap 封存前给出，
+        封存后不可补）；缺省不写，其它用例不受影响。
+
+        ``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
 
         ``official_reuse`` 为真时 VC-1 按只读复用前序证据的形态封存（B3-01 的原子批次链用）：中继证据在同一数据根下的
@@ -207,6 +212,11 @@ class _ClassifyCase(unittest.TestCase):
         scratch.mkdir()
         fixture = SyntheticCampaign(scratch, schema="v2")
         fixture.campaign_id = campaign_id
+        if bootstrap_control_copies:
+            fixture.extra_fw_c_receipts = [
+                fixture._write_external(f"evidence/campaigns/{campaign_id}/inputs/store-bootstrap/{name}", raw)
+                for name, raw in sorted(bootstrap_control_copies.items())
+            ]
         fixture.bootstrap_and_campaign(
             target_version=target,
             platforms=["linux/arm64"],

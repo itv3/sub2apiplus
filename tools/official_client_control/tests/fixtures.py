@@ -190,6 +190,9 @@ def synthetic_tool_identity(manifest: dict[str, Any]) -> dict[str, Any]:
 class SyntheticCampaign:
     """按文档顺序生成可在单元测试中变异的完整受管事实链。"""
 
+    # bootstrap 封存前由调用方追加的 fw_c_receipts 外部绑定；默认空，行为与字节不变。
+    extra_fw_c_receipts: tuple[dict[str, Any], ...] | list[dict[str, Any]] = ()
+
     def __init__(
         self,
         root: Path,
@@ -312,7 +315,9 @@ class SyntheticCampaign:
             "source_commit": "1" * 40,
             "contract_sources": contract_sources,
             "contract_bundle_sha256": canonical_sha256(contract_sources),
-            "fw_c_receipts": [self.receipt_binding],
+            # extra_fw_c_receipts：调用方在 bootstrap 封存前追加的控制收据副本（默认为空，其它用例不受影响）。
+            # bootstrap 合同要求按路径排序；没有追加项时仍是单元素列表，字节不变。
+            "fw_c_receipts": sorted([self.receipt_binding, *self.extra_fw_c_receipts], key=lambda row: row["path"]),
             "runtime_catalog": [self.catalog_binding],
             "tool_bundle_sha256": self.tool_sha256,
             "result": "stable",

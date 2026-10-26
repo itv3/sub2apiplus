@@ -337,6 +337,11 @@ class CampaignRunContextTests(unittest.TestCase):
 class _VC2Mixin:
     """在分类夹具上走完 VC-2 批准（直接 CLI），返回 (Campaign, 修订输出)。"""
 
+    # 为真时，build_batch_campaign 按真实 create_campaign 的布局造 Formal 控制收据：数据根内的计时账本，计时、ARM64 环境、
+    # P0 门禁、发布认证四项原件，以及 inputs/store-bootstrap/ 下的四份精确副本与 Store bootstrap 的 fw_c_receipts 登记，
+    # 供严格 subject 读者核对（见 claude_bootstrap_controls_fixture）。默认不开，其它用例的世界字节不变。
+    real_bootstrap_controls = False
+
     def approve_vc2_directly(self, campaign: Path, **resolution: Any) -> dict[str, Any]:
         draft = self.draft(campaign)
         docs = self.resolved_documents(Path(draft["draft_dir"]), **resolution)
@@ -563,14 +568,32 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         # Campaign 不接受命令行回退）。
         # 截止只在建世界时生成一次；Store、VC 总计划和项目注册都承接同一计时原件。
         # 不能让固定年末截止与动态六小时账本并存，也不能事后改写旧失败世界。
-        ledger = self.root / "timing-ledger"
+        if self.real_bootstrap_controls:
+            # 控制原件必须在数据根内，且 checkpoint 要读项目总账，所以先装总账（幂等）。
+            ledger_fixture.install_claude_project_ledger(self.data)
+            controls_base = self.data / "bootstrap-controls"
+            controls_base.mkdir(mode=0o700)
+            ledger = controls_base / "timing-ledger"
+        else:
+            ledger = self.root / "timing-ledger"
         timing_plan = timing.create_ledger(
             ledger, upgrade_id=f"{CAMPAIGN_ID}-ledger", baseline_version=BASELINE, target_version=TARGET,
             campaign_purpose="validation_only", evidence_decision="recapture", client="claude",
         )
         timing.append_event(ledger, event_id="fixture-vc0-completed", phase="VC-0", event_type="stage_completed", next_action="VC-0 收口完成", receipts=[])
+        bootstrap_controls = None
+        if self.real_bootstrap_controls:
+            from tools.official_client_capture.tests import claude_bootstrap_controls_fixture as controls_fixture
+
+            # 副本字节必须在 Store bootstrap 封存前定下，所以原件与副本先于 build_campaign 生成。
+            bootstrap_controls = controls_fixture.build_formal_bootstrap_controls(
+                controls_base, ledger=ledger, upgrade_id=f"{CAMPAIGN_ID}-ledger", campaign_purpose="validation_only",
+                baseline_version=BASELINE, target_version=TARGET, evidence_decision="recapture",
+                policy_version=self.tool_identity["policy_version"])
         campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files(),
-            vc1_sealed=vc1_sealed, deadline_at_utc=timing_plan["total_deadline_at_utc"])
+            vc1_sealed=vc1_sealed, deadline_at_utc=timing_plan["total_deadline_at_utc"],
+            bootstrap_control_copies=bootstrap_controls.copies if bootstrap_controls is not None else None,
+            control_receipts=bootstrap_controls.control_receipts if bootstrap_controls is not None else None)
         # 只读复用形态：VC-1 证据（中继清单与 Wire 证据）都在前序 Campaign 里，本 Campaign 没有官方 attempt 目录；
         # 对账器会按正式 attempt 读这里每个目录的原子预约收据，夹具不得留下半个 attempt。
         self.assertFalse((campaign / "official" / "attempts").exists(), "只读复用形态的 Campaign 不得出现官方 attempt 目录")
@@ -586,7 +609,7 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
             campaign,
             vc_control={**manifest["vc_control"], "vc0_checkpoint": claude_upgrade_vc.vc_control_binding(campaign, vc0), **first},
             # 计时控制绑定按 Codex 收口写出的形状带 upgrade_id 与证据决定（监督器失败收口按 upgrade_id 核对账本归属）。
-            control_receipts={
+            control_receipts=bootstrap_controls.control_receipts if bootstrap_controls is not None else {
                 "upgrade_timing": {
                     "ledger_dir": str(ledger.resolve()),
                     "ledger_plan_sha256": claude_upgrade.file_sha256(ledger / "ledger.json"),
