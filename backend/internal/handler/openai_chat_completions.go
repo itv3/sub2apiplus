@@ -227,13 +227,35 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
+		// Composite 满载换号（同 Responses 入口）：首选平台只拿到排队计划时先试候选池计划里的其它平台。
+		compositeTemporarySwap := false
+		if sw, switched := h.tryCompositeCapacitySwitch(c, apiKey, subscription, selection, reqLog, compositeCapacitySwitchParams{
+			Eligible:    len(failedAccountIDs) == 0 && switchCount == 0,
+			SessionHash: sessionHash,
+			Model:       forwardModel,
+			ModelFor: func(ctx context.Context, _ string) string {
+				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
+				return openAIChannelForwardModel(mapping, reqModel)
+			},
+			CapabilityFor: func(string) service.OpenAIEndpointCapability {
+				return service.OpenAIEndpointCapabilityChatCompletions
+			},
+			UseUpstreamTokenCost: true,
+		}); switched {
+			selection = sw.Selection
+			compositeTemporarySwap = sw.Temporary
+			requestPlatform = sw.Platform
+			// 换平台后按新平台重算渠道映射与调度模型名。
+			channelMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+			forwardModel = openAIChannelForwardModel(channelMapping, reqModel)
+		}
 		account := selection.Account
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_chat_completions.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, compositeAcquireSessionHash(sessionHash, compositeTemporarySwap), selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号；否决次数达上限则按无可用账号终止。
 			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {

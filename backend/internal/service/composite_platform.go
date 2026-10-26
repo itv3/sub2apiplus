@@ -48,6 +48,8 @@ func WithCompositeRouteDecision(ctx context.Context, decision CompositeRouteDeci
 	}
 	// 账号级候选池写回的候选账号集合，供三处调度声明闸门按"账号 ID 属于集合"判定。
 	ctx = withCompositeCandidateAccountIDs(ctx, decision.CandidateAccountIDs)
+	// 容量感知的换号计划（没有备选平台时不写）。
+	ctx = withCompositeCapacityPlan(ctx, decision.CapacityPlan)
 	return ctx
 }
 

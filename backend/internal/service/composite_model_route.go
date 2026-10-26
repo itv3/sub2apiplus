@@ -81,6 +81,9 @@ type CompositeRouteDecision struct {
 	// CandidateAccountIDs 是账号级候选池写回的候选账号 ID 集合（升序）。
 	// 非空时下游调度器只在集合内选号，声明闸门按"账号 ID 属于集合"放行。
 	CandidateAccountIDs []int64 `json:"candidate_account_ids,omitempty"`
+	// CapacityPlan 是候选池按剩余容量生成的换号计划（首选平台之外还有空位的备选平台），
+	// 只随请求上下文下发给处理器，不进入 JSON 输出。
+	CapacityPlan *CompositeCapacityPlan `json:"-"`
 }
 
 type CompositeRouteInput struct {

@@ -162,6 +162,9 @@ type CompositeCandidatePool struct {
 	billing  *BillingCacheService
 	// configLoads 把并发请求对同一分组的配置态加载合并成一次。
 	configLoads singleflight.Group
+	// capacityRand 是"同级按剩余容量随机选择"的随机源，返回 [0,n) 内的整数；
+	// 为空时使用全局随机数。仅供单测注入固定随机源（见 composite_capacity_selection.go）。
+	capacityRand func(n int64) int64
 }
 
 var _ CompositeCandidatePoolResolver = (*CompositeCandidatePool)(nil)
@@ -313,6 +316,8 @@ func (p *CompositeCandidatePool) resolve(ctx context.Context, groupID int64, mod
 		}
 		outcome.Path = compositeCandidatePathSticky
 		outcome.Decision = run.decision(bound.account.Platform, members)
+		// 普通会话命中粘性但绑定平台整体满载时，允许临时借用其它平台的空位（不改写粘性绑定）。
+		outcome.Decision.CapacityPlan = run.capacityPlanForSticky(eligible, bound.account.Platform)
 		run.logOutcome(outcome)
 		return outcome, nil
 	}
@@ -332,7 +337,18 @@ func (p *CompositeCandidatePool) resolve(ctx context.Context, groupID int64, mod
 	}
 	_, members := compositePickPrimary(pool)
 	platform := run.platformOf(pool, members)
+	var plan *CompositeCapacityPlan
+	if outcome.Path == compositeCandidatePathRanked {
+		// 同级按剩余容量随机选择；开关关闭或读不到负载时沿用上面的确定性结果。
+		if pick, ok := run.pickByCapacity(pool); ok {
+			platform, members = pick.Platform, pick.Members
+			if len(pick.Alternates) > 0 {
+				plan = &CompositeCapacityPlan{Alternates: pick.Alternates}
+			}
+		}
+	}
 	outcome.Decision = run.decision(platform, members)
+	outcome.Decision.CapacityPlan = plan
 	run.logOutcome(outcome)
 	return outcome, nil
 }

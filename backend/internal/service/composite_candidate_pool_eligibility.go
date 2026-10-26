@@ -27,7 +27,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
@@ -166,17 +165,10 @@ func (r *compositeCandidateRun) userPlatformQuotaError(ctx context.Context, plat
 // 这里刻意不调用 CheckBillingEligibility：它会递增分组与用户的 RPM 计数，候选预检每个平台
 // 调一次就会重复计数。正式准入与 RPM 计数仍由处理器按首选平台执行一次，位置不变。
 func (p *CompositeCandidatePool) checkUserPlatformQuota(ctx context.Context, entry CompositeCandidatePoolEntry, platform string) error {
-	billing := p.billing
-	if billing == nil || entry.UserID <= 0 || platform == "" {
+	if p.billing == nil || entry.UserID <= 0 {
 		return nil
 	}
-	if billing.cfg != nil && billing.cfg.RunMode == config.RunModeSimple {
-		return nil
-	}
-	if entry.Group != nil && entry.Group.IsSubscriptionType() && entry.Subscription != nil {
-		return nil
-	}
-	return billing.checkUserPlatformQuotaEligibility(ctx, entry.UserID, platform)
+	return p.billing.CheckUserPlatformQuotaReadOnly(ctx, entry.UserID, entry.Group, entry.Subscription, platform)
 }
 
 // isZeroConversion 判定账号对本次入站协议是否无需协议转换即可直通上游（结果按账号记忆）。

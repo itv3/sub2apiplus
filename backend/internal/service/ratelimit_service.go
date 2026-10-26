@@ -592,6 +592,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		} else if statusCode >= 500 {
 			// 未启用自定义错误码时：仅记录5xx错误
 			slog.Warn("account_upstream_error", "account_id", account.ID, "status_code", statusCode)
+			// Composite 自动路由的普通 5xx 与明确的上游超时：补 30 秒短冷却，让后续请求避开该账号
+			// （不改变返回值；开关、路由来源与"不缩短已有冷却"的判断见 composite_failure_cooldown.go）。
+			s.applyCompositeFailureCooldown(ctx, account, statusCode, responseBody)
 			shouldDisable = false
 		}
 	}
