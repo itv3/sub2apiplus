@@ -627,6 +627,8 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough(t *testi
 		embedded := gjson.Parse(gjson.GetBytes(sent, "client_metadata.x-codex-turn-metadata").String()).Get("turn_id").String()
 		require.NotEmpty(t, embedded)
 		require.NotEqual(t, testOfficialOpenAITurnID, embedded)
+		require.Equal(t, embedded, gjson.GetBytes(sent, "client_metadata.turn_id").String(),
+			"出站 client_metadata.turn_id 与 x-codex-turn-metadata 内 turn_id 是同一个值（官方请求里从来如此）")
 		for _, index := range []string{"input.1", "input.2"} {
 			passthrough := gjson.GetBytes(sent, index+"."+p2PassthroughKey)
 			require.True(t, passthrough.Exists(), index)

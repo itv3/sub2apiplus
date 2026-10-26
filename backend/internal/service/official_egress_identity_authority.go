@@ -431,14 +431,20 @@ func buildOfficialCodexIdentityFacts(
 	if err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
-	turnID, err := resolveStructured("turn_id", structuredIdentity.TurnID, metadata["turn_id"])
-	if err != nil {
-		return officialegress.CodexIdentityFacts{}, err
-	}
 	turnMetadata, err := resolveStructured(
 		"turn_metadata", structuredIdentity.TurnMetadata,
 		registeredField(OfficialEgressFieldTurnMetadata), metadata["x-codex-turn-metadata"],
 	)
+	if err != nil {
+		return officialegress.CodexIdentityFacts{}, err
+	}
+	// 没有结构化 turn_id、请求体里也没有 turn_id 时，turn_id 取自本次请求登记的 turn metadata：官方请求里 client_metadata.turn_id
+	// 与 x-codex-turn-metadata 内的 turn_id 是同一个值。此前这种情况会走“按 invocation 种子生成”，两处各是一个值，互相对不上。
+	turnIDFallbacks := []string{metadata["turn_id"]}
+	if strings.TrimSpace(structuredIdentity.TurnID) == "" && strings.TrimSpace(metadata["turn_id"]) == "" {
+		turnIDFallbacks = append(turnIDFallbacks, strings.TrimSpace(gjson.Get(turnMetadata, "turn_id").String()))
+	}
+	turnID, err := resolveStructured("turn_id", structuredIdentity.TurnID, turnIDFallbacks...)
 	if err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
