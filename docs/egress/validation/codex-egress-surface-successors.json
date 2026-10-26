@@ -20,6 +20,12 @@
       "reason": "Codex 0.157.0 候选（VC-4）：service 读取当前 release 画像可选节／新条件／新来源的唯一入口，画像未声明时调用方保持旧逻辑，直接决定官方出站形态。"
     },
     {
+      "path": "backend/internal/service/official_egress_images_turn.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.164.0 登记（W2）：images 端点（独立 images 调用）按画像 TurnMetadata 节登记的槽位补回合头——x-codex-image-turn-id 与 x-codex-turn-metadata（按官方扩展请求规则装配 14 键默认路径，无同回合事实时按画像登记的默认会话模型补 model／reasoning_effort），直接决定官方出站 images 请求头的有无、线序与取值。"
+    },
+    {
       "path": "backend/internal/service/official_egress_openai_access_programs.go",
       "file_type": "regular",
       "kind": "surface_addition",
@@ -67,6 +73,12 @@
       "file_type": "regular",
       "kind": "surface_addition",
       "reason": "Codex 0.157.0 候选（VC-6 前置）：按调用冻结的发布画像判定 responses_compact 是否仍被声明，未声明时在模型能力刷新等任何出站之前以 404 本地拒绝 legacy /responses/compact 入站，决定该入站是否产生官方出站。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_refresh_reason.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.164.0 登记（W2）：OAuth 令牌刷新请求体按画像 oauth_refresh 封闭 Body 声明的 refresh_reason 字段（四值闭集：官方 0.164 起带该字段）构造语义体，画像未声明时不带；直接决定官方出站刷新请求体的字段集合与键序。"
     },
     {
       "path": "backend/internal/service/openai_workspace_routing.go",
