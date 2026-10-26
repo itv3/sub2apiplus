@@ -1022,10 +1022,10 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertIn("/BaseInstructions", result["rule_field_paths"]["SPEC-BODY-006"])
 
     def test_0164_patch_manifest_binds_real_active_profile(self) -> None:
-        """0.164.0 补丁清单绑定当前 active 的 0.163.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名）。
-
-        登记阶段补丁为空（待 0.164.0 差异报告定稿后承接，开工前定稿；建 Campaign 之后改它属于证据语义层演进）。
-        补丁一旦非空，下面的“补丁为空”与“受影响规则为空”两处断言要随之改成对具体补丁的核对。
+        """0.164.0 补丁清单绑定当前 active 的 0.163.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），
+        并把差异报告里确认要改画像的三处逐条登记成 v2 补丁（开工前定稿，建 Campaign 之后改它属于证据语义层演进）：
+        ① OAuth 刷新体新增 refresh_reason（SPEC-EP-002）；② 图像生成与编辑端点新增 x-codex-image-turn-id、x-codex-turn-metadata 两个头
+        （SPEC-EP-022）；③ 基础指令消息的 id 方案声明为 uuidv7（SPEC-BODY-006）。三条传输画像只改 ID 里的版本号，补丁里不得出现传输字段。
         """
 
         active_profile = (
@@ -1037,23 +1037,69 @@ class CanonicalImportTests(unittest.TestCase):
             ROOT / "tools/official_client_capture/profile_rule_patches_0_164_0.json"
         )
         patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(patch_payload["schema_version"], "codex-upgrade-profile-rule-patches/v2")
         self.assertEqual(patch_payload["baseline_version"], "0.163.0")
         self.assertEqual(patch_payload["target_version"], "0.164.0")
         self.assertEqual(
             patch_payload["active_profile_sha256"],
             codex_upgrade.file_sha256(active_profile),
         )
-        self.assertEqual(patch_payload["rule_patches"], [])
+        patches = patch_payload["rule_patches"]
+        # 传输画像（tls-deps 调研结论）：TLS／H2／WS 指纹无变化，补丁清单里不得有传输字段的变化。
+        for patch in patches:
+            self.assertFalse(patch["path"].startswith("/Transports"), patch["path"])
+        self.assertEqual(
+            sorted((patch["op"], patch["path"], tuple(patch["rule_ids"])) for patch in patches),
+            sorted([
+                ("add", "/Endpoints/ID=oauth_refresh/Body/Fields/Name=refresh_reason", ("SPEC-EP-002",)),
+                ("add", "/Endpoints/ID=images_generations/Headers/Name=x-codex-image-turn-id", ("SPEC-EP-022",)),
+                ("add", "/Endpoints/ID=images_generations/Headers/Name=x-codex-turn-metadata", ("SPEC-EP-022",)),
+                ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-image-turn-id", ("SPEC-EP-022",)),
+                ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-turn-metadata", ("SPEC-EP-022",)),
+                ("add", "/BaseInstructions/IDScheme", ("SPEC-BODY-006",)),
+            ]),
+        )
+        affected = sorted({rule for patch in patches for rule in patch["rule_ids"]})
+        self.assertEqual(affected, ["SPEC-BODY-006", "SPEC-EP-002", "SPEC-EP-022"])
 
         with tempfile.TemporaryDirectory() as directory:
             fixture_root = Path(directory)
             active_payload = json.loads(active_profile.read_text(encoding="utf-8"))
             self.assertEqual(active_payload["Version"], "0.163.0")
+            # 基线里这些路径必须原本不存在（add 的前提），并且 refresh_reason 要落在 grant_type 与 refresh_token 之间。
+            endpoints_before = {item["ID"]: item for item in active_payload["Endpoints"]}
+            self.assertNotIn(
+                "refresh_reason",
+                [field["Name"] for field in endpoints_before["oauth_refresh"]["Body"]["Fields"]],
+            )
+            self.assertNotIn("IDScheme", active_payload["BaseInstructions"])
+            for endpoint in ("images_generations", "images_edits"):
+                names = [header["Name"] for header in endpoints_before[endpoint]["Headers"]]
+                self.assertNotIn("x-codex-image-turn-id", names)
+                self.assertNotIn("x-codex-turn-metadata", names)
             target_payload, _ = codex_upgrade._replace_json_string_literal(
                 active_payload,
                 "0.163.0",
                 "0.164.0",
             )
+            # 目标画像按补丁的 after 值独立装配：键控列表的插入位置由校验器按目标里的相对顺序决定，这里按官方顺序放。
+            endpoints = {item["ID"]: item for item in target_payload["Endpoints"]}
+            fields = endpoints["oauth_refresh"]["Body"]["Fields"]
+            fields.insert(
+                [field["Name"] for field in fields].index("refresh_token"),
+                next(p["after"] for p in patches if p["path"].endswith("Name=refresh_reason")),
+            )
+            for endpoint in ("images_generations", "images_edits"):
+                headers = endpoints[endpoint]["Headers"]
+                for name in ("x-codex-image-turn-id", "x-codex-turn-metadata"):
+                    headers.append(
+                        next(
+                            p["after"]
+                            for p in patches
+                            if p["path"] == f"/Endpoints/ID={endpoint}/Headers/Name={name}"
+                        )
+                    )
+            target_payload["BaseInstructions"]["IDScheme"] = "uuidv7"
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -1070,7 +1116,15 @@ class CanonicalImportTests(unittest.TestCase):
                             "classification": "inherit",
                             "baseline_rule": "SPEC-CODEX-IDENTITY",
                             "target_rule": "SPEC-CODEX-IDENTITY",
-                        }
+                        },
+                        *(
+                            {
+                                "classification": "change",
+                                "baseline_rule": rule,
+                                "target_rule": rule,
+                            }
+                            for rule in affected
+                        ),
                     ],
                 },
             )
@@ -1082,8 +1136,17 @@ class CanonicalImportTests(unittest.TestCase):
                 patch_manifest_path=patch_manifest,
             )
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["affected_rule_ids"], affected)
             self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(
+                result["rule_field_paths"]["SPEC-EP-002"],
+                ["/Endpoints/ID=oauth_refresh/Body/Fields/Name=refresh_reason"],
+            )
+            self.assertEqual(len(result["rule_field_paths"]["SPEC-EP-022"]), 4)
+            self.assertEqual(
+                result["rule_field_paths"]["SPEC-BODY-006"],
+                ["/BaseInstructions/IDScheme"],
+            )
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

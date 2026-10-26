@@ -1,7 +1,103 @@
 {
-  "schema_version": "codex-upgrade-profile-rule-patches/v1",
+  "schema_version": "codex-upgrade-profile-rule-patches/v2",
   "baseline_version": "0.163.0",
   "target_version": "0.164.0",
   "active_profile_sha256": "d6b5a25a0d82368ed038ff2af1638d39abb1ecd4154ae1c4e3c5b3331499b021",
-  "rule_patches": []
+  "rule_patches": [
+    {
+      "rule_ids": [
+        "SPEC-EP-002"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=oauth_refresh/Body/Fields/Name=refresh_reason",
+      "before": null,
+      "after": {
+        "Name": "refresh_reason",
+        "Required": true,
+        "OmitWhen": "",
+        "Condition": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-EP-022"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=images_generations/Headers/Name=x-codex-image-turn-id",
+      "before": null,
+      "after": {
+        "Slot": 60,
+        "Sequence": 0,
+        "Name": "x-codex-image-turn-id",
+        "WireName": "x-codex-image-turn-id",
+        "Value": "",
+        "Source": "turn",
+        "Condition": "always",
+        "AlternateGroup": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-EP-022"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=images_generations/Headers/Name=x-codex-turn-metadata",
+      "before": null,
+      "after": {
+        "Slot": 75,
+        "Sequence": 0,
+        "Name": "x-codex-turn-metadata",
+        "WireName": "x-codex-turn-metadata",
+        "Value": "",
+        "Source": "turn",
+        "Condition": "always",
+        "AlternateGroup": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-EP-022"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=images_edits/Headers/Name=x-codex-image-turn-id",
+      "before": null,
+      "after": {
+        "Slot": 60,
+        "Sequence": 0,
+        "Name": "x-codex-image-turn-id",
+        "WireName": "x-codex-image-turn-id",
+        "Value": "",
+        "Source": "turn",
+        "Condition": "always",
+        "AlternateGroup": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-EP-022"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=images_edits/Headers/Name=x-codex-turn-metadata",
+      "before": null,
+      "after": {
+        "Slot": 75,
+        "Sequence": 0,
+        "Name": "x-codex-turn-metadata",
+        "WireName": "x-codex-turn-metadata",
+        "Value": "",
+        "Source": "turn",
+        "Condition": "always",
+        "AlternateGroup": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-006"
+      ],
+      "op": "add",
+      "path": "/BaseInstructions/IDScheme",
+      "before": null,
+      "after": "uuidv7"
+    }
+  ]
 }
