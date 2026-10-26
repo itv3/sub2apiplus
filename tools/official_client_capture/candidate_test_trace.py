@@ -314,7 +314,7 @@ FROZEN_MAPPING_SHA256 = (
 # （需入站原文对照），均靠 W1b 的 Go 单测。验收契约：rule_counts dual_wire=25／candidate_profile=18，validation_modes、side_restricted_checks、side_coverage 逐字不变，
 # expected_check_ids 只有 BODY-003 多 7 条、WS-005 多 5 条。
 FROZEN_PROFILE_SHA256 = (
-    "140ef7be9bb6d2f0a78b19e695bd5bfeb1a8a04bcd9d074d8406fa7c8f68d18c"
+    "0cd9b3cb40964ea1bece871362d099313d8e68926dcc5bf13aff6c73d659254c"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
