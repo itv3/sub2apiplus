@@ -269,8 +269,8 @@ DEFECT_PROBES: tuple[Probe, ...] = (
 # VC-1 恢复链的录制回放对它不敏感：分别注入“整段关掉回退分支”（codex_upgrade.py 的 if 条件恒假）与“精确还原 6edb82a76
 # 的放行路径”（allowed_high_risk_path_changes=permitted_rebase_paths），恢复链两次都照样通过（1028～1044 秒）——录制数据
 # 没有走到会暴露这一差异的工具演进序列。所以 vc1 恢复链探针不带注入器、不参加历史重放，只在“一轮查全”里当恢复链基线。
-# 真正的防回归要靠一个覆盖 _prior_complete_results 回退调用点的单元用例（随 0.164 登记补，见记忆
-# opt-1026-arm64-deploy-and-validation）。别再给这条链配 R17d 的注入器。
+# 真正的防回归是一个覆盖 _prior_complete_results 回退调用点的单元用例（0.164 登记时已补：
+# test_codex_upgrade_tool_evolution 的 EvolutionReusedResultFallbackTests，四种变异检验均能变红）。别再给这条链配 R17d 的注入器。
 
 RECOVERY_PROBES: tuple[Probe, ...] = (
     Probe(
