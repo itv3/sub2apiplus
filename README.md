@@ -96,9 +96,10 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 
 1. **先查绑定**：先看会话粘性与 Responses 续链（见 §1.2.5），有绑定直接用绑定账号。
 2. **零转换优先**：没有绑定时，候选分为零转换组和需转换组。OpenAI 网关族账号用 `resolveUpstreamProtocol` 的返回值判定，等于入站协议即零转换；Anthropic 平台账号只对 Anthropic 入站（含 `count_tokens`）零转换，其它 Anthropic 网关族平台一律需转换。
-3. **组内排序**：零转换组非空时只在该组内选，按账号 `Priority` 升序（数值小的优先），并列按账号 ID 升序，取首选；零转换组为空才用需转换组，排序相同。比的是账号优先级，不是平台优先级。
-4. **集合怎么放**：集合只放与首选账号同平台、通过资格过滤的账号，再由该平台的调度器在集合内按原策略（优先级、负载、LRU）选号。不做请求内换组。
-5. **协议随账号地址变化**：给 `custom` 账号清空 Responses 地址后，Responses 入站对它就变成需转换，它退到需转换组；同平台里 Responses 地址齐全的账号优先于只填了 Chat Completions 地址的账号，哪怕后者优先级数值更小。
+3. **组内排序**：零转换组非空时只在该组内选，按账号 `Priority` 升序（数值小的优先），并列按账号 ID 升序；零转换组为空才用需转换组，排序相同。比的是账号优先级，不是平台优先级。
+4. **同级按剩余容量随机**：Priority 相同的账号算同级，首选账号不再固定取账号 ID 最小的那个，而是按各账号当前剩余并发容量（并发上限减去占用与排队）为权重随机抽取：剩余容量相同则等概率，剩余多的被选中的机会大；满载账号不参与抽取。同级全部满载才顺延到下一个 Priority；整组全部满载时仍取排序第一名并在它身上排队。并发不设上限的账号永远不算满载。读不到负载信息时退回上述确定性排序。可用环境变量 `SUB2API_COMPOSITE_CAPACITY_SELECTION=false` 单独关闭（默认开启，同时关闭下文的满载换号）。
+5. **集合怎么放**：集合只放与首选账号同平台、通过资格过滤的账号，再由该平台的调度器在集合内按原策略（优先级、负载、LRU）选号。候选池同时把「首选平台之外、快照里还有空位的平台」按同样的顺序写成换号计划，随请求上下文下发，见 §1.2.7。
+6. **协议随账号地址变化**：给 `custom` 账号清空 Responses 地址后，Responses 入站对它就变成需转换，它退到需转换组；同平台里 Responses 地址齐全的账号优先于只填了 Chat Completions 地址的账号，哪怕后者优先级数值更小。
 
 #### 1.2.5 粘性与续链
 
@@ -115,7 +116,9 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 
 #### 1.2.7 失败边界与生效时延
 
-1. **失败边界**：请求中途上游失败只在同平台内换号；首选账号返回 429 或 529 会进入冷却，下一次请求选到次优账号；5xx 默认不冷却，需要时配置已有的「临时不可调度」规则；集合内账号被调度器终检全部否决时，本次请求报错，不换组；流式已经输出后不能换号。
+1. **失败边界**：请求中途上游失败只在同平台内换号，不做上游失败后的跨平台重放；首选账号返回 429 或 529 会进入冷却，下一次请求选到次优账号；集合内账号被调度器终检全部否决时，本次请求报错，不换组；流式已经输出后不能换号。
+   - **满载换号**：OpenAI 网关族处理器（Responses、Chat Completions、Messages 三个 HTTP 入口）里，平台内调度器返回「需要排队」（首选平台所有候选都抢不到槽位，包括负载快照有空位但实际抢槽失败）时，不立刻排队，而是按候选池的换号计划依次试其它平台，第一个当场抢到槽位的账号胜出；全部抢不到才回到原账号排队。换号用的仍是调度器的原子抢槽和原来的释放函数，不会突破任何账号的并发上限。切换平台时重新写入目标平台与候选集合、重算渠道模型映射、重新做用户 × 平台配额的只读预检（不递增 RPM），用量只记在最终转发的账号上。带 `previous_response_id` 的续链请求、compact 与生图请求、已有账号失败后的重试、已开始输出的流都不换号。命中会话粘性的普通请求满载时只是临时借用其它平台，不改写粘性绑定。Anthropic 网关族平台与 Responses WebSocket 不做满载换号。
+   - **失败短冷却**：Composite 自动路由（候选池选出的目标）的请求，上游返回普通 5xx（500、502、503、520、521、523）或明确的上游超时（504、522、524）时，对该账号补 30 秒临时不可调度冷却，后续请求避开，到期自动重新允许选择；冷却写在账号级全局状态里，共用该账号的其它分组也会避开它。429、额度、鉴权、4xx 参数错误、客户端取消、本地满载不触发；账号已有更长的冷却时不缩短；池模式与自定义错误码账号沿用自己的规则；显式路由与非 Composite 请求不触发。没有 HTTP 响应的传输层超时不经过该入口，不在范围内。可用环境变量 `SUB2API_COMPOSITE_FAILURE_COOLDOWN=false` 单独关闭（默认开启）。
 2. **缓存**：账号配置态（分组里有哪些账号及其声明）复用模型列表缓存，TTL 由 `gateway.models_list_cache_ttl_seconds` 控制，默认 15 秒（取值 10 到 30）；声明命中的候选账号每次实时读取最新账号，状态、限流、冷却、优先级、地址等都以实时值为准。
 3. **生效时延**：冷却、限流、停用、重新启用，以及修改优先级、映射（含精确映射与通配映射互改）、协议地址、解绑分组、删除账号，下一次请求立即生效；新增声明账号、新绑定分组、给账号新加原本没有的模型声明，最长延迟一个模型列表缓存 TTL（`gateway.models_list_cache_ttl_seconds`，默认 15 秒），与原有的账号归属解析缓存一致。粘性会话固定在原账号上，旧会话不会因为更高优先级账号恢复而迁移，新会话才重新选。
 
@@ -125,8 +128,7 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 
 #### 1.2.9 已知限制
 
-- **Responses 输出上限**：非 Codex 客户端请求 `custom` 原生 Responses 时，`max_output_tokens` 被删除，上游按默认上限输出，Ollama 的夹紧逻辑也无法恢复被删除的客户端上限。变通方法：改用 Chat Completions 的 `max_tokens`，或把账号的 Responses 地址留空，让 Responses 入站回落 Chat Completions（多一次协议转换）。该转发器属于 Codex 事实映射源码快照，修复要随下一次 Codex 目标版本登记一并重封身份基线，本次不改。
-- **不做请求内跨平台换号**：请求中途失败只在同平台内换号，见 §1.2.7。
+- **不做上游失败后的跨平台换号**：请求中途上游失败只在同平台内换号；跨平台换号只发生在「调度器抢不到槽位、尚未转发」的满载场景，见 §1.2.7。
 - **WebSocket 不支持需要协议转换的账号**：Responses WebSocket 经 HTTP 桥接时，只能服务上游原生支持 Responses 的账号。WebSocket 上只能选到需要协议转换的账号（该模型只有 Chat Completions 或 Anthropic 端点）时，网关仍拒绝 WebSocket 并说明原因，这属于请求级的能力拒绝，不计为账号故障；Codex 重试后回落到 HTTPS（HTTP Responses）继续使用，会话不中断。
 
 #### 1.2.10 ARM64 实测结论
@@ -596,7 +598,7 @@ README、机器生成证据索引及 JSON 收据只承担操作或审计责任�
 | [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | 官方客户端出站工具索引；Codex 具有受管编排器，Claude 当前仅有取证与门禁工具。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
 | [`docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) | 官方 OAuth 客户端共用的目标、扩展架构、证据生命周期与发布门槛。 |
-| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.163.0。 |
+| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.164.0。 |
 | [`docs/EVIDENCE_INDEX.md`](docs/EVIDENCE_INDEX.md) | Codex 官方规则编号与证据文件的机器生成索引。 |
 | [`docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md) | Claude Code 规则与证据、环境职责、Sub2API 实现和版本演进规范。 |
 | [`docs/COMPOSITE_GROUPS.md`](docs/COMPOSITE_GROUPS.md) | Composite Groups 路由、管理流程和使用边界。 |
