@@ -101,10 +101,17 @@ describe('new Codex subscription labels', () => {
     ['self_serve_business_usage_based', 'Business', 'bg-indigo-100'],
     ['business', 'Enterprise', 'bg-indigo-100'],
     ['edu_plus', 'Edu Plus', 'bg-indigo-100'],
-    ['edu_pro', 'Edu Pro', 'bg-indigo-100']
+    ['edu_pro', 'Edu Pro', 'bg-indigo-100'],
+    ['sci', 'Academic Researchers', ''],
+    ['sci_plus', 'Academic Researchers Plus', '']
   ])('displays %s', (sku, label, color) => {
     const wrapper = mountPlan('openai', sku)
     expect(wrapper.text()).toContain(label)
     if (color) expect(wrapper.html()).toContain(color)
+  })
+
+  it('does not mix up the two academic plans', () => {
+    expect(mountPlan('openai', 'sci').text()).not.toContain('Plus')
+    expect(mountPlan('openai', 'sciplus').text()).toContain('Academic Researchers Plus')
   })
 })

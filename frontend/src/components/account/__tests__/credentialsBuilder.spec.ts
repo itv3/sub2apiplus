@@ -485,6 +485,12 @@ describe('plan_type helpers', () => {
       expect(planTypeDisplayLabel('team')).toBe('Business')
       expect(planTypeDisplayLabel('self_serve_business_prolite')).toBe('Business Premium')
     })
+    it('labels the 0.164 academic plans sci / sci_plus with the official names', () => {
+      expect(planTypeDisplayLabel('sci')).toBe('Academic Researchers')
+      expect(planTypeDisplayLabel('sci_plus')).toBe('Academic Researchers Plus')
+      expect(planTypeDisplayLabel('SCI-PLUS')).toBe('Academic Researchers Plus')
+      expect(planTypeDisplayLabel('  Sci Plus  ')).toBe('Academic Researchers Plus')
+    })
     it('normalizes case, separators and surrounding blanks', () => {
       expect(planTypeDisplayLabel('CHATGPTPRO')).toBe('Pro 200')
       expect(planTypeDisplayLabel('PROLITE')).toBe('Pro 100')
@@ -519,9 +525,11 @@ describe('plan_type helpers', () => {
       expect(opts).toContainEqual({ value: 'edu_plus', label: 'Edu Plus' })
       expect(opts).toContainEqual({ value: 'edu_pro', label: 'Edu Pro' })
       expect(opts).toContainEqual({ value: 'enterprise_cbp_automation', label: 'Enterprise (Automation)' })
+      expect(opts).toContainEqual({ value: 'sci', label: 'Academic Researchers' })
+      expect(opts).toContainEqual({ value: 'sci_plus', label: 'Academic Researchers Plus' })
     })
     it('preserves aliases without duplicating the same SKU', () => {
-      for (const [alias, canonical] of [['chatgpt_pro', 'pro'], ['pro_lite', 'prolite'], ['selfservebusinessprolite', 'self_serve_business_prolite']]) {
+      for (const [alias, canonical] of [['chatgpt_pro', 'pro'], ['pro_lite', 'prolite'], ['selfservebusinessprolite', 'self_serve_business_prolite'], ['sciplus', 'sci_plus']]) {
         const opts = buildPlanTypeOptions(alias, 'Clear')
         expect(opts.filter(option => option.value === alias)).toHaveLength(1)
         expect(opts.some(option => option.value === canonical)).toBe(false)
@@ -538,7 +546,7 @@ describe('plan_type helpers', () => {
     })
     it('keeps unknown values and exact presets without duplicates', () => {
       expect(buildPlanTypeOptions('future_sku', 'Clear').at(-1)).toEqual({ value: 'future_sku', label: 'future_sku' })
-      for (const value of ['promax', 'team', 'ent26', 'edu_plus']) {
+      for (const value of ['promax', 'team', 'ent26', 'edu_plus', 'sci', 'sci_plus']) {
         expect(buildPlanTypeOptions(value, 'Clear').filter(option => option.value === value)).toHaveLength(1)
       }
     })
@@ -570,8 +578,19 @@ describe('Codex subscription analytics labels', () => {
     ['business', 'Business'], ['self_serve_business_prolite', 'Business'],
     ['enterprise_cbp_automation', 'Enterprise'], ['ent26', 'Enterprise'],
     ['edu', 'Education'], ['edu_plus', 'Education'], ['edu_pro', 'Education'],
-    ['unknown', 'Account'], ['promax', 'Pro 500']
+    ['unknown', 'Account'], ['promax', 'Pro 500'],
+    // 官方 tui/src/analytics/models.rs 把 Sci、SciPlus 归入 Business 族
+    ['sci', 'Business'], ['sci_plus', 'Business']
   ])('groups %s without changing its status label', (sku, label) => {
     expect(openAIPlanTypeLabel(sku, 'analytics')).toBe(label)
+  })
+
+  it('keeps the academic plans distinct in the status view', () => {
+    expect(openAIPlanTypeLabel('sci')).toBe('Academic Researchers')
+    expect(openAIPlanTypeLabel('sci_plus')).toBe('Academic Researchers Plus')
+    expect(openAIPlanTypeLabel('sciplus', 'status')).toBe('Academic Researchers Plus')
+    // 相近但并非官方 wire 名的写法不能被误当成学术套餐
+    expect(openAIPlanTypeLabel('science')).toBe('')
+    expect(openAIPlanTypeLabel('sci_pro')).toBe('')
   })
 })
