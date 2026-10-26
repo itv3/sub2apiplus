@@ -1133,6 +1133,228 @@ class EvolutionReuseContextTests(unittest.TestCase):
                 self._context(fixture, drifted, reservation)
 
 
+class EvolutionReusedResultFallbackTests(unittest.TestCase):
+    """二次承接未重绑的承接结果：``_prior_complete_results`` 里按 Campaign 冻结身份回退验真（R17d）。
+
+    背景（0.163.0 VC-1，提交 cad6e7955、6edb82a76）：旧 attempt A1 的已完成作业被第一次恢复 attempt A2 承接，作业结果键没有变化，
+    承接时没有重绑，记录的组件摘要仍是冻结工具（Campaign 冻结身份）写下的。之后登记的工具演进改了共享组件文件，A2 的生产身份里
+    共享组件摘要随之变化；第二次恢复承接 A2 的结果时，按“源 attempt 生产身份”验真不命中，必须回退按 Campaign 冻结身份验真，
+    并且放行口径是“冻结身份到当前树”之间所有允许重绑组件的变化（而不只是“生产身份到当前树”的那一段），否则共享组件的
+    规范化摘要差异会被当成真实产出侧改动，恢复预览与 resume 的复用判定不一致，批准前的复用核对（R17）拒绝批准。
+
+    此前只有 ``_rebase_paths_since`` 助手的单测，没有任何用例走到 ``_prior_complete_results`` 里的回退调用点；
+    VC-1 恢复链录制回放对这一差异不敏感（关掉回退分支、还原 6edb82a76 的放行路径都照样通过）。
+    本组用例直接驱动真实的 ``_evolution_reuse_context`` 与 ``_prior_complete_results``：Campaign 冻结身份取真实受管树，
+    演进登记链走真实的 ``write_evolution``，承接链出处走磁盘上真实的 attempt.json 与 source_receipt 摘要。
+    """
+
+    # 共享组件（shared）里一个真实受管文件；演进把它的摘要改掉，模拟“共享组件规范化摘要变化”。
+    SHARED_FILE = "capturelib/model.py"
+    JOB_ID = "official-core"
+    IDENTITY = {"version": "0.163.0"}
+
+    @staticmethod
+    def _with_components(identity: dict) -> dict:
+        """``mutated_identity`` 只改逐文件清单与 v2 摘要；组件包也要按新清单重算，按组件比对才看得到共享组件的变化。"""
+
+        entries = identity["entries"]
+        components = codex_upgrade._tool_component_identities(entries)
+        return {
+            **identity,
+            "components": components["components"],
+            "component_identity_sha256": codex_upgrade._fingerprint(components),
+            **codex_upgrade._tool_identity_sides(entries),
+        }
+
+    def _prepare(self, root: Path, *, carried_tool: str = "frozen") -> None:
+        """搭一条完整场景：冻结身份 T0 → 演进 1 把共享文件改成 T1（生产身份，也是当前树）→ A1 完成作业 → A2 承接并失败。
+
+        ``carried_tool`` 决定 A2 里承接结果记录的组件摘要出自哪份身份：``frozen`` 是未重绑（冻结工具写下的，本组用例的主角），
+        ``production`` 是已按源 attempt 生产身份重绑过的（对照组）。
+        """
+
+        self.root = root
+        self.fixture = EvolutionFixture(root)
+        self.frozen = self.fixture.identity
+        self.assertEqual(codex_upgrade._tool_component_for_path(self.SHARED_FILE), "shared")
+        self.assertIn(self.SHARED_FILE, {entry["path"] for entry in self.frozen["entries"]})
+        self.production = self._with_components(
+            self.fixture.mutated_identity(self.frozen, self.SHARED_FILE, marker="1")
+        )
+        evolution = self.fixture.payload(
+            index=1, previous=None, from_identity=self.frozen, to_identity=self.production,
+            changed_paths=[self.SHARED_FILE],
+        )
+        wt.write_evolution(self.fixture.campaign_dir, self.fixture.manifest, evolution)
+        self.reservation = {"tool_evolution": {"index": 1, "receipt_sha256": evolution["receipt_sha256"]}}
+        # 当前树就是演进 1 之后的树：生产身份到当前树没有变化，授权路径为空；冻结身份到当前树的共享文件变化只能靠回退口径放行。
+        self.current = self.production
+
+        repo_root = TOOL_ROOT.parents[1]
+        self.job = codex_upgrade.Job(
+            job_id=self.JOB_ID,
+            phase="official",
+            suites=("full",),
+            description="R17d 回退验真测试",
+            steps=(
+                {
+                    "argv": ["bash", f"{repo_root}/tools/official_client_capture/{self.SHARED_FILE}"],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=(str(root / "evidence"),),
+            covers=(),
+            tool_dependencies=(self.SHARED_FILE,),
+        )
+        self.assertEqual(codex_upgrade._job_tool_components(self.job), ("shared",))
+
+        # A1：冻结工具产出的原始结果。
+        original = codex_upgrade._rebase_reused_result(
+            {"id": self.JOB_ID, "phase": "official", "status": "complete"},
+            self.job, identity=self.IDENTITY, tool_identity=self.frozen,
+        )
+        self.original = original
+        attempts = self.fixture.campaign_dir / "official" / "attempts"
+        self.a1_receipt = attempts / "A1" / "attempt.json"
+        _write_json(self.a1_receipt, {"status": "failed", "identity": self.IDENTITY, "results": [original]})
+        # A2：承接 A1 的结果（结果键没变所以没有重绑——记录的摘要仍是冻结工具写下的），随后失败。
+        carried = {
+            **original,
+            "carried_from_attempt": "A1",
+            "disposition": "reused",
+            "source_receipt": {
+                "path": "official/attempts/A1/attempt.json",
+                "sha256": codex_upgrade.file_sha256(self.a1_receipt),
+                "bytes": self.a1_receipt.stat().st_size,
+            },
+        }
+        if carried_tool == "production":
+            carried = codex_upgrade._rebase_reused_result(
+                carried, self.job, identity=self.IDENTITY, tool_identity=self.production
+            )
+        self.carried = carried
+        self.a2_root = attempts / "A2"
+        self.a2_payload = {"status": "failed", "identity": self.IDENTITY, "results": [carried]}
+        _write_json(self.a2_root / "attempt.json", self.a2_payload)
+
+    def _context(self) -> dict:
+        with mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value=self.reservation):
+            context = codex_upgrade._evolution_reuse_context(
+                self.fixture.campaign_dir,
+                self.fixture.manifest,
+                phase="official",
+                candidate_id=None,
+                attempt_root=self.a2_root,
+                current_tool=self.current,
+            )
+        self.assertIsNotNone(context)
+        return context
+
+    def _prior(self, context: dict) -> list[dict]:
+        """以第二次恢复的口径调用真实的 ``_prior_complete_results``：失败源 A2，冻结复用闭集只含该作业。"""
+
+        with (
+            mock.patch.object(codex_upgrade, "load_campaign_manifest", return_value=self.fixture.manifest),
+            mock.patch.object(codex_upgrade, "_ordered_capture_attempts", return_value=[(self.a2_root, {})]),
+            mock.patch.object(codex_upgrade, "_load_capture_attempt", return_value=(self.a2_root, self.a2_payload)),
+        ):
+            return codex_upgrade._prior_complete_results(
+                self.fixture.campaign_dir,
+                Path("official"),
+                [self.job],
+                phase="official",
+                candidate_id=None,
+                identity=self.IDENTITY,
+                tool_identity=self.current,
+                expected_reuse_job_ids=[self.JOB_ID],
+                source_attempt_id="A2",
+                evolution_context=context,
+            )
+
+    def _metadata_matches(self, context: dict, reference_tool: dict, allowed: set[str]) -> bool:
+        """直接问元数据核对：承接结果的记录在给定参照身份与放行路径下是否验真通过。"""
+
+        return codex_upgrade._historical_result_metadata_matches(
+            self.carried,
+            self.job,
+            self.IDENTITY,
+            reference_tool,
+            self.carried["execution_sha256"],
+            current_tool=self.current,
+            allowed_high_risk_path_changes=allowed,
+            validated_current_production_sha256=context["validated_current_production_sha256"],
+        )
+
+    def test_unrebound_carried_result_is_reused_through_frozen_identity_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._prepare(Path(directory).resolve())
+            context = self._context()
+
+            # 夹具必须真的走到回退分支，否则下面的“复用成功”可能只是第一次核对就通过了：
+            # ① 按源 attempt 生产身份核对不命中——记录的共享组件摘要是冻结工具写下的；
+            self.assertFalse(self._metadata_matches(context, context["production_identity"], set(context["allowed_paths"])))
+            # ② 回退到冻结身份、但放行路径只含“生产身份到当前树”的变化（6edb82a76 之前的口径）仍不命中——
+            #    共享文件在“冻结身份到生产身份”之间的变化没有被放行；
+            self.assertNotIn(self.SHARED_FILE, context["allowed_paths"])
+            self.assertFalse(self._metadata_matches(context, self.fixture.manifest["tool_identity"], set(context["allowed_paths"])))
+            # ③ 放行路径含“冻结身份到当前树”的共享文件变化（6edb82a76 之后的口径）才命中。
+            self.assertTrue(
+                self._metadata_matches(
+                    context, self.fixture.manifest["tool_identity"], set(context["allowed_paths"]) | {self.SHARED_FILE}
+                )
+            )
+
+            a2_bytes = (self.a2_root / "attempt.json").read_bytes()
+            reused = self._prior(context)
+
+            self.assertEqual([item["id"] for item in reused], [self.JOB_ID])
+            item = reused[0]
+            self.assertEqual(item["disposition"], "reused")
+            self.assertEqual(item["carried_from_attempt"], "A2")
+            self.assertEqual(item["source_receipt"]["path"], "official/attempts/A2/attempt.json")
+            # 承接后只在新结果里重绑到当前树：共享组件摘要换成当前值，执行摘要等于当前作业定义。
+            current_shared = codex_upgrade._tool_component_digest_map(self.current)["shared"]
+            self.assertEqual(item["tool_component_digests"], {"shared": current_shared})
+            self.assertNotEqual(item["tool_component_digests"]["shared"], self.carried["tool_component_digests"]["shared"])
+            self.assertEqual(item["execution_sha256"], codex_upgrade._job_execution_sha256(self.job))
+            # 历史收据只读：来源 attempt 的字节不能被回写。
+            self.assertEqual((self.a2_root / "attempt.json").read_bytes(), a2_bytes)
+
+    def test_fallback_is_refused_when_the_carry_chain_origin_cannot_be_proven(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._prepare(Path(directory).resolve())
+            context = self._context()
+            # 承接链出处的每一跳都要可证明：A1 收据在 A2 承接之后被改动，摘要与字节数对不上，不能再按冻结身份验真。
+            self.a1_receipt.write_text(self.a1_receipt.read_text("utf-8") + "\n", "utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                self._prior(context)
+
+    def test_fallback_is_refused_when_recorded_digests_are_not_from_the_frozen_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._prepare(Path(directory).resolve())
+            context = self._context()
+            # 组件摘要属于承接时可改写的重绑字段，出处核对不看它；但回退验真要求记录值确实出自冻结身份。
+            self.a2_payload["results"][0] = {
+                **self.carried,
+                "tool_component_digests": {"shared": "e" * 64},
+            }
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                self._prior(context)
+
+    def test_result_already_rebound_to_the_production_identity_does_not_need_the_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._prepare(Path(directory).resolve(), carried_tool="production")
+            context = self._context()
+            self.assertTrue(self._metadata_matches(context, context["production_identity"], set(context["allowed_paths"])))
+            # 已按源 attempt 生产身份重绑的结果第一次核对就通过，行为不变：根本不会去回溯承接链出处。
+            with mock.patch.object(codex_upgrade, "_reused_result_origin", wraps=codex_upgrade._reused_result_origin) as origin:
+                reused = self._prior(context)
+            origin.assert_not_called()
+            self.assertEqual([item["id"] for item in reused], [self.JOB_ID])
+            self.assertEqual(reused[0]["carried_from_attempt"], "A2")
+
+
 class EvolutionRecoveryScopeTests(unittest.TestCase):
     """续跑闭集、seal 核对与对账前置对工具演进的口径。"""
 
