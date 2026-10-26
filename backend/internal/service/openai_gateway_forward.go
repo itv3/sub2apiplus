@@ -734,9 +734,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
-			case PlatformOpenAI, PlatformDeepseek:
+			case PlatformOpenAI, PlatformDeepseek, PlatformCustom:
 				// Preserve Responses-native output limits unless the selected upstream
 				// explicitly rejects the field in the bounded HTTP retry loop below.
+				// 自定义多协议平台（custom）的 Responses 出站是原生 Responses 协议，
+				// 同样保留客户端设的输出上限；Ollama Cloud 出站地址上的超限值由下方的
+				// 独立夹紧钩子按账号上限处理。
 			case PlatformAnthropic:
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
