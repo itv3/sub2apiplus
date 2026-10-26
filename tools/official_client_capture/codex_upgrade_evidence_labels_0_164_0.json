@@ -2364,10 +2364,13 @@
             "variant": "default",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，0.163.0 起是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）。",
+          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，0.163.0 起是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）；同一断言也证明第 2 个 response.create 帧是首个业务帧（frame_role=first_business，绑定帧索引 1），0.164.0 起 additional_tools 前缀由它带出。",
           "frame_labels": {
             "0": {
               "frame_role": "warmup"
+            },
+            "1": {
+              "frame_role": "first_business"
             }
           }
         },

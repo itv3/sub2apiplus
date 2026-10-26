@@ -213,6 +213,159 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
 
 
 
+class Expectation0164WireChecksTests(unittest.TestCase):
+    """0.164.0 差异报告落进候选期望清单的新判据：手造观测跑正反例。
+
+    - SPEC-EP-002：OAuth 刷新体多一个 refresh_reason（键序 client_id, grant_type, refresh_reason, refresh_token，取值四选一）。
+    这四条规则（EP-002、WS-005、BODY-003、EP-022）都含读内部记录类型的判据，整条是 candidate_profile，不在官方侧离线判据门里执行。
+    - SPEC-WS-005：incremental_tools 默认开启后，generate=false 的预热帧 input 是空数组，additional_tools 前缀由第一条业务帧带出。
+    - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata。
+    样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.profile = json.loads(
+            (TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8")
+        )
+
+    def check(self, rule_id: str, check_id: str):
+        rule = next(item for item in self.profile["rules"] if item["rule_id"] == rule_id)
+        return rule, next(item for item in rule["checks"] if item["id"] == check_id)
+
+    def run_check(self, rule_id: str, check_id: str, observations: list) -> bool:
+        rule, check = self.check(rule_id, check_id)
+        matched = candidate_rule_assertion._select_observations(
+            observations, check["select"], rule["scenario_ids"]
+        )
+        passed, _ = candidate_rule_assertion._evaluate_assertion(matched, check["assertion"])
+        return passed
+
+    @staticmethod
+    def refresh_observation(body: dict, *, path: str = "/oauth/token"):
+        summary = relay_extract.summarize_body(json.dumps(body).encode(), "", "application/json")
+        return candidate_rule_assertion.Observation(
+            record_id="A13-refresh",
+            scenario_id="A13",
+            record_type="http_request",
+            artifact_path="relay/conn006.client_to_upstream.bin",
+            evidence_paths=("relay/conn006.client_to_upstream.bin",),
+            labels={"transport": "http", "provider": "openai_oauth"},
+            data={"method": "POST", "path": path, "body": summary},
+        )
+
+    @staticmethod
+    def frame_observation(frame: dict, *, role: str | None = None):
+        summary = relay_extract.summarize_body(json.dumps(frame).encode(), "", "application/json")
+        labels = {"transport": "websocket", "provider": "openai_oauth"}
+        if role is not None:
+            labels["frame_role"] = role
+        return candidate_rule_assertion.Observation(
+            record_id=f"A06-frame-{role}",
+            scenario_id="A06",
+            record_type="websocket_frame",
+            artifact_path="relay/conn001.client_to_upstream.bin",
+            evidence_paths=("relay/conn001.client_to_upstream.bin",),
+            labels=labels,
+            data={"event_type": "response.create", "top_level_fields_in_order": summary["top_level_fields_in_order"],
+                  "shape": summary["shape"]},
+        )
+
+    def test_refresh_body_keys_and_reason_closed_set(self) -> None:
+        good = {"client_id": "app_xxxxxxxxxxxxxxxxxxxxxxx", "grant_type": "refresh_token",
+                "refresh_reason": "forced", "refresh_token": "x" * 211}
+        self.assertTrue(self.run_check("SPEC-EP-002", "oauth-refresh-body-keys", [self.refresh_observation(good)]))
+        self.assertTrue(self.run_check("SPEC-EP-002", "oauth-refresh-reason-closed-set", [self.refresh_observation(good)]))
+        # 0.163.0 的三键形态：缺 refresh_reason，两个判据都失败。
+        legacy = {k: v for k, v in good.items() if k != "refresh_reason"}
+        self.assertFalse(self.run_check("SPEC-EP-002", "oauth-refresh-body-keys", [self.refresh_observation(legacy)]))
+        self.assertFalse(self.run_check("SPEC-EP-002", "oauth-refresh-reason-closed-set", [self.refresh_observation(legacy)]))
+        # 键序必须是字典序（BTreeMap），refresh_reason 放在末尾不行。
+        reordered = {"client_id": good["client_id"], "grant_type": "refresh_token",
+                     "refresh_token": good["refresh_token"], "refresh_reason": "forced"}
+        self.assertFalse(self.run_check("SPEC-EP-002", "oauth-refresh-body-keys", [self.refresh_observation(reordered)]))
+        # 四个官方取值都放行，闭集之外的值（含子串、大小写变体）失败。
+        for reason in ("proactive_expiry", "scheduled", "unauthorized_recovery", "forced"):
+            with self.subTest(reason=reason):
+                self.assertTrue(self.run_check(
+                    "SPEC-EP-002", "oauth-refresh-reason-closed-set",
+                    [self.refresh_observation({**good, "refresh_reason": reason})]))
+        for reason in ("forced2", "FORCED", "manual", ""):
+            with self.subTest(reason=reason):
+                self.assertFalse(self.run_check(
+                    "SPEC-EP-002", "oauth-refresh-reason-closed-set",
+                    [self.refresh_observation({**good, "refresh_reason": reason})]))
+        # 选不到样本（别的路径）时失败关闭，而不是空通过。
+        self.assertFalse(self.run_check(
+            "SPEC-EP-002", "oauth-refresh-body-keys", [self.refresh_observation(good, path="/other")]))
+
+    def test_refresh_checks_do_not_change_rule_modes(self) -> None:
+        """EP-002 因 Files 三跳判据读内部记录类型，整条规则本来就是 candidate_profile；新增的两条刷新判据只读线上 http_request，不改变分组。
+
+        官方侧的离线判据门只执行 dual_wire 规则，所以官方证据里 refresh_reason 的真实取值靠 VC-1 的事实核对（facts_summary）确认，
+        候选侧在验收（VC-5）时用这两条判据核对。
+        """
+
+        modes = acceptance_contract.derive_validation_modes(self.profile)
+        self.assertEqual(modes["SPEC-EP-002"], "candidate_profile")
+        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8"))
+        self.assertEqual(modes, acceptance_contract.derive_validation_modes(old))
+
+    def test_warmup_frame_input_is_empty_and_prefix_comes_with_first_business_frame(self) -> None:
+        tools = [{"type": "function", "name": "shell"}]
+        warmup_empty = {"type": "response.create", "model": "gpt-6.1-sol", "input": [], "generate": False}
+        warmup_legacy = {"type": "response.create", "model": "gpt-6.1-sol", "generate": False,
+                         "input": [{"type": "additional_tools", "role": "developer", "tools": tools},
+                                   {"type": "message", "role": "developer", "content": []}]}
+        business_with_prefix = {"type": "response.create", "model": "gpt-6.1-sol", "previous_response_id": "resp_1",
+                                "input": [{"type": "additional_tools", "role": "developer", "tools": tools},
+                                          {"type": "message", "role": "developer", "content": []},
+                                          {"type": "message", "role": "user", "content": []}]}
+        business_without_prefix = {"type": "response.create", "model": "gpt-6.1-sol", "previous_response_id": "resp_1",
+                                   "input": [{"type": "message", "role": "user", "content": []}]}
+        # 预热帧：0.164 形态（空数组）通过；0.163 形态（带前缀）失败；选不到预热帧时失败关闭。
+        self.assertTrue(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(warmup_empty, role="warmup")]))
+        self.assertFalse(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(warmup_legacy, role="warmup")]))
+        self.assertFalse(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(business_with_prefix)]))
+        # 预热判定只看 generate=false，不依赖候选侧的 frame_role 标签。
+        self.assertTrue(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(warmup_empty)]))
+        # 第一条业务帧：带前缀通过，不带失败；没有标签的帧不会被选中，选不到时失败关闭。
+        self.assertTrue(self.run_check(
+            "SPEC-WS-005", "first-business-frame-carries-prefix",
+            [self.frame_observation(business_with_prefix, role="first_business")]))
+        self.assertFalse(self.run_check(
+            "SPEC-WS-005", "first-business-frame-carries-prefix",
+            [self.frame_observation(business_without_prefix, role="first_business")]))
+        self.assertFalse(self.run_check(
+            "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
+
+    def test_image_header_order_lists_the_two_new_headers_around_originator(self) -> None:
+        _, check = self.check("SPEC-EP-022", "image-header-order")
+        order = check["assertion"]["value"]
+        self.assertEqual(
+            order,
+            ["version", "authorization", "chatgpt-account-id", "content-type", "x-codex-image-turn-id", "originator",
+             "x-codex-turn-metadata", "user-agent", "accept", "cookie", "host", "content-length"],
+        )
+        # 官方 image_request_headers 的插入顺序是 image-turn-id、originator、turn-metadata；画像按槽位排序时
+        # image-turn-id 在 originator 之前、turn-metadata 在 originator 之后，user-agent 仍在 accept 之前。
+        self.assertLess(order.index("x-codex-image-turn-id"), order.index("originator"))
+        self.assertLess(order.index("originator"), order.index("x-codex-turn-metadata"))
+        self.assertLess(order.index("x-codex-turn-metadata"), order.index("user-agent"))
+
+    def test_other_rules_are_untouched_by_the_increment(self) -> None:
+        """差异报告只落了四条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""
+
+        raw = (TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8")
+        reverted = json.loads(raw.replace("0.164.0", "0.163.0").replace(r"0\\.164\\.0", r"0\\.163\\.0"))
+        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8"))
+        changed = sorted(
+            new["rule_id"] for new, before in zip(reverted["rules"], old["rules"]) if new != before
+        )
+        self.assertEqual(changed, ["SPEC-BODY-003", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"])
+        self.assertEqual(len(reverted["rules"]), len(old["rules"]))
+
+
 class MainTrackLiteExpectation0164Tests(MainTrackLiteExpectationTests):
     """0.164.0 候选期望清单（由 0.163.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
 

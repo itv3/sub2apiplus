@@ -880,6 +880,60 @@
         },
         {
           "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input",
+            "value": "array:<len=0>"
+          },
+          "description": "0.164.0 起 Lite 预热帧（generate=false）的 input 是空数组：工具目录与基础指令消息不再随预热帧发出",
+          "id": "warmup-input-empty",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.generate",
+                "value": "bool:false"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.shape.input._types",
+            "value": "additional_tools"
+          },
+          "description": "0.164.0 起 additional_tools 前缀由同一 WS 会话的第一条业务帧带出（候选侧按帧标签 frame_role=first_business 选帧；官方侧没有该标签，由预热帧为空与官方源码佐证）",
+          "id": "first-business-frame-carries-prefix",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
             "operator": "all_subset",
             "path": "data",
             "value": {
@@ -1940,7 +1994,7 @@
             "path": "data.additional_tools_occurrences",
             "value": 0
           },
-          "description": "WS 增量帧不重复已复用的 additional_tools",
+          "description": "首个业务帧之后的 WS 增量帧不重复已复用的 additional_tools（前缀只在第一条业务帧出现，见 SPEC-WS-005）",
           "id": "incremental-no-repeat",
           "select": {
             "record_type": "lite_transform",
@@ -2931,6 +2985,65 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "client_id",
+              "grant_type",
+              "refresh_reason",
+              "refresh_token"
+            ]
+          },
+          "description": "OAuth 刷新请求体键序为字典序（官方用 BTreeMap 编码），0.164.0 起在 grant_type 与 refresh_token 之间多一个 refresh_reason",
+          "id": "oauth-refresh-body-keys",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A13"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/oauth/token"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.refresh_reason",
+            "value": "str:(proactive_expiry|scheduled|unauthorized_recovery|forced)"
+          },
+          "description": "refresh_reason 只能取官方 RefreshReason 的四个取值（调用方自报的诊断信息，不是令牌有效性证据）",
+          "id": "oauth-refresh-reason-closed-set",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A13"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/oauth/token"
+              }
+            ]
+          }
         }
       ],
       "description": "业务、刷新、realtime 与文件上传使用各自域名来源",
@@ -3705,7 +3818,9 @@
               "authorization",
               "chatgpt-account-id",
               "content-type",
+              "x-codex-image-turn-id",
               "originator",
+              "x-codex-turn-metadata",
               "user-agent",
               "accept",
               "cookie",
@@ -3713,7 +3828,7 @@
               "content-length"
             ]
           },
-          "description": "generation 与 edit 的 Header 线序一致且精确（accept 位于 originator、user-agent 之后）",
+          "description": "generation 与 edit 的 Header 线序一致且精确（x-codex-image-turn-id 在 originator 之前、x-codex-turn-metadata 在 originator 之后，accept 位于 originator、user-agent 之后）",
           "id": "image-header-order",
           "select": {
             "record_type": "http_request",
