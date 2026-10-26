@@ -52,7 +52,15 @@ func TestOAuthRefreshCompilesFromSingleReleaseBundle(t *testing.T) {
 	require.Equal(t, officialegress.BackendReqProfile, resource.transport.Backend)
 	body, err := io.ReadAll(resource.request.Body)
 	require.NoError(t, err)
-	require.Equal(t, `{"client_id":"client-id","grant_type":"refresh_token","refresh_token":"refresh-secret"}`, string(body))
+	// 旧画像（0.163 已封）的封闭 Body 没有 refresh_reason，线上字节保持三字段；
+	// 画像声明了该字段之后（官方 0.164 起），字典序为 client_id, grant_type, refresh_reason, refresh_token。
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	require.NoError(t, err)
+	if openAIOAuthRefreshProfileDeclaresReason(release.ExecutableProfile()) {
+		require.Equal(t, `{"client_id":"client-id","grant_type":"refresh_token","refresh_reason":"forced","refresh_token":"refresh-secret"}`, string(body))
+	} else {
+		require.Equal(t, `{"client_id":"client-id","grant_type":"refresh_token","refresh_token":"refresh-secret"}`, string(body))
+	}
 	require.NotEmpty(t, resource.request.Header.Get("User-Agent"))
 	require.Equal(t, resource.request.Header.Get("Content-Type"), "application/json")
 	identity, ok := officialegress.AttemptIdentityFromContext(resource.request.Context())
