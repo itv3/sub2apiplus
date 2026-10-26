@@ -277,6 +277,8 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	})
 	if s.rateLimitService != nil {
 		s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
+		// Composite 自动路由：首输出超时（含等待响应头超时）补 30 秒短冷却，见 composite_failure_cooldown.go。
+		s.rateLimitService.ApplyCompositeFirstOutputTimeoutCooldown(ctx, account, phase)
 	}
 	return &UpstreamFailoverError{
 		StatusCode:      http.StatusGatewayTimeout,

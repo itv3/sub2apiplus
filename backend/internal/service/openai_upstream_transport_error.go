@@ -167,6 +167,10 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 
 	if classifyUpstreamTransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
+	} else if s != nil && s.rateLimitService != nil {
+		// Composite 自动路由遇到明确的上游超时（连接／握手／响应头／读超时）：补 30 秒短冷却，
+		// 判定与边界见 composite_failure_cooldown.go；永久性故障已有 10 分钟冷却，不走这里。
+		s.rateLimitService.ApplyCompositeTransportTimeoutCooldown(ctx, account, err)
 	}
 
 	return &UpstreamFailoverError{
