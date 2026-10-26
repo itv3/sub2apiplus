@@ -29,7 +29,13 @@
       "path": "backend/internal/service/official_egress_openai_base_instructions.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.163.0 候选（C2a）：按画像 BaseInstructions 节把基础指令以官方形态（稳定 id、passthrough 标记、官方键序）安装进 input 前缀，识别并去重旧副本，直接决定官方出站请求体形态。"
+      "reason": "Codex 0.163.0 候选（C2a）：按画像 BaseInstructions 节把基础指令以官方形态（稳定 id、passthrough 标记、官方键序）安装进 input 前缀，识别并去重旧副本，直接决定官方出站请求体形态；Codex 0.164.0 登记（W1）：渲染函数拆出按 id／passthrough 参数化的版本，画像 IDScheme=uuidv7 时承载增量窗口前缀的基础指令消息（入站官方形态整项原样保留，第三方入站合成 msg_＋稳定 UUIDv7、passthrough 含 turn_id／create_time／content_item_kinds／content_item_metadata），旧方案（UUIDv5、仅 content_item_kinds）字节不变，直接决定官方出站请求体与 WS 帧形态。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_incremental_prefix.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.164.0 登记（W1）：画像 BaseInstructions 节 IDScheme=uuidv7 且本请求走 Lite 时的增量窗口前缀——判定入站 additional_tools／基础指令消息是否已是官方形态并原样保留，第三方入站才合成 at_／msg_＋进程内按种子稳定复用的 UUIDv7，WS 预热帧 input 为空、首个业务帧保留前缀，HTTP 与 WS 的安装入口；画像不声明 uuidv7 时不被调用，直接决定官方出站请求体与 WS 帧形态。"
     },
     {
       "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
