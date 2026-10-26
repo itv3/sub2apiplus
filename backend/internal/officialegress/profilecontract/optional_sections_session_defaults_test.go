@@ -19,7 +19,10 @@ func TestTurnMetadataSessionDefaultsOmittedWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	section := decoded.(*TurnMetadataSection)
+	section, ok := decoded.(*TurnMetadataSection)
+	if !ok {
+		t.Fatalf("解码结果类型不是 *TurnMetadataSection：%T", decoded)
+	}
 	if section.SessionDefaults != nil {
 		t.Fatalf("缺省时不应有会话默认值：%+v", section.SessionDefaults)
 	}
@@ -43,7 +46,10 @@ func TestTurnMetadataSessionDefaultsAccepted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s：%v", name, err)
 		}
-		section := decoded.(*TurnMetadataSection)
+		section, ok := decoded.(*TurnMetadataSection)
+		if !ok {
+			t.Fatalf("%s：解码结果类型不是 *TurnMetadataSection：%T", name, decoded)
+		}
 		if section.SessionDefaults == nil {
 			t.Fatalf("%s：会话默认值丢失", name)
 		}
@@ -56,7 +62,11 @@ func TestTurnMetadataSessionDefaultsAccepted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s 往返：%v", name, err)
 		}
-		if *again.(*TurnMetadataSection).SessionDefaults != *section.SessionDefaults {
+		againSection, ok := again.(*TurnMetadataSection)
+		if !ok {
+			t.Fatalf("%s 往返：解码结果类型不是 *TurnMetadataSection：%T", name, again)
+		}
+		if *againSection.SessionDefaults != *section.SessionDefaults {
 			t.Fatalf("%s 往返后取值漂移", name)
 		}
 	}

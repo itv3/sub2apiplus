@@ -30,7 +30,7 @@ func loadCodex0164Frame(t *testing.T, name string) []byte {
 	t.Helper()
 	file, err := os.Open(filepath.Join("testdata", "codex_0164_informal", name+".json.gz"))
 	require.NoError(t, err)
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	reader, err := gzip.NewReader(file)
 	require.NoError(t, err)
 	raw, err := io.ReadAll(reader)

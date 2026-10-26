@@ -63,20 +63,6 @@ func officialCodexStableItemID(prefix, domain, threadID string, digest officialC
 	return prefix + "_" + generateOfficialStableUUIDV7(key)
 }
 
-// officialCodexIncrementalBaseInstructionsID 是第三方入站合成的基础指令消息 id。
-func officialCodexIncrementalBaseInstructionsID(
-	section *profilecontract.BaseInstructionsSection,
-	threadID string,
-	text string,
-) string {
-	return officialCodexStableItemID(
-		section.IDPrefix,
-		officialUUIDV7DomainBaseInstructions,
-		threadID,
-		officialContentDigest(sha256.Sum256([]byte(text))),
-	)
-}
-
 // renderOfficialCodexIncrementalBaseInstructionsItem 为第三方入站合成官方 0.164 增量窗口形态的基础指令消息（预编码 JSON），
 // turn_id 取按 (线程, 正文) 稳定的 UUIDv7。没有"窗口第一段"turn_id 可用的场景（例如 WS 预热帧）才走这个入口，
 // 其余场景见 renderOfficialCodexIncrementalBaseInstructionsItemWithTurnID。

@@ -178,7 +178,7 @@ func asciiJSON(raw []byte) ([]byte, error) {
 		r, size := utf8.DecodeRune(rest)
 		switch {
 		case r < 0x80:
-			out.WriteByte(rest[0])
+			_ = out.WriteByte(rest[0]) // bytes.Buffer 的写入恒返回 nil
 		case r >= 0x10000:
 			r -= 0x10000
 			fmt.Fprintf(&out, "\\u%04x\\u%04x", 0xd800+(r>>10), 0xdc00+(r&0x3ff))
@@ -225,7 +225,7 @@ func marshalOfficialImagesTurnMetadata(
 		kept["codex_version"] = version
 	}
 	var out bytes.Buffer
-	out.WriteByte('{')
+	_ = out.WriteByte('{') // bytes.Buffer 的写入恒返回 nil
 	first := true
 	for _, key := range orderOfficialImagesTurnMetadataKeys(keys, userInputRequested) {
 		value, exists := kept[key]
@@ -246,14 +246,14 @@ func marshalOfficialImagesTurnMetadata(
 			return "", fmt.Errorf("images turn metadata 键 %s 的值不是合法 JSON：%w", key, err)
 		}
 		if !first {
-			out.WriteByte(',')
+			_ = out.WriteByte(',')
 		}
 		first = false
-		out.Write(encodedKey)
-		out.WriteByte(':')
-		out.Write(encodedValue)
+		_, _ = out.Write(encodedKey)
+		_ = out.WriteByte(':')
+		_, _ = out.Write(encodedValue)
 	}
-	out.WriteByte('}')
+	_ = out.WriteByte('}')
 	return out.String(), nil
 }
 
