@@ -593,6 +593,12 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	if identitySeed == "" {
 		return errors.New("Codex 身份事实缺少 invocation seed")
 	}
+	if officialCodexEndpointIsImages(endpointID) {
+		// images 端点没有 Responses 会话身份；回合头只在画像声明了对应槽位时才补事实。
+		return completeOfficialCodexImagesTurnFacts(
+			facts, endpointID, identitySeed, fallbackTurnMetadata.profileMode,
+		)
+	}
 	needsResponsesSession := officialCodexEndpointUsesResponsesSession(endpointID)
 	needsTurnMetadata := needsResponsesSession || endpointID == officialCodexEndpointAlphaSearch
 	setGenerated := func(target *officialegress.CodexIdentityValue, suffix string, lifecycle officialegress.IdentityFactLifecycle) error {

@@ -906,6 +906,11 @@ func codexHeaderValue(
 			return facts.TurnMetadata.Value, false, nil
 		case "x-codex-turn-state":
 			return facts.TurnState.Value, false, nil
+		case "x-codex-image-turn-id":
+			// 独立 images 端点的回合标识：官方取生图工具调用所在回合的 sub_id，与同一回合
+			// turn metadata 里的 turn_id 同源，所以复用 TurnID 事实。只有画像为
+			// images_generations／images_edits 声明了该槽位才会走到这里，旧画像不受影响。
+			return facts.TurnID.Value, false, nil
 		case "x-openai-subagent":
 			return facts.Subagent.Value, false, nil
 		}
