@@ -103,12 +103,18 @@ var officialImagesTurnMetadataPayloadOrder = []string{
 	"turn_started_at_unix_ms", "history_ingest_requested", "analytics_enabled", "compaction",
 }
 
-// officialImagesTurnMetadataResponsesOnlyKeys 是 Responses 请求才有、images 工具请求里恒无值的键
-// （扩展请求模板没有请求种类与窗口身份，也不带 analytics 与压缩信息）。
-var officialImagesTurnMetadataResponsesOnlyKeys = map[string]bool{
-	"installation_id": true, "window_id": true, "window_number": true, "context_window_id": true,
-	"request_kind": true, "history_initialization": true, "history_ingest_requested": true,
-	"analytics_enabled": true, "compaction": true, "tool_namespaces_info": true,
+// officialImagesTurnMetadataResponsesOnlyKey 判断键是否 Responses 请求才有、images 工具请求里恒无值
+// （扩展请求模板没有请求种类与窗口身份，也不带 analytics 与压缩信息）。用函数而不是包级 map，
+// 避免官方出站层新增需要登记的包级 map。
+func officialImagesTurnMetadataResponsesOnlyKey(key string) bool {
+	switch key {
+	case "installation_id", "window_id", "window_number", "context_window_id",
+		"request_kind", "history_initialization", "history_ingest_requested",
+		"analytics_enabled", "compaction", "tool_namespaces_info":
+		return true
+	default:
+		return false
+	}
 }
 
 // officialImagesTurnMetadataRemovedKeys 是官方按顺序 swap_remove 的三个键。
@@ -195,7 +201,7 @@ func marshalOfficialImagesTurnMetadata(
 	userInputRequested := false
 	for key, value := range values {
 		switch {
-		case officialImagesTurnMetadataResponsesOnlyKeys[key], key == "codex_version",
+		case officialImagesTurnMetadataResponsesOnlyKey(key), key == "codex_version",
 			key == "agent_name", key == "root_turn_id":
 			continue
 		case key == "user_input_requested_during_turn":
