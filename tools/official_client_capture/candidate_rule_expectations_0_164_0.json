@@ -907,11 +907,11 @@
         },
         {
           "assertion": {
-            "operator": "all_contains",
-            "path": "data.shape.input._types",
-            "value": "additional_tools"
+            "operator": "all_equal",
+            "path": "data.shape.input._first.type",
+            "value": "str:additional_tools"
           },
-          "description": "0.164.0 起 additional_tools 前缀由同一 WS 会话的第一条业务帧带出（候选侧按帧标签 frame_role=first_business 选帧；官方侧没有该标签，由预热帧为空与官方源码佐证）",
+          "description": "0.164.0 起 additional_tools 前缀由同一 WS 会话的第一条业务帧带出且排在 input 最前（候选侧按帧标签 frame_role=first_business 选帧；官方 0.164.0 非正式实采 s1／s3／s8 的第 2 个 response.create 帧即如此）",
           "id": "first-business-frame-carries-prefix",
           "select": {
             "record_type": "websocket_frame",

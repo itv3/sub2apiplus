@@ -329,13 +329,21 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertFalse(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(business_with_prefix)]))
         # 预热判定只看 generate=false，不依赖候选侧的 frame_role 标签。
         self.assertTrue(self.run_check("SPEC-WS-005", "warmup-input-empty", [self.frame_observation(warmup_empty)]))
-        # 第一条业务帧：带前缀通过，不带失败；没有标签的帧不会被选中，选不到时失败关闭。
+        # 第一条业务帧：前缀排在 input 最前才通过；前缀不在最前（0.164.0 官方形态里它总是最前）或根本没有都失败；
+        # 没有标签的帧不会被选中，选不到时失败关闭。
         self.assertTrue(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix",
             [self.frame_observation(business_with_prefix, role="first_business")]))
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix",
             [self.frame_observation(business_without_prefix, role="first_business")]))
+        business_prefix_not_first = {
+            **business_with_prefix,
+            "input": [business_with_prefix["input"][2], *business_with_prefix["input"][:2]],
+        }
+        self.assertFalse(self.run_check(
+            "SPEC-WS-005", "first-business-frame-carries-prefix",
+            [self.frame_observation(business_prefix_not_first, role="first_business")]))
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
 

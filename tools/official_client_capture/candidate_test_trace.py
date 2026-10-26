@@ -275,17 +275,18 @@ FROZEN_MAPPING_SHA256 = (
 # （收尾后的现状，摘要 a8b0ed45…）复制并逐字替换版本号。载荷逐项审核：2112 个叶子里差异共 12 处且全是版本号（codex_version 1、官方原始字节
 # 描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.163.0 版
 # 逐字节相同；验收契约现算新旧画像载荷逐项相等，仍为 706df763…（dual_wire=25／candidate_profile=18）。0.163.0 画像文件保留不动。
-# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 fcf66991…。载荷逐项审核（把版本号换回 0.163.0 后与
+# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 d9ef408f…。载荷逐项审核（把版本号换回 0.163.0 后与
 # 0.163.0 版比较）：只有四条规则变化，其余 39 条规则逐字不变，规则数 43、场景、source_spec 不变——
 # ①SPEC-EP-002 新增 oauth-refresh-body-keys、oauth-refresh-reason-closed-set（ChatGPT 令牌刷新请求体新增 refresh_reason，键序 client_id, grant_type,
 #   refresh_reason, refresh_token；取值闭集 proactive_expiry／scheduled／unauthorized_recovery／forced；EP-002 本来就是 candidate_profile，分组不变）；
 # ②SPEC-WS-005 新增 warmup-input-empty（generate=false 的预热帧 input 为空数组）、first-business-frame-carries-prefix（候选侧按帧标签
-#   frame_role=first_business 选帧，additional_tools 前缀由第一条业务帧带出）——对应 incremental_tools 默认开启；
+#   frame_role=first_business 选帧，input 首项是 additional_tools，即前缀由第一条业务帧带出且排在最前；官方 0.164.0 非正式实采 s1／s3／s8 的第 2 个
+#   response.create 帧即如此）——对应 incremental_tools 默认开启；
 # ③SPEC-BODY-003 的 incremental-no-repeat 只改 description（收窄到首个业务帧之后，判据不变）；
 # ④SPEC-EP-022 的 image-header-order 期望线序加入 x-codex-image-turn-id、x-codex-turn-metadata 两个头（候选侧判据，位置按官方插入顺序与画像槽位推断，待实采）。
 # 验收契约现算 706df763…→767c24e0…：dual_wire=25／candidate_profile=18 不变，expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002 两项多出上述新检查 ID。
 FROZEN_PROFILE_SHA256 = (
-    "fcf669918bad947ba166a9e1314a1e4e4a2115b547b3b382ae13bb94e7c53499"
+    "d9ef408fee753814024ab74b39e02b0b37eba77de0bc5c0d4e79bbbfedf103e7"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
