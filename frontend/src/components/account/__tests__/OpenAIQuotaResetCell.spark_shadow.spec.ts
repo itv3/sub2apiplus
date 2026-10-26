@@ -91,8 +91,14 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     { name: '多余前导零 007.5 规整为 7', balance: '007.5', expected: '7' },
     { name: '负零 -0.0 显示 0（通过非负检查的唯一负号写法）', balance: '-0.0', expected: '0' },
     { name: '负数仍走「可用」', balance: '-1.5', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
-    { name: '科学计数法无法按字符串截断，走「可用」', balance: '1.5e3', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
-    { name: '十六进制写法走「可用」', balance: '0x10', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+    // 不是普通十进制的写法无法安全地按字符串截断，保持改动前的行为：原样显示（只去前后空白），不取整、不改成「可用」。
+    { name: '科学计数法 1.5e3 原样显示', balance: '1.5e3', expected: '1.5e3' },
+    { name: '科学计数法 1E3 原样显示', balance: '1E3', expected: '1E3' },
+    { name: '科学计数法带负指数 25e-1 原样显示', balance: '25e-1', expected: '25e-1' },
+    { name: '十六进制 0x10 原样显示', balance: '0x10', expected: '0x10' },
+    { name: '二进制 0b101 原样显示', balance: '0b101', expected: '0b101' },
+    { name: '八进制 0o17 原样显示', balance: '0o17', expected: '0o17' },
+    { name: '非普通十进制写法同样先去前后空白', balance: '  1.5e3  ', expected: '1.5e3' },
   ]
 
   // 非金额的状态值必须原样显示，不受取整影响。

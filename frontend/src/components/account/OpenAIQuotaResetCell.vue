@@ -227,7 +227,7 @@ const readCachedCredits = (account: Account) => {
 const creditsData = ref(readCachedCredits(props.account))
 
 // 普通十进制字符串：可带一个正负号，整数部分和小数部分都允许为空（如 ".9"、"5."）。
-// 科学计数法（1e3）、十六进制（0x10）等写法不匹配，交给调用方按「可用」处理。
+// 科学计数法（1e3）、十六进制（0x10）等写法不匹配，调用方保持改动前的行为：原样显示。
 const plainDecimalPattern = /^[+-]?(\d*)(?:\.\d*)?$/
 
 // 点数只显示整数部分：直接舍去小数点及其后的内容，不做四舍五入。
@@ -253,9 +253,9 @@ const creditsDisplay = computed(() => {
   const balance = credits.balance?.trim()
   // 有效值检查保持不变：非空、能解析成有限数、且不为负。Number 只用来做这个检查，不参与显示。
   if (balance && Number.isFinite(Number(balance)) && Number(balance) >= 0) {
-    // 能按普通十进制取整就只显示整数部分；科学计数法、十六进制等写法无法安全地按字符串截断，按「可用」处理。
-    const integerPoints = toIntegerPoints(balance)
-    if (integerPoints !== null) return integerPoints
+    // 只有普通十进制才取整数部分；科学计数法、十六进制等写法无法安全地按字符串截断，
+    // 保持改动前的行为，把（已去掉前后空白的）原字符串原样显示，不改成「可用」。
+    return toIntegerPoints(balance) ?? balance
   }
   return t('admin.accounts.openaiQuotaReset.pointsAvailable')
 })
