@@ -165,8 +165,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # （0.163.0→0.164.0）一处，把新文件里的版本号换回后与 0.163.0 版逐字节相同；测试、事实宇宙与源码快照不变。0.163.0 映射文件保留不动
 # （它仍是当前 Active 的登记件）。后续 0.164.0 变更集若改动映射已登记的生产源码（如 openai_gateway_forward.go），只重绑对应源码快照，
 # 并在此追加一条带载荷审核的说明。
+# 2026-10-27（0.164.0 集成重绑）：0.164.0 变更集（优化三 custom 保留 max_output_tokens；W1／W1b／W1c 增量窗口前缀、逐项 passthrough 与 RA 验收修复；
+# W2 OAuth 刷新体与 images 回合头）改动了映射已登记的 official_egress_openai_http.go、official_egress_openai_ws.go、openai_gateway_forward.go、
+# official_egress_identity_authority.go、officialegress/compiler.go；映射只重绑这五份源码快照共 10 个叶子（http.go 5、ws.go 2、forward.go 1、
+# identity_authority.go 1、compiler.go 1），不改变测试、事实宇宙或规则语义。载荷逐项审核：383 个叶子里变化的 10 处全是 sha256 叶子，
+# 非 sha256 叶子 0 处变化；映射文件摘要 f0202513… 变为 6e1cedb0…。
 FROZEN_MAPPING_SHA256 = (
-    "f0202513edd35c2d01198c5f8f330bdd981694d88087075b116bcf2bde33e05d"
+    "6e1cedb04ebd971102f49413c8e0a547f686e743a9e520709d237677a94162a1"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

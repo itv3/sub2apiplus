@@ -145,7 +145,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "51cb0f7aee324c7f110bd5bd9f5811afaac04cec00f78430919c4e6b9cce25ed"
+          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
@@ -193,11 +193,11 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "51cb0f7aee324c7f110bd5bd9f5811afaac04cec00f78430919c4e6b9cce25ed"
+          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "62b8bfc9835971d42b6acd705d2a89c317aa19ba909671d75014e9f7f9054bfe"
+          "sha256": "3fc27e4d8d127ee6d3f5d8dd497ceb21efb55d4965dbd4068d4a9159674e164a"
         }
       ],
       "facts": [
@@ -277,7 +277,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "3d41a73eeaef7107163154a2e2c833d6a09296ec41d2cb3cc211f0613b6c2fca"
+          "sha256": "4dfe1839e817681d654e024e89bda8cb5d60b874e504c71fa043f529f417cde2"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
@@ -409,7 +409,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "51cb0f7aee324c7f110bd5bd9f5811afaac04cec00f78430919c4e6b9cce25ed"
+          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -516,15 +516,15 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "51cb0f7aee324c7f110bd5bd9f5811afaac04cec00f78430919c4e6b9cce25ed"
+          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
-          "sha256": "14a4af041907df9a208c3beed2129a9d8071cf7e914e6607e9c1d8dd03f91653"
+          "sha256": "acb194d06b5b1c018a005609deec60116cccb79089685c500a9871933d123384"
         },
         {
           "path": "backend/internal/officialegress/compiler.go",
-          "sha256": "886733e5e17de07d174f1dbe52fa9cd2999851809608b857274aff671233054e"
+          "sha256": "594c53e6303e6b407430a26c17bfc611256f1af64847396e05a7d2765b59d287"
         }
       ],
       "facts": [
@@ -552,7 +552,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "51cb0f7aee324c7f110bd5bd9f5811afaac04cec00f78430919c4e6b9cce25ed"
+          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
@@ -592,7 +592,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "62b8bfc9835971d42b6acd705d2a89c317aa19ba909671d75014e9f7f9054bfe"
+          "sha256": "3fc27e4d8d127ee6d3f5d8dd497ceb21efb55d4965dbd4068d4a9159674e164a"
         }
       ],
       "facts": [
