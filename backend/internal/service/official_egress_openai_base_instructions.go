@@ -571,7 +571,8 @@ func officialCodexLeadingInstructionsCopyExists(rawInput any, trimmedText string
 //  2. 候选帧 input 前缀里仍带节标记的 developer 消息；
 //  3. 原始帧 input 前缀里带节标记的 developer 消息，且候选帧前导系统区里还留着同文本的副本。官方较新版本客户端的帧
 //     没有顶层字段；OAuth 兼容层会把 input 项的 internal_chat_message_metadata_passthrough 剥掉，标记随之丢失，
-//     只能在原始帧上认。要求候选帧里还有副本，是为了不把兼容层有意删除的消息复活。
+//     只能在原始帧上认（官方出站 Lite 且画像声明 uuidv7 时官方形态的项不再被剥，标记留在候选帧里，由第 2 条认出）。
+//     要求候选帧里还有副本，是为了不把兼容层有意删除的消息复活。
 //
 // 都没有时返回 sourced=false。original 可以为空。
 func officialCodexWSBaseInstructionsSource(

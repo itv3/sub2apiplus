@@ -641,6 +641,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			"json_object",
 		)
 		codexResult := codexTransformResult{}
+		preserveOfficialInputPassthrough := !compatMessagesBridge && officialOpenAIHTTPEnabled && !isCompactRequest &&
+			officialCodexHTTPInputPassthroughPreserved(codexReleaseMode, account, useResponsesLite)
 		if compatMessagesBridge {
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
@@ -654,6 +656,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			ensureCodexOAuthInstructionsField(decoded)
 			markDecodedModified()
 		} else if officialOpenAIHTTPEnabled {
+			// 官方出站 Lite 且画像声明 uuidv7：官方形态的逐项 passthrough 绕开兼容层的剥离（压缩请求除外），转换后原位放回。
+			stashedOfficialInputPassthrough := preserveOfficialInputPassthrough &&
+				stashOfficialInputPassthroughForTransform(decoded)
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                isCodexCLI,
 				IsCompact:                 isCompactRequest,
@@ -661,6 +666,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				PreserveToolCallIDs:       true,
 				PreserveTopLevelSemantics: !useResponsesLite,
 			})
+			if stashedOfficialInputPassthrough {
+				restoreOfficialInputPassthroughAfterTransform(decoded)
+			}
 		} else {
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
 				IsCodexCLI:                          isCodexCLI,
@@ -690,6 +698,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// credentials after scheduler failover.
 		if !isCompactRequest && applyCodexAccountIdentityClientMetadataMap(decoded, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c)) {
 			markDecodedModified()
+		}
+		// 保留下来的逐项 passthrough 里的 turn_id 与 client_metadata.turn_id 用同一函数作用域化，保持两者对得上。
+		if preserveOfficialInputPassthrough {
+			section, _ := officialCodexBaseInstructionsCarrier(codexReleaseMode, officialCodexEndpointResponsesHTTP)
+			if applyCodexAccountIdentityInputTurnIDsMap(decoded, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), func(item map[string]any) bool {
+				return isOfficialCodexBaseInstructionsItem(section, item)
+			}) {
+				markDecodedModified()
+			}
 		}
 		stageCodexFingerprintIDs(c, nil)
 		// 指纹收敛：一次性解析收敛 ID，请求体和出站头共享同一份 IDs（保证 turn_id 等随机字段一致）。
