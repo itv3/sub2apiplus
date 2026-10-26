@@ -207,6 +207,22 @@ ALWAYS_FAIL_TEST = textwrap.dedent("""\
 
 
 @unittest.skipUnless(HAVE_GO, "本机没有 go")
+class DefaultTimeoutTests(unittest.TestCase):
+    """go test 缺省 10 分钟会把 ARM64 满载下的 internal/service 包杀掉，且超时被杀不补跑；包装器默认补 30 分钟。"""
+
+    def test_default_is_thirty_minutes_when_not_given(self) -> None:
+        self.assertEqual(gtp.with_default_timeout(["-race"], None), ["-race", "-timeout=30m"])
+        self.assertEqual(gtp.with_default_timeout([], ""), ["-timeout=30m"])
+
+    def test_an_explicit_timeout_in_any_spelling_wins(self) -> None:
+        for words in (["-timeout=5m"], ["-timeout", "5m"], ["--timeout=5m"], ["-test.timeout=5m"]):
+            self.assertEqual(gtp.with_default_timeout(words, None), words)
+
+    def test_environment_value_overrides_the_default_and_off_disables_it(self) -> None:
+        self.assertEqual(gtp.with_default_timeout([], "45m"), ["-timeout=45m"])
+        self.assertEqual(gtp.with_default_timeout(["-race"], "off"), ["-race"])
+
+
 class RealGoTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()

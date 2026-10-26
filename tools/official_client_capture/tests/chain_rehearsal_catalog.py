@@ -163,13 +163,16 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         signature=("未登记的旧摘要：02bc3d7e4d7b",),
         injections=(ReversePatch("producer-replay-registration.patch", "199683aab"),),
     ),
+    # 下面两个探针的注入改的是受管文件（codex_upgrade.py、codex_upgrade_reconciler.py），用例又会建 Campaign；ARM64 上固定
+    # 采集执行位置有生产受管副本，副本与它漂移就在到达缺陷之前被 ConfigurationError 挡住（10-26 实跑误判成漏报）。
+    # 绑定执行位置后比较的是副本自己。
     Probe(
         "orphan-candidate-recovery-preview",
         "零请求恢复预览取不到孤儿候选 attempt 的失败源（没有 attempt.json）",
         "VC-5", "候选采集被截停后的 N+1 零请求恢复预览",
         UnittestRunner([
             f"{TESTS}.test_codex_upgrade.CodexUpgradeTest.test_b0_zero_request_preview_adopts_authorized_orphan_preview",
-        ], timeout_seconds=600),
+        ], timeout_seconds=600, bind_execution_tree=True),
         history=("ca25c9936", "记忆 vc5-orphan-candidate-preview-gap-1021", "VC-5 批次 23"),
         signature=("尚未被授权消费",),
         injections=(ReversePatch("orphan-candidate-recovery-preview.patch", "ca25c9936"),),
@@ -180,7 +183,7 @@ DEFECT_PROBES: tuple[Probe, ...] = (
         "VC-5", "恢复预览：零结果隔离来源",
         UnittestRunner([
             f"{TESTS}.test_codex_upgrade.CodexUpgradeTest.test_b0_isolated_attempt_without_any_job_result_is_rerun_source",
-        ], timeout_seconds=600),
+        ], timeout_seconds=600, bind_execution_tree=True),
         history=("ee61713ab", "记忆 vc5-orphan-candidate-preview-gap-1021 第三轮", "VC-5 批次 25"),
         signature=("失败 attempt 缺少可重放 Job checkpoint",),
         injections=(ReversePatch("zero-result-isolation-source.patch", "ee61713ab"),),
@@ -284,7 +287,9 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "VC-1 恢复链故障注入：首批超时 → 预览批次失败 → 守护者三连败 → 控制面／证据层修复部署 → 二次承接 → 封存",
         "VC-1", "录制回放：对账 → 预览 → 补跑 → 演进登记 → epoch → seal → classify",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_vc1_recorded_chain.VC1RecordedRecoveryChainTests"], timeout_seconds=3600),
-        kind="recovery", needs=("linux_root_unshare", "recorded_vc1_campaign"),
+        # 用例里要从仓库根复制这个脚本进录制回放的临时树；历史重放的副本只有受管树、驱动目录与 tools/ci，不带它，
+        # 未注入的基线副本就红（10-26 ARM64 实跑）。
+        kind="recovery", needs=("linux_root_unshare", "recorded_vc1_campaign"), copy_extra=("tools/prepare_assertion_bundle.sh",),
         history=("cad6e7955", "6edb82a76", "记忆 vc1-recorded-replay-chain", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
         # 签名取“二次承接对账（reconcile-attempt-3）”这一步的断言源码行：二次承接被判不可复用时，失败就落在这一步对
         # third_reconciled 的断言上。**未经 ARM64 实跑验证**——失败现象的消息文本我没见过，首次实跑后应改成该步骤抛出的
@@ -296,7 +301,7 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "vc5-attempt-recovery-fault-injection",
         "VC-5 attempt 恢复链故障注入：恢复状态机 E1～E5 崩溃点、段增量 seal、恢复 finalizer",
         "VC-5", "评估 attempt 恢复（recover apply 崩溃注入）",
-        UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_evaluation_attempt_recovery_real_chain"], timeout_seconds=3600),
+        UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_evaluation_attempt_recovery_real_chain"], timeout_seconds=7200),
         kind="recovery", needs=("linux_root_unshare", "arm64_docker_go"),
         history=("记忆 vc5-reconcile-first-then-deploy-fix-limit-trap-1022",),
     ),

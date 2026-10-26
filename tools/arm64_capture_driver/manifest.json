@@ -310,9 +310,9 @@
     },
     {
       "path": "driver/go_test_packages.py",
-      "sha256": "a6ee2996d213efe9b440dbd52e7b5e3481de61af30a8c290e76707696100bc02",
+      "sha256": "75888b0065e7cec2c8c7f09e150383a5bbccbc1b7fae177f671d722042cd56d8",
       "mode": "0700",
-      "bytes": 29180
+      "bytes": 30137
     },
     {
       "path": "driver/guard.sh",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "c79bdc9e514de5e2ab32026a257fb4e61a3fed15f66087ec8b6cb4ae9e6c1fd7"
+  "manifest_sha256": "a5071c090ba927d01819a6a991e32e827304d3fee6c2c6c09520f155f9b6be1c"
 }

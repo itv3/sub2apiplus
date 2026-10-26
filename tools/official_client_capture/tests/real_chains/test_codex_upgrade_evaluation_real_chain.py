@@ -123,13 +123,21 @@ class _RealChainHarness:
     # ---- 驱动 ---------------------------------------------------------------
 
     def run(self, tree_root: Path, *arguments: str, expect_exit: int = 0, timeout: float = 900.0) -> dict:
-        completed = mtc.run_python(
-            tree_root,
-            ["-m", DRIVER, "--root", str(self.root), *arguments],
-            # 全部动作使用真实校验的 staging 夹具总账，不能借用生产出口策略。
-            extra_env={TREE_ROOT_ENV: str(tree_root), project_ledger_fixture.FIXTURE_ONLY_ENV: "1"},
-            timeout=timeout,
-        )
+        try:
+            completed = mtc.run_python(
+                tree_root,
+                ["-m", DRIVER, "--root", str(self.root), *arguments],
+                # 全部动作使用真实校验的 staging 夹具总账，不能借用生产出口策略。
+                extra_env={TREE_ROOT_ENV: str(tree_root), project_ledger_fixture.FIXTURE_ONLY_ENV: "1"},
+                timeout=timeout,
+            )
+        except mtc.subprocess.TimeoutExpired as error:
+            # 10-26 ARM64 实跑：evolve 步骤超时只留下一行 subprocess 异常，看不出是慢还是挂住；把子进程已经吐出的尾部带上。
+            def _tail(value) -> str:
+                text = value.decode("utf-8", "replace") if isinstance(value, bytes) else (value or "")
+                return text[-3000:]
+
+            self.case.fail(f"driver {' '.join(arguments)} 超过 {timeout:g} 秒仍未结束\nSTDERR 尾:\n{_tail(error.stderr)}\nSTDOUT 尾:\n{_tail(error.stdout)}")
         # 连续链失败时保留工具实际诊断，避免只剩父监督器的动作退出状态。
         self.last_stdout, self.last_stderr = completed.stdout, completed.stderr
         self.case.assertEqual(
@@ -311,7 +319,7 @@ class _RealChainHarness:
         ``registered``（不写任何文件），否则 tool-evolution 预览→批准。修复只在评估器与读侧，登记时断言影响为空：
         变化落在 control／evidence 层、编排器 wire 闭包不变，官方与候选作业都不重采。"""
 
-        result = self.run(tree_root, "evolve", "--fix-commit", FIX_COMMIT, "--reason", "评估链副本：修复评估器／读侧缺陷后登记工具演进")
+        result = self.run(tree_root, "evolve", "--fix-commit", FIX_COMMIT, "--reason", "评估链副本：修复评估器／读侧缺陷后登记工具演进", timeout=3000.0)
         self.case.assertIn(result["status"], {"evolution_applied", "registered"}, result)
         if result["status"] == "evolution_applied":
             self.case.assertEqual(result["changes"]["impact_paths"], [], result)

@@ -117,6 +117,65 @@ class UnittestRunnerSubprocessTest(unittest.TestCase):
         self.assertIn("超时", outcome.detail)
 
 
+class BindExecutionTreeTest(unittest.TestCase):
+    """第 13 项：历史缺陷回放在 ARM64 上要把固定采集执行位置绑到被测副本（10-26 实跑漏报 2 个的根因）。"""
+
+    def _production_root(self, root: Path, *, present: bool) -> Path:
+        production = root / "oauth-capture"
+        if present:
+            (production / "tools" / "official_client_capture").mkdir(parents=True)
+        else:
+            production.mkdir()
+        return production
+
+    def test_machine_without_production_execution_copy_runs_unwrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch.object(engine, "PRODUCTION_CAPTURE_ROOT", self._production_root(Path(temp), present=False)):
+                self.assertEqual(engine.bind_execution_tree_argv(Path("/tree"), ["python3", "-m", "x"]), ["python3", "-m", "x"])
+
+    def test_machine_with_production_copy_binds_it_to_the_tree_in_a_private_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            production = self._production_root(Path(temp), present=True)
+            with mock.patch.object(engine, "PRODUCTION_CAPTURE_ROOT", production), \
+                    mock.patch.object(engine.os, "geteuid", return_value=0), \
+                    mock.patch.object(engine.shutil, "which", return_value="/usr/bin/unshare"), \
+                    mock.patch.object(engine.sys, "platform", "linux"):
+                argv = engine.bind_execution_tree_argv(Path("/tree"), ["python3", "-m", "x"])
+        self.assertEqual(argv[:6], ["unshare", "-m", "--propagation", "private", "sh", "-c"])
+        self.assertIn(f'mount --bind "$0" {production}', argv[6])
+        self.assertEqual(argv[7:], ["/tree", "python3", "-m", "x"])
+
+    def test_machine_with_production_copy_but_not_root_refuses_instead_of_running_unbound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch.object(engine, "PRODUCTION_CAPTURE_ROOT", self._production_root(Path(temp), present=True)), \
+                    mock.patch.object(engine.os, "geteuid", return_value=1000):
+                self.assertIsNone(engine.bind_execution_tree_argv(Path("/tree"), ["python3"]))
+
+    def test_runner_with_the_flag_still_passes_where_there_is_no_production_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as work:
+            with mock.patch.object(engine, "PRODUCTION_CAPTURE_ROOT", self._production_root(Path(temp), present=False)):
+                context = RunContext(tree=engine.REPO_ROOT, work=Path(work), capabilities={}, checkpoints={})
+                outcome = UnittestRunner([f"{SAMPLES}.Passing"], timeout_seconds=120, bind_execution_tree=True).run(context)
+        self.assertEqual(outcome.verdict, "pass", outcome.detail)
+
+    def test_runner_with_the_flag_reports_error_when_the_namespace_cannot_be_built(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            context = RunContext(tree=engine.REPO_ROOT, work=Path(work), capabilities={}, checkpoints={})
+            with mock.patch.object(engine, "bind_execution_tree_argv", return_value=None):
+                outcome = UnittestRunner([f"{SAMPLES}.Passing"], timeout_seconds=120, bind_execution_tree=True).run(context)
+        self.assertEqual(outcome.verdict, "error")
+        self.assertIn("mount namespace", outcome.detail)
+
+    def test_catalog_binds_only_the_two_managed_file_injection_probes_and_copies_the_bundle_script(self) -> None:
+        from tools.official_client_capture.tests import chain_rehearsal_catalog as catalog
+
+        probes = (*catalog.DEFECT_PROBES, *catalog.RECOVERY_PROBES)
+        bound = {probe.probe_id for probe in probes if getattr(probe.runner, "bind_execution_tree", False)}
+        self.assertEqual(bound, {"orphan-candidate-recovery-preview", "zero-result-isolation-source"})
+        recovery = next(probe for probe in probes if probe.probe_id == "vc1-recovery-fault-injection-chain")
+        self.assertIn("tools/prepare_assertion_bundle.sh", recovery.copy_extra)
+
+
 class CommandRunnerTest(unittest.TestCase):
     def _run(self, runner: CommandRunner) -> Outcome:
         with tempfile.TemporaryDirectory() as work:

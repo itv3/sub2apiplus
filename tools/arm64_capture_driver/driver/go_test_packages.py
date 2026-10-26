@@ -66,6 +66,24 @@ def count_conflicts(words: Sequence[str]) -> list[str]:
     return [value for value in values if value != "1"]
 
 
+_TIMEOUT_FLAG = re.compile(r"--?(?:test\.)?timeout(?:=.*)?")
+DEFAULT_GO_TEST_TIMEOUT = "30m"
+
+
+def with_default_timeout(extra: Sequence[str], configured: str | None) -> list[str]:
+    """附加参数里没有 ``-timeout`` 时补一个默认的 30 分钟。
+
+    ``go test`` 单个包缺省 10 分钟；ARM64 全集并发下 ``internal/service`` 包要 8～10 分钟（10-26 入口门禁 601.7 秒、同一包在
+    后台验证里 494.5 秒），贴着线被杀，而超时被杀按规矩不补跑，整轮就红。``configured`` 取自环境变量
+    ``GO_TEST_PACKAGES_TIMEOUT``：空＝默认 30m，``off``＝不补，其它值原样当 ``-timeout`` 取值。
+    """
+
+    words = list(extra)
+    if configured == "off" or any(_TIMEOUT_FLAG.fullmatch(word) for word in words):
+        return words
+    return [*words, f"-timeout={configured or DEFAULT_GO_TEST_TIMEOUT}"]
+
+
 def signal_exit_code(returncode: int) -> int:
     """``Popen.wait()`` 返回负数＝被该信号杀；按 shell 约定折成 128＋信号。"""
 
@@ -497,10 +515,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 缓存合同（-count=1，防测试结果缓存成为隐藏输入）由包装器固定；附加参数不许把它改掉。
         echo(f"go_test_packages：附加参数里的 -count 取值 {conflicts} 与缓存合同要求的 -count=1 矛盾，拒绝运行\n")
         return EXIT_WRAPPER_ERROR
+    extra = with_default_timeout(args.extra, os.environ.get("GO_TEST_PACKAGES_TIMEOUT"))
     try:
         if kind == "retry":
-            return run_retry(args.tags, args.pattern, args.extra, sidecar=sidecar, first_sidecar=first_sidecar, narrow_enabled=narrow_enabled, echo=echo)
-        return run_first(args.tags, args.pattern, args.extra, sidecar=sidecar, echo=echo)
+            return run_retry(args.tags, args.pattern, extra, sidecar=sidecar, first_sidecar=first_sidecar, narrow_enabled=narrow_enabled, echo=echo)
+        return run_first(args.tags, args.pattern, extra, sidecar=sidecar, echo=echo)
     except GoRunError as error:
         echo(f"go_test_packages：{error}\n")
         return error.exit_code

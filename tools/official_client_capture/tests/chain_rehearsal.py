@@ -287,6 +287,29 @@ def _decode(value: Any) -> str:
     return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
 
 
+PRODUCTION_CAPTURE_ROOT = Path("/root/oauth-capture")
+
+
+def bind_execution_tree_argv(tree: Path, argv: Sequence[str]) -> list[str] | None:
+    """有生产采集执行副本的机器（ARM64）上，把固定执行位置 ``/root/oauth-capture`` 在独立 mount namespace 里绑到被测副本再起子进程。
+
+    建 Campaign 时 ``_verify_execution_tree`` 会拿固定执行位置与被测副本逐文件比对；历史缺陷回放的副本改了受管文件
+    （``codex_upgrade.py`` 等），不绑定就在到达缺陷之前被“执行位置与受管树不一致”挡住，缺陷被误判成漏报（10-26 ARM64 实跑
+    漏报 2 个）。没有生产执行副本的机器（本机、CI）原样返回；有副本却建不了 namespace（非 root、没有 unshare）返回 ``None``。
+    """
+
+    try:
+        required = (PRODUCTION_CAPTURE_ROOT / "tools" / "official_client_capture").is_dir()
+    except PermissionError:   # 非 root 的 CI 运行器进不了 /root：等于没有生产副本
+        required = False
+    if not required:
+        return list(argv)
+    if os.geteuid() != 0 or shutil.which("unshare") is None or not sys.platform.startswith("linux"):
+        return None
+    return ["unshare", "-m", "--propagation", "private", "sh", "-c",
+            f'mount --bind "$0" {PRODUCTION_CAPTURE_ROOT} && exec "$@"', str(tree), *argv]
+
+
 class UnittestRunner(Runner):
     """在被测树里用独立子进程跑一组单元用例，并按用例逐个取结论。
 
@@ -295,16 +318,23 @@ class UnittestRunner(Runner):
     """
 
     def __init__(self, test_ids: Sequence[str], *, timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
-                 extra_env: Mapping[str, str] | None = None) -> None:
+                 extra_env: Mapping[str, str] | None = None, bind_execution_tree: bool = False) -> None:
         if not test_ids:
             raise RehearsalError("单元用例探针至少要有一个用例")
         self.test_ids = tuple(test_ids)
         self.timeout_seconds = timeout_seconds
         self.extra_env = dict(extra_env or {})
+        # 只给“注入缺陷会改受管文件、且用例会建 Campaign”的探针打开；其它探针不动，免得把依赖真实数据根的用例遮住。
+        self.bind_execution_tree = bind_execution_tree
         self.description = "unittest " + " ".join(self.test_ids)
 
     def run(self, context: RunContext) -> Outcome:
         argv = [sys.executable, "-B", "-m", PACKAGE_MODULE, "_unittest", *self.test_ids]
+        if self.bind_execution_tree:
+            bound = bind_execution_tree_argv(context.tree, argv)
+            if bound is None:
+                return Outcome("error", "本机有固定采集执行副本，但无法建立 mount namespace（需要 root 与 unshare），没法把执行位置绑到被测副本", "")
+            argv = bound
         extra = {key: expand_placeholders(value, context) for key, value in self.extra_env.items()}
         try:
             completed = subprocess.run(
