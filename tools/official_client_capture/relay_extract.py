@@ -470,6 +470,23 @@ def parse_ws_frames(data: bytes) -> list[dict]:
     return frames
 
 
+TURN_METADATA_HEADER = "x-codex-turn-metadata"
+
+
+def turn_metadata_key_names(value: str) -> list[str] | None:
+    """x-codex-turn-metadata 头值（一行 JSON 对象）的顶层键名，按出现顺序；不是 JSON 对象时返回 None。
+
+    头值本身按 SENSITIVE_HEADERS 脱敏成 ``<redacted len=N>``（里面有会话、线程、回合标识），键名和键序不含敏感内容，
+    单独留下来，判据才能核对“键数与键序是否同官方默认路径”（0.164.0 登记：图像端点合成路径必须是 14 键）。
+    """
+
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    return list(parsed.keys()) if isinstance(parsed, dict) else None
+
+
 def parse_h1_stream(data: bytes) -> list[dict]:
     """从连续字节流里逐个切出 h1 请求，保留字面大小写与出现顺序。"""
 
@@ -483,6 +500,7 @@ def parse_h1_stream(data: bytes) -> list[dict]:
         if not lines or " HTTP/1." not in lines[0]:
             break
         headers, clen, ctype, cenc = [], 0, "", ""
+        turn_metadata_keys = None
         for line in lines[1:]:
             if ":" not in line:
                 continue
@@ -498,6 +516,8 @@ def parse_h1_stream(data: bytes) -> list[dict]:
                 ctype = value
             elif low == "content-encoding":
                 cenc = value
+            elif low == TURN_METADATA_HEADER and turn_metadata_keys is None:
+                turn_metadata_keys = turn_metadata_key_names(value)
             headers.append({"name": name, "value": redact(name, value)})
         body_start = idx + 4
         rec = {
@@ -505,6 +525,8 @@ def parse_h1_stream(data: bytes) -> list[dict]:
             "header_names_in_order": [h["name"] for h in headers],
             "headers": headers,
         }
+        if turn_metadata_keys is not None:
+            rec["turn_metadata_keys"] = turn_metadata_keys
         if clen:
             if summary := summarize_body(data[body_start:body_start + clen], cenc, ctype):
                 rec["body"] = summary

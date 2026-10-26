@@ -275,7 +275,7 @@ FROZEN_MAPPING_SHA256 = (
 # （收尾后的现状，摘要 a8b0ed45…）复制并逐字替换版本号。载荷逐项审核：2112 个叶子里差异共 12 处且全是版本号（codex_version 1、官方原始字节
 # 描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.163.0 版
 # 逐字节相同；验收契约现算新旧画像载荷逐项相等，仍为 706df763…（dual_wire=25／candidate_profile=18）。0.163.0 画像文件保留不动。
-# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 17944144…。载荷逐项审核（把版本号换回 0.163.0 后与
+# 2026-10-27（0.164.0 差异报告落地，建 Campaign 前）：按调研结论改写判据，摘要由 e61ed64e… 换为 0fe39797…。载荷逐项审核（把版本号换回 0.163.0 后与
 # 0.163.0 版比较）：只有五条规则变化，其余 38 条规则逐字不变，规则数 43、场景、source_spec 不变——
 # ①SPEC-EP-002 新增 oauth-refresh-body-keys、oauth-refresh-reason-closed-set（ChatGPT 令牌刷新请求体新增 refresh_reason，键序 client_id, grant_type,
 #   refresh_reason, refresh_token；取值闭集 proactive_expiry／scheduled／unauthorized_recovery／forced；EP-002 本来就是 candidate_profile，分组不变）；
@@ -289,10 +289,14 @@ FROZEN_MAPPING_SHA256 = (
 #   content_item_kinds, content_item_metadata 的有序子集且必含后两个；不核对 UUID 版本位，旧窗口续聊是 UUIDv5）——依赖 relay_extract.shape_top_level 新给 input 附的 _head；
 # ④SPEC-EP-022 的 image-header-order 期望线序加入 x-codex-image-turn-id、x-codex-turn-metadata 两个头，紧跟 version、排在 authorization 之前（IMG 路 0.164.0 非正式实采
 #   20 条请求头序一致；originator 默认路径下由 HTTP 客户端默认头补在 content-type 之后，不在两个新头之间；画像槽位 20、25）。
-# 验收契约现算 706df763…→bca66917…：dual_wire=25／candidate_profile=18 不变，各规则分组不变（BODY-006 仍是 dual_wire，新增三条判据官方侧也执行），
-# expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002、SPEC-BODY-006 三项多出上述新检查 ID。
+# ⑤SPEC-EP-022 新增 image-turn-metadata-default-keys：图像请求（候选侧由脚本直接调网关，无同回合 Responses 事实，走网关合成路径）的 x-codex-turn-metadata 必须是官方 CLI
+#   默认路径的 14 键同序（session_id, thread_id, reasoning_effort, turn_id, model, thread_source, turn_trigger, sandbox, sandbox_mode, auto_review_enabled,
+#   node_repl_auto_review_required, node_repl_disabled, turn_started_at_unix_ms, codex_version）；画像 TurnMetadata.SessionDefaults 漏登记时代码静默退回 12 键，靠它拦下。
+#   依赖 relay_extract 新增的请求级 turn_metadata_keys（只留键名与键序，头值仍脱敏）。
+# 验收契约现算 706df763…→96a80d6f…：dual_wire=25／candidate_profile=18 不变，各规则分组不变（BODY-006 仍是 dual_wire，新增三条判据官方侧也执行），
+# expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002、SPEC-BODY-006、SPEC-EP-022 四项多出上述新检查 ID。
 FROZEN_PROFILE_SHA256 = (
-    "1794414471107ff19f647dd577aa2a3761e1764a180446470b32b84f762b9bdc"
+    "0fe3979798b537620febbbd2549f39281b71e2fde975c03353848e00ef4ceee5"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

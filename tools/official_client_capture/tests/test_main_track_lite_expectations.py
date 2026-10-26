@@ -219,7 +219,8 @@ class Expectation0164WireChecksTests(unittest.TestCase):
     - SPEC-EP-002：OAuth 刷新体多一个 refresh_reason（键序 client_id, grant_type, refresh_reason, refresh_token，取值四选一）。
     这四条规则（EP-002、WS-005、BODY-003、EP-022）都含读内部记录类型的判据，整条是 candidate_profile，不在官方侧离线判据门里执行。
     - SPEC-WS-005：incremental_tools 默认开启后，generate=false 的预热帧 input 是空数组，additional_tools 前缀由第一条业务帧带出。
-    - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata（紧跟 version）。
+    - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata（紧跟 version）；图像请求的 x-codex-turn-metadata 必须是官方默认路径 14 键同序
+      （依赖 relay_extract 新增的请求级 turn_metadata_keys；头值本身仍脱敏）。
     - SPEC-BODY-006：Lite 前缀两项的形态（additional_tools 键序与 id 形态、基础指令消息 id 形态与 passthrough 键序，不核对 UUID 版本位）；
       依赖 relay_extract 给 input 附的头两项形态 ``_head``。
     样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
@@ -436,6 +437,77 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         from tools.official_client_capture import derive_official_observations as derive
 
         self.assertEqual(derive._mitm_body_summary({"json": body})["shape"], summary["shape"])
+
+    # ---- SPEC-EP-022：图像请求 x-codex-turn-metadata 的 14 键（依赖 relay_extract 新增的 turn_metadata_keys） ----
+
+    # 官方 CLI 默认路径（exec，IMG 路对 0.164.0 的实采原文换成占位值）：键序是 swap_remove 的副作用。
+    IMAGE_TURN_METADATA_OFFICIAL = {
+        "session_id": "s", "thread_id": "s", "reasoning_effort": "low", "turn_id": "t", "model": "gpt-6.1-sol",
+        "thread_source": "user", "turn_trigger": "exec", "sandbox": "seccomp", "sandbox_mode": "read-only",
+        "auto_review_enabled": False, "node_repl_auto_review_required": True, "node_repl_disabled": False,
+        "turn_started_at_unix_ms": 1, "codex_version": "0.164.0",
+    }
+
+    def image_request_bytes(self, metadata: dict | None) -> bytes:
+        body = json.dumps({"prompt": "p", "background": "opaque", "model": "gpt-image-2", "quality": "auto", "size": "auto"}).encode()
+        headers = ["POST /backend-api/codex/images/generations HTTP/1.1", "version: 0.164.0", "x-codex-image-turn-id: t"]
+        if metadata is not None:
+            headers.append("x-codex-turn-metadata: " + json.dumps(metadata, separators=(",", ":")))
+        headers += ["authorization: Bearer x", "content-type: application/json", "host: chatgpt.com", f"content-length: {len(body)}"]
+        return ("\r\n".join(headers) + "\r\n\r\n").encode() + body
+
+    def image_observations(self, metadata: dict | None) -> list:
+        from tools.official_client_capture import derive_official_observations as derive
+
+        records = derive._derive_from_h1(
+            self.image_request_bytes(metadata),
+            {"connection_id": "conn005", "target": "scenarios/A09/relay/conn005.client_to_upstream.bin", "scenario_id": "A09",
+             "source": "scenarios/A09/relay/conn005.client_to_upstream.bin"},
+        )
+        return [
+            candidate_rule_assertion.Observation(
+                record_id=record["record_id"], scenario_id="A09", record_type=record["record_type"],
+                artifact_path="x", evidence_paths=("x",),
+                labels={"transport": "http", "endpoint_class": "images", "provider": "openai_oauth"}, data=record["data"],
+            )
+            for record in records
+        ]
+
+    def test_image_turn_metadata_keys_are_visible_while_values_stay_redacted(self) -> None:
+        requests = relay_extract.parse_h1_stream(self.image_request_bytes(self.IMAGE_TURN_METADATA_OFFICIAL))
+        self.assertEqual(requests[0]["turn_metadata_keys"], list(self.IMAGE_TURN_METADATA_OFFICIAL))
+        header = next(h for h in requests[0]["headers"] if h["name"] == "x-codex-turn-metadata")
+        self.assertTrue(header["value"].startswith("<redacted len="), header)
+        # 没有这个头、头值不是 JSON 对象的请求不产生该字段。
+        self.assertNotIn("turn_metadata_keys", relay_extract.parse_h1_stream(self.image_request_bytes(None))[0])
+        self.assertNotIn("turn_metadata_keys", relay_extract.parse_h1_stream(
+            b"GET /x HTTP/1.1\r\nx-codex-turn-metadata: not-json\r\nhost: h\r\n\r\n")[0])
+        # 派生器与断言器直接解析原件的结果同构（模块文档的约定）。
+        import tempfile
+
+        derived = self.image_observations(self.IMAGE_TURN_METADATA_OFFICIAL)[0].data["turn_metadata_keys"]
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "conn005.client_to_upstream.bin"
+            raw.write_bytes(self.image_request_bytes(self.IMAGE_TURN_METADATA_OFFICIAL))
+            direct = candidate_rule_assertion._h1_observations(raw, "conn005.client_to_upstream.bin", ["A09"], {}, {})
+        self.assertEqual(derived, direct[0].data["turn_metadata_keys"])
+
+    def test_image_turn_metadata_default_keys_check(self) -> None:
+        check = "image-turn-metadata-default-keys"
+        self.assertTrue(self.run_check("SPEC-EP-022", check, self.image_observations(self.IMAGE_TURN_METADATA_OFFICIAL)))
+        # 补丁漏填 SessionDefaults：代码静默退回 12 键（没有 model、reasoning_effort），判据必须拦住。
+        twelve = {k: v for k, v in self.IMAGE_TURN_METADATA_OFFICIAL.items() if k not in {"model", "reasoning_effort"}}
+        self.assertFalse(self.run_check("SPEC-EP-022", check, self.image_observations(twelve)))
+        # 只缺 reasoning_effort（13 键）、键序不对（model 排在 turn_id 前）也失败。
+        self.assertFalse(self.run_check("SPEC-EP-022", check, self.image_observations(
+            {k: v for k, v in self.IMAGE_TURN_METADATA_OFFICIAL.items() if k != "reasoning_effort"})))
+        reordered = {"session_id": "s", "thread_id": "s", "turn_id": "t", "model": "m", "reasoning_effort": "low",
+                     **{k: v for k, v in self.IMAGE_TURN_METADATA_OFFICIAL.items()
+                        if k not in {"session_id", "thread_id", "turn_id", "model", "reasoning_effort"}}}
+        self.assertFalse(self.run_check("SPEC-EP-022", check, self.image_observations(reordered)))
+        # 请求根本没带这个头也失败（而不是空通过）；选不到样本同理。
+        self.assertFalse(self.run_check("SPEC-EP-022", check, self.image_observations(None)))
+        self.assertFalse(self.run_check("SPEC-EP-022", check, []))
 
     def test_first_business_frame_chains_the_warmup_response(self) -> None:
         tools = [{"type": "function", "name": "shell"}]

@@ -3999,6 +3999,44 @@
         {
           "assertion": {
             "operator": "all_equal",
+            "path": "data.turn_metadata_keys",
+            "value": [
+              "session_id",
+              "thread_id",
+              "reasoning_effort",
+              "turn_id",
+              "model",
+              "thread_source",
+              "turn_trigger",
+              "sandbox",
+              "sandbox_mode",
+              "auto_review_enabled",
+              "node_repl_auto_review_required",
+              "node_repl_disabled",
+              "turn_started_at_unix_ms",
+              "codex_version"
+            ]
+          },
+          "description": "图像请求的 x-codex-turn-metadata 是官方 CLI 默认路径的 14 键且键序一致（reasoning_effort 在 turn_id 前、model 在 turn_id 后是 swap_remove 的副作用）；候选侧图像请求没有同回合 Responses 事实，14 键靠画像 TurnMetadata.SessionDefaults 登记的默认会话模型补齐，漏登记会静默退回 12 键",
+          "id": "image-turn-metadata-default-keys",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.endpoint_class",
+                "value": "images"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
             "path": "data.body.top_level_fields_in_order",
             "value": [
               "prompt",

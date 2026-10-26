@@ -216,6 +216,8 @@ def _derive_from_h1(
             "header_values": _header_values(request),
             "body": request.get("body"),
         }
+        if "turn_metadata_keys" in request:
+            data["turn_metadata_keys"] = request["turn_metadata_keys"]
         records.append(
             _observation_record(
                 target=entry["target"],

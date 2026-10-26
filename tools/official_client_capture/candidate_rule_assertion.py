@@ -921,6 +921,8 @@ def _h1_observations(
             "header_values": _header_values(request),
             "body": request.get("body"),
         }
+        if "turn_metadata_keys" in request:
+            data["turn_metadata_keys"] = request["turn_metadata_keys"]
         for scenario_id in scenario_ids:
             observations.append(
                 Observation(
