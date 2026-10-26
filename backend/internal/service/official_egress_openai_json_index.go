@@ -86,6 +86,10 @@ type officialJSONRawIndex struct {
 	seed         maphash.Seed
 	validateOnly bool // 只做语法校验：不登记节点、不计算摘要
 	skipDigest   bool // 只登记节点、不计算摘要：供索引直建对象树的解码器使用
+	// orderAdditionalToolsKeys 为真时，重编码带 id 的 additional_tools 项会把键序固定为官方序（见
+	// orderOfficialAdditionalToolsKeys）。只由画像声明 uuidv7 增量窗口方案的编码入口置位（见
+	// officialJSONIndexWithAdditionalToolsKeyOrder），其余画像保持原有编码行为。
+	orderAdditionalToolsKeys bool
 }
 
 var officialJSONRawHashSeed = maphash.MakeSeed()
@@ -1171,7 +1175,9 @@ func officialJSONAppendObject(index *officialJSONRawIndex, out []byte, payload m
 	}
 	sort.Strings(additional)
 	keys = append(keys, additional...)
-	keys = orderOfficialAdditionalToolsKeys(payload, keys)
+	if index != nil && index.orderAdditionalToolsKeys {
+		keys = orderOfficialAdditionalToolsKeys(payload, keys)
+	}
 
 	out = append(out, '{')
 	for i, key := range keys {
@@ -1200,9 +1206,34 @@ func officialJSONAppendObject(index *officialJSONRawIndex, out []byte, payload m
 // 其后依次是 id、role、tools。
 var officialAdditionalToolsKeyOrder = [...]string{"type", "id", "role", "tools"}
 
+// officialJSONIndexWithAdditionalToolsKeyOrder 给编码入口用：enabled 为真（画像声明 uuidv7 增量窗口方案）时，保证返回一个
+// 带"additional_tools 键序固定为官方序"开关的索引，enabled 为假时原样返回 index（可为 nil），与引入该开关之前完全相同。
+// index 为 nil 时按 original 现场构建（与编码函数自己的做法一致）；original 不可索引（空、非法）时用一个空对象索引占位，
+// 它不匹配任何原文区间，编码结果与 nil 索引相同。开关只改变键序，不影响原文区间的复用。
+func officialJSONIndexWithAdditionalToolsKeyOrder(
+	index *officialJSONRawIndex,
+	original []byte,
+	enabled bool,
+) *officialJSONRawIndex {
+	if !enabled {
+		return index
+	}
+	if index == nil {
+		index = officialJSONRawIndexForOriginal(original)
+	}
+	if index == nil {
+		index, _ = buildOfficialJSONRawIndex([]byte("{}"))
+	}
+	if index != nil {
+		index.orderAdditionalToolsKeys = true
+	}
+	return index
+}
+
 // orderOfficialAdditionalToolsKeys 在重编码 additional_tools 项时把键序固定为官方序（其余键保持相对顺序、排在后面）。
 // 只作用于带 id 的项：带 id 是新形态（Codex 增量窗口自带，或网关合成时补上），其官方键序是确定的；没有 id 的旧形态
 // 保持原有编码行为不变。未被改动的项直接引用原文字节，不经过这里，所以官方客户端自带的项永远保持它原有的字节。
+// 仅在索引的 orderAdditionalToolsKeys 开关为真（画像声明 uuidv7 方案）时才会被调用。
 func orderOfficialAdditionalToolsKeys(payload map[string]any, keys []string) []string {
 	if itemType, _ := payload["type"].(string); itemType != "additional_tools" {
 		return keys

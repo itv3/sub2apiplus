@@ -314,8 +314,11 @@ func TestEnsureOfficialCodexAdditionalToolsIDs(t *testing.T) {
 
 // 带 id 的 additional_tools 项被重编码时键序固定为官方序 type,id,role,tools；没有 id 的旧形态编码行为不变。
 func TestOfficialJSONEncoderOrdersAdditionalToolsKeysWithID(t *testing.T) {
+	// 开关由画像声明 uuidv7 方案的编码入口置位；这里直接构造带开关的索引。
+	index := officialJSONIndexWithAdditionalToolsKeyOrder(nil, nil, true)
+	require.NotNil(t, index)
 	encode := func(value map[string]any) string {
-		out, err := officialJSONAppendValue(nil, nil, value, -1)
+		out, err := officialJSONAppendValue(index, nil, value, -1)
 		require.NoError(t, err)
 		return string(out)
 	}
@@ -376,7 +379,7 @@ func officialIncrementalHTTPBody(items ...string) []byte {
 }
 
 // 入站是 Codex 客户端的 Lite 请求：官方形态的 additional_tools 与基础指令消息原样放行（id、键序、passthrough 都不变），
-// 不论 id 是增量窗口的 UUIDv7 还是旧窗口的 UUIDv5。
+// 不论 id 是增量窗口的 UUIDv7 还是旧窗口的 UUIDv5（基础指令消息除 passthrough.turn_id 外逐字节，turn_id 改写成网关的窗口第一段 turn_id）。
 func TestFinalizeOfficialOpenAIHTTPBodyKeepsInboundOfficialPrefixVerbatimInIncrementalWindow(t *testing.T) {
 	withOfficialCodexSyntheticPreviousProfile(t, syntheticIncrementalPrefixMutation(t))
 	cases := []struct {
@@ -389,11 +392,13 @@ func TestFinalizeOfficialOpenAIHTTPBodyKeepsInboundOfficialPrefixVerbatimInIncre
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
 			inbound := officialIncrementalHTTPBody(item.tools, item.base, incOfficialContext, incOfficialUser)
-			final, _ := finalizeIncrementalHTTP(t, true, inbound, stripInboundPassthrough(t, inbound))
+			final, identity := finalizeIncrementalHTTP(t, true, inbound, stripInboundPassthrough(t, inbound))
 			input := gjson.GetBytes(final, "input").Array()
 			require.Equal(t, 4, len(input))
 			require.Equal(t, item.tools, input[0].Raw, "additional_tools 逐字节原样")
-			require.Equal(t, item.base, input[1].Raw, "基础指令消息逐字节原样（id、passthrough 全部保留）")
+			// 基础指令消息除 passthrough.turn_id 外逐字节原样（id、键序、其余各键全部保留）；turn_id 改写成网关本轮（单段，
+			// 即窗口第一段）的 turn_id。旧窗口的官方形态本来就没有 turn_id 键，整项原样。
+			requireBaseMessageVerbatimExceptTurnID(t, item.base, input[1].Raw, identity.turnID, "基础指令消息")
 			require.Equal(t, "permissions", input[2].Get("content.0.text").String())
 			require.Equal(t, "hi", input[3].Get("content.0.text").String())
 			require.False(t, gjson.GetBytes(final, "instructions").Exists())
@@ -429,6 +434,8 @@ func TestFinalizeOfficialOpenAIHTTPBodySynthesizesStableUUIDv7PrefixForThirdPart
 	requireStableUUIDv7ItemID(t, base.Get("id").String(), "msg", "基础指令消息")
 	require.Equal(t, text, base.Get("content.0.text").String())
 	requireSynthesizedBasePassthrough(t, base, "HTTP 第三方入站")
+	require.Equal(t, identity.turnID, base.Get("internal_chat_message_metadata_passthrough.turn_id").String(),
+		"基础指令消息的 turn_id 是窗口第一段（首轮即本轮）的网关 turn_id")
 	require.True(t, isOfficialCodexOfficialBaseInstructionsForm(section, []byte(base.Raw), text))
 
 	// 同一线程、同内容的下一个请求：id 与整段前缀逐字节相同（上游前缀缓存不被 id 破坏）。
@@ -525,7 +532,7 @@ func TestMoveOfficialOpenAIAdditionalToolsFirstKeepsIDBearingIncrementsInPlace(t
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
 			payload := map[string]any{"input": append([]any(nil), item.input...)}
-			require.Equal(t, item.wantModified, moveOfficialOpenAIAdditionalToolsFirst(payload))
+			require.Equal(t, item.wantModified, moveOfficialOpenAIAdditionalToolsFirst(payload, true))
 			require.Equal(t, item.want, payload["input"])
 		})
 	}

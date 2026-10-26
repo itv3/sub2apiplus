@@ -72,11 +72,12 @@ func TestWSIncrementalPrefixOfficialClientFlowKeepsEmptyPrewarmAndVerbatimPrefix
 	input := gjson.GetBytes(business, "input").Array()
 	require.Len(t, input, 4)
 	require.Equal(t, incOfficialTools, input[0].Raw, "additional_tools 逐字节原样")
-	require.Equal(t, incOfficialBase, input[1].Raw, "基础指令消息逐字节原样（UUIDv7 id、turn_id、create_time、content_item_metadata 都保留）")
-	require.Equal(t, 1, strings.Count(string(business), "model.base_instructions"), "前缀只出现一次，没有重复追加")
-	require.Equal(t, "resp_inc_warm", gjson.GetBytes(business, "previous_response_id").String())
 	turnID := gjson.GetBytes(business, "client_metadata.turn_id").String()
 	require.NotEmpty(t, turnID)
+	requireBaseMessageVerbatimExceptTurnID(t, incOfficialBase, input[1].Raw, turnID,
+		"基础指令消息除 turn_id 外逐字节原样（UUIDv7 id、create_time、content_item_metadata 都保留），turn_id 与首轮其余项、client_metadata 相同")
+	require.Equal(t, 1, strings.Count(string(business), "model.base_instructions"), "前缀只出现一次，没有重复追加")
+	require.Equal(t, "resp_inc_warm", gjson.GetBytes(business, "previous_response_id").String())
 	for index := 2; index < 4; index++ {
 		require.Equal(t, turnID, input[index].Get("internal_chat_message_metadata_passthrough.turn_id").String(), "input.%d", index)
 	}
@@ -99,7 +100,8 @@ func TestWSIncrementalPrefixFullHistoryReplayGetsEmptyGatewayPrewarmAndKeepsPref
 
 	first := incWSPrepare(t, ctx, original, "")
 	require.Equal(t, incOfficialTools, gjson.GetBytes(first, "input.0").Raw)
-	require.Equal(t, incOfficialBase, gjson.GetBytes(first, "input.1").Raw)
+	requireBaseMessageVerbatimExceptTurnID(t, incOfficialBase, gjson.GetBytes(first, "input.1").Raw,
+		gjson.GetBytes(first, "client_metadata.turn_id").String(), "整段重放的基础指令消息")
 
 	prewarm, inject, err := buildDerivedOpenAIOfficialEgressWSPrewarmFrame(ctx, first)
 	require.NoError(t, err)
@@ -116,7 +118,8 @@ func TestWSIncrementalPrefixFullHistoryReplayGetsEmptyGatewayPrewarmAndKeepsPref
 	require.Equal(t, wsBasePrewarmResp, gjson.GetBytes(chain, "previous_response_id").String())
 	require.False(t, gjson.GetBytes(chain, "generate").Exists())
 	require.Equal(t, incOfficialTools, gjson.GetBytes(chain, "input.0").Raw, "业务帧保留 additional_tools，逐字节不变")
-	require.Equal(t, incOfficialBase, gjson.GetBytes(chain, "input.1").Raw, "业务帧保留基础指令消息，逐字节不变")
+	requireBaseMessageVerbatimExceptTurnID(t, incOfficialBase, gjson.GetBytes(chain, "input.1").Raw,
+		gjson.GetBytes(chain, "client_metadata.turn_id").String(), "业务帧保留基础指令消息，除 turn_id 外逐字节不变")
 	require.Equal(t, []string{"tools", "BASE", "message:developer", "message:user"}, describeWSInput(chain))
 }
 
@@ -191,6 +194,7 @@ func requireTurnIDOnNonPrefixItems(t *testing.T, frame []byte) {
 			require.False(t, passthrough.Exists(), "input.%d：additional_tools 不带 passthrough", index)
 		case passthrough.Get("content_item_kinds").Exists():
 			requireSynthesizedBasePassthrough(t, item, "input."+strconv.Itoa(index))
+			require.Equal(t, turnID, passthrough.Get("turn_id").String(), "input.%d：单段时基础指令消息的 turn_id 等于本轮 turn_id", index)
 		default:
 			require.Equal(t, turnID, passthrough.Get("turn_id").String(), "input.%d 应带本轮 turn_id", index)
 		}

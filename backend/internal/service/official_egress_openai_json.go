@@ -116,7 +116,17 @@ func marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
 	if err != nil {
 		return nil, err
 	}
+	index = officialJSONIndexWithAdditionalToolsKeyOrder(
+		index, original, officialCodexOrdersAdditionalToolsKeys(mode, endpointID),
+	)
 	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, index)
+}
+
+// officialCodexOrdersAdditionalToolsKeys 判断该版本画像、该端点是否要把重编码的带 id additional_tools 项键序固定为官方序：
+// 与基础指令的增量窗口方案同一开关（BaseInstructions 节列出该端点且声明 IDScheme=uuidv7）。0.163 等旧画像恒为否。
+func officialCodexOrdersAdditionalToolsKeys(mode, endpointID string) bool {
+	section, ok := officialCodexBaseInstructionsCarrier(mode, endpointID)
+	return ok && section.UsesUUIDv7IDs()
 }
 
 func marshalOfficialOpenAIWSJSONPreservingRaw(
@@ -130,7 +140,10 @@ func marshalOfficialOpenAIWSJSONPreservingRaw(
 	if err != nil {
 		return nil, err
 	}
-	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, original)
+	index := officialJSONIndexWithAdditionalToolsKeyOrder(
+		nil, original, officialCodexOrdersAdditionalToolsKeys(mode, officialCodexEndpointResponsesWS),
+	)
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, index)
 }
 
 // marshalOfficialOrderedJSONObject 只固定官方结构体可观察的顶层字段顺序；
@@ -236,6 +249,9 @@ func marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex(
 	if err != nil {
 		return nil, err
 	}
+	index = officialJSONIndexWithAdditionalToolsKeyOrder(
+		index, original, officialCodexOrdersAdditionalToolsKeys(mode, endpointID),
+	)
 	return marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex(payload, order, original, index)
 }
 

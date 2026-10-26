@@ -487,6 +487,13 @@ func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
 				if !want[index].Exists() {
 					continue
 				}
+				if strings.Contains(want[index].Raw, "model.base_instructions") && want[index].Get("turn_id").Exists() {
+					// 基础指令消息的 passthrough：除 turn_id 外原样，turn_id 是网关本轮（单段，即窗口第一段）的 turn_id。
+					p2RequirePassthroughExceptTurnID(t, want[index], got[index], fmt.Sprintf("input.%d", index))
+					require.Equal(t, identity.turnID, got[index].Get("turn_id").String(), "input.%d：基础指令消息的 turn_id 是窗口第一段的网关 turn_id", index)
+					require.NotEqual(t, want[index].Get("turn_id").String(), got[index].Get("turn_id").String())
+					continue
+				}
 				if strings.Contains(want[index].Raw, "model.base_instructions") || !want[index].Get("turn_id").Exists() {
 					require.Equal(t, want[index].Raw, got[index].Raw, "input.%d：基础指令消息／无 turn_id 的 passthrough 原样", index)
 					continue

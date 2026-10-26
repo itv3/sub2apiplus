@@ -67,6 +67,9 @@ func marshalOfficialWSFrameBody(mode string, payload map[string]any, source []by
 	if err != nil {
 		return nil, err
 	}
+	index = officialJSONIndexWithAdditionalToolsKeyOrder(
+		index, source, officialCodexOrdersAdditionalToolsKeys(mode, officialCodexEndpointResponsesWS),
+	)
 	if index != nil {
 		index.ensureDigests()
 	}

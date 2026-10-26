@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,7 +70,27 @@ func inputRaws(frame []byte) []string {
 	return raws
 }
 
-// requireBasePrefixVerbatim 要求 got 的 input 前两项（additional_tools 与基础指令消息）与 want 帧里的逐字节相同。
+// requireBaseMessageVerbatimExceptTurnID 要求 got 的基础指令消息与 want（入站官方原文）除 passthrough.turn_id 外逐字节相同：
+// id、键序、其余各键、空白都不变。入站带 turn_id 键时，got 的 turn_id 必须等于 wantTurnID（网关的"窗口第一段"turn_id），
+// 且不能还是客户端的值（不得把客户端命名空间的 id 漏到上游）；入站没有 turn_id 键（旧窗口的官方形态）时整项逐字节相同，不补键。
+func requireBaseMessageVerbatimExceptTurnID(t *testing.T, want, got, wantTurnID, label string) {
+	t.Helper()
+	clientTurn := gjson.Get(want, "internal_chat_message_metadata_passthrough.turn_id")
+	if !clientTurn.Exists() {
+		require.True(t, want == got, "%s：入站基础指令消息没有 turn_id 键，必须整项逐字节原样且不补键\nwant %.300s\n got %.300s", label, want, got)
+		return
+	}
+	gotTurn := gjson.Get(got, "internal_chat_message_metadata_passthrough.turn_id")
+	require.True(t, gotTurn.Exists(), label)
+	require.Equal(t, wantTurnID, gotTurn.String(), "%s：基础指令消息的 turn_id 是网关的窗口第一段 turn_id", label)
+	require.NotEqual(t, clientTurn.String(), gotTurn.String(), "%s：客户端的 turn_id 不得漏到上游", label)
+	expected := string(rewriteOfficialCodexBaseInstructionsRawTurnID(json.RawMessage(want), wantTurnID))
+	require.True(t, expected == got, "%s：除 turn_id 外必须逐字节原样\nwant %.300s\n got %.300s", label, expected, got)
+}
+
+// requireBasePrefixVerbatim 要求 got 的 input 前两项（additional_tools 与基础指令消息）与 want 帧里的相同：
+// additional_tools 逐字节，基础指令消息除 turn_id 外逐字节；turn_id 必须与 got 里第一段其余项的 turn_id 一致
+// （官方里它就是窗口第一个回合的 id，与第一段其余项相同）。
 func requireBasePrefixVerbatim(t *testing.T, want, got []byte, label string) {
 	t.Helper()
 	wantItems, gotItems := inputRaws(want), inputRaws(got)
@@ -78,7 +99,13 @@ func requireBasePrefixVerbatim(t *testing.T, want, got []byte, label string) {
 	require.Equal(t, "additional_tools", gjson.Get(wantItems[0], "type").String(), label)
 	require.Equal(t, "model.base_instructions", gjson.Get(wantItems[1], "internal_chat_message_metadata_passthrough.content_item_kinds.0").String(), label)
 	require.True(t, wantItems[0] == gotItems[0], "%s：additional_tools 必须逐字节原样（%d 字节）", label, len(wantItems[0]))
-	require.True(t, wantItems[1] == gotItems[1], "%s：基础指令消息必须逐字节原样\nwant %.300s\n got %.300s", label, wantItems[1], gotItems[1])
+	wantTurnID := gjson.Get(gotItems[1], "internal_chat_message_metadata_passthrough.turn_id").String()
+	if len(gotItems) > 2 {
+		if firstSegment := gjson.Get(gotItems[2], "internal_chat_message_metadata_passthrough.turn_id"); firstSegment.Exists() {
+			wantTurnID = firstSegment.String()
+		}
+	}
+	requireBaseMessageVerbatimExceptTurnID(t, wantItems[1], gotItems[1], wantTurnID, label)
 }
 
 func TestWSIncrementalPrefixRealCodex0164LiteFlow(t *testing.T) {

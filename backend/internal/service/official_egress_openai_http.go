@@ -989,12 +989,20 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	var modified bool
 	var err error
 	carrier, carrierActive := officialCodexBaseInstructionsCarrier(options.ProfileMode, endpointID)
-	// 画像声明 uuidv7 方案且本请求走 Lite 时，前缀按增量窗口形态处理：入站官方形态原样保留，只有第三方入站才合成稳定
+	// 画像声明 uuidv7 方案且本请求走 Lite 时，前缀按增量窗口形态处理：入站官方形态除基础指令消息的 turn_id 外原样保留，只有第三方入站才合成稳定
 	// UUIDv7 id（见 official_egress_openai_incremental_prefix.go）。其余情况与引入该方案之前逐字节相同。
 	incrementalPrefix := carrierActive && officialCodexIncrementalPrefix(carrier, useResponsesLite)
+	// 画像声明 uuidv7 方案时，基础指令消息自己的 passthrough.turn_id（官方里是窗口第一个回合的 id）改写成网关的
+	// "窗口第一段"turn_id；必须在安装基础指令之前、用入站 input 算（见 officialOpenAIHTTPFirstSegmentTurnID）。
+	baseInstructionsTurnID := ""
+	if !isCompact && carrierActive && carrier.UsesUUIDv7IDs() && options.TurnID != "" {
+		baseInstructionsTurnID = officialOpenAIHTTPFirstSegmentTurnID(payload, options.TurnID, options.ThreadID)
+	}
 	switch {
 	case incrementalPrefix:
-		modified, err = applyOfficialCodexIncrementalBaseInstructionsCarrier(payload, contract, carrier, options.ThreadID)
+		modified, err = applyOfficialCodexIncrementalBaseInstructionsCarrier(
+			payload, contract, carrier, options.ThreadID, baseInstructionsTurnID,
+		)
 	case carrierActive:
 		modified, err = applyOfficialCodexBaseInstructionsCarrier(payload, contract, carrier, options.ThreadID)
 	default:
@@ -1010,6 +1018,10 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 			return false, err
 		}
 		if turnRewritten {
+			modified = true
+		}
+		// 仍以对象形态留在 input 里的基础指令消息（没被安装步骤重建的残留）的 turn_id 同样改写，避免客户端值漏到上游。
+		if rewriteOfficialCodexBaseInstructionsMapTurnIDs(payload, carrier, baseInstructionsTurnID) {
 			modified = true
 		}
 	}
@@ -1046,6 +1058,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 			reasoningDefaults,
 			allowedTopLevel,
 			options.UserAgent,
+			carrierActive && carrier.UsesUUIDv7IDs(),
 		)
 		if err != nil {
 			return false, err
@@ -1378,6 +1391,9 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 	allowedTopLevel map[string]struct{},
 	// userAgent 只用于投影告警定位来源，不参与定型决策。
 	userAgent string,
+	// keepIDBearingAdditionalTools 为真（画像声明 uuidv7 增量窗口方案）时，带 id 的 additional_tools 增量项原地不动；
+	// 其余画像沿用旧行为（所有 additional_tools 都提到 input 首位）。
+	keepIDBearingAdditionalTools bool,
 ) (bool, error) {
 	modified, err := normalizeDerivedOfficialOpenAIInput(payload)
 	if err != nil {
@@ -1395,7 +1411,7 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 		if liteModified {
 			modified = true
 		}
-		toolsModified, err := moveOfficialOpenAIHTTPToolsToInput(payload)
+		toolsModified, err := moveOfficialOpenAIHTTPToolsToInput(payload, keepIDBearingAdditionalTools)
 		if err != nil {
 			return false, err
 		}
@@ -1600,10 +1616,10 @@ func normalizeDerivedOfficialOpenAIInput(payload map[string]any) (bool, error) {
 // moveOfficialOpenAIHTTPToolsToInput 将第三方标准 Responses 顶层工具无损搬到
 // 当前 Codex Release 使用的 input.additional_tools 载体。工具对象本身不改名、不改
 // schema；已有 additional_tools 会按类型和名称去重合并。
-func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
+func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any, keepIDBearingAdditionalTools bool) (bool, error) {
 	rawTools, exists := payload["tools"]
 	if !exists || rawTools == nil {
-		return moveOfficialOpenAIAdditionalToolsFirst(payload), nil
+		return moveOfficialOpenAIAdditionalToolsFirst(payload, keepIDBearingAdditionalTools), nil
 	}
 	tools, ok := rawTools.([]any)
 	if !ok {
@@ -1611,7 +1627,7 @@ func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
 	}
 	if len(tools) == 0 {
 		delete(payload, "tools")
-		moveOfficialOpenAIAdditionalToolsFirst(payload)
+		moveOfficialOpenAIAdditionalToolsFirst(payload, keepIDBearingAdditionalTools)
 		return true, nil
 	}
 
@@ -1620,7 +1636,7 @@ func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
 		return false, err
 	}
 	payload["input"] = input
-	moveOfficialOpenAIAdditionalToolsFirst(payload)
+	moveOfficialOpenAIAdditionalToolsFirst(payload, keepIDBearingAdditionalTools)
 	delete(payload, "tools")
 	return true, nil
 }
@@ -1629,10 +1645,11 @@ func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
 // input 首位，工具项和其余消息各自的相对顺序均保持不变。纯 namespace 请求在
 // Lite 规范化后已经没有顶层 tools，因此排序不能依赖顶层工具是否仍然存在。
 //
-// 例外：已带 id 的 additional_tools 项出现在对话内容之后（不在开头那一串工具项里）时原地不动。这是官方增量窗口里
-// 工具集中途变化时追加的增量项，位置本身是语义（"后面的定义替换前面的"，且前面还有一条提示消息），不能提到最前面；
-// 没有 id 的项是第三方入站的工具声明，仍然移到首位。
-func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any) bool {
+// 例外（仅 keepIDBearingIncrements 为真，即画像声明 uuidv7 增量窗口方案时）：已带 id 的 additional_tools 项出现在对话内容之后
+// （不在开头那一串工具项里）时原地不动。这是官方增量窗口里工具集中途变化时追加的增量项，位置本身是语义
+// （"后面的定义替换前面的"，且前面还有一条提示消息），不能提到最前面；没有 id 的项是第三方入站的工具声明，仍然移到首位。
+// keepIDBearingIncrements 为假（旧画像）时一律提到首位，行为与引入该例外之前逐字相同。
+func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any, keepIDBearingIncrements bool) bool {
 	input, ok := payload["input"].([]any)
 	if !ok || len(input) < 2 {
 		return false
@@ -1647,7 +1664,7 @@ func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any) bool {
 			if firstAdditionalIndex < 0 {
 				firstAdditionalIndex = len(additional) + len(remaining)
 			}
-			if id, _ := item["id"].(string); strings.TrimSpace(id) != "" && !leadingTools {
+			if id, _ := item["id"].(string); keepIDBearingIncrements && strings.TrimSpace(id) != "" && !leadingTools {
 				remaining = append(remaining, rawItem)
 				continue
 			}

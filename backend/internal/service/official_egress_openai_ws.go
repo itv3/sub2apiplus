@@ -668,7 +668,7 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	// 顶层 instructions 不在该画像的 WS 字段表里，留着会被闭集静默剔除；官方形态消息在逐项 turn_id 补写之后才安装。
 	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
 	baseInstructionsText, baseInstructionsSourced := "", false
-	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）：入站官方形态的基础指令消息要原样保留，所以在入站帧原文里
+	// 增量窗口形态（画像 uuidv7 方案且连接走 Lite）：入站官方形态的基础指令消息除 passthrough.turn_id 外要逐字节保留，所以在入站帧原文里
 	// 先找出它（候选帧里的 passthrough 已被兼容层剥掉，只能看原文）；正文与实际使用的不同时不采用。
 	incrementalPrefix := officialCodexIncrementalPrefix(baseInstructionsSection, egressContext.responsesLite)
 	// 兼容层在同一条件下（官方出站、画像 uuidv7、项按 Lite 与否是官方形态）保留了入站逐项 passthrough（Lite 与非 Lite 都适用）。客户端自带的 turn_id
@@ -758,6 +758,7 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 		// WS 帧定型阶段拿不到入站 HTTP 头，投影告警只报告字段名与入口类型；
 		// 握手阶段的入站身份已由 WS 入口自行记录。
 		"",
+		baseInstructionsSection.UsesUUIDv7IDs(),
 	); err != nil {
 		return nil, result, err
 	}
@@ -801,9 +802,13 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 			return nil, result, err
 		}
 		if incrementalPrefix {
+			// 基础指令消息自己的 passthrough.turn_id 改写成本帧"窗口第一段"的网关 turn_id（官方里它是窗口第一个回合的 id，
+			// 首轮请求中与其余项、client_metadata.turn_id 相同）；预热帧没有回合身份时为空，退回旧行为。
+			baseInstructionsTurnID := officialOpenAIWSFirstSegmentTurnID(payload, baseInstructionsSection)
+			rewriteOfficialCodexBaseInstructionsMapTurnIDs(payload, baseInstructionsSection, baseInstructionsTurnID)
 			err = applyOfficialCodexWSIncrementalBaseInstructions(
 				payload, egressContext.openAIWSDerived, baseInstructionsSection, threadID,
-				baseInstructionsText, baseInstructionsSourced, officialBaseInstructions,
+				baseInstructionsText, baseInstructionsSourced, officialBaseInstructions, baseInstructionsTurnID,
 			)
 		} else {
 			err = applyOfficialCodexWSBaseInstructions(
