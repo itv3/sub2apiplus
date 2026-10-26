@@ -267,10 +267,6 @@ FROZEN_MAPPING_SHA256 = (
 # 验收契约 706df763… 不变（approval-revision 第一类判据要求契约逐字相同）。
 # 2026-10-23（0.163.0 收尾，同日第二次）：指南第二部分按 0.163.0 改写，第二章摘要由 476f9d55… 变为 b6fa9dcc…，期望清单的
 # source_spec_sha256 随之重绑，摘要由 c66552c6… 换为 a8b0ed45…；载荷除该一行外逐字不变。
-# 2026-10-25（第 19 项，指南源码引用换到 0.163.0）：指南第二部分按 0.163.0 复核改写，第二章摘要由 b6fa9dcc… 变为 ee92ff27…，期望清单的
-# source_spec_sha256 随之重绑，摘要由 a8b0ed45… 换为 b9ce3322…；载荷除该一行外逐字不变。
-# 2026-10-27（0.164 升级第 5 路，指南源码引用增量换到 0.164.0）：指南第二部分的源码行号按 0.164.0 复核平移、行为有差异的规则补写“0.164.0 复核”说明，
-# 第二章摘要由 ee92ff27… 变为 ba36bf78…，期望清单的 source_spec_sha256 随之重绑，摘要由 b9ce3322… 换为 653f0af7…；载荷除该一行外逐字不变。
 # 2026-10-27（0.164.0 版本登记）：目标版本升到 0.164.0，默认断言画像改指 candidate_rule_expectations_0_164_0.json；该文件由 0.163.0 版
 # （收尾后的现状，摘要 a8b0ed45…）复制并逐字替换版本号。载荷逐项审核：2112 个叶子里差异共 12 处且全是版本号（codex_version 1、官方原始字节
 # 描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.163.0 版
@@ -295,8 +291,16 @@ FROZEN_MAPPING_SHA256 = (
 #   依赖 relay_extract 新增的请求级 turn_metadata_keys（只留键名与键序，头值仍脱敏）。
 # 验收契约现算 706df763…→96a80d6f…：dual_wire=25／candidate_profile=18 不变，各规则分组不变（BODY-006 仍是 dual_wire，新增三条判据官方侧也执行），
 # expected_check_ids 只有 SPEC-WS-005、SPEC-EP-002、SPEC-BODY-006、SPEC-EP-022 四项多出上述新检查 ID。
+# 2026-10-27（0.164.0 LR2，建 Campaign 前）：把上一条 ③b 的三条前缀形态判据从 SPEC-BODY-006 挪到 SPEC-BODY-003，摘要由 0fe39797… 换为 8bfab38f…。原因：BODY-006 是
+# dual_wire，官方证据上也会执行，而官方非 Lite 请求本来就不带 content_item_metadata，正式采集时可能误红，一误红只能走 tool-evolution；BODY-003 整条是 candidate_profile
+# （含 lite_transform 事实），官方侧不执行。载荷逐项审核（挪动前后两份文件做规则／检查级与叶子级比较）：规则数 43、顶层其余字段、其余 41 条规则逐字不变；
+# ①SPEC-BODY-006 删除 main-additional-tools-item-form、main-base-instructions-item-form、main-base-instructions-passthrough-keys 三条，剩余检查与顺序同 0.163.0
+#   （把版本号换回后与 0.163.0 版 BODY-006 逐字相同）；②SPEC-BODY-003 新增同名三条（判据内容逐字未改，选择器仍是 A04 主线 Lite 的 POST /backend-api/codex/responses），
+#   规则级 scenario_ids 由 [A03, A05] 补为 [A03, A04, A05]（引擎要求判据场景是规则场景的子集；lite_transform 事实只有 A03，原有两个判据的选样不变）。
+# 验收契约：rule_counts 仍 dual_wire=25／candidate_profile=18，validation_modes、side_restricted_checks、side_coverage 逐字不变（A04 官方侧由 BODY-006 的其余检查提供，
+# 候选侧早已有 A04）；expected_check_ids 只有 BODY-003 多三条、BODY-006 少三条，其余规则逐字不变。
 FROZEN_PROFILE_SHA256 = (
-    "2d5d0669cfab53678cb447c7fc5922e565a0f4723f22e7ea5182df7c0105d085"
+    "8bfab38f429b4fc9eae3d044b89de9dbb4d6cba6f658b7573cc4f6cba366a07e"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

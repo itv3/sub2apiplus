@@ -221,8 +221,9 @@ class Expectation0164WireChecksTests(unittest.TestCase):
     - SPEC-WS-005：incremental_tools 默认开启后，generate=false 的预热帧 input 是空数组，additional_tools 前缀由第一条业务帧带出。
     - SPEC-EP-022：图像头线序加入 x-codex-image-turn-id、x-codex-turn-metadata（紧跟 version）；图像请求的 x-codex-turn-metadata 必须是官方默认路径 14 键同序
       （依赖 relay_extract 新增的请求级 turn_metadata_keys；头值本身仍脱敏）。
-    - SPEC-BODY-006：Lite 前缀两项的形态（additional_tools 键序与 id 形态、基础指令消息 id 形态与 passthrough 键序，不核对 UUID 版本位）；
-      依赖 relay_extract 给 input 附的头两项形态 ``_head``。
+    - SPEC-BODY-003：Lite 前缀两项的形态（additional_tools 键序与 id 形态、基础指令消息 id 形态与 passthrough 键序，不核对 UUID 版本位）；
+      依赖 relay_extract 给 input 附的头两项形态 ``_head``。这几条判据**落在 BODY-003（整条 candidate_profile，官方侧不执行）而不是 BODY-006**：
+      BODY-006 是 dual_wire，官方证据上也会执行，而官方非 Lite 请求本来就不带 content_item_metadata，放在那里正式采集时可能误红（调度者 10-27 决定）。
     样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
     """
 
@@ -350,7 +351,7 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
 
-    # ---- SPEC-BODY-006 前缀两项形态（依赖 relay_extract.shape_top_level 给 input 附的 _head） ----
+    # ---- SPEC-BODY-003 前缀两项形态（依赖 relay_extract.shape_top_level 给 input 附的 _head；候选侧执行，官方侧不执行） ----
 
     V7_AT = "at_01a17935-5c98-7f51-995d-9105098f672a"
     V7_MSG = "msg_01a17935-5c98-7f51-995d-9110469c51d5"
@@ -381,7 +382,7 @@ class Expectation0164WireChecksTests(unittest.TestCase):
 
     def run_prefix_checks(self, body: dict) -> dict:
         return {
-            check_id: self.run_check("SPEC-BODY-006", check_id, [self.http_observation(body)])
+            check_id: self.run_check("SPEC-BODY-003", check_id, [self.http_observation(body)])
             for check_id in ("main-additional-tools-item-form", "main-base-instructions-item-form",
                              "main-base-instructions-passthrough-keys")
         }
@@ -538,6 +539,33 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertLess(order.index("content-type"), order.index("originator"))
         self.assertLess(order.index("user-agent"), order.index("accept"))
 
+    def test_prefix_form_checks_live_in_candidate_only_body_003_not_in_dual_wire_body_006(self) -> None:
+        """三条前缀形态判据只在候选侧执行：落 BODY-003（candidate_profile），BODY-006（dual_wire）一条都没有。"""
+
+        prefix_ids = ("main-additional-tools-item-form", "main-base-instructions-item-form", "main-base-instructions-passthrough-keys")
+        by_rule = {rule["rule_id"]: rule for rule in self.profile["rules"]}
+        body003_ids = [check["id"] for check in by_rule["SPEC-BODY-003"]["checks"]]
+        body006_ids = [check["id"] for check in by_rule["SPEC-BODY-006"]["checks"]]
+        for check_id in prefix_ids:
+            self.assertIn(check_id, body003_ids)
+            self.assertNotIn(check_id, body006_ids)
+        # 判据选的是 A04，BODY-003 的 scenario_ids 必须覆盖（引擎要求判据场景是规则场景的子集）。
+        self.assertEqual(by_rule["SPEC-BODY-003"]["scenario_ids"], ["A03", "A04", "A05"])
+        for rule in self.profile["rules"]:
+            for check in rule["checks"]:
+                self.assertLessEqual(set(check["select"].get("scenario_ids", [])), set(rule["scenario_ids"]), (rule["rule_id"], check["id"]))
+        payload = acceptance_contract.build_contract_payload(self.profile)
+        self.assertEqual(payload["validation_modes"]["SPEC-BODY-003"], "candidate_profile")
+        self.assertEqual(payload["validation_modes"]["SPEC-BODY-006"], "dual_wire")
+        self.assertEqual(payload["rule_counts"], {"dual_wire": 25, "candidate_profile": 18})
+        # 官方侧覆盖矩阵不因挪动改变：A04 仍由 BODY-006 提供，候选侧 A04 也早已在列。
+        self.assertIn("A04", payload["side_coverage"]["official"])
+        self.assertIn("A04", payload["side_coverage"]["candidate"])
+        # BODY-006 的检查集合回到 0.163.0 的集合（逐 ID 相同）。
+        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8"))
+        old_ids = [check["id"] for rule in old["rules"] if rule["rule_id"] == "SPEC-BODY-006" for check in rule["checks"]]
+        self.assertEqual(body006_ids, old_ids)
+
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
         """差异报告只落了五条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""
 
@@ -547,7 +575,8 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         changed = sorted(
             new["rule_id"] for new, before in zip(reverted["rules"], old["rules"]) if new != before
         )
-        self.assertEqual(changed, ["SPEC-BODY-003", "SPEC-BODY-006", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"])
+        # BODY-006 是 dual_wire（官方侧也执行），不新增任何判据，必须与 0.163.0 逐字相同。
+        self.assertEqual(changed, ["SPEC-BODY-003", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"])
         self.assertEqual(len(reverted["rules"]), len(old["rules"]))
 
 

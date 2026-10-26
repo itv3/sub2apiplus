@@ -2033,12 +2033,137 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._head.0",
+            "value": {
+              "keys": [
+                "type",
+                "id",
+                "role",
+                "tools"
+              ],
+              "type": "additional_tools",
+              "id_form": "at_uuid"
+            }
+          },
+          "description": "Lite input 首项是 additional_tools：键序 type,id,role,tools，id 为 at_＋规范 UUID（不核对版本位），没有逐项 passthrough",
+          "id": "main-additional-tools-item-form",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data.body.shape.input._head.1",
+            "value": {
+              "keys": [
+                "type",
+                "id",
+                "role",
+                "content",
+                "internal_chat_message_metadata_passthrough"
+              ],
+              "type": "message",
+              "id_form": "msg_uuid"
+            }
+          },
+          "description": "Lite input 第 2 项是基础指令消息：键序 type,id,role,content,internal_chat_message_metadata_passthrough，id 为 msg_＋规范 UUID（不核对版本位）",
+          "id": "main-base-instructions-item-form",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_ordered_subset_of",
+            "path": "data.body.shape.input._head.1.passthrough_keys",
+            "allowed": [
+              "turn_id",
+              "create_time",
+              "content_item_kinds",
+              "content_item_metadata"
+            ],
+            "required": [
+              "content_item_kinds",
+              "content_item_metadata"
+            ]
+          },
+          "description": "基础指令消息的 passthrough 键序是 turn_id, create_time, content_item_kinds, content_item_metadata 的有序子集且必含后两个（新窗口四键；0.163 形态只有 content_item_kinds，不满足）",
+          "id": "main-base-instructions-passthrough-keys",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
         }
       ],
       "description": "Lite 变换由模型 manifest 驱动且 WS 增量不重复 additional_tools",
       "rule_id": "SPEC-BODY-003",
       "scenario_ids": [
         "A03",
+        "A04",
         "A05"
       ]
     },
@@ -2279,130 +2404,6 @@
           },
           "description": "主线（0.163.0 起为 Lite 模型）的 Responses 请求体把工具目录放在 input 的 additional_tools 项里（Lite 形态，顶层不再有 tools）",
           "id": "main-additional-tools-present",
-          "select": {
-            "record_type": "http_request",
-            "scenario_ids": [
-              "A04"
-            ],
-            "where": [
-              {
-                "operator": "equal",
-                "path": "labels.mode",
-                "value": "lite"
-              },
-              {
-                "operator": "equal",
-                "path": "data.method",
-                "value": "POST"
-              },
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_equal",
-            "path": "data.body.shape.input._head.0",
-            "value": {
-              "keys": [
-                "type",
-                "id",
-                "role",
-                "tools"
-              ],
-              "type": "additional_tools",
-              "id_form": "at_uuid"
-            }
-          },
-          "description": "Lite input 首项是 additional_tools：键序 type,id,role,tools，id 为 at_＋规范 UUID（不核对版本位），没有逐项 passthrough",
-          "id": "main-additional-tools-item-form",
-          "select": {
-            "record_type": "http_request",
-            "scenario_ids": [
-              "A04"
-            ],
-            "where": [
-              {
-                "operator": "equal",
-                "path": "labels.mode",
-                "value": "lite"
-              },
-              {
-                "operator": "equal",
-                "path": "data.method",
-                "value": "POST"
-              },
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_subset",
-            "path": "data.body.shape.input._head.1",
-            "value": {
-              "keys": [
-                "type",
-                "id",
-                "role",
-                "content",
-                "internal_chat_message_metadata_passthrough"
-              ],
-              "type": "message",
-              "id_form": "msg_uuid"
-            }
-          },
-          "description": "Lite input 第 2 项是基础指令消息：键序 type,id,role,content,internal_chat_message_metadata_passthrough，id 为 msg_＋规范 UUID（不核对版本位）",
-          "id": "main-base-instructions-item-form",
-          "select": {
-            "record_type": "http_request",
-            "scenario_ids": [
-              "A04"
-            ],
-            "where": [
-              {
-                "operator": "equal",
-                "path": "labels.mode",
-                "value": "lite"
-              },
-              {
-                "operator": "equal",
-                "path": "data.method",
-                "value": "POST"
-              },
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_ordered_subset_of",
-            "path": "data.body.shape.input._head.1.passthrough_keys",
-            "allowed": [
-              "turn_id",
-              "create_time",
-              "content_item_kinds",
-              "content_item_metadata"
-            ],
-            "required": [
-              "content_item_kinds",
-              "content_item_metadata"
-            ]
-          },
-          "description": "基础指令消息的 passthrough 键序是 turn_id, create_time, content_item_kinds, content_item_metadata 的有序子集且必含后两个（新窗口四键；0.163 形态只有 content_item_kinds，不满足）",
-          "id": "main-base-instructions-passthrough-keys",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [
