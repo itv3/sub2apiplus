@@ -2790,8 +2790,8 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 0.4,
-   "owner": "shared",
-   "rule": "default-shared"
+   "owner": "codex",
+   "rule": "evidence:codex-only"
   },
   "test_main_track_models": {
    "claude_plan": "run",
