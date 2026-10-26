@@ -469,6 +469,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_background_fixed_work": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_background_preflight": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -735,6 +742,20 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_inherit_predict": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_inherit_view": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_opening_checks": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -869,6 +890,20 @@
    "rule": "infra-prefix"
   },
   "test_ci_retry_ledger_across_closeouts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_retry_under_audit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_run_seal": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": null,
@@ -2020,6 +2055,13 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 18.7,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
+  "test_codex_closeout_inherit": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "codex",
    "rule": "name:codex"
   },
