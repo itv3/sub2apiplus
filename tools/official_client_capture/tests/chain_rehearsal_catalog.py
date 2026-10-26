@@ -281,6 +281,18 @@ R17_SECOND_REUSE_FALLBACK = ExactReplacement(
     "二次承接回退分支恒假：承接链里没重绑过的结果再次承接时按源 attempt 生产身份核对不命中，被判不可复用",
 )
 
+# R17e：精确还原 6edb82a76。回退验真的放行路径只含“源 attempt 生产身份到当前树”的变化，漏掉“冻结身份到源 attempt 生产身份”
+# 之间已由前序工具演进登记的允许重绑组件变化（10-26 ARM64 实跑：上一条整段关掉回退分支，恢复链照样通过，注入点太弱，
+# 因为恢复链走到的是未改回退口径的主路径；真正出过事故的是这一处口径）。
+R17_FROZEN_REBASE_SINCE = ExactReplacement(
+    f"{T}/codex_upgrade.py",
+    "                        allowed_high_risk_path_changes=_rebase_paths_since(\n"
+    "                            original_tool, current_tool, permitted_rebase_paths\n"
+    "                        ),\n",
+    "                        allowed_high_risk_path_changes=permitted_rebase_paths,\n",
+    "回退验真只放行“源 attempt 生产身份到当前树”的变化：冻结身份到源 attempt 生产身份之间已登记的允许重绑组件变化被当成真实产出侧改动，二次承接的预览与 resume 复用集合不一致",
+)
+
 RECOVERY_PROBES: tuple[Probe, ...] = (
     Probe(
         "vc1-recovery-fault-injection-chain",
@@ -294,8 +306,10 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         # 签名取“二次承接对账（reconcile-attempt-3）”这一步的断言源码行：二次承接被判不可复用时，失败就落在这一步对
         # third_reconciled 的断言上。**未经 ARM64 实跑验证**——失败现象的消息文本我没见过，首次实跑后应改成该步骤抛出的
         # 具体错误消息（例如 R17 核对的“预览复用…resume 复用…”）。
-        signature=('third_reconciled["status"]', 'third_reconciled["reuse_job_ids"]'),
-        injections=(R17_SECOND_REUSE_FALLBACK,),
+        # 签名第一条是 R17 核对拒绝批准的真实文案（codex_upgrade.py 恢复预览与源 attempt 冻结闭集不一致）；后两条是二次承接对账
+        # 步骤的断言源码行，作为备用。**未经 ARM64 实跑验证**，首次实跑的失败输出会写在汇总的 detail 里，不命中就按它改。
+        signature=('恢复预览与源 attempt 冻结闭集不一致', 'third_reconciled["status"]', 'third_reconciled["reuse_job_ids"]'),
+        injections=(R17_FROZEN_REBASE_SINCE,),
     ),
     Probe(
         "vc5-attempt-recovery-fault-injection",
@@ -365,7 +379,8 @@ CHAIN_STEPS: tuple[Probe, ...] = (
     Probe(
         "chain-vc5-evaluation", "VC-5 真实评估链：compare／builder／accept 与 VC-5 completion",
         "VC-5", "评估链",
-        UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_evaluation_real_chain"], timeout_seconds=3600),
+        # 该模块 9 条真实链各约 10 分钟，3600 秒不够（10-26 ARM64 实跑超时）；放宽到 3 小时。
+        UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_evaluation_real_chain"], timeout_seconds=10800),
         kind="chain", needs=("linux_root_unshare", "arm64_docker_go"),
     ),
     Probe(
