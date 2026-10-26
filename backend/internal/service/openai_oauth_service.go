@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -294,8 +293,13 @@ func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken stri
 }
 
 // RefreshTokenWithClientID refreshes an OpenAI OAuth token with optional client_id.
+//
+// 该入口只被管理端“粘贴 refresh_token 校验／换取”和 RefreshToken 使用，对应官方的显式刷新入口，
+// refresh_reason 固定为 forced。
 func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*OpenAITokenInfo, error) {
-	return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID, openAITokenEnrichmentInput{})
+	return s.refreshTokenWithClientID(
+		ctx, refreshToken, proxyURL, clientID, openAIOAuthRefreshReasonForced, openAITokenEnrichmentInput{},
+	)
 }
 
 func (s *OpenAIOAuthService) refreshTokenWithClientID(
@@ -303,6 +307,7 @@ func (s *OpenAIOAuthService) refreshTokenWithClientID(
 	refreshToken string,
 	proxyURL string,
 	clientID string,
+	refreshReason openAIOAuthRefreshReason,
 	enrichment openAITokenEnrichmentInput,
 ) (*OpenAITokenInfo, error) {
 	decoder, ok := s.oauthClient.(OpenAIOAuthRefreshResponseDecoder)
@@ -322,7 +327,7 @@ func (s *OpenAIOAuthService) refreshTokenWithClientID(
 		)
 	}
 	response, transportErr := s.executeOAuthRefresh(
-		ctx, refreshToken, clientID, proxyURL, enrichment.LocalAccountID,
+		ctx, refreshToken, clientID, proxyURL, refreshReason, enrichment.LocalAccountID,
 	)
 	tokenResp, err := decoder.DecodeRefreshResponse(ctx, response, transportErr, proxyURL)
 	if err != nil {
@@ -369,6 +374,7 @@ func (s *OpenAIOAuthService) executeOAuthRefresh(
 	refreshToken string,
 	clientID string,
 	proxyURL string,
+	refreshReason openAIOAuthRefreshReason,
 	localAccountID ...int64,
 ) (*http.Response, error) {
 	if s.officialEgress == nil || s.officialEgress.BundleResolver == nil ||
@@ -412,12 +418,15 @@ func (s *OpenAIOAuthService) executeOAuthRefresh(
 	if err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(struct {
-		ClientID  string `json:"client_id"`
-		GrantType string `json:"grant_type"`
-	}{
-		ClientID: clientID, GrantType: "refresh_token",
-	})
+	if observer := openAIOAuthRefreshReasonObserver; observer != nil {
+		observer(refreshReason)
+	}
+	// refresh_reason 仅在当前 Release 画像的 oauth_refresh 封闭 Body 声明了该字段时出站
+	// （官方 0.164 起）；旧画像语义 Body 与之前逐字节相同。判断读的是 Bundle 冻结的同一份画像。
+	body, err := buildOpenAIOAuthRefreshSemanticBody(
+		clientID, refreshReason,
+		openAIOAuthRefreshProfileDeclaresReason(bundle.Release().ExecutableProfile()),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -632,8 +641,21 @@ func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID strin
 	return ""
 }
 
-// RefreshAccountToken refreshes token for an OpenAI OAuth account
+// RefreshAccountToken refreshes token for an OpenAI OAuth account。
+//
+// 没有显式说明原因的调用（管理端手动刷新、CRS 同步等）对应官方的显式刷新入口，
+// refresh_reason 为 forced；后台刷新服务与请求路径的主动刷新走 RefreshAccountTokenWithReason。
 func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
+	return s.RefreshAccountTokenWithReason(ctx, account, openAIOAuthRefreshReasonForced)
+}
+
+// RefreshAccountTokenWithReason 与 RefreshAccountToken 相同，但由调用点声明本次刷新的触发原因，
+// 该原因只在画像声明了 refresh_reason 字段时进入线上请求体。
+func (s *OpenAIOAuthService) RefreshAccountTokenWithReason(
+	ctx context.Context,
+	account *Account,
+	refreshReason openAIOAuthRefreshReason,
+) (*OpenAITokenInfo, error) {
 	if account.Platform != PlatformOpenAI {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI account")
 	}
@@ -685,7 +707,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	}
 
 	clientID := account.GetCredential("client_id")
-	return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID, openAITokenEnrichmentInput{
+	return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID, refreshReason, openAITokenEnrichmentInput{
 		RolloutKey:     openAIPrivacyRolloutKeyForAccount(account),
 		LocalAccountID: account.ID,
 	})

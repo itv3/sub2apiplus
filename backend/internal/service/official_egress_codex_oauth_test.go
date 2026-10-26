@@ -43,7 +43,7 @@ func TestOAuthRefreshCompilesFromSingleReleaseBundle(t *testing.T) {
 	svc.SetOfficialEgressRuntime(runtimeState)
 
 	response, err := svc.executeOAuthRefresh(
-		context.Background(), "refresh-secret", "client-id", "",
+		context.Background(), "refresh-secret", "client-id", "", openAIOAuthRefreshReasonForced,
 	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), runtimeState.BundleResolver.ResolveCount())

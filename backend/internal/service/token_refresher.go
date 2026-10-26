@@ -117,8 +117,13 @@ func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 
 // Refresh 执行token刷新
 // 保留原有credentials中的所有字段，只更新token相关字段
+//
+// 该 Refresh 是后台刷新服务与请求路径取令牌（OpenAITokenProvider 经 OAuthRefreshAPI）共用的
+// 执行器，两条路径都是“发现访问令牌进入过期窗口后主动刷新”，refresh_reason 取 proactive_expiry。
 func (r *OpenAITokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
-	tokenInfo, err := r.openaiOAuthService.RefreshAccountToken(ctx, account)
+	tokenInfo, err := r.openaiOAuthService.RefreshAccountTokenWithReason(
+		ctx, account, openAIOAuthProactiveRefreshReason(),
+	)
 	if err != nil {
 		return nil, err
 	}

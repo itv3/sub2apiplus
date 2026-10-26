@@ -367,6 +367,7 @@ func changeset3CaptureProductionRoute(
 		service := &OpenAIOAuthService{officialEgress: runtimeState}
 		response, executeErr := service.executeOAuthRefresh(
 			ctx, "synthetic-refresh-token", "synthetic-client-id", "",
+			openAIOAuthRefreshReasonForced,
 		)
 		if executeErr != nil {
 			t.Fatalf("OAuth production bridge 捕获失败：%v", executeErr)

@@ -1200,7 +1200,9 @@ func (g *codexGateService) images(t *testing.T, path string, body []byte, conten
 func (g *codexGateService) oauthRefresh() error {
 	oauth := NewOpenAIOAuthService(nil, nil)
 	oauth.SetOfficialEgressRuntime(g.service.officialEgress)
-	response, err := oauth.executeOAuthRefresh(context.Background(), "promotion-gate-refresh-token", "", "")
+	response, err := oauth.executeOAuthRefresh(
+		context.Background(), "promotion-gate-refresh-token", "", "", openAIOAuthRefreshReasonForced,
+	)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
 	}
