@@ -419,7 +419,7 @@ func TestImagesTurnMetadataConditionalKeysPresence(t *testing.T) {
 	_, _ = dec.Token()
 	for dec.More() {
 		tok, _ := dec.Token()
-		keys = append(keys, tok.(string))
+		keys = append(keys, requireType[string](t, tok))
 		var skip json.RawMessage
 		require.NoError(t, dec.Decode(&skip))
 	}
