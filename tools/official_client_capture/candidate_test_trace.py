@@ -299,8 +299,22 @@ FROZEN_MAPPING_SHA256 = (
 #   规则级 scenario_ids 由 [A03, A05] 补为 [A03, A04, A05]（引擎要求判据场景是规则场景的子集；lite_transform 事实只有 A03，原有两个判据的选样不变）。
 # 验收契约：rule_counts 仍 dual_wire=25／candidate_profile=18，validation_modes、side_restricted_checks、side_coverage 逐字不变（A04 官方侧由 BODY-006 的其余检查提供，
 # 候选侧早已有 A04）；expected_check_ids 只有 BODY-003 多三条、BODY-006 少三条，其余规则逐字不变。
+# 2026-10-27（0.164.0 LR2，同日第二次）：落入 W1b（reg0164/wire-ws-p2）逐项 passthrough 保真的候选侧判据（W1b 报告 10.6），摘要由 8bfab38f… 换为 140ef7be…。全部只放候选侧
+# 会执行的规则（BODY-003、WS-005 均整条是 candidate_profile），不进 dual_wire 规则。载荷逐项审核（前后两份文件做规则／检查级比较）：规则数 43、顶层其余字段、规则级字段
+# （含 scenario_ids）与其余 41 条规则逐字不变，两条规则只有检查新增、既有检查（含顺序）逐字不变——
+# ①SPEC-BODY-003 新增 7 条（A04 主线 Lite 的 POST /backend-api/codex/responses，另排除带 compaction_trigger 的请求，因 W1b 说明 HTTP 压缩请求不适用保真）：
+#   main-passthrough-key-orders（逐项 passthrough 键序是官方 7 键的有序子集，闭集正则）、main-passthrough-assistant-key-order（助手消息只有 turn_id,content_item_kinds）、
+#   main-passthrough-carrier-types（带 passthrough 的 type 是官方携带者闭集，additional_tools／compaction_trigger／configuration_update／compaction 不带）、
+#   main-messages-keep-passthrough（message 项不被剥离）、main-passthrough-turn-id-form（项级 turn_id 是规范 UUID）、main-current-turn-item-turn-id（尾项 turn_id 等于出站
+#   client_metadata.turn_id）、main-client-turn-id-matches-turn-metadata（client_metadata.turn_id 等于 turn metadata 里的 turn_id，依赖 W1b cbdf22345）；
+# ②SPEC-WS-005 新增 5 条（A06 首个业务帧，frame_role=first_business）：first-business-frame-passthrough-key-orders、-messages-keep-passthrough、-passthrough-turn-id-form、
+#   -current-turn-item-turn-id、-client-turn-id-matches-turn-metadata（WS 网关对非预热帧本就强制 turn metadata 里的 turn_id 等于 client_metadata.turn_id）。
+# 十二条判据都读 relay_extract 新增的 input._passthrough（键序串、携带者 type、剥离计数、turn_id 一致性布尔结论，不含取值）。没有判据的条目：非 Lite 三键形态与带
+# content_item_metadata 的非 Lite 项被剥（0.164 没有非 Lite 的 wire 场景，选不到样本）、历史各段 turn_id 为网关派生稳定值（需跨请求比较取值）、除 turn_id 外各键与入站相同
+# （需入站原文对照），均靠 W1b 的 Go 单测。验收契约：rule_counts dual_wire=25／candidate_profile=18，validation_modes、side_restricted_checks、side_coverage 逐字不变，
+# expected_check_ids 只有 BODY-003 多 7 条、WS-005 多 5 条。
 FROZEN_PROFILE_SHA256 = (
-    "8bfab38f429b4fc9eae3d044b89de9dbb4d6cba6f658b7573cc4f6cba366a07e"
+    "140ef7be9bb6d2f0a78b19e695bd5bfeb1a8a04bcd9d074d8406fa7c8f68d18c"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

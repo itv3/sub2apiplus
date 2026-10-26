@@ -961,6 +961,143 @@
         },
         {
           "assertion": {
+            "operator": "all_match",
+            "path": "data.shape.input._passthrough.key_orders",
+            "value": "(?:(?=[a-z])(?:turn_id(?:,(?=[a-z])|(?=\\||$)))?(?:create_time(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_kinds(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_metadata(?:,(?=[a-z])|(?=\\||$)))?(?:cell_id(?:,(?=[a-z])|(?=\\||$)))?(?:executed_tool_calls(?:,(?=[a-z])|(?=\\||$)))?(?:tool_calls_complete(?:,(?=[a-z])|(?=\\||$)))?)(?:\\|(?:(?=[a-z])(?:turn_id(?:,(?=[a-z])|(?=\\||$)))?(?:create_time(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_kinds(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_metadata(?:,(?=[a-z])|(?=\\||$)))?(?:cell_id(?:,(?=[a-z])|(?=\\||$)))?(?:executed_tool_calls(?:,(?=[a-z])|(?=\\||$)))?(?:tool_calls_complete(?:,(?=[a-z])|(?=\\||$)))?))*"
+          },
+          "description": "逐项 internal_chat_message_metadata_passthrough 的键序是官方键 turn_id, create_time, content_item_kinds, content_item_metadata, cell_id, executed_tool_calls, tool_calls_complete 的有序子集（Lite 新窗口消息四键，助手消息 turn_id,content_item_kinds，旧窗口续聊的历史项可以少 content_item_metadata；出现官方没有的键或乱序即失败）",
+          "id": "first-business-frame-passthrough-key-orders",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.messages_without",
+            "value": 0
+          },
+          "description": "每个 message 项都带逐项 passthrough（被网关整体剥离时 messages_without 非 0）：官方出站、画像 uuidv7、官方形态三条件满足时入站逐项 passthrough 原样保留",
+          "id": "first-business-frame-messages-keep-passthrough",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.turn_id_forms",
+            "value": [
+              "uuid"
+            ]
+          },
+          "description": "项级 passthrough 里的 turn_id 一律是规范 UUID 字符串（不是字符串、不规范即失败；不核对具体值，也不核对版本位）",
+          "id": "first-business-frame-passthrough-turn-id-form",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.tail_turn_id_matches_client",
+            "value": true
+          },
+          "description": "最后一个带 turn_id 的 input 项（请求尾部恒属于当前回合）的项级 turn_id 等于出站 client_metadata.turn_id：网关把客户端自带的 turn_id 校验后改写成本轮 turn_id，不是客户端原值也不是账号作用域值",
+          "id": "first-business-frame-current-turn-item-turn-id",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.client_turn_id_matches_turn_metadata",
+            "value": true
+          },
+          "description": "出站 client_metadata.turn_id 等于 client_metadata[\"x-codex-turn-metadata\"] 里的 turn_id（官方请求里恒等；HTTP 上网关曾对两者分别派生，W1b cbdf22345 让 turn_id 取自登记的 turn metadata）",
+          "id": "first-business-frame-client-turn-id-matches-turn-metadata",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
             "operator": "all_subset",
             "path": "data",
             "value": {
@@ -2154,6 +2291,274 @@
                 "operator": "equal",
                 "path": "data.path",
                 "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.input._passthrough.key_orders",
+            "value": "(?:(?=[a-z])(?:turn_id(?:,(?=[a-z])|(?=\\||$)))?(?:create_time(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_kinds(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_metadata(?:,(?=[a-z])|(?=\\||$)))?(?:cell_id(?:,(?=[a-z])|(?=\\||$)))?(?:executed_tool_calls(?:,(?=[a-z])|(?=\\||$)))?(?:tool_calls_complete(?:,(?=[a-z])|(?=\\||$)))?)(?:\\|(?:(?=[a-z])(?:turn_id(?:,(?=[a-z])|(?=\\||$)))?(?:create_time(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_kinds(?:,(?=[a-z])|(?=\\||$)))?(?:content_item_metadata(?:,(?=[a-z])|(?=\\||$)))?(?:cell_id(?:,(?=[a-z])|(?=\\||$)))?(?:executed_tool_calls(?:,(?=[a-z])|(?=\\||$)))?(?:tool_calls_complete(?:,(?=[a-z])|(?=\\||$)))?))*"
+          },
+          "description": "逐项 internal_chat_message_metadata_passthrough 的键序是官方键 turn_id, create_time, content_item_kinds, content_item_metadata, cell_id, executed_tool_calls, tool_calls_complete 的有序子集（Lite 新窗口消息四键，助手消息 turn_id,content_item_kinds，旧窗口续聊的历史项可以少 content_item_metadata；出现官方没有的键或乱序即失败）",
+          "id": "main-passthrough-key-orders",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.input._passthrough.assistant_key_orders",
+            "value": "(?:turn_id,content_item_kinds)?"
+          },
+          "description": "助手消息的 passthrough 只有 turn_id,content_item_kinds（官方助手消息不带 create_time 与 content_item_metadata）；请求里没有助手消息时为空串，同样通过",
+          "id": "main-passthrough-assistant-key-order",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_ordered_subset_of",
+            "path": "data.body.shape.input._passthrough.carrier_types",
+            "allowed": [
+              "agent_message",
+              "custom_tool_call",
+              "custom_tool_call_output",
+              "function_call",
+              "function_call_output",
+              "image_generation_call",
+              "local_shell_call",
+              "message",
+              "reasoning",
+              "tool_search_call",
+              "tool_search_output",
+              "web_search_call"
+            ],
+            "required": []
+          },
+          "description": "带逐项 passthrough 的 input 项 type 都是官方允许的携带者（message、reasoning、各类 call 与 output 等）；additional_tools、compaction_trigger、configuration_update、compaction 在官方里没有该字段，出现即说明网关替它们合成了 passthrough",
+          "id": "main-passthrough-carrier-types",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.messages_without",
+            "value": 0
+          },
+          "description": "每个 message 项都带逐项 passthrough（被网关整体剥离时 messages_without 非 0）：官方出站、画像 uuidv7、官方形态三条件满足时入站逐项 passthrough 原样保留",
+          "id": "main-messages-keep-passthrough",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.turn_id_forms",
+            "value": [
+              "uuid"
+            ]
+          },
+          "description": "项级 passthrough 里的 turn_id 一律是规范 UUID 字符串（不是字符串、不规范即失败；不核对具体值，也不核对版本位）",
+          "id": "main-passthrough-turn-id-form",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.tail_turn_id_matches_client",
+            "value": true
+          },
+          "description": "最后一个带 turn_id 的 input 项（请求尾部恒属于当前回合）的项级 turn_id 等于出站 client_metadata.turn_id：网关把客户端自带的 turn_id 校验后改写成本轮 turn_id，不是客户端原值也不是账号作用域值",
+          "id": "main-current-turn-item-turn-id",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.client_turn_id_matches_turn_metadata",
+            "value": true
+          },
+          "description": "出站 client_metadata.turn_id 等于 client_metadata[\"x-codex-turn-metadata\"] 里的 turn_id（官方请求里恒等；HTTP 上网关曾对两者分别派生，W1b cbdf22345 让 turn_id 取自登记的 turn metadata）",
+          "id": "main-client-turn-id-matches-turn-metadata",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
               }
             ]
           }

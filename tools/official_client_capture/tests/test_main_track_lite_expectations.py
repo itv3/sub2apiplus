@@ -439,6 +439,148 @@ class Expectation0164WireChecksTests(unittest.TestCase):
 
         self.assertEqual(derive._mitm_body_summary({"json": body})["shape"], summary["shape"])
 
+    # ---- W1b 逐项 passthrough 保真（依赖 relay_extract 的 input._passthrough；BODY-003 的 HTTP 判据与 WS-005 首个业务帧判据，候选侧执行） ----
+
+    PASSTHROUGH_HTTP_IDS = (
+        "main-passthrough-key-orders", "main-passthrough-assistant-key-order", "main-passthrough-carrier-types",
+        "main-messages-keep-passthrough", "main-passthrough-turn-id-form", "main-current-turn-item-turn-id",
+        "main-client-turn-id-matches-turn-metadata",
+    )
+    PASSTHROUGH_WS_IDS = (
+        "first-business-frame-passthrough-key-orders", "first-business-frame-messages-keep-passthrough",
+        "first-business-frame-passthrough-turn-id-form", "first-business-frame-current-turn-item-turn-id",
+        "first-business-frame-client-turn-id-matches-turn-metadata",
+    )
+    TURN_NOW = "01a17935-c8dc-7cb2-8b5b-c9b98611bb03"
+    TURN_OLD = "01a17935-0000-7cb2-8b5b-c9b98611bb99"
+    FOUR_KEYS = ("turn_id", "create_time", "content_item_kinds", "content_item_metadata")
+
+    def passthrough_item(self, kind, role, keys, turn_id=None) -> dict:
+        passthrough = {key: (turn_id if key == "turn_id" else []) for key in keys}
+        item: dict = {"type": kind, "content": []}
+        if role:
+            item["role"] = role
+        item["internal_chat_message_metadata_passthrough"] = passthrough
+        return item
+
+    def official_input(self, *, turn=None) -> list:
+        """官方 Lite 新窗口加一轮历史的请求：前缀两项、历史助手消息、当前回合的用户消息与工具调用。"""
+
+        turn = turn or self.TURN_NOW
+        return [
+            {"type": "additional_tools", "id": self.V7_AT, "role": "developer", "tools": []},
+            {**self.passthrough_item("message", "developer", self.FOUR_KEYS, turn_id=self.TURN_OLD), "id": self.V7_MSG},
+            self.passthrough_item("message", "user", self.FOUR_KEYS, turn_id=self.TURN_OLD),
+            self.passthrough_item("message", "assistant", ("turn_id", "content_item_kinds"), turn_id=self.TURN_OLD),
+            self.passthrough_item("message", "user", self.FOUR_KEYS, turn_id=turn),
+            self.passthrough_item("function_call", None, self.FOUR_KEYS + ("cell_id",), turn_id=turn),
+        ]
+
+    def passthrough_body(self, items: list, *, client_turn=None, metadata_turn=None) -> dict:
+        client_turn = client_turn or self.TURN_NOW
+        return {
+            "model": "gpt-6.1-sol", "input": items,
+            "client_metadata": {"turn_id": client_turn, "x-codex-turn-metadata": json.dumps({"turn_id": metadata_turn or client_turn})},
+        }
+
+    def run_passthrough_http(self, body: dict) -> dict:
+        return {
+            check_id: self.run_check("SPEC-BODY-003", check_id, [self.http_observation(body)])
+            for check_id in self.PASSTHROUGH_HTTP_IDS
+        }
+
+    def run_passthrough_ws(self, frame: dict) -> dict:
+        frame = {"type": "response.create", **frame}
+        return {
+            check_id: self.run_check("SPEC-WS-005", check_id, [self.frame_observation(frame, role="first_business")])
+            for check_id in self.PASSTHROUGH_WS_IDS
+        }
+
+    def test_official_form_passthrough_passes_http_and_ws(self) -> None:
+        body = self.passthrough_body(self.official_input())
+        self.assertEqual(set(self.run_passthrough_http(body).values()), {True})
+        self.assertEqual(set(self.run_passthrough_ws(body).values()), {True})
+        # 旧窗口续聊（r1 样本形态）：基础指令消息只有 content_item_kinds,content_item_metadata，旧历史项三键；仍通过。
+        legacy = self.official_input()
+        legacy[1] = {**self.passthrough_item("message", "developer", ("content_item_kinds", "content_item_metadata")), "id": self.V5_MSG}
+        legacy[2] = self.passthrough_item("message", "user", ("turn_id", "create_time", "content_item_kinds"), turn_id=self.TURN_OLD)
+        self.assertEqual(set(self.run_passthrough_http(self.passthrough_body(legacy)).values()), {True})
+
+    def test_stripped_passthrough_fails(self) -> None:
+        """网关把逐项 passthrough 整体剥离（保真失败）：message 不带 passthrough，保真判据与键序、turn_id 判据都红。"""
+
+        stripped = [
+            {key: value for key, value in item.items() if key != "internal_chat_message_metadata_passthrough"}
+            for item in self.official_input()
+        ]
+        results = self.run_passthrough_http(self.passthrough_body(stripped))
+        self.assertFalse(results["main-messages-keep-passthrough"])
+        self.assertFalse(results["main-passthrough-key-orders"])
+        self.assertFalse(results["main-current-turn-item-turn-id"])
+        self.assertFalse(self.run_passthrough_ws(self.passthrough_body(stripped))["first-business-frame-messages-keep-passthrough"])
+
+    def test_turn_id_not_rewritten_or_split_fails(self) -> None:
+        # 当前回合的项保留了客户端旧 turn_id（没有改写成本轮值）：尾项与 client_metadata.turn_id 不等。
+        stale = self.official_input(turn=self.TURN_OLD)
+        results = self.run_passthrough_http(self.passthrough_body(stale))
+        self.assertFalse(results["main-current-turn-item-turn-id"])
+        self.assertTrue(results["main-client-turn-id-matches-turn-metadata"])
+        self.assertFalse(self.run_passthrough_ws(self.passthrough_body(stale))["first-business-frame-current-turn-item-turn-id"])
+        # client_metadata.turn_id 与 turn metadata 里的 turn_id 不一致（W1b 10.3 的既有缺陷）：一致性判据红，项级判据不受影响。
+        split = self.passthrough_body(self.official_input(), metadata_turn=self.TURN_OLD)
+        self.assertFalse(self.run_passthrough_http(split)["main-client-turn-id-matches-turn-metadata"])
+        self.assertTrue(self.run_passthrough_http(split)["main-current-turn-item-turn-id"])
+        self.assertFalse(self.run_passthrough_ws(split)["first-business-frame-client-turn-id-matches-turn-metadata"])
+        # 项级 turn_id 不是规范 UUID。
+        bad_form = self.official_input()
+        bad_form[4] = self.passthrough_item("message", "user", self.FOUR_KEYS, turn_id="not-a-uuid")
+        self.assertFalse(self.run_passthrough_http(self.passthrough_body(bad_form))["main-passthrough-turn-id-form"])
+
+    def test_malformed_passthrough_keys_and_carriers_fail(self) -> None:
+        # 乱序（content_item_kinds 在 create_time 前）、多出官方没有的键。
+        for keys in (("turn_id", "content_item_kinds", "create_time"), ("turn_id", "create_time", "content_item_kinds", "foreign_key")):
+            items = self.official_input()
+            items[4] = self.passthrough_item("message", "user", keys, turn_id=self.TURN_NOW)
+            self.assertFalse(self.run_passthrough_http(self.passthrough_body(items))["main-passthrough-key-orders"], keys)
+        # 助手消息多了 create_time（官方助手消息只有 turn_id,content_item_kinds）。
+        items = self.official_input()
+        items[3] = self.passthrough_item("message", "assistant", ("turn_id", "create_time", "content_item_kinds"), turn_id=self.TURN_OLD)
+        self.assertFalse(self.run_passthrough_http(self.passthrough_body(items))["main-passthrough-assistant-key-order"])
+        # additional_tools 项被网关合成了 passthrough（官方里它没有该字段）。
+        items = self.official_input()
+        items[0] = {**items[0], "internal_chat_message_metadata_passthrough": {"turn_id": self.TURN_NOW, "content_item_kinds": []}}
+        self.assertFalse(self.run_passthrough_http(self.passthrough_body(items))["main-passthrough-carrier-types"])
+
+    def test_http_compaction_requests_are_not_selected_for_passthrough_checks(self) -> None:
+        """HTTP 压缩请求不适用保真（W1b：仍按旧行为剥离），带 compaction_trigger 的请求不进这些判据的样本。"""
+
+        items = self.official_input() + [{"type": "compaction_trigger"}]
+        rule, check = self.check("SPEC-BODY-003", "main-messages-keep-passthrough")
+        matched = candidate_rule_assertion._select_observations(
+            [self.http_observation(self.passthrough_body(items))], check["select"], rule["scenario_ids"]
+        )
+        self.assertEqual(matched, [])
+        matched = candidate_rule_assertion._select_observations(
+            [self.http_observation(self.passthrough_body(self.official_input()))], check["select"], rule["scenario_ids"]
+        )
+        self.assertEqual(len(matched), 1)
+
+    def test_passthrough_checks_are_candidate_only_and_do_not_touch_dual_wire_rules(self) -> None:
+        by_rule = {rule["rule_id"]: rule for rule in self.profile["rules"]}
+        for rule_id, ids in (("SPEC-BODY-003", self.PASSTHROUGH_HTTP_IDS), ("SPEC-WS-005", self.PASSTHROUGH_WS_IDS)):
+            present = {check["id"] for check in by_rule[rule_id]["checks"]}
+            self.assertTrue(set(ids) <= present, rule_id)
+        # 官方侧会执行的 dual_wire 规则里没有任何读 _passthrough 的判据。
+        payload = acceptance_contract.build_contract_payload(self.profile)
+        for rule in self.profile["rules"]:
+            if payload["validation_modes"][rule["rule_id"]] != "dual_wire":
+                continue
+            self.assertNotIn("input._passthrough", json.dumps(rule), rule["rule_id"])
+            self.assertNotIn("input._head", json.dumps(rule), rule["rule_id"])
+        self.assertEqual(payload["validation_modes"]["SPEC-BODY-003"], "candidate_profile")
+        self.assertEqual(payload["validation_modes"]["SPEC-WS-005"], "candidate_profile")
+        self.assertEqual(payload["rule_counts"], {"dual_wire": 25, "candidate_profile": 18})
+
     # ---- SPEC-EP-022：图像请求 x-codex-turn-metadata 的 14 键（依赖 relay_extract 新增的 turn_metadata_keys） ----
 
     # 官方 CLI 默认路径（exec，IMG 路对 0.164.0 的实采原文换成占位值）：键序是 swap_remove 的副作用。
