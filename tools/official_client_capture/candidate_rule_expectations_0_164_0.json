@@ -934,6 +934,33 @@
         },
         {
           "assertion": {
+            "operator": "all_match",
+            "path": "data.shape.previous_response_id",
+            "value": "str:.+"
+          },
+          "description": "首个业务帧带 previous_response_id 指向预热响应（预热帧本身没有响应前缀，业务帧才续链）",
+          "id": "first-business-frame-chains-warmup",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
             "operator": "all_subset",
             "path": "data",
             "value": {
@@ -1994,7 +2021,7 @@
             "path": "data.additional_tools_occurrences",
             "value": 0
           },
-          "description": "首个业务帧之后的 WS 增量帧不重复已复用的 additional_tools（前缀只在第一条业务帧出现，见 SPEC-WS-005）",
+          "description": "首个业务帧之后的 WS 增量帧不重复已复用的 additional_tools 与基础指令消息（前缀只在第一条业务帧出现，见 SPEC-WS-005；判据读候选追踪事实的 additional_tools 出现次数，不核对基础指令消息）",
           "id": "incremental-no-repeat",
           "select": {
             "record_type": "lite_transform",

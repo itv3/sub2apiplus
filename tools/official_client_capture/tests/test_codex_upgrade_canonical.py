@@ -1025,7 +1025,7 @@ class CanonicalImportTests(unittest.TestCase):
         """0.164.0 补丁清单绑定当前 active 的 0.163.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），
         并把差异报告里确认要改画像的三处逐条登记成 v2 补丁（开工前定稿，建 Campaign 之后改它属于证据语义层演进）：
         ① OAuth 刷新体新增 refresh_reason（SPEC-EP-002）；② 图像生成与编辑端点新增 x-codex-image-turn-id、x-codex-turn-metadata 两个头
-        （SPEC-EP-022）；③ 基础指令消息的 id 方案声明为 uuidv7（SPEC-BODY-006）。三条传输画像只改 ID 里的版本号，补丁里不得出现传输字段。
+        （SPEC-EP-022）；③ 基础指令消息的 id 方案声明为 uuidv7（SPEC-BODY-006，同一字段也决定前缀所在帧，所以同时绑 SPEC-BODY-003、SPEC-WS-005）。三条传输画像只改 ID 里的版本号，补丁里不得出现传输字段。
         """
 
         active_profile = (
@@ -1056,11 +1056,14 @@ class CanonicalImportTests(unittest.TestCase):
                 ("add", "/Endpoints/ID=images_generations/Headers/Name=x-codex-turn-metadata", ("SPEC-EP-022",)),
                 ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-image-turn-id", ("SPEC-EP-022",)),
                 ("add", "/Endpoints/ID=images_edits/Headers/Name=x-codex-turn-metadata", ("SPEC-EP-022",)),
-                ("add", "/BaseInstructions/IDScheme", ("SPEC-BODY-006",)),
+                ("add", "/BaseInstructions/IDScheme", ("SPEC-BODY-003", "SPEC-BODY-006", "SPEC-WS-005")),
             ]),
         )
         affected = sorted({rule for patch in patches for rule in patch["rule_ids"]})
-        self.assertEqual(affected, ["SPEC-BODY-006", "SPEC-EP-002", "SPEC-EP-022"])
+        self.assertEqual(
+            affected,
+            ["SPEC-BODY-003", "SPEC-BODY-006", "SPEC-EP-002", "SPEC-EP-022", "SPEC-WS-005"],
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             fixture_root = Path(directory)
@@ -1151,10 +1154,13 @@ class CanonicalImportTests(unittest.TestCase):
                     if p["path"].startswith(f"/Endpoints/ID={endpoint}/Headers/")
                 }
                 self.assertEqual(slots, {"x-codex-image-turn-id": 20, "x-codex-turn-metadata": 25}, endpoint)
-            self.assertEqual(
-                result["rule_field_paths"]["SPEC-BODY-006"],
-                ["/BaseInstructions/IDScheme"],
-            )
+            # IDScheme 一个字段同时决定 id 方案和“前缀所在帧”（官方里是同一个 incremental_tools 开关），三条规则共用这一条路径。
+            for rule in ("SPEC-BODY-003", "SPEC-BODY-006", "SPEC-WS-005"):
+                self.assertEqual(
+                    result["rule_field_paths"][rule],
+                    ["/BaseInstructions/IDScheme"],
+                    rule,
+                )
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

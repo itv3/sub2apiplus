@@ -347,6 +347,19 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         self.assertFalse(self.run_check(
             "SPEC-WS-005", "first-business-frame-carries-prefix", [self.frame_observation(business_with_prefix)]))
 
+    def test_first_business_frame_chains_the_warmup_response(self) -> None:
+        tools = [{"type": "function", "name": "shell"}]
+        prefix = [{"type": "additional_tools", "role": "developer", "tools": tools}]
+        chained = {"type": "response.create", "model": "gpt-6.1-sol", "previous_response_id": "resp_informal_0001", "input": prefix}
+        unchained = {"type": "response.create", "model": "gpt-6.1-sol", "input": prefix}
+        self.assertTrue(self.run_check(
+            "SPEC-WS-005", "first-business-frame-chains-warmup", [self.frame_observation(chained, role="first_business")]))
+        # 没有 previous_response_id（0.163 之前的整段重放形态）失败；没有标签帧时失败关闭。
+        self.assertFalse(self.run_check(
+            "SPEC-WS-005", "first-business-frame-chains-warmup", [self.frame_observation(unchained, role="first_business")]))
+        self.assertFalse(self.run_check(
+            "SPEC-WS-005", "first-business-frame-chains-warmup", [self.frame_observation(chained)]))
+
     def test_image_header_order_lists_the_two_new_headers_right_after_version(self) -> None:
         _, check = self.check("SPEC-EP-022", "image-header-order")
         order = check["assertion"]["value"]

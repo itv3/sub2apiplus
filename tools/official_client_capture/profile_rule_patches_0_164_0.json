@@ -92,7 +92,9 @@
     },
     {
       "rule_ids": [
-        "SPEC-BODY-006"
+        "SPEC-BODY-003",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
       ],
       "op": "add",
       "path": "/BaseInstructions/IDScheme",
