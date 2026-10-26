@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在 ARM64 上受独立监督器保护地启用 Codex 0.163.0 工具和文档。
+"""在 ARM64 上受独立监督器保护地启用 Codex 0.164.0 工具和文档。
 
 本脚本只负责受管工具和活动文档的同一部署事务，不执行官方请求，也不读取证据。
 所有外部命令都经由 ``codex_upgrade_supervisor.SupervisorClient``，文件操作前后均
@@ -356,6 +356,10 @@ from urllib.parse import urlsplit
 # 目标场景清单切到 0.163.0，staging 默认目录改为 codex-0.163.0-managed-tools，部署命名改为 01630（与驱动按目标版本推导的
 # c{compact} 前缀一致）。消费者只按 codex-*-supervisor-enable-* 通配与其后的时间戳取最新收据，不绑定版本号。监督器与断言预处理器
 # 文件本身没有改动，下面两个默认摘要不变。wire 层变化；受管工具树随之变化。
+# 2026-10-27（0.164.0 版本登记）：新增 0.164.0 目标版本清单与 0.163.0→0.164.0 升级对（0.163.0 是真实 Active，其全部清单保留），
+# 目标场景清单切到 0.164.0，staging 默认目录改为 codex-0.164.0-managed-tools，部署命名改为 01640（与驱动按目标版本推导的 c{compact}
+# 前缀一致）。消费者仍只按 codex-*-supervisor-enable-* 通配与其后的时间戳取最新收据，不绑定版本号。监督器与断言预处理器文件本身没有改动，
+# 下面两个默认摘要不变。wire 层变化；受管工具树随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
     "09b326d073066c20612d024874e4a6aebdb1c168176558584058f22a3dbf8b47"
 )
@@ -585,14 +589,14 @@ CLIENT_MANAGED_RUNTIME_DOCUMENTS: Mapping[str, tuple[str, ...]] = {
     "claude": CLAUDE_MANAGED_RUNTIME_DOCUMENTS,
 }
 # 部署收据：合同、文件名模式（与适配器 deploy_receipt_glob 同值，测试核对）与文件名里时间戳之前的前缀。
-# Codex 的文件名保留它自己维护的版本标签（codex-01630-…），消费者按 "-supervisor-enable-" 之后的时间戳排序。
+# Codex 的文件名保留它自己维护的版本标签（codex-01640-…），消费者按 "-supervisor-enable-" 之后的时间戳排序。
 CODEX_DEPLOY_RECEIPT_SCHEMA = "codex-arm64-supervisor-enable/v1"
 CLAUDE_DEPLOY_RECEIPT_SCHEMA = "official-client-managed-deploy/v1"
 DEPLOY_RECEIPT_GLOBS: Mapping[str, str] = {
     "codex": "codex-*-supervisor-enable-*.json",
     "claude": "claude-managed-deploy-*.json",
 }
-CODEX_RECEIPT_NAME_TEMPLATE = "codex-01630-supervisor-enable-{stamp}.json"
+CODEX_RECEIPT_NAME_TEMPLATE = "codex-01640-supervisor-enable-{stamp}.json"
 CLAUDE_RECEIPT_NAME_TEMPLATE = "claude-managed-deploy-{stamp}.json"
 # Codex 收据的字段闭集（22 项，VC-0 收口与驱动按它核对）；B5a-01 不增不减。
 CODEX_DEPLOY_RECEIPT_FIELDS = frozenset({
@@ -637,7 +641,7 @@ DEPLOY_LOCK_NAME = "managed-deploy.lock"
 # 生产监督器的编译检查只编译、不落盘（E2-02）：py_compile 会无视 PYTHONDONTWRITEBYTECODE 显式写 .pyc，生产受管树原先
 # 因此每次部署都多一个 __pycache__。内置 compile() 与 py_compile 是同一个编译器，语法与编码声明错误同样失败。
 COMPILE_CHECK_COMMAND = ("python3", "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec', dont_inherit=True)")
-TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_163_0.json"
+TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_164_0.json"
 SOURCE_SPEC_HEADINGS = {
     "第二章": "# 第二部分 Codex CLI 客户端规则画像",
     "第二部分": "# 第二部分 Codex CLI 客户端规则画像",
@@ -3087,7 +3091,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--staging-root",
         type=Path,
-        default=Path("/root/docker/capture-cli/data/staging/codex-0.163.0-managed-tools"),
+        default=Path("/root/docker/capture-cli/data/staging/codex-0.164.0-managed-tools"),
     )
     parser.add_argument(
         "--production-root",
@@ -3175,7 +3179,7 @@ def main(argv: list[str] | None = None) -> int:
     claude_expected = claude_identity(staging_root) if "claude" in signing else None
     supervisor = load_supervisor(staging_root)
     stamp = utc_stamp().lower()
-    campaign_id = f"c01630-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
+    campaign_id = f"c01640-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
     attached_client = supervisor.SupervisorClient.attach_from_environment()
     client = attached_client or supervisor.SupervisorClient(
         control_root,
@@ -3417,7 +3421,7 @@ def main(argv: list[str] | None = None) -> int:
                 suffix = root_event_suffix(root)
                 staging_path = staging_root / root
                 candidate_path = control_root / (
-                    f"codex-01630-tool-candidate-{stamp}-{secrets.token_hex(4)}"
+                    f"codex-01640-tool-candidate-{stamp}-{secrets.token_hex(4)}"
                     if root == CAPTURE_ROOT
                     else f"{root_name(root)}-candidate-{stamp}-{secrets.token_hex(4)}"
                 )
@@ -4306,7 +4310,7 @@ def transaction_documents(clients: list[str]) -> tuple[tuple[str, ...], tuple[st
 def transaction_root_name(stamp: str, token: str, clients: list[str]) -> str:
     """文档事务目录名：签 Codex 收据时沿用改造前的名字（Codex 收据的 document_rollback_backup 指向它）。"""
 
-    return f".codex-01630-deploy-{stamp}-{token}" if "codex" in clients else f".managed-deploy-{stamp}-{token}"
+    return f".codex-01640-deploy-{stamp}-{token}" if "codex" in clients else f".managed-deploy-{stamp}-{token}"
 
 
 @contextmanager

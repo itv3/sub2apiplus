@@ -55,6 +55,9 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # default_verbosity=low）。这是语义变化而不是换名：内置目录里 gpt-5.5 是唯一 use_responses_lite=false 的模型，换成 gpt-6.1-sol 后
 # 0.163.0 的主线轨道本身就是 Lite，所以在 MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 里把 0.163.0 声明为 true；Lite 轨仍沿用
 # gpt-6-astra（true），可见性和 Lite 标记以 VC-1 目录证据复核。
+# 0.164.0 的内置目录（models-manager/models.json 与 model_presets.rs）与 0.163.0 逐字节相同（这两个文件在 rust-v0.163.0 与 rust-v0.164.0 之间无任何差异），
+# 沿用 0.163.0 的两条轨道：主线 gpt-6.1-sol（Lite）、Lite 专项 gpt-6-astra。登记时只核对了内置目录；gpt-6.1-sol 对采集账号是否仍可用
+# 属于上游服务侧事实，开工前要按 codex-0163 的做法用 codex exec 各发一次最小请求复核（不入总账、不作证据）。
 #
 # 主线只收录已在本升级中实际采过或即将采的模型，而不是所有同 Lite 标志的模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
@@ -98,6 +101,11 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "main": ("gpt-6.1-sol",),
         "lite": ("gpt-6-astra",),
     },
+    "0.164.0": {
+        # 内置目录与 0.163.0 逐字节相同，沿用 0.163.0 的主线 Lite 模型与 Lite 专项模型；见上方说明。
+        "main": ("gpt-6.1-sol",),
+        "lite": ("gpt-6-astra",),
+    },
 }
 
 # 各目标版本主线轨道的 use_responses_lite 声明：True 表示主线模型本身就是 Lite 模型。
@@ -122,6 +130,7 @@ MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION: dict[str, bool] = {
     "0.159.2": False,
     "0.160.0": False,
     "0.163.0": True,
+    "0.164.0": True,
 }
 
 
@@ -167,7 +176,7 @@ def track_expected_use_responses_lite(codex_version: str, track: str) -> bool:
     """目标版本某条轨道的模型应有的 use_responses_lite；缺政策或缺声明时失败关闭。
 
     Lite 轨按定义恒为 True；主线按 MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 声明
-    （0.160.0 及更早为 False，0.163.0 起为 True）。作业默认期望、模型条件收据的期望坐标
+    （0.160.0 及更早为 False，0.163.0 起为 True，0.164.0 沿用）。作业默认期望、模型条件收据的期望坐标
     和场景清单显式字段的一致性校验都读这里，调用方不得自行比较版本号。
     """
 

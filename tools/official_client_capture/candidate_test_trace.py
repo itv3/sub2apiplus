@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_163_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_164_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_163_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_164_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -160,8 +160,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-21（0.163.0 VC-4 候选实现）：候选按画像 BaseInstructions／AccessPrograms／TurnMetadata 节改动已登记的
 # `official_egress_openai_http.go`、`official_egress_openai_ws.go` 与 `official_egress_openai_turn_metadata_section.go`；映射只重绑这三份源码快照，
 # 不改变测试、事实宇宙或规则语义（载荷审核：仅 source_files 的 sha256 叶子变化）。
+# 2026-10-27（0.164.0 版本登记）：目标版本升到 0.164.0，默认映射改指 candidate_test_fact_map_0_164_0.json；该文件由 0.163.0 版
+# （含上面历次源码快照重绑后的现状，摘要 299ef735…）原样复制并逐字替换版本号。载荷逐项审核：383 个叶子里唯一差异是 codex_version
+# （0.163.0→0.164.0）一处，把新文件里的版本号换回后与 0.163.0 版逐字节相同；测试、事实宇宙与源码快照不变。0.163.0 映射文件保留不动
+# （它仍是当前 Active 的登记件）。后续 0.164.0 变更集若改动映射已登记的生产源码（如 openai_gateway_forward.go），只重绑对应源码快照，
+# 并在此追加一条带载荷审核的说明。
 FROZEN_MAPPING_SHA256 = (
-    "299ef7356b5a409d03a94883ac02e64700998e6346ce0eee637453ac66c07b8a"
+    "f0202513edd35c2d01198c5f8f330bdd981694d88087075b116bcf2bde33e05d"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -266,8 +271,13 @@ FROZEN_MAPPING_SHA256 = (
 # source_spec_sha256 随之重绑，摘要由 a8b0ed45… 换为 b9ce3322…；载荷除该一行外逐字不变。
 # 2026-10-27（0.164 升级第 5 路，指南源码引用增量换到 0.164.0）：指南第二部分的源码行号按 0.164.0 复核平移、行为有差异的规则补写“0.164.0 复核”说明，
 # 第二章摘要由 ee92ff27… 变为 ba36bf78…，期望清单的 source_spec_sha256 随之重绑，摘要由 b9ce3322… 换为 653f0af7…；载荷除该一行外逐字不变。
+# 2026-10-27（0.164.0 版本登记）：目标版本升到 0.164.0，默认断言画像改指 candidate_rule_expectations_0_164_0.json；该文件由 0.163.0 版
+# （收尾后的现状，摘要 a8b0ed45…）复制并逐字替换版本号。载荷逐项审核：2112 个叶子里差异共 12 处且全是版本号（codex_version 1、官方原始字节
+# 描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.163.0 版
+# 逐字节相同；验收契约现算新旧画像载荷逐项相等，仍为 706df763…（dual_wire=25／candidate_profile=18）。规则、场景、检查 ID 与判据载荷不变，
+# 待 0.164.0 差异报告的判据改写落地后再追加说明并重算。0.163.0 画像文件保留不动。
 FROZEN_PROFILE_SHA256 = (
-    "653f0af70319179442cdec8d7eb8c653af385a26edb3989682c938af486bb0c7"
+    "e61ed64ed60c7812a9834e181a8cb42fccebea23d4a16ec6fa7f242b4b23104a"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
