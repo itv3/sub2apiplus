@@ -166,14 +166,15 @@ class BindExecutionTreeTest(unittest.TestCase):
         self.assertEqual(outcome.verdict, "error")
         self.assertIn("mount namespace", outcome.detail)
 
-    def test_catalog_binds_only_the_two_managed_file_injection_probes_and_copies_the_bundle_script(self) -> None:
+    def test_catalog_binds_only_the_two_managed_file_injection_probes_and_keeps_vc1_recovery_out_of_replay(self) -> None:
         from tools.official_client_capture.tests import chain_rehearsal_catalog as catalog
 
         probes = (*catalog.DEFECT_PROBES, *catalog.RECOVERY_PROBES)
         bound = {probe.probe_id for probe in probes if getattr(probe.runner, "bind_execution_tree", False)}
         self.assertEqual(bound, {"orphan-candidate-recovery-preview", "zero-result-isolation-source"})
         recovery = next(probe for probe in probes if probe.probe_id == "vc1-recovery-fault-injection-chain")
-        self.assertIn("tools/prepare_assertion_bundle.sh", recovery.copy_extra)
+        # R17d 两种注入在 ARM64 上恢复链都照样通过（见目录里的盲区说明），不能再当历史重放。
+        self.assertEqual(recovery.injections, ())
 
 
 class CommandRunnerTest(unittest.TestCase):

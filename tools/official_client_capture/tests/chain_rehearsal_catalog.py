@@ -265,33 +265,12 @@ DEFECT_PROBES: tuple[Probe, ...] = (
 # 二、恢复分支故障注入探针（ARM64 root 专用；缺条件如实“未执行”）
 # ---------------------------------------------------------------------------
 
-# R17d：二次承接未重绑的承接结果时，按 Campaign 冻结身份回退验真（cad6e7955／6edb82a76）。当时没有任何单元用例覆盖，
-# 只有真实恢复链走到“二次承接”才会暴露，所以把它登记为 VC-1 恢复链的历史重放：注入器把回退分支的条件改成恒假。
-R17_SECOND_REUSE_FALLBACK = ExactReplacement(
-    f"{T}/codex_upgrade.py",
-    "                if (\n"
-    "                    evolution_context is not None\n"
-    "                    and not cross_campaign_source\n"
-    "                    and item.get(\"disposition\") == \"reused\"\n",
-    "                if (\n"
-    "                    False\n"
-    "                    and evolution_context is not None\n"
-    "                    and not cross_campaign_source\n"
-    "                    and item.get(\"disposition\") == \"reused\"\n",
-    "二次承接回退分支恒假：承接链里没重绑过的结果再次承接时按源 attempt 生产身份核对不命中，被判不可复用",
-)
-
-# R17e：精确还原 6edb82a76。回退验真的放行路径只含“源 attempt 生产身份到当前树”的变化，漏掉“冻结身份到源 attempt 生产身份”
-# 之间已由前序工具演进登记的允许重绑组件变化（10-26 ARM64 实跑：上一条整段关掉回退分支，恢复链照样通过，注入点太弱，
-# 因为恢复链走到的是未改回退口径的主路径；真正出过事故的是这一处口径）。
-R17_FROZEN_REBASE_SINCE = ExactReplacement(
-    f"{T}/codex_upgrade.py",
-    "                        allowed_high_risk_path_changes=_rebase_paths_since(\n"
-    "                            original_tool, current_tool, permitted_rebase_paths\n"
-    "                        ),\n",
-    "                        allowed_high_risk_path_changes=permitted_rebase_paths,\n",
-    "回退验真只放行“源 attempt 生产身份到当前树”的变化：冻结身份到源 attempt 生产身份之间已登记的允许重绑组件变化被当成真实产出侧改动，二次承接的预览与 resume 复用集合不一致",
-)
+# R17d 的回归盲区（10-26 ARM64 实测两次）：二次承接未重绑的承接结果时，按 Campaign 冻结身份回退验真（cad6e7955／6edb82a76）。
+# VC-1 恢复链的录制回放对它不敏感：分别注入“整段关掉回退分支”（codex_upgrade.py 的 if 条件恒假）与“精确还原 6edb82a76
+# 的放行路径”（allowed_high_risk_path_changes=permitted_rebase_paths），恢复链两次都照样通过（1028～1044 秒）——录制数据
+# 没有走到会暴露这一差异的工具演进序列。所以 vc1 恢复链探针不带注入器、不参加历史重放，只在“一轮查全”里当恢复链基线。
+# 真正的防回归要靠一个覆盖 _prior_complete_results 回退调用点的单元用例（随 0.164 登记补，见记忆
+# opt-1026-arm64-deploy-and-validation）。别再给这条链配 R17d 的注入器。
 
 RECOVERY_PROBES: tuple[Probe, ...] = (
     Probe(
@@ -299,17 +278,8 @@ RECOVERY_PROBES: tuple[Probe, ...] = (
         "VC-1 恢复链故障注入：首批超时 → 预览批次失败 → 守护者三连败 → 控制面／证据层修复部署 → 二次承接 → 封存",
         "VC-1", "录制回放：对账 → 预览 → 补跑 → 演进登记 → epoch → seal → classify",
         UnittestRunner([f"{REAL_CHAINS}.test_codex_upgrade_vc1_recorded_chain.VC1RecordedRecoveryChainTests"], timeout_seconds=3600),
-        # 用例里要从仓库根复制这个脚本进录制回放的临时树；历史重放的副本只有受管树、驱动目录与 tools/ci，不带它，
-        # 未注入的基线副本就红（10-26 ARM64 实跑）。
-        kind="recovery", needs=("linux_root_unshare", "recorded_vc1_campaign"), copy_extra=("tools/prepare_assertion_bundle.sh",),
+        kind="recovery", needs=("linux_root_unshare", "recorded_vc1_campaign"),
         history=("cad6e7955", "6edb82a76", "记忆 vc1-recorded-replay-chain", "记忆 vc1-windowed-isolation-recovery-preview-mismatch-1021"),
-        # 签名取“二次承接对账（reconcile-attempt-3）”这一步的断言源码行：二次承接被判不可复用时，失败就落在这一步对
-        # third_reconciled 的断言上。**未经 ARM64 实跑验证**——失败现象的消息文本我没见过，首次实跑后应改成该步骤抛出的
-        # 具体错误消息（例如 R17 核对的“预览复用…resume 复用…”）。
-        # 签名第一条是 R17 核对拒绝批准的真实文案（codex_upgrade.py 恢复预览与源 attempt 冻结闭集不一致）；后两条是二次承接对账
-        # 步骤的断言源码行，作为备用。**未经 ARM64 实跑验证**，首次实跑的失败输出会写在汇总的 detail 里，不命中就按它改。
-        signature=('恢复预览与源 attempt 冻结闭集不一致', 'third_reconciled["status"]', 'third_reconciled["reuse_job_ids"]'),
-        injections=(R17_FROZEN_REBASE_SINCE,),
     ),
     Probe(
         "vc5-attempt-recovery-fault-injection",
