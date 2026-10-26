@@ -104,7 +104,7 @@ class TemplateValidityTest(unittest.TestCase):
         clients["codex"]["active_path"] = str(egress / "catalogdata/runtime" / active_file)
         clients["codex"]["rollback_path"] = str(egress / "catalogdata/runtime" / rollback_file)
         # request-render 把只读源码根渲染成主仓库路径（UM-18），源码树只在主仓库存在。
-        self.source_tree = self.root / "local-analysis/sources/codex-cli-0.163.0"
+        self.source_tree = self.root / "local-analysis/sources/codex-cli-0.164.0"
         self.source_tree.mkdir(parents=True)
         for gate in self.request["gates"]:
             gate["argv"] = [item.replace("{source_repository}", str(self.root)) for item in gate["argv"]]
@@ -155,9 +155,9 @@ class TemplateValidityTest(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             return report["findings"]
 
-        unrendered = findings_for("CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.163.0")
+        unrendered = findings_for("CODEX_SPEC_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.164.0")
         self.assertEqual(sum("{source_repository} 未渲染" in item for item in unrendered), 1)
-        worktree = findings_for("CODEX_SPEC_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.163.0")
+        worktree = findings_for("CODEX_SPEC_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.164.0")
         self.assertEqual(sum("执行时的 {repository}" in item for item in worktree), 1)
         self.source_tree.rmdir()
         missing = template_validity(self.root, self.request, self.template)["findings"]

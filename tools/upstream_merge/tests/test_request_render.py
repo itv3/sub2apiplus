@@ -23,7 +23,7 @@ from tools.upstream_merge.preflight_report import (
 from tools.upstream_merge.request_render import INVENTORY_FILES, FINALIZE_RECEIPT, render_request
 
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
-SOURCE_TREE = "local-analysis/sources/codex-cli-0.163.0"
+SOURCE_TREE = "local-analysis/sources/codex-cli-0.164.0"
 
 
 def git(root: Path, *argv: str) -> str:
