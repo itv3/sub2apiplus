@@ -1,23 +1,30 @@
 """后台验证起跑前置检查（优化第 4 项，``tools/ci/background_preflight.py``）。
 
-四项检查：冻结收据、基线重封、重部署、准入绑定。用两次真实发生过的“起跑顺序错”复现并确认被拦下：
+五项检查：冻结收据、基线重封、重部署、准入绑定、主机工具链（host-toolchain）。用三次真实发生过的“起跑条件不对”复现并确认被拦下：
 
 * 顺序错一（先于冻结收据）：源码改了冻结文件，承接收据还没单独提交就起后台验证——冻结覆盖检查报出未承接的路径；
 * 顺序错二（先于重部署）：数据根部署的受管树还是旧的，就起后台验证——部署与测试树不一致；
-* 两个都错时一次报全；全都对时放行；``background_validation.py start --preflight on`` 在不通过时拒绝起跑，也不停掉已在跑的验证。
+* 环境不匹配（后台验证 #1）：采集主机 Go 是 1.27.2，被验证提交的 backend/go.mod 已要求 1.27.3，``GOTOOLCHAIN=local`` 的出站单元退出 2、整轮白跑——主机工具链检查拦下；
+* 几个都错时一次报全；全都对时放行；``background_validation.py start --preflight on`` 在不通过时拒绝起跑，也不停掉已在跑的验证。
 
-冻结覆盖用真实的 ``tools.upstream_merge``（拷进临时仓库），其余依赖用可注入的替身，不碰真实 ARM64。
+冻结覆盖用真实的 ``tools.upstream_merge``（拷进临时仓库），其余依赖用可注入的替身，不碰真实 ARM64。主机工具链检查用临时目录里的假 go 可执行脚本充当执行器的 PATH，
+不碰真实 Go、不联网。
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,9 +32,12 @@ from unittest import mock
 
 from tools.ci import background_preflight as pre
 from tools.ci import background_validation as bv
+from tools.ci import entry_gates as eg
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMIT_PLACEHOLDER = "d" * 40
+# 假 go 探测时记下的环境变量名（见 write_fake_go）：用来核对探测环境里放行了什么、强制了什么、挡掉了什么。
+FAKE_GO_LOGGED_NAMES = ("PATH", "LANG", "HOME", "GOTOOLCHAIN", "GOPROXY", "GOFLAGS", "GOCACHE", "CGO_ENABLED", "STRAY", "PYTHONPATH")
 
 
 def sha(text: str) -> str:
@@ -40,11 +50,15 @@ def git(root: Path, *args: str) -> str:
 
 
 def make_frozen_repo(root: Path, *, receipted: bool) -> str:
-    """最小的“有冻结台账”的仓库：frozen/data.txt 是冻结文件；receipted 为假时再改一版内容而不补承接收据。返回提交号。"""
+    """最小的“有冻结台账”的仓库：frozen/data.txt 是冻结文件；receipted 为假时再改一版内容而不补承接收据。返回提交号。
+
+    树里另带一份 ``backend/go.mod``（要求 go 1.27.3），让它同时是第五项主机工具链检查能读的“被验证提交”；冻结覆盖检查只看台账里登记的路径，不受它影响。"""
 
     root.mkdir(parents=True)
     shutil.copytree(REPO_ROOT / "tools" / "upstream_merge", root / "tools" / "upstream_merge", ignore=shutil.ignore_patterns("__pycache__", "tests"))
     (root / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "backend").mkdir()
+    (root / "backend" / "go.mod").write_text("module example.invalid/backend\n\ngo 1.27.3\n", encoding="utf-8")
     maintenance = root / "docs" / "egress" / "maintenance"
     maintenance.mkdir(parents=True)
     (root / "frozen").mkdir()
@@ -59,6 +73,44 @@ def make_frozen_repo(root: Path, *, receipted: bool) -> str:
         (root / "frozen" / "data.txt").write_text("v2 源码已改，承接收据还没提交\n", encoding="utf-8")
         git(root, "commit", "-q", "-am", "改冻结文件")
     return git(root, "rev-parse", "HEAD")
+
+
+def write_fake_go(directory: Path, stdout: str = "go version go1.27.3 linux/arm64", *, exit_code: int = 0, stderr: str = "",
+                  log: Path | None = None, delay: float | None = None) -> Path:
+    """在 ``directory`` 里写一个假的 go 可执行脚本，返回它的路径。
+
+    脚本是 POSIX sh，只用 shell 内建命令（echo、printf、pwd、exit），所以执行器 PATH 里只放这个目录也能跑。``log`` 不为空时，每次运行把参数、当前目录和
+    ``FAKE_GO_LOGGED_NAMES`` 里各变量的值（没设置记为 ``<unset>``）追加进去，用来核对探测环境；``delay`` 不为空时先 ``exec sleep``（模拟 go 卡住，
+    调用方的 PATH 里要找得到 sleep）。"""
+
+    lines = ["#!/bin/sh"]
+    if log is not None:
+        lines.append("{")
+        lines.append('  echo "args=$*"')
+        lines.append('  echo "pwd=$(pwd)"')
+        lines.extend(f'  echo "{name}=${{{name}-<unset>}}"' for name in FAKE_GO_LOGGED_NAMES)
+        lines.append(f"}} >> {shlex.quote(str(log))}")
+    if delay is not None:
+        lines.append(f"exec sleep {delay}")
+    if stdout:
+        lines.append(f"printf '%s\\n' {shlex.quote(stdout)}")
+    if stderr:
+        lines.append(f"printf '%s\\n' {shlex.quote(stderr)} >&2")
+    lines.append(f"exit {exit_code}")
+    path = Path(directory) / "go"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def read_fake_go_log(log: Path) -> dict[str, str]:
+    """假 go 记下的最后一次探测：变量名（以及 args、pwd）→ 值。"""
+
+    values: dict[str, str] = {}
+    for line in log.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        values[key] = value
+    return values
 
 
 class FreezeReceiptsTests(unittest.TestCase):
@@ -229,8 +281,241 @@ class AdmissionBindingTests(unittest.TestCase):
         self.assertIn("缺少已纳管客户端", partial["problems"][0])
 
 
+class HostToolchainTests(unittest.TestCase):
+    """第五项 ``host-toolchain``：执行器单元用的 go 不得低于被验证提交 ``backend/go.mod`` 的 ``go`` 指令，判不了一律失败关闭。
+
+    背景（后台验证 #1）：采集主机 ``/usr/local/go`` 是 1.27.2，上游合并把 go.mod 抬到 1.27.3，``GOTOOLCHAIN=local`` 的两个 make 出站单元退出 2，整轮白跑。
+    这里用临时目录里的假 go 脚本充当“执行器 PATH”复现各种主机；不碰真实 Go，也不联网。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.bin = self.root / "go-bin"
+        self.bin.mkdir()
+        self.tree = self.root / "tree"
+        (self.tree / "backend").mkdir(parents=True)
+        self.log = self.root / "go-probe.log"
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27.3\n")
+
+    def write_go_mod(self, text: str) -> None:
+        (self.tree / "backend" / "go.mod").write_text(text, encoding="utf-8")
+
+    def install_go(self, version: str | None = "1.27.3", **kwargs) -> Path:
+        """装一个报告 ``go version go<version> linux/arm64`` 的假 go；``version`` 给 None 时输出由关键字 ``stdout`` 指定。每次探测都记进 ``self.log``。"""
+
+        if version is not None:
+            kwargs.setdefault("stdout", f"go version go{version} linux/arm64")
+        return write_fake_go(self.bin, log=self.log, **kwargs)
+
+    def check(self, **kwargs) -> dict:
+        kwargs.setdefault("exec_path", str(self.bin))
+        kwargs.setdefault("environ", {})
+        return pre.check_host_toolchain(self.tree, **kwargs)
+
+    def test_the_incident_host_older_than_go_mod_is_blocked_with_a_full_explanation(self) -> None:
+        go = self.install_go("1.27.2")
+        result = self.check()
+        self.assertEqual((result["name"], result["passed"]), ("host-toolchain", False))
+        self.assertEqual(len(result["problems"]), 1)
+        text = result["problems"][0]
+        for needle in (str(go), "go1.27.2", "backend/go.mod", "go 1.27.3",                          # 主机 go 的路径与版本、go.mod 要求的版本
+                       "GOTOOLCHAIN=local", "退出 2", "整轮后台验证白跑",                                  # 后果
+                       "egress-spec:egress-scanner-check", "egress-spec:egress-spec-egressscan-self-test",
+                       "toolchain@v0.0.1-go1.27.3.linux-arm64", "升级必须在没有后台验证运行时进行"):          # 怎么办
+            self.assertIn(needle, text)
+        self.assertEqual({key: result["detail"][key] for key in ("required_go", "host_go", "go_path")},
+                         {"required_go": "1.27.3", "host_go": "1.27.2", "go_path": str(go)})
+
+    def test_equal_or_newer_hosts_pass_and_versions_compare_numerically(self) -> None:
+        for host in ("1.27.3", "1.27.4", "1.27.10", "1.28.0", "1.28", "1.100.0"):   # 1.27.10 与 1.100.0：按字符串比会误判成“更旧”
+            with self.subTest(host=host):
+                self.install_go(host)
+                result = self.check()
+                self.assertEqual((result["passed"], result["problems"]), (True, []), result)
+                self.assertEqual(result["detail"]["host_go"], host)
+        self.install_go(None, stdout="go version go1.27.3 X:nocoverageredesign linux/arm64")
+        self.assertTrue(self.check()["passed"], "版本号后面的实验标记不影响解析")
+
+    def test_older_hosts_fail_even_where_a_string_comparison_would_let_them_through(self) -> None:
+        for host in ("1.27.2", "1.27.0", "1.26.9", "1.9.9", "1.2.99", "0.99.0"):   # 1.9.9：按字符串比比 1.27.3 “更大”
+            with self.subTest(host=host):
+                self.install_go(host)
+                result = self.check()
+                self.assertFalse(result["passed"], result)
+                self.assertEqual(result["detail"]["host_go"], host)
+
+    def test_a_missing_patch_defaults_to_zero_on_both_sides(self) -> None:
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27\n")
+        for host, expected in (("1.27", True), ("1.27.0", True), ("1.27.2", True), ("1.28", True), ("1.26.9", False), ("1.26", False)):
+            with self.subTest(go_mod="go 1.27", host=host):
+                self.install_go(host)
+                self.assertEqual(self.check()["passed"], expected)
+        self.install_go("1.26.9")
+        self.assertIn("toolchain@v0.0.1-go1.27.0.linux-arm64", self.check()["problems"][0], "go.mod 写 go 1.27（没有补丁段）时，建议拷出的工具链目录名补成 1.27.0")
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27.0\n")
+        self.install_go("1.27")
+        self.assertTrue(self.check()["passed"], "go.mod 写 1.27.0、主机是老式写法 go1.27（没有补丁段）：两边都按 1.27.0 比")
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27.1\n")
+        self.assertFalse(self.check()["passed"], "同一台 go1.27（按 1.27.0）低于 go.mod 的 1.27.1")
+
+    def test_go_missing_from_the_executor_path_fails_closed(self) -> None:
+        empty, not_executable = self.root / "empty-bin", self.root / "not-executable-bin"
+        empty.mkdir()
+        not_executable.mkdir()
+        (not_executable / "go").write_text("#!/bin/sh\necho 'go version go1.27.3 linux/arm64'\n", encoding="utf-8")   # 没有执行权限
+        for label, path in (("空目录", str(empty)), ("go 没有执行权限", str(not_executable)), ("PATH 为空", ""), ("目录不存在", str(self.root / "nope"))):
+            with self.subTest(label):
+                result = self.check(exec_path=path)
+                self.assertFalse(result["passed"], result)
+                self.assertIn("找不到 go", result["problems"][0])
+                self.assertIsNone(result["detail"]["go_path"])
+        self.assertIn(str(empty), self.check(exec_path=str(empty))["problems"][0], "失败信息写明查找的 PATH")
+
+    def test_unparseable_go_version_output_fails_closed(self) -> None:
+        for label, output in (("乱码", "hello world"), ("空输出", ""), ("没有 go version 前缀", "go1.27.3 linux/arm64"),
+                              ("开发版", "go version devel go1.28-abcdef0 Mon Jan 1 00:00:00 2026 +0000 linux/arm64"),
+                              ("候选版", "go version go1.27rc1 linux/arm64"), ("带厂商后缀", "go version go1.27.3-bigcorp linux/arm64")):
+            with self.subTest(label):
+                self.install_go(None, stdout=output)
+                result = self.check()
+                self.assertFalse(result["passed"], result)
+                self.assertIn("解析不了", result["problems"][0])
+                self.assertIsNone(result["detail"]["host_go"])
+                self.assertEqual(result["detail"]["go_version_output"], output)
+
+    def test_a_go_that_fails_or_cannot_run_fails_closed(self) -> None:
+        self.install_go(None, stdout="go version go1.27.3 linux/arm64", exit_code=1, stderr="go: boom")
+        result = self.check()
+        self.assertFalse(result["passed"], "退出码非零：即使输出看着像合格的版本也不信")
+        self.assertIn("退出码 1", result["problems"][0])
+        self.assertIn("go: boom", result["problems"][0])
+        (self.bin / "go").write_text("这不是一个可执行程序\n", encoding="utf-8")   # 有执行权限，但既不是二进制也没有 #! 行：exec 失败
+        (self.bin / "go").chmod(0o755)
+        result = self.check()
+        self.assertFalse(result["passed"], result)
+        self.assertIn("运行不起来", result["problems"][0])
+
+    def test_a_go_that_hangs_is_killed_and_fails_closed(self) -> None:
+        self.install_go(None, stdout="", delay=30)
+        started = time.monotonic()
+        with mock.patch.object(pre, "HOST_GO_PROBE_TIMEOUT_SECONDS", 0.5):
+            result = self.check(exec_path=f"{self.bin}:/bin:/usr/bin")   # 假 go 用 exec sleep 模拟卡住，PATH 里要找得到 sleep
+        self.assertFalse(result["passed"], result)
+        self.assertIn("没有返回", result["problems"][0])
+        self.assertLess(time.monotonic() - started, 20, "超时后进程被杀，不会等满 30 秒")
+
+    def test_go_mod_without_exactly_one_parseable_go_directive_fails_closed(self) -> None:
+        self.install_go("1.27.3")
+        cases = {
+            "没有 go 指令（require 块里有 go.uber.org 开头的模块行，不能误认）":
+                ("module example.invalid/backend\n\nrequire (\n\tgo.uber.org/zap v1.27.0\n)\n", "实际有 0 个"),
+            "两个 go 指令": ("module example.invalid/backend\n\ngo 1.27.3\ngo 1.28.0\n", "实际有 2 个"),
+            "被注释掉": ("module example.invalid/backend\n\n// go 1.27.3\n", "实际有 0 个"),
+            "候选版写法": ("module example.invalid/backend\n\ngo 1.27rc1\n", "不是 X.Y 或 X.Y.Z 形式"),
+            "只有主版本": ("module example.invalid/backend\n\ngo 1\n", "不是 X.Y 或 X.Y.Z 形式"),
+        }
+        for label, (text, expected) in cases.items():
+            with self.subTest(label):
+                self.write_go_mod(text)
+                result = self.check()
+                self.assertFalse(result["passed"], result)
+                self.assertIn(expected, result["problems"][0])
+        (self.tree / "backend" / "go.mod").unlink()
+        result = self.check()
+        self.assertFalse(result["passed"], result)
+        self.assertIn("读不到", result["problems"][0])
+        self.assertFalse(self.log.exists(), "go.mod 判不了的时候根本没有去跑 go")
+
+    def test_go_directive_spellings_that_go_itself_accepts_are_all_read(self) -> None:
+        self.install_go("1.27.3")
+        for label, text in (("行尾注释", "module m\n\ngo 1.27.3 // 注释\n"), ("Windows 换行", "module m\r\n\r\ngo 1.27.3\r\n"),
+                            ("行首缩进", "module m\n\n  go 1.27.3\n"), ("Tab 分隔", "module m\n\ngo\t1.27.3\n")):
+            with self.subTest(label):
+                self.write_go_mod(text)
+                result = self.check()
+                self.assertEqual((result["passed"], result["detail"]["required_go"]), (True, "1.27.3"), result)
+
+    def test_go_mod_parser_reads_only_real_directives(self) -> None:
+        text = ("module example.invalid/m\n\ngo 1.27.3 // 注释\n\ntoolchain go1.27.5\n\nrequire (\n\tgo.uber.org/zap v1.27.0\n"
+                "\tgolang.org/x/net v0.56.0 // indirect\n)\n\n// go 1.99.0\n godebug default=go1.21\n")
+        self.assertEqual(pre.parse_go_mod(text), (["1.27.3"], ["go1.27.5"]))
+        self.assertEqual(pre.parse_go_mod("go 1.27.3\r\ntoolchain default\r\n"), (["1.27.3"], ["default"]))
+        self.assertEqual(pre.parse_go_mod(""), ([], []))
+
+    def test_the_toolchain_line_is_a_hint_not_a_gate(self) -> None:
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27.3\n\ntoolchain go1.27.5\n")
+        self.install_go("1.27.3")
+        below = self.check()
+        self.assertTrue(below["passed"], "主机满足 go 指令、低于 toolchain 行：GOTOOLCHAIN=local 的单元不据 toolchain 行做决定，放行")
+        self.assertEqual(below["detail"]["toolchain_line"], "go1.27.5")
+        self.assertIn("go1.27.5", below["detail"]["toolchain_note"])
+        for host in ("1.27.5", "1.28.0"):
+            self.install_go(host)
+            met = self.check()
+            self.assertTrue(met["passed"], met)
+            self.assertNotIn("toolchain_note", met["detail"], "主机不低于 toolchain 行：不需要提示")
+        self.install_go("1.27.2")
+        self.assertFalse(self.check()["passed"], "硬门槛仍是 go 指令：低于它照样拦，哪怕 toolchain 行也在")
+        self.write_go_mod("module example.invalid/backend\n\ngo 1.27.3\n\ntoolchain default\n")
+        self.install_go("1.27.3")
+        self.assertNotIn("toolchain_note", self.check()["detail"], "toolchain default 没有版本可比，不提示")
+
+    def test_the_probe_runs_in_the_offline_units_environment_and_not_in_the_tree(self) -> None:
+        self.install_go("1.27.3")
+        caller = {"PATH": "/operator/path", "LANG": "zh_CN.UTF-8", "HOME": "/home/operator", "GOTOOLCHAIN": "auto",
+                  "GOPROXY": "https://proxy.example.invalid", "GOFLAGS": "-mod=mod", "GOCACHE": "/work/go-build-cache", "CGO_ENABLED": "0",
+                  "STRAY": "不应放行", "PYTHONPATH": "/leak"}
+        self.assertTrue(self.check(environ=caller)["passed"])
+        seen = read_fake_go_log(self.log)
+        self.assertEqual(seen["args"], "version")
+        self.assertEqual(seen["pwd"], "/", "站在根目录：与被验证的树没有任何关系")
+        self.assertEqual((seen["GOTOOLCHAIN"], seen["GOPROXY"], seen["GOFLAGS"]), ("local", "off", "-mod=readonly"),
+                         "三个变量强制成离线单元的值，盖掉调用方给的")
+        self.assertEqual((seen["GOCACHE"], seen["CGO_ENABLED"], seen["HOME"]), ("/work/go-build-cache", "0", "/home/operator"),
+                         "其余 GO*／CGO_* 与 HOME 照调用方放行")
+        self.assertEqual((seen["PATH"], seen["LANG"]), (str(self.bin), "C.UTF-8"), "PATH 与语言固定，不用调用方的")
+        self.assertEqual((seen["STRAY"], seen["PYTHONPATH"]), ("<unset>", "<unset>"), "白名单之外的变量一个都不带")
+
+    def test_the_operators_path_is_ignored_and_the_first_go_on_the_executor_path_wins(self) -> None:
+        operator_bin = self.root / "operator-bin"
+        operator_bin.mkdir()
+        write_fake_go(operator_bin, "go version go1.20.0 linux/arm64")   # 操作员 shell 的 PATH 上有个旧 go：执行器根本看不见它
+        self.install_go("1.27.3")
+        result = self.check(environ={"PATH": str(operator_bin)})
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["detail"]["go_path"], str(self.bin / "go"))
+        # 执行器 PATH 上有两个 go 时取第一个（/usr/local/go/bin 排在 /usr/local/bin 前面）。
+        second = self.root / "second-bin"
+        second.mkdir()
+        write_fake_go(second, "go version go1.28.0 linux/arm64")
+        self.install_go("1.27.2")
+        result = self.check(exec_path=f"{self.bin}:{second}")
+        self.assertFalse(result["passed"], "排在前面的旧 go 才是单元用的，后面的新 go 救不了")
+        self.assertEqual(result["detail"]["go_path"], str(self.bin / "go"))
+
+    def test_the_constants_agree_with_the_executor_and_the_offline_units(self) -> None:
+        script = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"^EXEC_PATH=(\S+)$", script, re.M), [pre.EXEC_PATH],
+                         "执行器固定 PATH 在 entry-gates.sh 里只定义一次，且与本模块的 EXEC_PATH 逐字相同")
+        self.assertEqual(pre.HOST_GO_PROBE_ENV, eg.DECLARED_OFFLINE_ENV, "探测强制的三个变量就是声明级单元运行期的离线环境")
+        self.assertTrue(eg.DECLARED_REQUIRE_OFFLINE, "声明级单元的离线要求仍打开：它关了的话 GOTOOLCHAIN=local 的前提不成立，第五项的判定理由要重新评估")
+        self.assertTrue((REPO_ROOT / pre.GO_MOD_RELATIVE).is_file())
+
+    def test_the_repositorys_own_go_mod_is_readable_and_gates_exactly_at_its_version(self) -> None:
+        go_values, _toolchain = pre.parse_go_mod((REPO_ROOT / pre.GO_MOD_RELATIVE).read_text(encoding="utf-8"))
+        self.assertEqual(len(go_values), 1, go_values)
+        required = go_values[0]
+        major, minor = required.split(".")[:2]
+        self.install_go(required)
+        at_version = pre.check_host_toolchain(REPO_ROOT, exec_path=str(self.bin), environ={})
+        self.assertEqual((at_version["passed"], at_version["detail"]["required_go"]), (True, required), at_version)
+        self.install_go(f"{major}.{int(minor) - 1}.99")
+        self.assertFalse(pre.check_host_toolchain(REPO_ROOT, exec_path=str(self.bin), environ={})["passed"], "低一个次版本的主机被拦")
+
+
 class RunChecksTests(unittest.TestCase):
-    """四项合在一起：两种顺序错误各自被拦下，两个都错一次报全，全对放行。"""
+    """五项合在一起：三种起跑条件错误各自被拦下，几个都错一次报全，全对放行。"""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -243,16 +528,23 @@ class RunChecksTests(unittest.TestCase):
             json.dumps({"status": "passed", "tool_files_sha256": "f" * 64}), encoding="utf-8")
         self.deployment = bv.latest_deployment(self.data)
         self.ok_runner = lambda argv, **kw: (pre._run(argv, **kw) if "-c" in argv else SimpleNamespace(returncode=0, stdout="OK", stderr=""))
+        # 主机工具链检查（第五项）：假 go 充当执行器 PATH，缺省报 1.27.3，与 make_frozen_repo 树里 backend/go.mod 要求的版本相同，所以缺省放行。
+        self.go_bin = self.root / "go-bin"
+        self.go_bin.mkdir()
+        write_fake_go(self.go_bin, "go version go1.27.3 linux/arm64")
 
-    def run_all(self, tree: Path, steps: FakeSteps) -> dict:
+    def run_all(self, tree: Path, steps: FakeSteps, **extra) -> dict:
         return pre.run_checks(tree=tree, commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
-                              deployment=self.deployment, deployments=None, runner=self.ok_runner, steps=steps)
+                              deployment=self.deployment, deployments=None, runner=self.ok_runner, steps=steps,
+                              exec_path=str(self.go_bin), environ={}, **extra)
 
     def test_all_good_passes(self) -> None:
         make_frozen_repo(self.root / "tree", receipted=True)
         report = self.run_all(self.root / "tree", FakeSteps(recorded="a" * 64, actual="a" * 64))
         self.assertTrue(report["passed"], report)
         self.assertEqual([item["name"] for item in report["checks"]], list(pre.CHECK_NAMES))
+        self.assertEqual(list(pre.CHECK_NAMES), ["freeze-receipts", "baseline-reseal", "redeploy", "admission-binding", "host-toolchain"],
+                         "第五项追加在末尾，前四项的名字与顺序不变")
 
     def test_reproduces_and_blocks_the_two_historical_wrong_orders(self) -> None:
         make_frozen_repo(self.root / "late-receipt", receipted=False)
@@ -267,6 +559,37 @@ class RunChecksTests(unittest.TestCase):
         self.assertIn("拒绝起跑后台验证", text)
         self.assertIn("[freeze-receipts]", text)
         self.assertIn("[redeploy]", text)
+
+    def test_reproduces_and_blocks_the_wrong_host_go_environment(self) -> None:
+        """第三次真实发生的白跑（后台验证 #1）：被验证提交的 backend/go.mod 要求 go 1.27.3，采集主机 Go 是 1.27.2——环境与被验证提交不匹配，起跑前就要拦下。"""
+
+        make_frozen_repo(self.root / "late-receipt", receipted=False)
+        make_frozen_repo(self.root / "good", receipted=True)
+        write_fake_go(self.go_bin, "go version go1.27.2 linux/arm64")
+        old_host = self.run_all(self.root / "good", FakeSteps(recorded="a" * 64, actual="a" * 64))
+        every_wrong = self.run_all(self.root / "late-receipt", FakeSteps(recorded="a" * 64, actual="b" * 64))
+        self.assertEqual(old_host["failed_checks"], ["host-toolchain"], "主机 Go 低于 go.mod：被拦下，其余四项照常通过")
+        self.assertEqual(every_wrong["failed_checks"], ["freeze-receipts", "redeploy", "host-toolchain"], "三种都错，一次报全")
+        text = pre.format_failures(every_wrong)
+        self.assertIn("拒绝起跑后台验证", text)
+        self.assertIn("[host-toolchain]", text)
+        self.assertIn("go1.27.2", text)
+        # 换上够新的 Go 之后，同一棵树放行：被拦的就是主机 Go，不是别的。
+        write_fake_go(self.go_bin, "go version go1.27.3 linux/arm64")
+        self.assertTrue(self.run_all(self.root / "good", FakeSteps(recorded="a" * 64, actual="a" * 64))["passed"])
+
+    def test_the_fifth_check_reports_in_the_same_shape_as_the_first_four(self) -> None:
+        make_frozen_repo(self.root / "tree", receipted=True)
+        report = self.run_all(self.root / "tree", FakeSteps(recorded="a" * 64, actual="a" * 64))
+        self.assertEqual(sorted(report), ["checked_at_unix", "checks", "client", "commit", "failed_checks", "passed", "schema_version"])
+        for item in report["checks"]:
+            self.assertEqual(sorted(item), ["detail", "name", "passed", "problems", "seconds"], item["name"])
+            self.assertIsInstance(item["problems"], list, item["name"])
+            self.assertIsInstance(item["detail"], dict, item["name"])
+        json.dumps(report, ensure_ascii=False)   # 整份报告能序列化：background_validation 把它留档成 JSON
+        fifth = report["checks"][4]
+        self.assertEqual((fifth["name"], fifth["passed"], fifth["problems"]), ("host-toolchain", True, []))
+        self.assertEqual((fifth["detail"]["required_go"], fifth["detail"]["host_go"]), ("1.27.3", "1.27.3"))
 
     def test_with_two_managed_clients_the_baseline_reseal_covers_both(self) -> None:
         make_frozen_repo(self.root / "tree", receipted=True)
@@ -293,6 +616,38 @@ class RunChecksTests(unittest.TestCase):
         with self.assertRaises(pre.PreflightError):
             pre.run_checks(tree=self.root, commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
                            deployment=self.deployment, deployments=None, only=["不存在"])
+
+    def test_only_can_select_the_toolchain_check_and_nothing_else_runs(self) -> None:
+        make_frozen_repo(self.root / "tree", receipted=True)
+        spawned: list[object] = []
+        report = pre.run_checks(tree=self.root / "tree", commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
+                                deployment=self.deployment, deployments=None, only=["host-toolchain"],
+                                runner=lambda *args, **kwargs: spawned.append(args), exec_path=str(self.go_bin), environ={})
+        self.assertEqual([item["name"] for item in report["checks"]], ["host-toolchain"])
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(spawned, [], "只选第五项时，冻结覆盖与基线重封（经 runner 起子进程的两项）一个都没有执行")
+
+    def command_line(self, tree: Path, *extra: str) -> tuple[int, str, str]:
+        """跑一遍 ``background_preflight.py check`` 命令行（执行器 PATH 指向假 go 目录），返回（退出码, 标准输出, 标准错误）。"""
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(pre, "EXEC_PATH", str(self.go_bin)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pre.main(["check", "--runroot", str(self.runroot), "--data-root", str(self.data), "--commit", COMMIT_PLACEHOLDER,
+                             "--tree", str(tree), *extra])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_command_line_only_host_toolchain_passes_and_blocks_with_the_documented_exit_codes(self) -> None:
+        make_frozen_repo(self.root / "tree", receipted=True)
+        code, stdout, stderr = self.command_line(self.root / "tree", "--only", "host-toolchain")
+        report = json.loads(stdout)
+        self.assertEqual((code, report["passed"], [item["name"] for item in report["checks"]]), (0, True, ["host-toolchain"]), stderr)
+        write_fake_go(self.go_bin, "go version go1.27.2 linux/arm64")
+        code, stdout, stderr = self.command_line(self.root / "tree", "--only", "host-toolchain")
+        self.assertEqual((code, json.loads(stdout)["failed_checks"]), (3, ["host-toolchain"]), "没过：退出码 3，JSON 报告照常打印")
+        self.assertIn("[host-toolchain]", stderr)
+        self.assertIn("拒绝起跑后台验证", stderr)
+        code, _stdout, stderr = self.command_line(self.root / "tree", "--only", "不存在")
+        self.assertEqual(code, 2, f"不认识的检查项是用法错误，退出码 2：{stderr}")
 
 
 class BundleMaterializationTests(unittest.TestCase):
@@ -423,6 +778,19 @@ class DriverCopyTests(unittest.TestCase):
         for name in ("background_preflight.py", "background_validation.py"):
             with self.subTest(name):
                 self.assertEqual((driver / name).read_bytes(), (REPO_ROOT / "tools" / "ci" / name).read_bytes())
+
+    def test_usage_texts_name_every_preflight_check(self) -> None:
+        """用法说明跟着检查项走：``preflight --only`` 的帮助和驱动入口脚本的说明都得列全 ``CHECK_NAMES``（新增检查项忘了改文字就红）。"""
+
+        text = (REPO_ROOT / "tools" / "ci" / "background_validation.py").read_text(encoding="utf-8")
+        only_help = next(line for line in text.splitlines() if 'p_pre.add_argument("--only"' in line)
+        wrapper = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "background-validate.sh").read_text(encoding="utf-8")
+        wrapper_usage = wrapper[wrapper.index("#   preflight <bundle"):wrapper.index("#   stop [--reason")]
+        for name in pre.CHECK_NAMES:
+            with self.subTest(name):
+                self.assertIn(name, only_help)
+        self.assertIn("host-toolchain", wrapper_usage)
+        self.assertIn("五项", wrapper_usage)
 
 
 if __name__ == "__main__":

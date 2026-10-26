@@ -28,21 +28,21 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "adcf63ea96678705995e2a198c9dcb3ef9a3efe63c11fd0e1dd90baee7e34a43",
+      "sha256": "1cd6a4235f4ae040a36499384fa3da80206f8c851e319e8d59ff034f02348410",
       "mode": "0700",
-      "bytes": 9468
+      "bytes": 9761
     },
     {
       "path": "driver/background_preflight.py",
-      "sha256": "4f241544dc89500c108bbda18d69ed7a61d2fdda4c9acb1013478b8505ba66f1",
+      "sha256": "80c4f77db7be486d987cd04b3f2d0774f5760bac12b790e48ca039d972e97e04",
       "mode": "0700",
-      "bytes": 20367
+      "bytes": 34548
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "28caf3687cb999d105a08640f56cdf5efc77edca9f98323ef0bb3dc42fc1077e",
+      "sha256": "ff8b604b7eb45006c600c3b8bb036bb41735ba6d9e7acbdc858c22aeaf583461",
       "mode": "0700",
-      "bytes": 212806
+      "bytes": 213043
     },
     {
       "path": "driver/build.sh",
@@ -747,5 +747,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "6cce0c07095c4dee1f53800c1af1c0edc81ace93642e8582b1abff0b9ffb749e"
+  "manifest_sha256": "f89d3b923b62745f15362b4a0b4dd119f8f6d7463da50b76c5d6b3b2c24a9481"
 }

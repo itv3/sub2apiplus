@@ -65,8 +65,9 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 ``require-passed``（VC-5 统一准入 ``vc5_admission.state`` 也经 ``check`` 取同一份判定）的提示单列这些单元，并在判定时按执行器汇总重放标注（含两次
 日志的摘要）——标注被改写、被藏起来、日志缺失，结论就不是通过，不静默放行。补跑关闭或没有补跑时结论与改造前逐字相同。
 
-起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署）。
-``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定，任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
+起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署），
+之后又白跑过一次是环境与被验证提交不匹配（采集主机 Go 低于 ``backend/go.mod`` 的 ``go`` 指令）。
+``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 ``host-toolchain``），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
 报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 on（验收修正建议 12：Python 命令行与
 驱动入口 ``background-validate.sh start`` 同一缺省，直接调 Python 也不会悄悄绕过前置检查），``--preflight off``（驱动入口 ``--no-preflight``）显式跳过。
 
@@ -999,7 +1000,7 @@ def _preflight_module() -> Any:
 
 def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any],
                     deployments: Mapping[str, Mapping[str, Any]] | None) -> None:
-    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定；不通过抛 ``ValidationError``（拒绝起跑）。
+    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本；不通过抛 ``ValidationError``（拒绝起跑）。
     不是命令行解析出来的参数对象（没有 ``preflight`` 属性）什么都不做。"""
 
     if getattr(args, "preflight", "off") != "on":
@@ -2784,7 +2785,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                               "只与 --unit-inherit-source-result 同用")
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
     p_start.add_argument("--preflight", choices=("on", "off"), default="on",
-                         help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定），不通过就拒绝起跑；缺省 on（与驱动入口 background-validate.sh 一致），off 显式跳过")
+                         help="起跑前置检查（冻结收据、基线重封、重部署、准入绑定、主机 Go 版本），不通过就拒绝起跑；缺省 on（与驱动入口 background-validate.sh 一致），off 显式跳过")
     p_start.add_argument("--reuse", choices=("auto", "only", "off"), default="auto",
                          help="同树重部署沿用测试结论：auto 先试沿用、拒绝就照常起完整验证；only 只试沿用（reuse 子命令）；缺省 auto（与驱动入口 background-validate.sh 一致），off 显式不沿用")
     p_start.add_argument("--gate-scope", choices=(GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN, GATE_SCOPE_AUTO), default=GATE_SCOPE_FULL,
@@ -2801,7 +2802,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_pre.add_argument("--branch", required=True)
     p_pre.add_argument("--commit", required=True)
     p_pre.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
-    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding）")
+    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_reuse = sub.add_parser("reuse", help="同树重部署后沿用已通过的测试结论（退出码 0 沿用成功、3 被拒绝要求重验）")
