@@ -296,7 +296,7 @@ func TestFinalizeOfficialOpenAIWSInputTurnMetadataSkipsAdditionalToolsOnlyForUUI
 		}
 	}
 	itemOf := func(payload map[string]any, index int) map[string]any {
-		return payload["input"].([]any)[index].(map[string]any)
+		return typeAs[map[string]any](t, typeAs[[]any](t, payload["input"])[index])
 	}
 
 	v7 := build()
@@ -308,7 +308,7 @@ func TestFinalizeOfficialOpenAIWSInputTurnMetadataSkipsAdditionalToolsOnlyForUUI
 	_, triggerHasPassthrough := itemOf(v7, 2)[officialOpenAIWSItemTurnMetadata]
 	require.False(t, triggerHasPassthrough, "uuidv7 方案：compaction_trigger 不补 passthrough")
 	require.Equal(t, "7a46fb58-2930-4d6c-9cca-ea1124fcc871",
-		itemOf(v7, 1)[officialOpenAIWSItemTurnMetadata].(map[string]any)["turn_id"], "其余项照常补 turn_id")
+		typeAs[map[string]any](t, itemOf(v7, 1)[officialOpenAIWSItemTurnMetadata])["turn_id"], "其余项照常补 turn_id")
 
 	for name, section := range map[string]*profilecontract.BaseInstructionsSection{
 		"旧方案":  baseInstructionsTestSection(),

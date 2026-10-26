@@ -403,7 +403,7 @@ func TestNeutralizeOfficialOpenAIWSClientTurnIDsValidatesThenBlanks(t *testing.T
 	modified, err := neutralizeOfficialOpenAIWSClientTurnIDs(good, isBase)
 	require.NoError(t, err)
 	require.True(t, modified)
-	passthrough := good["input"].([]any)[0].(map[string]any)[p2PassthroughKey].(map[string]any)
+	passthrough := typeAs[map[string]any](t, typeAs[map[string]any](t, typeAs[[]any](t, good["input"])[0])[p2PassthroughKey])
 	require.Equal(t, "", passthrough["turn_id"])
 	require.Equal(t, json.Number("1.5"), passthrough["create_time"], "其余键不动")
 
@@ -447,8 +447,8 @@ func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
 				return decoded
 			}
 			wantMaps := map[int]any{}
-			for index, item := range decode()["input"].([]any) {
-				if value, ok := item.(map[string]any)[p2PassthroughKey]; ok {
+			for index, item := range typeAs[[]any](t, decode()["input"]) {
+				if value, ok := typeAs[map[string]any](t, item)[p2PassthroughKey]; ok {
 					wantMaps[index] = value
 				}
 			}
@@ -461,19 +461,19 @@ func TestHTTPRealCodex0164PreservesItemPassthrough(t *testing.T) {
 			require.NoError(t, result.Error)
 			restoreOfficialInputPassthroughAfterTransform(transformed)
 			for index, value := range wantMaps {
-				items := transformed["input"].([]any)
-				require.Equal(t, value, items[index].(map[string]any)[p2PassthroughKey], "字段路径 input.%d 保留", index)
+				items := typeAs[[]any](t, transformed["input"])
+				require.Equal(t, value, typeAs[map[string]any](t, items[index])[p2PassthroughKey], "字段路径 input.%d 保留", index)
 			}
-			for _, item := range transformed["input"].([]any) {
-				require.NotContains(t, item.(map[string]any), officialCodexStashedInputPassthroughKey, "私有暂存键不残留")
+			for _, item := range typeAs[[]any](t, transformed["input"]) {
+				require.NotContains(t, typeAs[map[string]any](t, item), officialCodexStashedInputPassthroughKey, "私有暂存键不残留")
 			}
 			transformedOff := decode()
 			result = applyCodexOAuthTransformWithOptions(transformedOff, codexOAuthTransformOptions{
 				SkipDefaultInstructions: true, PreserveToolCallIDs: true,
 			})
 			require.NoError(t, result.Error)
-			for _, item := range transformedOff["input"].([]any) {
-				require.NotContains(t, item.(map[string]any), p2PassthroughKey)
+			for _, item := range typeAs[[]any](t, transformedOff["input"]) {
+				require.NotContains(t, typeAs[map[string]any](t, item), p2PassthroughKey)
 			}
 
 			// 定型：基础指令消息逐字节原样；其余项除 turn_id 外逐字节相同，turn_id 改写成网关本轮的 turn_id

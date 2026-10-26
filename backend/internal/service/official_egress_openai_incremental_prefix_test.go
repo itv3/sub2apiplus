@@ -118,7 +118,7 @@ func TestIsOfficialCodexOfficialBaseInstructionsFormTable(t *testing.T) {
 		return raw
 	}
 	passthrough := func(item map[string]any) map[string]any {
-		return item["internal_chat_message_metadata_passthrough"].(map[string]any)
+		return typeAs[map[string]any](t, item["internal_chat_message_metadata_passthrough"])
 	}
 	cases := []struct {
 		name string
@@ -257,24 +257,24 @@ func TestEnsureOfficialCodexAdditionalToolsIDs(t *testing.T) {
 		modified, err := ensureOfficialCodexAdditionalToolsIDs(first, incTestThreadID)
 		require.NoError(t, err)
 		require.True(t, modified)
-		id := first["input"].([]any)[0].(map[string]any)["id"].(string)
+		id := typeAs[string](t, typeAs[map[string]any](t, typeAs[[]any](t, first["input"])[0])["id"])
 		requireStableUUIDv7ItemID(t, id, "at", "合成 additional_tools")
 		// 同线程同工具定义：id 相同；用户消息不被改动。
 		_, err = ensureOfficialCodexAdditionalToolsIDs(second, incTestThreadID)
 		require.NoError(t, err)
-		require.Equal(t, id, second["input"].([]any)[0].(map[string]any)["id"])
-		_, hasID := first["input"].([]any)[1].(map[string]any)["id"]
+		require.Equal(t, id, typeAs[map[string]any](t, typeAs[[]any](t, second["input"])[0])["id"])
+		_, hasID := typeAs[map[string]any](t, typeAs[[]any](t, first["input"])[1])["id"]
 		require.False(t, hasID)
 		// 工具定义不同或线程不同：id 不同。
 		changed := build()
-		changed["input"].([]any)[0].(map[string]any)["tools"] = append(tools(), map[string]any{"type": "function", "name": "other"})
+		typeAs[map[string]any](t, typeAs[[]any](t, changed["input"])[0])["tools"] = append(tools(), map[string]any{"type": "function", "name": "other"})
 		_, err = ensureOfficialCodexAdditionalToolsIDs(changed, incTestThreadID)
 		require.NoError(t, err)
-		require.NotEqual(t, id, changed["input"].([]any)[0].(map[string]any)["id"])
+		require.NotEqual(t, id, typeAs[map[string]any](t, typeAs[[]any](t, changed["input"])[0])["id"])
 		otherThread := build()
 		_, err = ensureOfficialCodexAdditionalToolsIDs(otherThread, incTestThreadID+"y")
 		require.NoError(t, err)
-		require.NotEqual(t, id, otherThread["input"].([]any)[0].(map[string]any)["id"])
+		require.NotEqual(t, id, typeAs[map[string]any](t, typeAs[[]any](t, otherThread["input"])[0])["id"])
 	})
 	t.Run("入站自带 id 的项原样保留", func(t *testing.T) {
 		payload := map[string]any{"input": []any{
@@ -283,7 +283,7 @@ func TestEnsureOfficialCodexAdditionalToolsIDs(t *testing.T) {
 		modified, err := ensureOfficialCodexAdditionalToolsIDs(payload, incTestThreadID)
 		require.NoError(t, err)
 		require.False(t, modified)
-		require.Equal(t, "at_01a17935-5c98-7f51-995d-9105098f672a", payload["input"].([]any)[0].(map[string]any)["id"])
+		require.Equal(t, "at_01a17935-5c98-7f51-995d-9105098f672a", typeAs[map[string]any](t, typeAs[[]any](t, payload["input"])[0])["id"])
 	})
 	t.Run("没有工具的空壳不补 id 也不删除", func(t *testing.T) {
 		for _, emptyTools := range []any{nil, []any{}} {

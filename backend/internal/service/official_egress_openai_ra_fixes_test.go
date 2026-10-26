@@ -150,9 +150,9 @@ func TestRewriteOfficialCodexBaseInstructionsMapTurnIDsRewritesLeftovers(t *test
 	}
 	payload := map[string]any{"input": []any{leftover, other, noKey}}
 	require.True(t, rewriteOfficialCodexBaseInstructionsMapTurnIDs(payload, section, "gateway-turn"))
-	require.Equal(t, "gateway-turn", leftover[p2PassthroughKey].(map[string]any)["turn_id"])
-	require.Equal(t, "keep-me", other[p2PassthroughKey].(map[string]any)["turn_id"], "非基础指令消息不动")
-	require.NotContains(t, noKey[p2PassthroughKey].(map[string]any), "turn_id", "没有 turn_id 键的不补键")
+	require.Equal(t, "gateway-turn", typeAs[map[string]any](t, leftover[p2PassthroughKey])["turn_id"])
+	require.Equal(t, "keep-me", typeAs[map[string]any](t, other[p2PassthroughKey])["turn_id"], "非基础指令消息不动")
+	require.NotContains(t, typeAs[map[string]any](t, noKey[p2PassthroughKey]), "turn_id", "没有 turn_id 键的不补键")
 	require.False(t, rewriteOfficialCodexBaseInstructionsMapTurnIDs(payload, section, "gateway-turn"), "再次调用无改动")
 	require.False(t, rewriteOfficialCodexBaseInstructionsMapTurnIDs(payload, section, ""), "turnID 为空不改")
 }
@@ -414,10 +414,10 @@ func TestRAHTTPNonUUIDItemTurnIDIsNotStashed(t *testing.T) {
 	decoded := map[string]any{}
 	require.NoError(t, json.Unmarshal(tampered, &decoded))
 	require.True(t, stashOfficialInputPassthroughForTransform(decoded, true), "其余项仍是官方形态")
-	input := decoded["input"].([]any)
-	_, stashedBad := input[4].(map[string]any)[officialCodexStashedInputPassthroughKey]
+	input := typeAs[[]any](t, decoded["input"])
+	_, stashedBad := typeAs[map[string]any](t, input[4])[officialCodexStashedInputPassthroughKey]
 	require.False(t, stashedBad, "非 UUID turn_id 的项不暂存，交给兼容层剥离")
-	_, stashedGood := input[5].(map[string]any)[officialCodexStashedInputPassthroughKey]
+	_, stashedGood := typeAs[map[string]any](t, input[5])[officialCodexStashedInputPassthroughKey]
 	require.True(t, stashedGood)
 	restoreOfficialInputPassthroughAfterTransform(decoded)
 }
