@@ -1819,5 +1819,17 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
                              {k: v for k, v in interrupted.items() if k != "variant"})
 
 
+class Scenario0164ManifestParameterTest(Scenario0163ManifestParameterTest):
+    """0.164.0 清单（由 0.163.0 终态复制并逐字替换版本号）：作业集合、执行参数与标签同 0.163.0，复用同一组断言。
+
+    清单里的目标版本表述已换成 0.164.0，但 0.164.0 差异报告里的改写尚未落地时，作业与 0.163.0 逐项相同；
+    差异报告若要求新增或修改作业，在这里按 0.163.0 的先例（``NEW_0163_JOBS``）追加期望集合。
+    """
+
+    MANIFEST_SUFFIX = "0_164_0"
+    TARGET_VERSION = "0.164.0"
+    UNIT_CAMPAIGN_ID = "c01640-unit"
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-"""0.163.0 起主线是 Lite 模型：BODY-006 里原来依赖非 Lite 样本的两个检查已改写成主线 Lite 形态。
+"""0.163.0 起主线是 Lite 模型（0.164.0 沿用）：BODY-006 里原来依赖非 Lite 样本的两个检查已改写成主线 Lite 形态。
 
 这里用手造的 Lite／非 Lite 请求体样本跑改写后检查的正反例，并锁定 EP-001 的 nonlite-image-tool 保持原样的理由
 （它读候选侧 Go 追踪测试事实，不依赖官方主线样本）。声明本身与各处载荷的一致性见 test_main_track_models.py。
@@ -25,12 +25,16 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
     用手造的 Lite／非 Lite 请求体样本跑这两个检查的正反例；样本的 body 摘要由 relay_extract.summarize_body
     从真实 JSON 请求体生成，与官方证据派生的 data.body 同构。引擎用 candidate_rule_assertion 里
     评估规则时同样的选样与断言函数，选不到样本时断言失败关闭（all_* 要求至少一条命中）。
+
+    清单后缀写成类属性，0.164.0 由下面的子类复用同一组断言（0.164.0 清单由 0.163.0 终态复制，判据随差异报告改写时两份都要继续满足）。
     """
+
+    MANIFEST_SUFFIX = "0_163_0"
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.profile = json.loads(
-            (TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8")
+            (TOOL_ROOT / f"candidate_rule_expectations_{cls.MANIFEST_SUFFIX}.json").read_text(encoding="utf-8")
         )
         cls.rule = next(
             rule for rule in cls.profile["rules"] if rule["rule_id"] == "SPEC-BODY-006"
@@ -189,7 +193,7 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
         self.assertEqual(modes["SPEC-EP-001"], "candidate_profile")
         # 事实来源：候选追踪测试的 a09.image-tool-nonlite 事实仍在映射里，与官方采集的主线模型无关。
         mapping = json.loads(
-            (TOOL_ROOT / "candidate_test_fact_map_0_163_0.json").read_text(encoding="utf-8")
+            (TOOL_ROOT / f"candidate_test_fact_map_{self.MANIFEST_SUFFIX}.json").read_text(encoding="utf-8")
         )
         fact_ids = {
             fact["fact_id"] for test in mapping["tests"] for fact in test["facts"]
@@ -207,6 +211,12 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
         self.assertIn("main-instructions-absent", ids)
         self.assertIn("main-additional-tools-present", ids)
 
+
+
+class MainTrackLiteExpectation0164Tests(MainTrackLiteExpectationTests):
+    """0.164.0 候选期望清单（由 0.163.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
+
+    MANIFEST_SUFFIX = "0_164_0"
 
 
 if __name__ == "__main__":

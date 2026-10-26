@@ -1199,7 +1199,15 @@ class JobRehearsalReceiptTests(unittest.TestCase):
         这里锁定的是演练这一环：6 个声明模型收据的作业（3 个主线、3 个 Lite 轨）逐个通过，反向篡改逐个被拒。
         """
 
-        scenario_path = Path(receipt.__file__).with_name("codex_upgrade_scenarios_0_163_0.json")
+        self.assert_model_condition_identity_tracks_declaration("0.163.0")
+
+    def test_0164_model_condition_identity_tracks_the_main_track_declaration(self) -> None:
+        """0.164.0 清单由 0.163.0 终态复制、主线声明沿用 Lite：同一组演练收据断言逐项成立。"""
+
+        self.assert_model_condition_identity_tracks_declaration("0.164.0")
+
+    def assert_model_condition_identity_tracks_declaration(self, version: str) -> None:
+        scenario_path = Path(receipt.__file__).with_name(f"codex_upgrade_scenarios_{version.replace('.', '_')}.json")
         manifest = json.loads(scenario_path.read_text(encoding="utf-8"))
         by_type = {
             "string": "value",
@@ -1212,9 +1220,9 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             item["name"]: str(item["default"]) if "default" in item else by_type[item["type"]]
             for item in manifest["variable_contract"]
         }
-        context.update(target_version="0.163.0", model="gpt-6.1-sol", lite_model="gpt-6-astra")
+        context.update(target_version=version, model="gpt-6.1-sol", lite_model="gpt-6-astra")
         jobs = codex_upgrade.load_scenario_jobs(
-            scenario_path, context, expected_version="0.163.0", require_bindings=True
+            scenario_path, context, expected_version=version, require_bindings=True
         )
         receipt_jobs = {job.job_id: job for job in jobs if job.required_model_receipt}
         self.assertEqual(
@@ -1239,7 +1247,7 @@ class JobRehearsalReceiptTests(unittest.TestCase):
         with mock.patch.object(receipt, "_syntax_probe", return_value=("host", [])):
             for job_id, job in receipt_jobs.items():
                 with self.subTest(job=job_id, case="声明一致"):
-                    # 0.163.0 的主线与 Lite 轨作业都声明 Lite：作业字段与环境变量镜像都是 true。
+                    # 0.163.0 起主线与 Lite 轨作业都声明 Lite：作业字段与环境变量镜像都是 true。
                     self.assertIs(job.expected_use_responses_lite, True)
                     self.assertEqual(job.steps[0]["environment"]["EXPECT_USE_RESPONSES_LITE"], "true")
                     self.assertEqual(receipt._job_probe(job, "capture-cli")["status"], "passed")

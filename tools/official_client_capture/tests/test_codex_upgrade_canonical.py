@@ -1021,6 +1021,70 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertIn("/AccessPrograms", result["rule_field_paths"]["SPEC-BODY-001"])
             self.assertIn("/BaseInstructions", result["rule_field_paths"]["SPEC-BODY-006"])
 
+    def test_0164_patch_manifest_binds_real_active_profile(self) -> None:
+        """0.164.0 补丁清单绑定当前 active 的 0.163.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名）。
+
+        登记阶段补丁为空（待 0.164.0 差异报告定稿后承接，开工前定稿；建 Campaign 之后改它属于证据语义层演进）。
+        补丁一旦非空，下面的“补丁为空”与“受影响规则为空”两处断言要随之改成对具体补丁的核对。
+        """
+
+        active_profile = (
+            ROOT
+            / "backend/internal/officialegress/catalogdata/runtime/profiles/0.163.0"
+            / "3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6.json"
+        )
+        patch_manifest = (
+            ROOT / "tools/official_client_capture/profile_rule_patches_0_164_0.json"
+        )
+        patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(patch_payload["baseline_version"], "0.163.0")
+        self.assertEqual(patch_payload["target_version"], "0.164.0")
+        self.assertEqual(
+            patch_payload["active_profile_sha256"],
+            codex_upgrade.file_sha256(active_profile),
+        )
+        self.assertEqual(patch_payload["rule_patches"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            active_payload = json.loads(active_profile.read_text(encoding="utf-8"))
+            self.assertEqual(active_payload["Version"], "0.163.0")
+            target_payload, _ = codex_upgrade._replace_json_string_literal(
+                active_payload,
+                "0.163.0",
+                "0.164.0",
+            )
+            target_payload["Digest"] = "f" * 64
+            target_profile = fixture_root / "target-profile.json"
+            migration = fixture_root / "rule-migration.json"
+            self._write(
+                target_profile,
+                {"codex_version": "0.164.0", "profile_payload": target_payload},
+            )
+            self._write(
+                migration,
+                {
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "classification": "inherit",
+                            "baseline_rule": "SPEC-CODEX-IDENTITY",
+                            "target_rule": "SPEC-CODEX-IDENTITY",
+                        }
+                    ],
+                },
+            )
+
+            result = codex_upgrade.validate_profile_derivation(
+                active_profile_path=active_profile,
+                target_profile_path=target_profile,
+                migration_path=migration,
+                patch_manifest_path=patch_manifest,
+            )
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["live_request_count"], 0)
+
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._fixture(Path(directory))
