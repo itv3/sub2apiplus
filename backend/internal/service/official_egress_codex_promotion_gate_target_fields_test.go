@@ -40,9 +40,9 @@ func codexGateTaggedBaseInstructionsMessage(text string) map[string]any {
 // 画像数据层同时锁定：两个端点的闭集字段序与必需项恰为批准值，闭集不含 instructions、含 access_programs。
 // 对照：另一槽位的闭集仍含顶层 instructions、没有 access_programs，同一入站在 wire 上保留顶层 instructions、不带 access_programs。
 func TestCodexResponsesBodyClosedFieldsReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-		// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
+	// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
 	// 改在较旧槽位（批准这些语义的 0.163 发布）上重放，作为既有批准语义的回归；0.164 对同一规则的新语义由本轮的
-	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_*_test.go）覆盖。
+	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_test.go）覆盖。
 	mode := codexGateTargetReleaseMode(t, "Responses 的 HTTP 与 WS 闭集字段不含 instructions 且含 access_programs",
 		codexGateResponsesClosedFieldsWithoutInstructions)
 	profile := codexGateExecutableProfile(t, mode)

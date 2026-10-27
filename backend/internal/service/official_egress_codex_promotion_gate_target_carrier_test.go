@@ -26,9 +26,9 @@ import (
 //
 // 对照：另一槽位的非 Lite 请求保留顶层 instructions、没有载体消息；Lite 把指令以不带 id 与标记的普通 developer 消息放进 input。
 func TestCodexBaseInstructionsCarrierReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-		// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
+	// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
 	// 改在较旧槽位（批准这些语义的 0.163 发布）上重放，作为既有批准语义的回归；0.164 对同一规则的新语义由本轮的
-	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_*_test.go）覆盖。
+	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_test.go）覆盖。
 	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 input 里 developer 消息形态的基础指令载体（HTTP 与 WS）",
 		codexGateBaseInstructionsCarrierDeclared)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
