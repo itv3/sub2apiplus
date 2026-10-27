@@ -1,0 +1,184 @@
+{
+  "base_commit": "7c62c53f30bfc833a69526d0c57307de25c0e963",
+  "changed_path_count": 9,
+  "current_commit": "77dc885c290827086ec32da95c897f6b567add7a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7139,
+  "frozen_path_count": 2318,
+  "identity_sha256": "1d8984fba20bb52120b01fcc7d044f50f59038ad89e8b160e97f79bfc21a0a80",
+  "issued_at_utc": "2026-10-27T23:40:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "8457076c78f3a838b53abf31d41a85ec9c34028253e8b1e8d17f2163d082521d"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/account_test_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-closeout-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "129ba44f73c77c2cac4e0a1c2bb2b5bc2801d0b6d04da43d3c356d4c4bdb93ba"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "predecessor_sha256s": [
+        "2d7345f819718af6c2bb258d4ec25e3c75077cbec738cc78d6f69afed247fd2a"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/official_egress_openai_ws_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1f1749ecf7fe26ac970abdab55d638057cbdb204abaff551e09895b0ba3b782b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_test_helpers_test.go",
+      "predecessor_sha256s": [
+        "d1f7b63e6d24123e95d95fc6e07db7e547d7c4f62111dae291fbf1114f247db6"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/official_egress_test_helpers_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "f7fd15ff83f6ce86ea1af433a0ec86ac019a267190daa9a6cf1b78bdad98d709"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_test.go",
+      "predecessor_sha256s": [
+        "1d519f96fe89ffd5b78bc397600d762e0a5b7a39d3281ec38cbca32475ee9ec5"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/openai_images_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-closeout-image-tests-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c334e24c95429c9866ef4bd6843a226297673ebe58659f2854e9c5536fb5654e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_oauth_input_metadata_test.go",
+      "predecessor_sha256s": [
+        "67af0800535c00b01aaadfc59e2933072ca79d0bf37df264936be4ac56b98fac"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/openai_oauth_input_metadata_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3c78e782de0cf7033875f9455700cd5c6b7b722eeebd3052f608ff44faec0e73"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "predecessor_sha256s": [
+        "e3e2de5c2c5447448988ff392d4455bdb417baabef81a48399137fbfb4f83a58"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-tool-opt-20261026-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d8abd26fe775d3bb65842c6fd95cdb736e3edd28e1285620e519a5e84c0a2f78"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "332f1ae875f8b79c162d76f519cc2f4c0fc3917b28dfa36ca8eaf446a1d4ff28"
+      ],
+      "reason": "Codex 0.164.0 收尾预备：晋升后形态暴露的 internal/service 两处生产偏差修复（生图账号测试补绑运行态快照；WS→HTTP 桥接延迟正文分支在 uuidv7 画像下把网关补 id 的 additional_tools 项键序对齐官方序，属出站字节层面、仅该条件生效）与七处依赖 0.163 形态的测试修正；不改变官方客户端画像声明、Persona 选择与生产配置 path=backend/internal/service/openai_ws_http_bridge.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "837c1e96ff21609525f910ac624433c7ecd211251939c19efb25cf7623ebe40d"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/internal/service/official_egress_forward_body_segments_test.go",
+    "backend/internal/service/official_egress_members_handoff_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
