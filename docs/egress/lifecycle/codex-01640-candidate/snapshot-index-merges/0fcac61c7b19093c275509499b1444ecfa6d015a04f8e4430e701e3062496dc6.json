@@ -1,0 +1,74 @@
+{
+  "added": [
+    [
+      "0.164.0",
+      "871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d"
+    ]
+  ],
+  "after_sha256": "bc6f3b9c2764c2a44690286f20532dee489f8fd60e6ea0287d225954a1e59a88",
+  "before_sha256": "5e5a364c0225159da599966ea3afe7a2a1b5b8872daa9e0131b03c5725f9cfc4",
+  "binding_sha256": "1d45b936f74e0ae18b33656b7f295ab3a305f3ab61189b4d6e708497ca797169",
+  "catalog_inventory_sha256": "ab563f8455db61b768e7db2905082402d3de0b415e2a67b4a54de8c922e9d267",
+  "contract_verification": {
+    "catalog_count": 3,
+    "checker_sha256": "071aba3513d9d53915e0b2c24b0346e7490f8cb5939861b370a5d9a81f0f1fc6",
+    "profile_contract_sha256": "13d3a2c00911d96f7b5cf7039681d2bd2667c8b9a0f877ec36b682bc5df7a626",
+    "status": "passed"
+  },
+  "preserved": [
+    [
+      "0.145.0",
+      "343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431"
+    ],
+    [
+      "0.145.0",
+      "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b"
+    ],
+    [
+      "0.147.0",
+      "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc"
+    ],
+    [
+      "0.149.1",
+      "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3"
+    ],
+    [
+      "0.149.1",
+      "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60"
+    ],
+    [
+      "0.151.0",
+      "dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39"
+    ],
+    [
+      "0.154.0",
+      "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3"
+    ],
+    [
+      "0.154.0",
+      "33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563"
+    ],
+    [
+      "0.157.0",
+      "3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d"
+    ],
+    [
+      "0.160.0",
+      "d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c"
+    ],
+    [
+      "0.163.0",
+      "3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6"
+    ]
+  ],
+  "schema_version": "arm64-snapshot-index-merge/v1",
+  "snapshot_count": 12,
+  "staged_sha256": "3eac5553b172ec73cd7726419f9cc3a8df164dc543bf5bb20cd17242d9e8c0c8",
+  "status": "complete",
+  "written_verification": {
+    "catalog_count": 1,
+    "checker_sha256": "071aba3513d9d53915e0b2c24b0346e7490f8cb5939861b370a5d9a81f0f1fc6",
+    "profile_contract_sha256": "13d3a2c00911d96f7b5cf7039681d2bd2667c8b9a0f877ec36b682bc5df7a626",
+    "status": "passed"
+  }
+}
