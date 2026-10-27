@@ -1144,9 +1144,10 @@ case "$scenario" in
     prompt='__GUARDIAN_TUI__' ;;
   daemon-tui)
     # 0.157.0 起 TUI 默认经常驻 app-server daemon 发请求（daemon_auto_start 转为默认开启）。
-    # 其余 TUI 场景都带 --disable plugins/apps，属白名单外 CLI 覆盖，一律退回内嵌模式，
-    # 默认路径因此没有样本。本场景用独立的冷启动 CODEX_HOME、不带任何 CLI 覆盖启动 TUI，
-    # 功能开关改写进该 home 的 config.toml；daemon 在 TUI initialize 之前发出的 models 与
+    # 其余 TUI 场景都带 --disable plugins/apps：0.163.0 及更早它们属白名单外 CLI 覆盖，自动退回内嵌模式；
+    # 0.164.0 起白名单取消、任何功能开关覆盖都要与 daemon 的功能状态核对（不一致即报错退出），所以这些场景
+    # 一律显式带 --no-daemon 走内嵌模式，默认路径因此没有样本。本场景用独立的冷启动 CODEX_HOME、
+    # 不带任何 CLI 覆盖启动 TUI，功能开关改写进该 home 的 config.toml；daemon 在 TUI initialize 之前发出的 models 与
     # accounts/check 即 SPEC-HDR-005 的 daemon 条件样本。daemon 在停中继之前停止并核验无残留。
     prompt='__DAEMON_TUI__' ;;
   memgen)
@@ -1443,6 +1444,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
     --slash-hold "${TUI_HOLD:-75}" \
     ${TUI_ENABLE:+$(for f in $TUI_ENABLE; do printf -- '--enable %s ' "$f"; done)} \
     ${TUI_DISABLE:+--disable $TUI_DISABLE} \
+    --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -12 || true
 elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
@@ -1453,6 +1455,7 @@ elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
     --prompt '请调用图片生成工具生成一张红色狐狸的简单插画；必须实际调用工具。' \
     --prompt '请再次调用图片生成工具生成一张蓝色鲸鱼的简单插画；必须实际调用工具。' \
     --prompt-hold "${TUI_HOLD:-180}" \
+    --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
 elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
@@ -1463,6 +1466,7 @@ elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
     --prompt '请联网搜索 Rust 1.90 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
     --prompt '请再次联网搜索 Python 3.14 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
     --prompt-hold "${TUI_HOLD:-150}" \
+    --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
 elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
@@ -1472,6 +1476,7 @@ elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
     --model "$model" --cwd /work --no-bypass \
     --approval-policy on-request --sandbox-mode workspace-write \
     --config 'approvals_reviewer="auto_review"' \
+    --no-daemon \
     --prompt "请用 shell 在工作区外执行：printf guardian-probe > ${guardian_probe_path}。必须实际执行命令。" \
     --prompt-hold "${TUI_HOLD:-240}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
@@ -1620,6 +1625,7 @@ elif [[ $prompt == "__REVIEW_TUI__" ]]; then
     --warmup-ready "${TUI_READY:-READY}" \
     --slash "${TUI_SLASH:-/review}" \
     --slash-hold "${TUI_HOLD:-240}" \
+    --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -12 || true
 
@@ -1632,6 +1638,7 @@ elif [[ $prompt == "__WS_IDLE_CLOSE_TUI__" ]]; then
     --prompt '请只回复 FIRST-OK，不要做任何其他事。' \
     --prompt '请只回复 SECOND-OK，不要做任何其他事。' \
     --prompt-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
 elif [[ $prompt == "__IMAGE_EDIT_FILE_ID__" ]]; then

@@ -149,6 +149,11 @@ def main() -> int:
     ap.add_argument("--prompt-hold", type=float, default=120,
                     help="每条普通提示词发送后保持多久")
     ap.add_argument("--log", default=None, help="把 TUI 原始输出写到这个文件")
+    ap.add_argument("--no-daemon", action="store_true",
+                    help="传给 codex 的 --no-daemon：不经共享后台 daemon，用内嵌 app-server。"
+                         "0.164.0 起 daemon 兼容检查不再有功能开关白名单，任何 --disable／--enable 都会让 TUI 去核对 "
+                         "daemon 的功能状态，不一致即报错退出；要用 --disable 关掉 plugins／apps 等非必要流量的"
+                         "非 daemon 场景必须显式带它")
     ap.add_argument("--disable", action="append", default=[],
                     help="传给 codex 的 --disable <FEATURE>，可重复")
     ap.add_argument("--enable", action="append", default=[],
@@ -177,6 +182,9 @@ def main() -> int:
                  "--sandbox", args.sandbox_mode]
     else:
         argv += ["--dangerously-bypass-approvals-and-sandbox"]
+    # 显式走内嵌 app-server（见 --no-daemon 的说明）。clap 不看选项顺序，放在 --disable／--enable 之前即可。
+    if args.no_daemon:
+        argv += ["--no-daemon"]
     # 关掉某个 feature——用于验证 legacy compact 是否可达：
     # tasks/compact.rs:40 的分派是 supports_remote_compaction() 为真进外层，
     # 再由 Feature::RemoteCompactionV2 为**假**才走 legacy。
