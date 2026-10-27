@@ -2048,7 +2048,15 @@ func (s *OpenAIGatewayService) refreshCachedOpenAIModels(cacheKey string, reques
 	return s.openAIModelsCache.refresh.DoChan(cacheKey, func() (any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), codexModelsManifestRequestTimeout)
 		defer cancel()
-		cached, _ := s.openAIModelsCache.get(cacheKey, time.Now())
+		cached, state := s.openAIModelsCache.get(cacheKey, time.Now())
+		// 调用方在进入 singleflight 之前是先看缓存、再排队合并的两步，中间没有锁。
+		// 若上一轮合并调用恰好在这两步之间完成（结果已写入缓存、key 已释放），
+		// 后来者会把自己当成新一轮的领头者，重复打一次上游。这里在领头者内部
+		// 再看一次缓存：已被他人刷新到新鲜状态就直接复用，不再请求上游。
+		// 过期但仍可用（stale）与未命中的情形不受影响，照常刷新。
+		if state == openAIModelsCacheFresh && cached != nil {
+			return cached, nil
+		}
 		ifNoneMatch := ""
 		if cached != nil {
 			ifNoneMatch = cached.upstreamETag

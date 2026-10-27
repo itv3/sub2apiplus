@@ -9,19 +9,6 @@
 
 ## 未修复
 
-### TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups
-
-- 位置：Go，`backend/internal/service/openai_models_list_test.go`。
-- 现象：两个分组并发拉取同一批账号的模型清单，用例断言 API Key 账号只打一次上游，偶发实际打了两次
-  （`require.EqualValues(t, 1, apiCalls.Load())` 报 expected 1、actual 2）。
-- 出现记录：
-  - 2026-09-25，提交 001d8955a 的 CI（run 36109428010，test job「Unit tests」）；该提交没有改 backend。
-- 本机复现：`go test -run TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups` 连跑 30 次均通过。
-- 疑似根因：冷缓存并发去重的时间窗。第一个分组的上游调用结束、合并调用释放之后，结果写入缓存之前，第二个分组检查缓存
-  未命中，又发了一次上游调用。与调度时序有关，CI 负载高时更容易出现。
-- 处置：现象一致可复跑一次。根治要保证合并调用释放前结果已对后来者可见（或让后来者等待同一次调用的结果），列入后续
-  backend 修复。
-
 ### test_heartbeat_gap_is_watchdog_abort_without_owner_kill
 
 - 位置：Python，`tools/official_client_capture/tests/test_codex_upgrade_supervisor.py`（`SupervisorTests`）。
@@ -36,4 +23,22 @@
 
 ## 已修复
 
-（暂无）
+### TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups
+
+- 位置：Go，`backend/internal/service/openai_models_list_test.go`。
+- 现象：两个分组并发拉取同一批账号的模型清单，用例断言 API Key 账号只打一次上游，偶发实际打了两次
+  （`require.EqualValues(t, 1, apiCalls.Load())` 报 expected 1、actual 2）。
+- 出现记录：
+  - 2026-09-25，提交 001d8955a 的 CI（run 36109428010，test job「Unit tests」）；该提交没有改 backend。
+  - 2026-10-27，ARM64 后台验证整包并行首跑红一次；本机整包并行时候选链一路也红过一次。
+- 根因（生产代码缺陷，不是测试问题）：`fetchCachedOpenAIModels` 先查缓存、再进入 singleflight，两步之间没有锁；
+  上一轮合并调用若恰好在这两步之间完成（结果已写入缓存、key 已释放），后来者仍按“未命中”进入新一轮合并，
+  而领头者内部只取缓存里的 ETag、并不判断缓存是否已经新鲜，于是重复请求上游。线上并发冷读同一账号时同样会多打一次上游。
+  （原先怀疑的“释放之后、写入之前”并不存在：写入缓存发生在合并调用返回之前。）
+- 本机复现：固定写法下单独跑约 0.1% 概率红（2000 次红 4 次），多进程并发约 0.3%（9600 次红 31 次，全是上游被调 2 次）。
+- 修复：`refreshCachedOpenAIModels` 的领头者内部在请求上游前再看一次缓存，已是新鲜状态就直接复用；
+  stale 与未命中照常刷新。新增 `openai_models_cache_refresh_test.go`：一个确定性用例（旧代码必红）、一个 stale／过期仍刷新用例、
+  一个 300 轮冷读并发用例（旧代码第 11 轮即红）。修复后同口径 19200 次 0 次红。
+- 修复提交：见该条所在提交（reg0164/fix-flaky 分支）。
+- 注意：该用例走真实 loopback HTTP，用 `-count` 很大并多进程同时跑时会耗尽本机临时端口（TIME_WAIT 过万），
+  表现为 OAuth 账号清单缺项，与本条无关，压测时分批并等 TIME_WAIT 排空。
