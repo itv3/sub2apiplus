@@ -53,7 +53,7 @@ NON_ARGV_OPTIONS = {"--warmup", "--slash", "--warmup-ready", "--slash-hold", "--
 # drive_codex_tui.py 的全部选项：新增任何一项都必须先评估它是否影响客户端命令行、探测是否需要复刻。
 DRIVE_OPTIONS = NON_ARGV_OPTIONS | {
     "--codex-bin", "--model", "--cwd", "--context-window", "--disable", "--enable", "--config",
-    "--no-bypass", "--approval-policy", "--sandbox-mode",
+    "--no-bypass", "--approval-policy", "--sandbox-mode", "--no-daemon",
 }
 
 
@@ -226,6 +226,27 @@ class CallSiteCoverageTests(unittest.TestCase):
         # 探测的独立 home 同样不在临时目录下（客户端对 temp_dir 下的 CODEX_HOME 拒建 helper 别名）。
         self.assertFalse(str(runner.DAEMON_HOME).startswith(("/tmp/", "/var/tmp/")))
         self.assertTrue(str(runner.DAEMON_HOME).startswith("/work/"))
+
+    def test_non_daemon_scenarios_pass_no_daemon_and_daemon_scenario_does_not(self) -> None:
+        """0.164.0 起共享后台服务的兼容检查不再有功能开关白名单：带 --disable 的 TUI 场景不显式 --no-daemon 就会因
+        “Cannot use the shared background server”退出（入口第二轮 3 个组合 drive_exited）。非 daemon 场景的调用点与
+        探测表都必须带它，daemon-tui 绝不能带（它要的就是 daemon 路径）。"""
+
+        text = _relay_text()
+        for scenario, spec in probe.TUI_SCENARIOS.items():
+            _, command = _drive_call(_marker_blocks(text)[spec["marker"]])
+            in_call_site = any(line.strip().startswith("--no-daemon") for line in command)
+            with self.subTest(scenario=scenario):
+                self.assertEqual(in_call_site, not spec.get("daemon"))
+                self.assertEqual("--no-daemon" in probe.drive_options(scenario, {}), not spec.get("daemon"))
+                self.assertEqual("--no-daemon" in probe.drive_options(scenario, {"DISABLE_FEATURES": "plugins"}), not spec.get("daemon"))
+
+    def test_drive_forwards_no_daemon_to_client(self) -> None:
+        """受管驱动收到 --no-daemon 就原样转给客户端；不收到就不加。"""
+
+        source = DRIVE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('ap.add_argument("--no-daemon", action="store_true"', source)
+        self.assertIn('if args.no_daemon:\n        argv += ["--no-daemon"]', source)
 
     def test_drive_option_set_is_pinned(self) -> None:
         options = set(re.findall(r'add_argument\("(--[a-z-]+)"', DRIVE_SCRIPT.read_text(encoding="utf-8")))
@@ -464,7 +485,7 @@ class ComboExtractionTests(unittest.TestCase):
         self.assertIsNone(
             probe.runner_config(by_jobs[("a-compact", "b-compact-wham")], token="T", test_mutations=[], diagnostic_window=None)["daemon"]
         )
-        self.assertEqual(by_jobs[("a-compact", "b-compact-wham")]["drive_options"], ["--disable", "plugins", "--disable", "apps"])
+        self.assertEqual(by_jobs[("a-compact", "b-compact-wham")]["drive_options"], ["--no-daemon", "--disable", "plugins", "--disable", "apps"])
         self.assertEqual(by_jobs[("c-compact-v2",)]["drive_options"][-2:], ["--disable", "remote_compaction_v2"])
         guardian = by_jobs[("d-guardian",)]
         self.assertEqual((guardian["cwd"], guardian["drive_options"][:2]), ("/work", ["--no-bypass", "--approval-policy"]))

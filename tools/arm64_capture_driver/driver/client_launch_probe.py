@@ -64,31 +64,36 @@ RELAY_DEFAULTS = {
     "DISABLE_FEATURES": "plugins apps",
 }
 TOOL_ROOT_SUFFIX = "tools/official_client_capture"
+# 非 daemon 的 TUI 场景在调用点一律显式带 --no-daemon（驱动转给客户端）：0.164.0 起共享后台服务的兼容检查不再有
+# 功能开关白名单，TUI 带 --disable plugins／apps 会去核对 daemon 的功能状态，不一致就报
+# “Cannot use the shared background server” 退出（10-27 入口第二轮 3 个组合 drive_exited 的根因）；
+# 0.163.0 及更早这类覆盖本来就自动退回内嵌模式，显式 --no-daemon 与之等价。daemon-tui 不带（它要的就是 daemon 路径）。
+NO_DAEMON = ("--no-daemon",)
 # 场景 → 调用点的工作目录、固定参数与参与展开的环境变量（静态测试执行脚本调用点的真实展开逐项对照）。
 TUI_SCENARIOS: dict[str, dict[str, Any]] = {
     "compact-tui": {
         "marker": "__COMPACT_TUI__",
         "cwd": "/tmp/tui-probe",
-        "fixed": [],
+        "fixed": list(NO_DAEMON),
         "variables": ("CONTEXT_WINDOW", "TUI_ENABLE", "TUI_DISABLE", "DISABLE_FEATURES"),
     },
     "image-repeat-tui": {
         "marker": "__PROMPT_TUI_IMAGE__",
         "cwd": "/tmp/tui-probe",
-        "fixed": [],
+        "fixed": list(NO_DAEMON),
         "variables": ("DISABLE_FEATURES",),
     },
     "search-repeat-tui": {
         "marker": "__PROMPT_TUI_SEARCH__",
         "cwd": "/tmp/tui-probe",
-        "fixed": [],
+        "fixed": list(NO_DAEMON),
         "variables": ("DISABLE_FEATURES",),
     },
     # 同一 TUI 会话两轮，中间留空闲让中继以服务端身份关闭首条 WS（空闲阈值是中继参数，不进客户端命令行）。
     "ws-idle-close-tui": {
         "marker": "__WS_IDLE_CLOSE_TUI__",
         "cwd": "/tmp/tui-probe",
-        "fixed": [],
+        "fixed": list(NO_DAEMON),
         "variables": ("DISABLE_FEATURES",),
     },
     "guardian-tui": {
@@ -96,14 +101,14 @@ TUI_SCENARIOS: dict[str, dict[str, Any]] = {
         "cwd": "/work",
         "fixed": [
             "--no-bypass", "--approval-policy", "on-request", "--sandbox-mode", "workspace-write",
-            "--config", 'approvals_reviewer="auto_review"',
+            "--config", 'approvals_reviewer="auto_review"', *NO_DAEMON,
         ],
         "variables": ("DISABLE_FEATURES",),
     },
     "review-tui": {
         "marker": "__REVIEW_TUI__",
         "cwd": "/tmp/review-probe",
-        "fixed": [],
+        "fixed": list(NO_DAEMON),
         "variables": ("DISABLE_FEATURES",),
     },
     # daemon_auto_start 默认开启后的 daemon 路径：命令行不带任何覆盖（带了会退回内嵌模式），DISABLE_FEATURES 由
