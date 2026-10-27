@@ -84,7 +84,8 @@ func directBodyDeclaresInstructions(t *testing.T, mode string) bool {
 }
 
 // directBodyBothSlots 返回两个正式槽位及各自的结构事实，并要求候选态与晋升后态两种情形至少各有一个槽位：
-// 一个声明 instructions（旧画像），一个不声明（较新画像）。
+// 一个声明 instructions（旧画像），一个不声明（较新画像）；两个槽位都不声明（0.163 起的候选态与晋升后）时原样返回两个槽位，
+// 由调用方逐槽位断言。
 func directBodyBothSlots(t *testing.T) map[string]bool {
 	t.Helper()
 	slots := map[string]bool{}
@@ -100,8 +101,10 @@ func directBodyBothSlots(t *testing.T) map[string]bool {
 		}
 	}
 	if declared == 0 {
-		t.Skip("正式目录的两个槽位都不再声明顶层 instructions（Codex 0.163 起）：没有旧画像槽位可做“旧一新”对照，" +
-			"本用例验证的 Executor 冻结槽位对照不可达，跳过")
+		// Codex 0.163 起两个槽位都不再声明顶层 instructions（候选 0.164 进入 previous 之后、晋升后同样）：没有旧画像槽位可做
+		// “旧一新”对照，但每个槽位自己的行为（Executor 冻结槽位下的整理、探针与管理员测试连接经正式 Compiler）照常可验，
+		// 调用方按各槽位的 declares 分支断言，不整体跳过。
+		return slots
 	}
 	require.Equal(t, 1, declared, "两个槽位里应恰有一个旧画像（闭集声明 instructions）：%v", slots)
 	require.Equal(t, 1, omitted, "两个槽位里应恰有一个较新画像（闭集不声明 instructions）：%v", slots)
