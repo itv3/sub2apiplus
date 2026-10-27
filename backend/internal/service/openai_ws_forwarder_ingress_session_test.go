@@ -1364,6 +1364,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		toolCorrector:             NewCodexToolCorrector(),
 		openaiWSPassthroughDialer: captureDialer,
 	}
+	// 断言预热帧携带 additional_tools：这是 0.163 的线上形态（0.164 的增量窗口方案预热帧为空，工具目录随业务帧走），固定在较旧槽位。
+	useOfficialCodexOlderSlotProfile(t, svc)
 	// 官方 /backend-api/codex/models 返回的是真实模型 slug，不会返回 gpt-5.1 这类
 	// 客户端别名。请求里的 gpt-5.1 实际以 gpt-5.4 出站，能力必须按 gpt-5.4 查到，
 	// 这样入站归一与出站定型才落在同一个键上。

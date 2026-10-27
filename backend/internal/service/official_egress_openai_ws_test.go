@@ -1003,7 +1003,9 @@ func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *test
 }
 
 func TestOpenAIOfficialEgressWSFrameRejectsConflictingItemTurnMetadata(t *testing.T) {
-	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
+	// 逐项 turn_id 与所在回合冲突即拒绝，是 0.163 形态；0.164 的 uuidv7 方案把 passthrough.turn_id 统一改写为窗口回合（见 RA 验收修复），
+	// 不再判冲突。固定在较旧槽位，断言不放宽。
+	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t, olderSlotProfileConfigForTest(t))
 	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"input":[{

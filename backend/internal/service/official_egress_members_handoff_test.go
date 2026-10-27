@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // 本文件锁定问题四 M1 第三项：Finalizer 的定型结果按顶层成员交接给编译器，不再拼成整段正文。
@@ -203,6 +204,10 @@ func TestOfficialEgressHTTPRequestMembersBodyReadsFinalBytes(t *testing.T) {
 		// 画像声明基础指令载体节时，定型按线程 ID 计算消息 id：取请求冻结的线程字段，与生产装配同源。
 		threadID, err := requiredOfficialEgressFieldValue(egressContext, OfficialEgressFieldThreadID)
 		require.NoError(t, err, name)
+		// 画像声明 uuidv7 方案时，定型按请求 turn_id 改写入站逐项 passthrough.turn_id；生产装配传 identity.turnID，
+		// 它与登记的 turn metadata 里的 turn_id 同源，这里取同一字段。
+		turnMetadata, err := requiredOfficialEgressFieldValue(egressContext, OfficialEgressFieldTurnMetadata)
+		require.NoError(t, err, name)
 		expected, modified, err := finalizeOfficialOpenAIHTTPBody(
 			body, contract, officialOpenAIHTTPIdentity{},
 			officialOpenAIReasoningDefaultsFromContext(egressContext),
@@ -211,6 +216,7 @@ func TestOfficialEgressHTTPRequestMembersBodyReadsFinalBytes(t *testing.T) {
 				SupportsParallelTools: egressContext.parallelTools,
 				ProfileMode:           egressContext.ProfileMode(),
 				ThreadID:              threadID,
+				TurnID:                gjson.Get(turnMetadata, "turn_id").String(),
 			},
 		)
 		require.NoError(t, err)

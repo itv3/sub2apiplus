@@ -254,7 +254,10 @@ func TestOfficialForwardHTTPBodyWritesLiteDefaultsWhenFinalizerOtherwiseUnchange
 	require.NoError(t, err)
 	payload, err := decodeOfficialJSONObjectUseNumber(seed)
 	require.NoError(t, err)
-	options := officialOpenAIHTTPBodyOptions{UseResponsesLite: true, ProfileMode: officialClientProfileModeActive}
+	// ThreadID 与生产装配一致由请求身份提供：画像声明 uuidv7 增量窗口方案（0.164 起）时，网关给工具目录补 at_ id 需要线程 ID。
+	options := officialOpenAIHTTPBodyOptions{
+		UseResponsesLite: true, ProfileMode: officialClientProfileModeActive, ThreadID: testOfficialOpenAISessionID,
+	}
 	_, err = finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, officialOpenAIReasoningDefaults{}, options)
 	require.NoError(t, err)
 	changed, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, officialOpenAIReasoningDefaults{}, options)

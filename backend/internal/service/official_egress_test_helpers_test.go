@@ -39,6 +39,30 @@ func useOfficialCodexLegacyProfile(t *testing.T, svc *OpenAIGatewayService) {
 	svc.officialEgress = newOfficialEgressTestRuntimeForMode(t, svc.httpUpstream, mode)
 }
 
+// olderSlotProfileConfigForTest 返回发布指针固定在 Active／Previous 里画像版本较旧的槽位的配置：晋升前是 Active（0.163），
+// 晋升后是 Previous（0.163）。与 legacyProfileConfigForTest 的区别：后者找“尚未声明基础指令载体节”的 0.160 级旧画像，
+// 正式目录晋升到 0.164 后该槽位已不可达（用例会跳过）；本助手面向“0.163 形态与 0.164 不同”的用例，两种目录形态下都有槽位可用。
+func olderSlotProfileConfigForTest(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := &config.Config{}
+	cfg.Gateway.OfficialClientProfiles.Mode = codexGateOlderReleaseMode(t)
+	return cfg
+}
+
+// useOfficialCodexOlderSlotProfile 把整个用例固定在较旧槽位，做法同 useOfficialCodexLegacyProfile（发布指针配置与
+// Codex runtime 同时指向该槽位）。适用于断言 0.163 线上形态、而 0.164 已改变该形态的用例（例如 WS 预热帧的工具目录位置、
+// 逐项 passthrough 的剥离）；0.164 对应语义由 0.164 的专项用例与晋升门禁覆盖。断言本身不放宽。
+func useOfficialCodexOlderSlotProfile(t *testing.T, svc *OpenAIGatewayService) {
+	t.Helper()
+	mode := codexGateOlderReleaseMode(t)
+	if svc.cfg == nil {
+		svc.cfg = &config.Config{}
+	}
+	svc.cfg.Gateway.OfficialClientProfiles.Mode = mode
+	require.NotNil(t, svc.httpUpstream, "固定较旧槽位 runtime 需要服务已配置 HTTPUpstream")
+	svc.officialEgress = newOfficialEgressTestRuntimeForMode(t, svc.httpUpstream, mode)
+}
+
 func init() {
 	officialEgressTestRuntimeFactory = func(
 		httpUpstream HTTPUpstream,

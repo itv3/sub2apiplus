@@ -12,6 +12,9 @@ func TestOAuthInputInternalMetadata(t *testing.T) {
 	const field = "internal_chat_message_metadata_passthrough"
 	// The identically named field in user content must not be recursively stripped.
 	const body = `{"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello","internal_chat_message_metadata_passthrough":{"keep":true}}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["text"]}},{"type":"function_call","call_id":"fc_123","name":"echo","arguments":"{\"internal_chat_message_metadata_passthrough\":true}","internal_chat_message_metadata_passthrough":null},{"type":"function_call_output","call_id":"fc_123","output":"result"}],"internal_chat_message_metadata_passthrough":{"keep":true}}`
+	// WS 入口在 0.164 起按画像保留官方形态的逐项 passthrough（见 official_egress_openai_input_passthrough_test.go），
+	// 本用例断言的“整体剥离”是 0.163 形态，WS 一行固定在较旧槽位；其余入口各版本都剥离。
+	olderSlotConfig := olderSlotProfileConfigForTest(t)
 	tests := []struct {
 		name      string
 		normalize func([]byte) ([]byte, bool, error)
@@ -29,7 +32,7 @@ func TestOAuthInputInternalMetadata(t *testing.T) {
 		{"OAuth passthrough", func(b []byte) ([]byte, bool, error) { return normalizeOpenAIPassthroughOAuthBody(b, false) }, true},
 		{"OAuth compact", func(b []byte) ([]byte, bool, error) { return normalizeOpenAIPassthroughOAuthBody(b, true) }, true},
 		{"OAuth websocket", func(b []byte) ([]byte, bool, error) {
-			return normalizeOpenAIResponsesWebSocketCompatibilityBody(b, &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, false)
+			return normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(olderSlotConfig, b, &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, false)
 		}, true},
 		{"API key websocket", func(b []byte) ([]byte, bool, error) {
 			return normalizeOpenAIResponsesWebSocketCompatibilityBody(b, &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, false)

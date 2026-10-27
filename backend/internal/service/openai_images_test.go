@@ -853,9 +853,20 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesActiveCodexGenerationsContra
 	for name := range upstream.lastReq.Header {
 		headerNames = append(headerNames, http.CanonicalHeaderKey(name))
 	}
-	require.ElementsMatch(t, []string{
+	expectedHeaderNames := []string{
 		"Version", "Authorization", "Chatgpt-Account-Id", "Content-Type", "Accept", "Originator", "User-Agent",
-	}, headerNames)
+	}
+	// 画像在 images 端点声明回合头槽位时（0.164 起，EP-022）请求多出这两个头；未声明的画像（0.163）保持原名单。
+	declaresImageTurnID, declaresTurnMetadata, _ := officialCodexImagesHeaderDeclarations(
+		officialClientProfileModeActive, officialCodexEndpointImagesGenerations,
+	)
+	if declaresImageTurnID {
+		expectedHeaderNames = append(expectedHeaderNames, "X-Codex-Image-Turn-Id")
+	}
+	if declaresTurnMetadata {
+		expectedHeaderNames = append(expectedHeaderNames, "X-Codex-Turn-Metadata")
+	}
+	require.ElementsMatch(t, expectedHeaderNames, headerNames)
 
 	require.Equal(t, `{"prompt":"draw a cat",`+activeCodexImageBackgroundFieldForTest(t, "auto")+`"model":"gpt-image-2","quality":"high","size":"1024x1024"}`, string(upstream.lastBody))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "n").Exists())
