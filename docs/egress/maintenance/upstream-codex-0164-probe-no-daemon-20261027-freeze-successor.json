@@ -1,0 +1,92 @@
+{
+  "base_commit": "544e9c7819ca5961c00b8874f3df9d0dbcbcf153",
+  "changed_path_count": 7,
+  "current_commit": "85fa48646c0f2d19cf1d453a188126d3d7a7f703",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7117,
+  "frozen_path_count": 2318,
+  "identity_sha256": "e37530c158e482430a4a10ad14797498ecc46ef8db00cf0676d9b8d86ecca9b8",
+  "issued_at_utc": "2026-10-27T09:51:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-probe-no-daemon-20261027-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "predecessor_sha256s": [
+        "e922fb8462bc9e2a644b91e04f01d0cd1dc66b31703ba64a5afec9eb655a059c"
+      ],
+      "reason": "Codex 0.164.0 客户端启动探测修复：非 daemon 的 TUI 场景显式 --no-daemon，受管工具变更与守恒基线重封（建 Formal Campaign 之前） path=tools/official_client_capture/run_official_relay_scenario.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-managed-execution-root-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-astra-lite-recovery-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-request-gate-message-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-daemon-home-sunlen-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e944e70f103cb22577b0f4548f121ddf5b7df9b62c0bac250e737cc95c3974a4"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "b4b92859d69a5c4e21996ce198175f1a10ce4d5ee3e4c8b82d063a400ca03bb4"
+      ],
+      "reason": "Codex 0.164.0 客户端启动探测修复：非 daemon 的 TUI 场景显式 --no-daemon，受管工具变更与守恒基线重封（建 Formal Campaign 之前） path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-guide-chain-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-merge-align-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "983943aba2f7ef36cce7ed68e028735eab0d6758c48b7f86ee3c2917158a5bf7"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/client_launch_probe.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/official_client_capture/drive_codex_tui.py",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_164_0.json",
+    "tools/official_client_capture/tests/test_client_launch_probe.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
