@@ -1,10 +1,10 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "96b79619ae283aca41a98caf029d8364764528e6",
+ "source_commit": "ab3c99909babb350d4bf79cdb915511f9ee0f0cd",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "f3c7b8d159292685c8bfe621650539ad8fef38069c76c06b70558145e17a571f",
- "wire_producer_sha256": "e689f3baa3b219853239ecbcd176c1ce8cb6f28e1a8033fc6fa930faa7104390",
+ "files_sha256": "5315b11960aa2e647046370e03b43b0574845205b123dcb569e479fc2b73a3db",
+ "wire_producer_sha256": "2179ff8f4ea59a0d66a8d524b26600e2ddaef70caa4facfd141eb8f818d43578",
  "evidence_semantics_sha256": "7cedc6878c253da9388c10370a92fff9703f47f26ed2a8222617eb36444b2754",
  "control_sha256": "a1c0400c05ba711d2d4b2ea1da845806da352a4aea0d5ea61423bfc8709175a7",
  "orchestrator_closure_sha256": {
@@ -1667,11 +1667,11 @@
   },
   {
    "path": "claude_rule_assertion.py",
-   "sha256": "2ffb25aedbd35ac27d59ea04ec10d6bdd8b2f4b16cb59a85f2fd953ab5e64044"
+   "sha256": "6494045fb6564b8eef4a5d871b69f47629553021184d154a7e2fa2d0b865e455"
   },
   {
    "path": "claude_rule_expectations_2_1_226.json",
-   "sha256": "48c54407f83d0603b04b3836bbf129c28fce96e4d2db720777097d60bd81b341"
+   "sha256": "1f6362ba2b4ed16c4bb2ddaf72836ccf1eca400a9b6db0b592133a82c0553a0e"
   },
   {
    "path": "claude_rule_expectations_templates.json",
@@ -2603,7 +2603,7 @@
   },
   {
    "path": "drive_codex_tui.py",
-   "sha256": "ecef4b4cc74a3107341c843b7eb0a35202e36cb382f728e88ad5d599c65a7a0d"
+   "sha256": "24dba6c517d28dc2d456d5f477d24107f9ffc2fc66d0be083cee7a681e9f2264"
   },
   {
    "path": "drive_codex_wham_consume.py",
@@ -2747,7 +2747,7 @@
   },
   {
    "path": "run_official_relay_scenario.sh",
-   "sha256": "e922fb8462bc9e2a644b91e04f01d0cd1dc66b31703ba64a5afec9eb655a059c"
+   "sha256": "e944e70f103cb22577b0f4548f121ddf5b7df9b62c0bac250e737cc95c3974a4"
   },
   {
    "path": "run_sub2api_direct_matrix.sh",
