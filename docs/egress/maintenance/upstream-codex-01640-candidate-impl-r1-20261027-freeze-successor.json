@@ -1,0 +1,58 @@
+{
+  "base_commit": "d715a3a9b159895cbe4c82f245813b7dd913a00d",
+  "changed_path_count": 12,
+  "current_commit": "da6a503fc1d47227ea0849d795f30de4e46527b0",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7122,
+  "frozen_path_count": 2318,
+  "identity_sha256": "c14003379eef0c34537413119ea33ed5ca0b698ce136727ce5d4d23acc967a10",
+  "issued_at_utc": "2026-10-27T15:58:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01640-candidate-impl-r1-20261027-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_test_helpers_test.go",
+      "predecessor_sha256s": [
+        "d1f7b63e6d24123e95d95fc6e07db7e547d7c4f62111dae291fbf1114f247db6"
+      ],
+      "reason": "候选实现的测试夹具改造（正式目录两槽位都声明新节后旧画像夹具改取冻结底稿）按最终提交登记冻结路径的精确后继摘要；旧收据保持只读。 path=backend/internal/service/official_egress_test_helpers_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6dafc8731d41af5da765dee0c1d49724b07987a19ac9408ca2e72f30645f0c81"
+    }
+  ],
+  "unregistered_path_count": 11,
+  "unregistered_paths": [
+    "backend/internal/service/official_egress_codex_body_order_entry_test.go",
+    "backend/internal/service/official_egress_codex_direct_body_test.go",
+    "backend/internal/service/official_egress_codex_newer_profile_fixture_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_responses_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_carrier_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_fields_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_frames_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_history_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_websocket_test.go",
+    "backend/internal/service/official_egress_codex_synthetic_profile_test.go",
+    "backend/internal/service/official_egress_openai_access_programs_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
