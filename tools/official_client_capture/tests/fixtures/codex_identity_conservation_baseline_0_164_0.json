@@ -1,20 +1,20 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "f987a11cf426558a754aa6f2a654ce376705b8e5",
+ "source_commit": "c18da9d90e8b66756cff4a80ba9b069a58e5230e",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "84022bb9bb04fdfb1d7c958aadcf9a570034bb27f220fee59c5f00915647ddf5",
- "wire_producer_sha256": "b8ed7655d4b72b870328f6c369ef211e9df2e99c11c6715ff32f629de17eae96",
- "evidence_semantics_sha256": "f28131cace1f8aee5e8509c2a2b37251c8ad698ed0d95867367e096466d0436b",
+ "files_sha256": "a95bd72ddab0661b2001738981bfa36c3c86b18dbc7f61eace9b9fc9bdd1d6d4",
+ "wire_producer_sha256": "b8d562ac72a549ff261ac5b813ea63812a1ca71a8c49e06c893dbd61ccbfc867",
+ "evidence_semantics_sha256": "fcb7ebdf54867b712d13444251bcdf72bd3351876e1eaf3f5227f0f7d6a964e1",
  "control_sha256": "a1c0400c05ba711d2d4b2ea1da845806da352a4aea0d5ea61423bfc8709175a7",
  "orchestrator_closure_sha256": {
   "wire_producer": "33f2d92cb9a69c31fb133024146b1cdf51fb4a8aa6416a5564c2d49759e8a3db",
-  "evidence_semantics": "b6f51a0cf2cde7a34292721e5e974a646e3d557856bc095e6fa3a76361823f80"
+  "evidence_semantics": "4ec2ad1a57674f79726c415e732b3c74cb8062fdb552142e3d1d8253694a7d08"
  },
- "checker_sha256": "1446e713a01a69e8fc991d36a793fda67f6c8e85c52fdb1436c673fc3152b1e8",
+ "checker_sha256": "4353a66c5ee3ccce0a8dc9de8f4977dbda9647fc879e74bfb567244ae2a75517",
  "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
- "compare_reader_sha256": "1b5fa5f44cb849e6fd8ef387054a0303fb542922c14ae68e497490a1bf01d299",
- "accept_reader_sha256": "1a6c01caafaee393d064b75fa9baf9505d5766eca83dad1779806bd2b9173d8a",
+ "compare_reader_sha256": "7adec0c93bd2e57b861a063f57ad5164c45298ed10338e3430e7dbdd5c74e650",
+ "accept_reader_sha256": "f9c17397b4868e336c1d6e0661fd37f7aab7ec6e53ab482cf3ea9785d3b10c68",
  "layer_counts": {
   "wire_producer": 58,
   "evidence_semantics": 71,
@@ -1143,7 +1143,7 @@
   },
   {
    "path": "candidate_rule_assertion.py",
-   "sha256": "1446e713a01a69e8fc991d36a793fda67f6c8e85c52fdb1436c673fc3152b1e8"
+   "sha256": "4353a66c5ee3ccce0a8dc9de8f4977dbda9647fc879e74bfb567244ae2a75517"
   },
   {
    "path": "candidate_rule_assertion_result.example.json",
@@ -1167,35 +1167,35 @@
   },
   {
    "path": "candidate_rule_expectations_0_149_1.json",
-   "sha256": "67e00387d9e246383d5aec4ab4874cc335c68a0721f6e61262ec0ac3dc0e2dba"
+   "sha256": "4b458b0f42582d7271b954e43bb0067367488e047f90ad047568a0c947448000"
   },
   {
    "path": "candidate_rule_expectations_0_151_0.json",
-   "sha256": "f4d7e6034180f738a98c90d0201e7ad9b0c7d0e973656adb2f1ffb6493f05512"
+   "sha256": "d8e1ed1a5a6d73980066403322b86495d564a04b32fbff8c01233ae37175f9f3"
   },
   {
    "path": "candidate_rule_expectations_0_154_0.json",
-   "sha256": "788f9750b52bdf258a753780630b66aadf5312fe649f7ad3f79c1eb7fe750625"
+   "sha256": "66c3f630032079cba64c513b8d4510574ad3a46179a72b498eaad49c58ec3f7c"
   },
   {
    "path": "candidate_rule_expectations_0_156_1.json",
-   "sha256": "23aa9d6391f70834ef6003ad2e27a4188b98f271ba983d47ec06b08c68e4432f"
+   "sha256": "11cf59f3ec05e2c75276bf8fe5900eab06ba34c04786a6532b59ebc5b45928b6"
   },
   {
    "path": "candidate_rule_expectations_0_157_0.json",
-   "sha256": "26a0629fbbf5256d7ade3f62cc1fc9283f31a42981a218599cc8359742332c60"
+   "sha256": "8ce37bec846841596deec89651ae0f237f405b2c918208d38c10f7b30d27a546"
   },
   {
    "path": "candidate_rule_expectations_0_160_0.json",
-   "sha256": "0a8e3b21b2b8879c70e7dde942695bc535a43a614b5b0971fdfa7bbeb356a7b2"
+   "sha256": "06427486c8066e77c98b1b2a758e6fb1e0efd801c0aafc8083461baf645b7fb4"
   },
   {
    "path": "candidate_rule_expectations_0_163_0.json",
-   "sha256": "653f0af70319179442cdec8d7eb8c653af385a26edb3989682c938af486bb0c7"
+   "sha256": "78651c341acc31404bbf052e6b51f444c14cc8afd5faa84909b623c904eb5cd0"
   },
   {
    "path": "candidate_rule_expectations_0_164_0.json",
-   "sha256": "9e20778dea7493d4631931f5e078663d1c6f17c92fd00475e392a148540e4c39"
+   "sha256": "d721e240365b35392ccbe595922241839910a4c6a7a1e7e6ebb6d9951c6bebca"
   },
   {
    "path": "candidate_test_fact_map.schema.json",
@@ -1243,7 +1243,7 @@
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "1de28cef20c6bbc8ef516701b14e58b043a7adaa70cdbae741384b4e939c984b"
+   "sha256": "c40776eb9ec9dabffffe6ab4499df6e120201f2b39b09dc2c245ba33e0004a96"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
@@ -2407,35 +2407,35 @@
   },
   {
    "path": "codex_upgrade_scenarios_0_149_1.json",
-   "sha256": "46d804fc14bf30d6ed3d7767cf9f9a499d93ec828f71228a8b86e4b7ed786b20"
+   "sha256": "ae4b34cbe2fe173c1333fc23d7e6eddaf6b2188684332b62d9546340e775fd45"
   },
   {
    "path": "codex_upgrade_scenarios_0_151_0.json",
-   "sha256": "6d0dd05645d3cf64348aa7c6f1c709ca79a3fafc045b0c439e6225434d89fe1f"
+   "sha256": "df3baacdbae6c106440a7dfd71ba18663eabfdbf598b70672569a7986365bda8"
   },
   {
    "path": "codex_upgrade_scenarios_0_154_0.json",
-   "sha256": "54b970b113f606525202abc4d9d72a383bf6b76f6ad10f476fbf5fc026e52079"
+   "sha256": "6a34a84f76c985f266d66827e4b2053e0c771867c31ec6faa1bf8f82d186f9b7"
   },
   {
    "path": "codex_upgrade_scenarios_0_156_1.json",
-   "sha256": "97de90b04ed37d09374f8eaabef9d0a74125567079c5f314d34d6516a1f09c8f"
+   "sha256": "26ea4129e6e9aa87cae1740dbac375a9862a04e77137f29d1f915bba07b858db"
   },
   {
    "path": "codex_upgrade_scenarios_0_157_0.json",
-   "sha256": "4fa31fa769a383d9635134b29d12f51e089ca1859d3d4c462cc6e2c4f87e55be"
+   "sha256": "f79840e637b27f7be565eda9fb565d754d09f9857935b77a76fee5ce4e0d1141"
   },
   {
    "path": "codex_upgrade_scenarios_0_160_0.json",
-   "sha256": "3c62ecb2a1323a573622e67eb65bd45cf930f38fd7e84ffca2b3ee190d56b4ca"
+   "sha256": "0c97641d8df18c6a14abd82cd24dfd3887bc97c0098952faa4e9edd5c11cad20"
   },
   {
    "path": "codex_upgrade_scenarios_0_163_0.json",
-   "sha256": "f810ebcdeae99daf7124a08860e7a6dfdada90166ad9d3dcaeec0014467cf175"
+   "sha256": "dae0b197385f866ba0f559aeef97e0b8dd07bcf2c6c4a3321f222d1a74015454"
   },
   {
    "path": "codex_upgrade_scenarios_0_164_0.json",
-   "sha256": "b621db7f454549c6125dd25aba27c3aa32c516904d04ee499e5ab60a2efe434a"
+   "sha256": "f502c32a66030817cfcbedf1ddbf40005f5e387474030f3cc8abc56102304512"
   },
   {
    "path": "codex_upgrade_seal_failure.schema.json",
