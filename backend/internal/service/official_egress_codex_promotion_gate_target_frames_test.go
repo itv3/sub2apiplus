@@ -56,7 +56,10 @@ func codexGateRunWSIngress(
 // Lite 模型（前导 additional_tools）。对照：另一槽位每帧保留顶层 instructions、预热帧带 developer 上下文、没有载体消息，
 // 任何一帧都不带 access_programs。
 func TestCodexWebSocketFrameSlotsReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "responses_ws 的闭集字段不含 instructions 且含 access_programs，基础指令走 input 载体",
+		// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
+	// 改在较旧槽位（批准这些语义的 0.163 发布）上重放，作为既有批准语义的回归；0.164 对同一规则的新语义由本轮的
+	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_*_test.go）覆盖。
+	mode := codexGateTargetReleaseMode(t, "responses_ws 的闭集字段不含 instructions 且含 access_programs，基础指令走 input 载体",
 		func(profile profilecontract.ExecutableProfile) bool {
 			return codexGateResponsesClosedFieldsWithoutInstructions(profile) && codexGateBaseInstructionsCarrierDeclared(profile)
 		})
@@ -165,7 +168,10 @@ func TestCodexWebSocketFrameSlotsReplaysApprovedSemanticsOnTargetRelease(t *test
 
 	// ---- 对照：另一槽位每帧保留顶层 instructions，没有载体消息，也没有 access_programs ----
 	control, ok := codexGateControlReleaseMode(t, mode)
-	require.True(t, ok, "判别式门禁必有一个不具备该结构事实的对照槽位")
+	if !ok {
+		// 继承特征：两个槽位都具备该结构事实，没有“不具备”的对照槽位；上面已在较旧槽位完成重放，对照段随之省略。
+		return
+	}
 	_, controlHandshakes := codexGateRunWSIngress(t, control, thirdParty)
 	require.NotEmpty(t, controlHandshakes)
 	for _, handshake := range controlHandshakes {

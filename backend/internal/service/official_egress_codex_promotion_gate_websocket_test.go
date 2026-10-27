@@ -360,6 +360,11 @@ func TestCodexResponseCreateSlotsReplaysApprovedSemanticsOnTargetRelease(t *test
 	}
 	required := []string{"type", "model", "input", "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream", "include"}
 	responsesWS := codexGateMustEndpoint(t, profile, officialCodexEndpointResponsesWS)
+	if codexGateResponsesClosedFieldsWithoutInstructions(profile) {
+		// 0.163 起 WS 闭集字段不再有顶层 instructions、另有 access_programs（SPEC-WS-005 的 0.163 批准语义，由 WS-005 的门禁锁定）；
+		// 两个槽位都是 0.163 及以后的画像时，较旧槽位的字段序取批准的新序，必需字段不变。
+		allowed = codexGateApprovedWSFields
+	}
 	var slotNames, requiredNames []string
 	for _, field := range responsesWS.Body.Fields {
 		slotNames = append(slotNames, field.Name)

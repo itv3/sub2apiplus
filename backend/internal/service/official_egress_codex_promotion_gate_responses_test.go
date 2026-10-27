@@ -884,7 +884,13 @@ func TestCodexTurnMetadataKeysReplaysApprovedSemanticsOnTargetRelease(t *testing
 		"sandbox", "sandbox_mode", "session_id", "thread_id", "thread_source", "turn_id", "turn_started_at_unix_ms",
 		"turn_trigger", "window_id", "window_number",
 	}
-	require.Equal(t, allowed, section.Keys, "画像 TurnMetadata.Keys 必须恰为批准的 21 键")
+	// 0.163 起画像另声明 history_initialization 键（SPEC-BODY-009，由 BODY-009 的门禁锁定 22 键）；两个槽位都是 0.163 及以后的
+	// 画像时，较旧槽位（0.163）的键集合是批准的 21 键加上它，其余 21 键的判据不变。
+	if slices.Contains(section.Keys, "history_initialization") {
+		allowed = append(slices.Clone(allowed), "history_initialization")
+		slices.Sort(allowed)
+	}
+	require.Equal(t, allowed, section.Keys, "画像 TurnMetadata.Keys 必须恰为批准的 21 键（0.163 起另含 history_initialization）")
 	require.True(t, section.AnalyticsEnabled, "画像默认 analytics_enabled 必须为 true")
 
 	server := startCodexGateWireServer(t, nil)
