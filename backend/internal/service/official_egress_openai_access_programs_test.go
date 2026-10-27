@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -512,11 +511,7 @@ func withAccessProgramsSectionButFieldsWithoutIt(t *testing.T) {
 	t.Helper()
 	accessProgramsProfile(t, "standard")
 	// 字段表取正式目录里不声明 access_programs 的旧画像：晋升前是 active，晋升后旧画像在 previous。
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(
-		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
-	)
-	require.NoError(t, err)
-	legacyProfile := release.ExecutableProfile()
+	_, legacyProfile := officialCodexLegacyBase(t)
 	previous := officialCodexReleaseProfileForBodyOrder
 	officialCodexReleaseProfileForBodyOrder = func(string) (profilecontract.ExecutableProfile, error) {
 		return legacyProfile, nil

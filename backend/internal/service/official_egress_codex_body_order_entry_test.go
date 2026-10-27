@@ -113,11 +113,7 @@ func syntheticNewerBodyContractMutation(t *testing.T) func(*profilecontract.Snap
 // 需要同时覆盖两者的用例叠加使用即可（两个夹具的 Cleanup 各自恢复各自的入口）。
 func withOfficialCodexBodyOrderProfile(t *testing.T, mutate func(*profilecontract.SnapshotDoc)) profilecontract.ExecutableProfile {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(
-		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
-	)
-	require.NoError(t, err)
-	doc := release.Profile().ToSnapshot()
+	doc, _ := officialCodexLegacyBase(t)
 	if mutate != nil {
 		mutate(&doc)
 	}
@@ -279,7 +275,8 @@ func TestOfficialCodexBodyFieldOrderEntryCanBeReplacedBySyntheticProfile(t *test
 
 func TestOfficialCodexBodyFieldOrderEntryIsRestoredAfterSyntheticProfile(t *testing.T) {
 	// 观察对象取正式目录里的旧画像槽位：合成画像的字段序与较新的正式画像相同，只有旧画像能看出替换。
-	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	// 没有旧画像槽位时（Codex 0.164 起）看不出替换，且旧画像兜底会占用同一入口，无法断言“恢复的是严格默认实现”，跳过。
+	legacyMode := skipWithoutOfficialCodexLegacyReleaseSlot(t)
 	before, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesWS)
 	require.NoError(t, err)
 

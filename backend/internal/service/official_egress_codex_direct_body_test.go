@@ -99,6 +99,10 @@ func directBodyBothSlots(t *testing.T) map[string]bool {
 			omitted++
 		}
 	}
+	if declared == 0 {
+		t.Skip("正式目录的两个槽位都不再声明顶层 instructions（Codex 0.163 起）：没有旧画像槽位可做“旧一新”对照，" +
+			"本用例验证的 Executor 冻结槽位对照不可达，跳过")
+	}
 	require.Equal(t, 1, declared, "两个槽位里应恰有一个旧画像（闭集声明 instructions）：%v", slots)
 	require.Equal(t, 1, omitted, "两个槽位里应恰有一个较新画像（闭集不声明 instructions）：%v", slots)
 	return slots

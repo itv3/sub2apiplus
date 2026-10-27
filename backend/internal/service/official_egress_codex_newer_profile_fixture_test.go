@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/stretchr/testify/require"
 )
@@ -30,11 +29,8 @@ func withOfficialCodexSyntheticPreviousProfile(
 	mutate func(*profilecontract.SnapshotDoc),
 ) profilecontract.ExecutableProfile {
 	t.Helper()
-	baseMode := requireOfficialCodexLegacyBaseProfileMode(t)
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(baseMode))
-	require.NoError(t, err)
-	legacy := release.ExecutableProfile()
-	doc := release.Profile().ToSnapshot()
+	baseMode, hasLegacySlot := officialCodexLegacyBaseProfileMode()
+	doc, legacy := officialCodexLegacyBase(t)
 	if mutate != nil {
 		mutate(&doc)
 	}
@@ -44,7 +40,7 @@ func withOfficialCodexSyntheticPreviousProfile(
 	require.NoError(t, err)
 
 	// 旧画像不在 active 槽位（晋升后）时，active 槽位也要读旧画像，才能继续充当“旧画像对照”。
-	activeIsLegacy := baseMode == officialClientProfileModeActive
+	activeIsLegacy := hasLegacySlot && baseMode == officialClientProfileModeActive
 	previousOptional := officialCodexExecutableProfileForMode
 	officialCodexExecutableProfileForMode = func(mode string) (profilecontract.ExecutableProfile, error) {
 		switch normalizeOfficialClientProfileMode(mode) {
