@@ -16,14 +16,14 @@
   "profile_validation_result": "passed",
   "attempt_ordinal": 1,
   "attempt_reason": "initial",
-  "release_digest": "13d4130c79dd23ec78181ee079541d220702145dbfd7a957084fae56e62e030b",
-  "profile_digest": "d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c",
-  "bundle_digest": "960e7d9264cd65892bb7c0300d05b59315c1c36e1078689e618ed798241d33f5",
+  "release_digest": "82c3774a7c8bd26a2c5842891cf04465621042a62521b23ff33a65f03d58b28c",
+  "profile_digest": "3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6",
+  "bundle_digest": "bbaab00ed3d513b63b16a587f2dedc88fd439db794071c8f8dc0ebd69a23a518",
   "backend": "http_upstream",
   "adapter_id": "officialegress.http_upstream",
-  "transport_id": "codex-0.160.0-http-ubuntu24-native-long-lived",
-  "connection_identity_digest": "d4be70d391f0ff3b43919dfc65965807d131aad6996d3291721afef460732716",
-  "connection_pool_digest": "6aaa7afcea3079df0ecd027a61ec012c789a5064dde3a20c077a8e154341fa3a",
+  "transport_id": "codex-0.163.0-http-ubuntu24-native-long-lived",
+  "connection_identity_digest": "a01de131cefba0ffde35fc2d45da603cd208b030e2c56c7d1f8c3293c6443e08",
+  "connection_pool_digest": "ff8b02069269b8ac7103125e51d10daeecde187b2415883e7b87ce864023345f",
   "tls_profile_digest": "2fe3df1e56e020f4ec6103deb2b644704bfbfd86fa5a2278a576cf8d47a7c89b",
   "normalization": {
     "HeaderMode": "lowercase",
@@ -35,8 +35,8 @@
       "name": "user-agent",
       "wire_name": "user-agent",
       "value_kind": "static_or_synthetic_safe",
-      "safe_value": "codex_exec/0.160.0 (Ubuntu 24.4.0; aarch64) unknown (codex_exec; 0.160.0)",
-      "value_sha256": "a43059ded3066fb961347240746e136174e2b5742c0d3c04dd44ecbc7c52a6f0"
+      "safe_value": "codex_exec/0.163.0 (Ubuntu 24.4.0; aarch64) unknown (codex_exec; 0.163.0)",
+      "value_sha256": "425681de41f0500951ac5f7a5a6d7ad483c6c79e9511b25dd075597ac9dd2fb7"
     },
     {
       "name": "authorization",
