@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "ab3c99909babb350d4bf79cdb915511f9ee0f0cd",
+ "source_commit": "f987a11cf426558a754aa6f2a654ce376705b8e5",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "5315b11960aa2e647046370e03b43b0574845205b123dcb569e479fc2b73a3db",
- "wire_producer_sha256": "2179ff8f4ea59a0d66a8d524b26600e2ddaef70caa4facfd141eb8f818d43578",
- "evidence_semantics_sha256": "7cedc6878c253da9388c10370a92fff9703f47f26ed2a8222617eb36444b2754",
+ "files_sha256": "84022bb9bb04fdfb1d7c958aadcf9a570034bb27f220fee59c5f00915647ddf5",
+ "wire_producer_sha256": "b8ed7655d4b72b870328f6c369ef211e9df2e99c11c6715ff32f629de17eae96",
+ "evidence_semantics_sha256": "f28131cace1f8aee5e8509c2a2b37251c8ad698ed0d95867367e096466d0436b",
  "control_sha256": "a1c0400c05ba711d2d4b2ea1da845806da352a4aea0d5ea61423bfc8709175a7",
  "orchestrator_closure_sha256": {
   "wire_producer": "33f2d92cb9a69c31fb133024146b1cdf51fb4a8aa6416a5564c2d49759e8a3db",
@@ -1195,7 +1195,7 @@
   },
   {
    "path": "candidate_rule_expectations_0_164_0.json",
-   "sha256": "0cd9b3cb40964ea1bece871362d099313d8e68926dcc5bf13aff6c73d659254c"
+   "sha256": "9e20778dea7493d4631931f5e078663d1c6f17c92fd00475e392a148540e4c39"
   },
   {
    "path": "candidate_test_fact_map.schema.json",
@@ -1243,7 +1243,7 @@
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "aa98036c8e7976ae7d18a234274a8bab66e0f0b5835e8d9f4026308d697c83d0"
+   "sha256": "1de28cef20c6bbc8ef516701b14e58b043a7adaa70cdbae741384b4e939c984b"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
@@ -2199,7 +2199,7 @@
   },
   {
    "path": "codex_upgrade_evidence_labels_0_164_0.json",
-   "sha256": "afca49c95ffe4dc0cde5ede355af1f80abd3aa8d5b3dfd2426ab9ad6fad9c1c7"
+   "sha256": "7ca3d033cc979c77f05db4378e078a5b24fd00cebd83188715493fadc3e0048a"
   },
   {
    "path": "codex_upgrade_evidence_manifest.py",
@@ -2435,7 +2435,7 @@
   },
   {
    "path": "codex_upgrade_scenarios_0_164_0.json",
-   "sha256": "7bb263c906ddce0e83d517ee47804ad289a723a260465e52299d13c18c74a547"
+   "sha256": "b621db7f454549c6125dd25aba27c3aa32c516904d04ee499e5ab60a2efe434a"
   },
   {
    "path": "codex_upgrade_seal_failure.schema.json",
