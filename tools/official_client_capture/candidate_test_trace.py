@@ -322,8 +322,10 @@ FROZEN_MAPPING_SHA256 = (
 # 而 0.164.0 的 baseline 就是 0.163.0；本文件从 0.163.0 版复制来的 4 处描述文字（SPEC-BODY-006 的 main-instructions-absent／main-additional-tools-present 两条检查描述、
 # 场景 A04／A06 的描述）写着“0.163.0 起为 Lite 模型”。摘要由 0cd9b3cb… 换为 9e20778d…，只把这 4 句去掉版本字面量（“主线（Lite 模型）”“主线轨道（主线是 Lite 模型）”），
 # 其余逐字不变（8 行替换，无增删）；规则数、检查 ID、选择器、判据、验收契约一律不变。
+# 2026-10-28（0.164 升级收尾预备）：指南第二部分按 0.164.0 终态改写，第二章摘要由 ba36bf78… 变为 9cd05343…，本检查绑定的 0.164.0 期望清单摘要由 9e20778d… 变为 d721e240…，
+# 只改该清单 source_spec_sha256 一行（由收尾工具 codex_closeout.source_updates 计算），规则数、检查 ID、选择器、判据、验收契约一律不变。
 FROZEN_PROFILE_SHA256 = (
-    "9e20778dea7493d4631931f5e078663d1c6f17c92fd00475e392a148540e4c39"
+    "d721e240365b35392ccbe595922241839910a4c6a7a1e7e6ebb6d9951c6bebca"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
