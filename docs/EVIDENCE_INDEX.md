@@ -31,7 +31,7 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 |---|---|---|---|---|---|
 | SPEC-BODY-001 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-BODY-002 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
-| SPEC-BODY-003 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
+| SPEC-BODY-003 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-BODY-004 | ④ 内部机制 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | HTTP 响应头与 WS response.metadata 两条输入路径均已完成输入→保存→后续出站回送闭环。 |
 | SPEC-BODY-005 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-BODY-006 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
@@ -199,7 +199,7 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-WS-005 | ① OAuth 可见规则 | 内置 OpenAI OAuth | ✅ 验过 | `clean-tool-20260728T132346Z` | **R** | Lite WS 原始帧与键序 | `raw-scrubbed/clean-tool-20260728T132346Z/` （4 个 .bin） |
 |  |  |  |  | `audit-ws005-nonlite-20260730a` | **R** | 非 Lite WS 原始帧：warmup／增量键序及 instructions／tools 正向形态 | `raw-scrubbed/audit-ws005-nonlite-20260730a/` （4 个 .bin） |
 
-## 2.1 Campaign 封存证据（Active 0.163.0，23 项）
+## 2.1 Campaign 封存证据（Active 0.163.0，24 项）
 
 正文实测以 `assert-SPEC-*` 引用本条候选断言的编号项登记为 C。官方取证与候选断言的原始字节、观测和
 断言结论封存在 ARM64 私有归档，仓库内只登记坐标：
@@ -211,6 +211,7 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | 编号项 | 分类 | 验证状态 | 候选断言 |
 |---|---|---|---|
 | SPEC-BODY-002 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-002` |
+| SPEC-BODY-003 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-003` |
 | SPEC-BODY-004 | ④ 内部机制 | 源码机制 | `assert-SPEC-BODY-004` |
 | SPEC-BODY-006 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-006` |
 | SPEC-BODY-008 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-008` |

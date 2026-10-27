@@ -51,16 +51,17 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 
 # 第二部分 Codex CLI 客户端规则画像
 
-本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述当前生产 active 0.163.0 的规则（previous 为
-0.160.0）；生产激活、精确回滚、目标恢复与 0.157.0 Runtime Catalog 退休的机器事实见
-[`0.163 终态收据`](egress/maintenance/CODEX_CLI_0160_TO_0163_TERMINAL_STATE_RECEIPT.json)。各条实测中的“0.163.0
-官方样本”来自 Campaign `c01630-formal-vc1-r2-20261020t131500z` 的 attempt `20261021T003916Z-24ff3483a4288709`
-（本轮官方证据全部重新采集，47 个官方 Job 全部 complete）；继承规则正文里保留的“0.160.0 官方样本”（Campaign
+本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述当前生产 active 0.164.0 的规则（previous 为
+0.163.0）；生产激活、精确回滚、目标恢复与 0.160.0 Runtime Catalog 退休的机器事实见
+[`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json)。各条实测中的“0.164.0
+官方样本”来自 Campaign `c01640-formal-vc1-r1-20261027t000000z` 的 attempt `20261027T135446Z-d8a16a8e788de81e`
+（本轮官方证据全部重新采集，47 个官方 Job 全部 complete）；继承规则正文里保留的“0.163.0 官方样本”（Campaign
+`c01630-formal-vc1-r2-20261020t131500z` 的 attempt `20261021T003916Z-24ff3483a4288709`）、“0.160.0 官方样本”（Campaign
 `c01600-formal-vc1-r1-20261003t084239z` 的 attempt `20261003T102647Z-6b5390a3ddffc296`）与“0.157.0 官方样本”
 （Campaign `c01570-formal-vc1-r2-20260926t084354z` 的 attempt `20260926T094510Z-ce907a4fa1d25931`）是历史佐证；
-“候选断言”指 `c01630-formal-vc1-r2-20261020t131500z` canonical 链中的 `assert-SPEC-*`（评估基线 b2，evidence_level
-均为 full）。本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.163.0
-官方样本（`gpt-5.5` 已在采集账号下线），相关结论以 0.163.0 源码为准。源码字段的行号锚点以本地固化的 0.164.0 源码为准
+“候选断言”指 `c01640-formal-vc1-r1-20261027t000000z` canonical 链中的 `assert-SPEC-*`（评估基线与 evidence_level 以该链的断言结果为准）。
+本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.164.0
+官方样本（`gpt-5.5` 已在采集账号下线），相关结论以 0.164.0 源码为准。源码字段的行号锚点以本地固化的 0.164.0 源码为准
 （`tools/spec_ref_anchors.json`，源码树 `local-analysis/sources/codex-cli-0.164.0`；0.163.0 到 0.164.0 之间有变化的引用已逐条复核，行为有差异处在对应规则里以“0.164.0 复核”标出）；正文里 0.157.0 与 0.160.0 的
 “文件 第 N 行”坐标只是历史对照，不再由门禁复核。
 
@@ -81,7 +82,7 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 | 逐规则机器证据 | [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) |
 | 源码锚点 | [`tools/spec_ref_anchors.json`](../tools/spec_ref_anchors.json) |
 | Sub2API 实现证据 | `backend/` 与 `docs/egress/` |
-| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与 [`0.163 终态收据`](egress/maintenance/CODEX_CLI_0160_TO_0163_TERMINAL_STATE_RECEIPT.json) |
+| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与 [`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json) |
 
 每条规则的准入证据包必须绑定官方源码、依赖、二进制、平台、配置、账号、抓包运行号和摘要。只有能够
 重新解析的材料可以作为规则依据；R 类材料只允许等长脱敏，未脱敏材料不得离开采集机。
@@ -102,7 +103,7 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 - 自定义 CA、代理和受控失败等条件样本不能外推为默认路径或自然成功链；
 - 全集、缺失和连接完整性结论必须基于无预设过滤的完整双向样本。
 
-**遥测零流量判定（当前 active 0.163.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
+**遥测零流量判定（当前 active 0.164.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
 源码链均已冻结时，未产生的遥测才可排除在 strict 分母之外：
 
 | 组件 | 关闭条件与源码闭环 |
@@ -311,8 +312,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/client.rs:2514-2520` 调用链决定；WS 握手头的构造见 `core/src/client.rs:1420-1454`。
   http 1.4.0 仍是锁定依赖（0.164.0 的 `Cargo.lock` 第 8885-8886 行）。
 - **实测**：`c1491-r14-f-lite-http-response/relay/conn005.client_to_upstream.bin`（R）验证冷启动 Lite Responses
-  的原始线序。0.163.0 官方样本（Campaign `c01630-formal-vc1-r2-20261020t131500z`，attempt
-  `20261021T003916Z-24ff3483a4288709`；场景 A01、A03；匹配数不是去重请求数）：models 默认头线序（`variant=no_cookie`）
+  的原始线序。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt
+  `20261027T135446Z-d8a16a8e788de81e`；场景 A01、A03；匹配数不是去重请求数）：models 默认头线序（`variant=no_cookie`）
   `models-order` 匹配 2 条，header 名线序为上列 models 序；Responses 默认压缩头线序（`variant=http_default`）
   `responses-order` 匹配 1 条，线序落在上列允许集合内并含全部必含头；Lite 默认样本的
   `x-openai-internal-codex-responses-lite` 值为 `true`（`responses-lite-header-value` 匹配 1 条），
@@ -460,20 +461,29 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   prompt_cache_key?, text?, generate?, client_metadata?, access_programs?`；续接帧与首帧遵循同一顺序规则，
   都没有 `instructions` 槽位。`generate=false` 只用于 warmup（预热帧不带 `access_programs`）；`previous_response_id`
   只在既有响应前缀可复用时出现，连接键或账号 owner 变化、迟到的 tool-result metadata 都会使前缀不可复用。
-  `access_programs` 的取值与出现条件见 SPEC-BODY-001。
+  `access_programs` 的取值与出现条件见 SPEC-BODY-001。0.164.0 起 Lite 模型默认走增量工具（见 SPEC-BODY-003），
+  预热帧（`generate=false`）的 `input` 是空数组 `[]`，顶层其余字段不变；工具目录与基础指令消息改由同一会话的第一条业务帧携带：该帧的
+  `previous_response_id` 取预热响应的 id，`additional_tools` 与基础指令消息排在 `input` 最前，其后的增量帧只带新增项；
+  全历史回退帧（没有 `previous_response_id`）带完整历史，前缀项的 id 与之前相同。从旧窗口续聊（历史里没有工具声明项）仍是旧形态。
 - **源码**：[L1] `codex-api/src/common.rs:331-357`、
   `core/src/client.rs:2119-2192`、`core/src/client.rs:1117`。续接前缀的判定由 `prepare_websocket_request`
-  返回 `Result<Continuation, Failure>` 给出（0.163.0 起复用失败原因逐项记录，只影响遥测，不改变字段）。
+  返回 `Result<Continuation, Failure>` 给出（0.163.0 起复用失败原因逐项记录，只影响遥测，不改变字段）。0.164.0 的预热入参
+  来自 `core/src/session/startup_prewarm.rs` 第 398-433 行（`PrewarmInput::Base` 为空 `Vec`，增量窗口下 `tools` 与基础指令都被清空）；首个业务帧
+  的增量项由 `get_incremental_items`（`core/src/client.rs` 第 1534-1565 行）取出，预热帧为空时整份 `request.input` 都是增量。官方单测
+  `core/tests/suite/agent_websocket.rs` 的 incremental tools 用例断言预热帧 `input` 为 `[]`、业务帧续链预热响应且 `input` 含 `additional_tools`。
 - **实测**：`clean-tool-20260728T132346Z`（R）覆盖 Lite；
-  `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧；这两份 R 类样本采集版本早于 0.163.0，字段顺序以
-  0.163.0 官方样本为准，只用于说明 warmup 与增量帧的条件语义。0.163.0 官方样本（Campaign
-  `c01630-formal-vc1-r2-20261020t131500z`，attempt `20261021T003916Z-24ff3483a4288709`；匹配数不是去重请求数）：
-  `field-slots` 匹配 16 条（场景 A05、A06 的 `response.create`）。`warmup-generate-false` 与 `incremental-prefix-reuse`
-  各匹配 0 条：这两项是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。候选断言 `assert-SPEC-WS-005` 核对字段槽位、
-  warmup 的 `generate=false` 与增量帧只在可复用前缀时携带 `previous_response_id`；owner 变化时复位 WS 会话见 0.157.0
+  `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧；这两份 R 类样本采集版本早于 0.164.0，字段顺序以
+  0.164.0 官方样本为准，只用于说明 warmup 与增量帧的条件语义（其中预热帧携带前缀是 0.163.0 及更早的形态）。0.164.0 官方样本（Campaign
+  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：
+  `field-slots` 匹配 16 条（场景 A05、A06 的 `response.create`），`warmup-input-empty` 匹配 3 条（预热帧 `generate=false` 且 `input` 为 `[]`）。
+  `warmup-generate-false`、`incremental-prefix-reuse` 与七项 `first-business-frame-*`（首个业务帧带前缀并续链预热响应，以及逐项 passthrough 的键序、
+  保留、`turn_id` 形态与等值）各匹配 0 条：这些是候选侧判据，按候选帧标签 `frame_role=first_business` 选帧，由 VC-5 候选断言核对，官方侧不适用。
+  候选断言 `assert-SPEC-WS-005` 核对字段槽位、warmup 的 `generate=false` 且 `input` 为空、首个业务帧排在 `input` 最前的 `additional_tools` 前缀并以预热响应 id
+  续链，以及增量帧只在可复用前缀时携带 `previous_response_id`；owner 变化时复位 WS 会话见 0.157.0
   `core/src/client.rs` 第 1538-1548 行。
 - **实现**：按 serde 条件省略字段；不得把某一类样本的字段子集或“首轮／后续轮”写成固定规则。画像 `responses_ws` 的
-  `Body.Fields` 按上列槽位重排并移除 `instructions`。
+  `Body.Fields` 按上列槽位重排并移除 `instructions`。画像 `BaseInstructions.IDScheme=uuidv7` 声明增量窗口形态：网关为第三方客户端派生的预热帧 `input` 为
+  `[]`，首个业务帧保留 `additional_tools` 与基础指令消息（不再剥离），并以预热响应 id 续链。
 - **状态**：✅ 源码充分；抓包充分。
 
 ## 2.8 Header
@@ -544,8 +554,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth。
 - **规则**：UA 为平台前缀加可选 ` ({name}; {version})` suffix。exec 使用
-  `codex_exec/0.163.0` 与 `(codex_exec; 0.163.0)`；TUI 使用
-  `codex-tui/0.163.0` 与 `(codex-tui; 0.163.0)`。启动首次 models 因进程级写入时序，
+  `codex_exec/0.164.0` 与 `(codex_exec; 0.164.0)`；TUI 使用
+  `codex-tui/0.164.0` 与 `(codex-tui; 0.164.0)`。启动首次 models 因进程级写入时序，
   有 suffix 和无 suffix 均属于官方观测集；TUI initialize 之后的真实插件请求必须带 `codex-tui` 前缀与同名 suffix。
   0.163.0 复核：UA、originator 与 suffix 机制未改；exec 新增 `model/list` 后，首次 `/models` 更可能带 suffix，
   规则已允许有无两种。
@@ -555,13 +565,13 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `cloud-tasks/src/util.rs:13`、`exec/src/lib.rs:268`。
 - **实测**：`clean-search-20260728T132311Z`（exec）、`clean-legacy-20260728T132509Z`
   （TUI）、`audit-ep019-wham-consume-safe-20260730a`（`codex_exec` originator、
-  `unknown` 终端标识）均为 R。0.163.0 官方 VC-1（Campaign `c01630-formal-vc1-r2-20261020t131500z`，attempt
-  `20261021T003916Z-24ff3483a4288709`）对场景 A15 的五项判据（`exec-identity`、`tui-identity`、
+  `unknown` 终端标识）均为 R。0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt
+  `20261027T135446Z-d8a16a8e788de81e`）对场景 A15 的五项判据（`exec-identity`、`tui-identity`、
   `exec-startup-models-suffix-optional`、`tui-startup-models-suffix-optional`、`post-initialize-suffix-present`）各匹配
   0 条：这五项是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
 - **实现**：按入口和进程状态生成 suffix；不得把一次首次 models 结果硬编码为固定值。ARM64 候选的平台前缀为
   `(Ubuntu 24.4.0; aarch64)`，suffix 的可选性和生成规则不变。
-- **状态**：✅ 源码充分；抓包充分（R 类样本）；0.163.0 的身份判据是候选侧判据，由 VC-5 候选断言核对。
+- **状态**：✅ 源码充分；抓包充分（R 类样本）；0.164.0 的身份判据是候选侧判据，由 VC-5 候选断言核对。
 
 ### SPEC-HDR-006 accept 按传输和端点变化
 
@@ -698,17 +708,40 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth；模型 manifest 的 `use_responses_lite=true`。
 - **规则**：instructions/tools 迁入 `input.additional_tools`；
-  `reasoning.context=all_turns`；`parallel_tool_calls=false`。WS 增量帧不重复发送
-  已复用的 additional_tools 前缀。
+  `reasoning.context=all_turns`；`parallel_tool_calls=false`；`additional_tools` 项只在工具目录非空时加入，键序为
+  `type, id, role, tools`。增量工具（`incremental_tools`）自 0.164.0 起是 Stable 特性且默认开启，对 Lite 模型默认生效：
+  工具目录与基础指令消息在新窗口开头作为历史条目记录一次，`input` 首项是 `additional_tools`（`id` 为 `at_` 加记录时随机生成的
+  UUIDv7），第 2 项是基础指令消息（键序 `type, id, role, content, internal_chat_message_metadata_passthrough`，`id` 为 `msg_` 加随机
+  UUIDv7；逐项 passthrough 键序为 `turn_id, create_time, content_item_kinds, content_item_metadata`），此后每个请求随历史原样重放同一对
+  id，不再按“线程 id 加内容字节”现场重算 UUIDv5。工具集中途变化时，历史中间插追加只含变化定义的 `additional_tools`，不改前缀；
+  压缩之后是新窗口，重新记录一对新 id。窗口是否增量只看历史里有没有工具声明项：从旧窗口续聊的请求仍是旧形态（前缀每次现场重算，
+  id 为 UUIDv5），所以同一客户端会同时发出两种前缀形态，不能按版本号二选一。WS 的前缀只在第一条业务帧出现（预热帧的
+  `input` 为空，见 SPEC-WS-005），其后的增量帧不重复发送。
 - **源码**：[L1] `core/src/client.rs:957-976`、
-  `core/src/client.rs:1015-1030`、`core/src/client.rs:1117`。0.163.0 与 0.164.0 源码另有两点：`additional_tools` 项只在 `prompt.tools` 非空时加入；
-  项 `id` 为 `at_` 加 UUIDv5（命名空间为 `UUIDv5(NAMESPACE_OID, thread_id)`，名称为该项 `tools` 的 JSON 序列化字节），0.149.1 无 `id`
-  且总是加入。已核实为线上偏差：官方 0.163.0 样本（HTTP 7 条、WS 预热帧 1 条）的 `additional_tools` 项全部带 `at_` id，按上述规则重算逐字节一致，
-  键序为 `type, id, role, tools`；网关没有实现该 id（Codex 入站原样放行但线程身份被网关重派生，非 Codex 入站合成的项没有 id），
-  随 0.164 版本登记修复，核实报告见 `local-analysis/opt-1025/body003/report.md`。
+  `core/src/client.rs:1015-1030`、`core/src/client.rs:1117`。0.164.0 源码：`features/src/lib.rs` 第 1645-1650 行把
+  `incremental_tools` 设为 Stable 且默认开启；`core/src/session/world_state.rs` 第 44-56 行按历史是否含工具声明项判定窗口是否增量；
+  增量窗口里 `prompt.tools` 与 `prompt.base_instructions` 被清空（`core/src/session/turn.rs` 第 1675-1693 行），所以请求构造里按
+  工具目录与基础指令现场拼装的两段不触发；`ResponseItemId::new` 为前缀加 `Uuid::now_v7()`（`protocol/src/response_item_id.rs`
+  第 15-22 行），在项入历史时补 id（`core/src/session/mod.rs` 第 3575-3597 行）；`AdditionalTools` 的字段顺序见
+  `protocol/src/models.rs` 第 1052-1060 行。0.163.0 默认路径（增量工具关闭）仍按旧方式现场拼装：`additional_tools` 项 id 为 `at_` 加
+  UUIDv5（命名空间为 `UUIDv5(NAMESPACE_OID, thread_id)`，名称为该项 `tools` 的 JSON 序列化字节），0.149.1 无 `id` 且总是加入。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（HTTP）、
-  `clean-tool-20260728T132346Z`（WS），均为 R。
-- **实现**：由模型 manifest 驱动；不得把 Lite 变换应用到非 Lite 模型。
+  `clean-tool-20260728T132346Z`（WS），均为 R，采集版本早于 0.164.0，只用于说明工具目录迁移的位置与 WS 增量语义。0.164.0 官方样本
+  （Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：
+  主线场景 A04（`gpt-6.1-sol`）的请求上，`main-additional-tools-item-form`、`main-base-instructions-item-form`、
+  `main-base-instructions-passthrough-keys`、`main-passthrough-key-orders`、`main-passthrough-assistant-key-order`、
+  `main-passthrough-carrier-types`、`main-messages-keep-passthrough`、`main-passthrough-turn-id-form`、
+  `main-current-turn-item-turn-id`、`main-client-turn-id-matches-turn-metadata` 各匹配 3 条；`lite-transform` 与
+  `incremental-no-repeat` 各匹配 0 条：这两项是候选侧判据，官方侧不适用。候选断言 `assert-SPEC-BODY-003` 核对 Lite 变换、首项
+  `additional_tools` 与第 2 项基础指令消息的键序和 id 形态（id 为前缀加规范 UUID，不核对版本位与具体值）、逐项 passthrough 的键序与携带者类型、
+  项级 `turn_id` 的规范形态且请求尾部项的 `turn_id` 等于出站 `client_metadata.turn_id`（后者又等于 `x-codex-turn-metadata` 里的 `turn_id`），以及 WS
+  增量帧不重复首个业务帧已带的前缀。
+- **实现**：由模型 manifest 驱动；不得把 Lite 变换应用到非 Lite 模型。画像 `BaseInstructions` 节的 `IDScheme=uuidv7` 声明增量窗口方案
+  （缺省保持 UUIDv5 旧语义，旧画像字节不变）：入站前缀项是官方形态（带 `at_`／`msg_` 前缀 id 且类型匹配）时原样保留，不重写 id；第三方客户端入站时由网关合成，
+  `additional_tools` 项带 `at_` 加稳定的 UUIDv7 形态 id（同一会话各请求相同），键序 `type, id, role, tools`，工具目录为空时不合成该项。
+  逐项 passthrough 在官方出站、画像 `uuidv7`、入站为官方形态三个条件同时满足时按项原样保留（含 `content_item_metadata`；Lite 与非 Lite
+  各按自己的官方形态判定），缺任一条照旧整体剥离；客户端自带的逐项 `turn_id` 校验后改写成网关本轮的 `turn_id`，其余键逐字节保留，网关不为第三方入站合成逐项 passthrough。
+  HTTP 出站的 `client_metadata.turn_id` 取自登记的 turn metadata，与其内的 `turn_id` 恒等。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-BODY-004 turn-state 的消费、保存与回送
@@ -749,12 +782,16 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   解析的自定义值时发 JSON 字符串；自定义档位能按 u64 解析时（如 `"3"`）发 JSON 整数，HTTP 与 WS `response.create` 共用同一
   结构体、形态相同；`x-codex-turn-metadata` 的 `reasoning_effort` 仍记字符串。默认内置模型目录的档位全是字符串，
   整数形态只在用户配置或远端目录给出纯数字自定义档位时出现。0.163.0 起主线模型 gpt-6.1-sol 是 Responses Lite。
-  0.164.0 复核：字段全集与顺序未变，请求体另有三处变化——① 开启 `reasoning_effort` 覆盖时，`input` 中连续的 `ConfigurationUpdate` 项只保留最后一条
+  0.164.0：字段全集与顺序未变，Lite 请求里的基础指令消息与工具目录由增量窗口作为历史条目承载（见 SPEC-BODY-003），消息 id 由 `msg_` 加
+  UUIDv5 改为记录时随机的 `msg_` 加 UUIDv7，其逐项 passthrough 为 `turn_id, create_time, content_item_kinds, content_item_metadata`；载体（`input` 最前的
+  developer 消息、`content_item_kinds=[model.base_instructions]`）与顶层不带 `instructions` 的结论不变。非 Lite 不走增量工具，基础指令消息仍由请求构造现场拼出，
+  形态不变。请求体另有三处变化——① 开启 `reasoning_effort` 覆盖时，`input` 中连续的 `ConfigurationUpdate` 项只保留最后一条
   （`core/src/client.rs:990-1006`）；② Lite 请求里带来源归因的 `input` 消息，其 `internal_chat_message_metadata_passthrough` 在
   `content_item_kinds` 之外另带逐项对齐的 `content_item_metadata` 数组（基础指令消息为 `[{"provenance":{"type":"harness","hook":false}}]`），
   非 Lite 请求在发出前清除该数组（`core/src/client.rs:1042-1047`），所以下文非 Lite 基础指令消息的 `passthrough` 仍只带 `content_item_kinds`；
   ③ 请求体 `prompt_cache_key` 改由 `PromptCacheKey` 策略决定（默认 `SessionDerived`，取值与 0.163.0 相同；宿主可配 `Custom` 或 `Omit`，`Omit` 时整字段省略，
-  `core/src/client.rs:658-664`），官方 CLI 默认路径不受影响。上述 ① ② 在 0.164.0 官方样本里的形态未经核实。
+  `core/src/client.rs:658-664`），官方 CLI 默认路径不受影响。② 由 SPEC-BODY-003 的 `main-base-instructions-passthrough-keys` 在 A04 官方样本上核对（匹配 3 条）；
+  ① 与 ③ 依据 0.164.0 源码，官方样本的判据不核对。
 - **源码**：[L1] `codex-api/src/common.rs:278-304`、
   `core/src/client.rs:957-1130`、`core/src/client.rs:990-1006`、`core/src/client.rs:1042-1047`、`core/src/client.rs:658-664`（`build_responses_request` 从第 979 行起，对任何模型都不再产生顶层 `instructions`）、
   `codex-api/src/common.rs:170-183`（数字档位序列化，内容与 0.160.0 一致）。Lite 分支的端到端断言见
@@ -762,8 +799,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/turn_metadata.rs` 第 83-93 行。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（Lite）与
   `audit-body002-plain-20260730a`（非 Lite），均为 R；这两份 R 类样本采集版本早于 0.163.0，其非 Lite 样本里的顶层
-  `instructions` 在 0.163.0 不再出现，不作为 0.163.0 非 Lite 的佐证。0.163.0 官方样本（Campaign
-  `c01630-formal-vc1-r2-20261020t131500z`，attempt `20261021T003916Z-24ff3483a4288709`；匹配数不是去重请求数）：Lite 轨场景
+  `instructions` 在 0.163.0 起不再出现，不作为 0.164.0 非 Lite 的佐证。0.164.0 官方样本（Campaign
+  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：Lite 轨场景
   A03 的请求 `body.model` 为 gpt-6-astra（`lite-model-is-lite-track-model`），顶层无 `instructions` 与 `tools`
   （`lite-top-level-omission`、`lite-tools-omission`），`reasoning.context=all_turns`（`lite-reasoning-manifest-defaults`），
   `reasoning.effort` 为清单支持的档位（采集客户端配置为 low，`lite-reasoning-effort-present`），`reasoning.summary` 省略
@@ -772,15 +809,16 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `input` 的 `additional_tools` 项里（`main-additional-tools-present` 匹配 3 条）；数字档位定向样本中 `reasoning.effort`
   为 JSON 整数 `3`（A04 HTTP 的 `numeric-effort-http-integer` 匹配 1 条，A05 WS `response.create` 的
   `numeric-effort-ws-integer` 匹配 2 条）。本轮官方采集的主线与 Lite 轨都是 Lite 模型，非 Lite
-  分支（基础指令作为 `input` 最前的 developer 消息）没有本轮官方样本：gpt-5.5 在采集账号上已下线，0.163.0 内置目录再无
-  非 Lite 模型；该分支的结论依据 0.163.0 源码，不用 0.160.0 的非 Lite 样本充当 0.163.0 的佐证。候选断言
+  分支（基础指令作为 `input` 最前的 developer 消息）没有本轮官方样本：gpt-5.5 在采集账号上已下线，0.164.0 内置目录再无
+  非 Lite 模型；该分支的结论依据 0.164.0 源码，不用 0.160.0 的非 Lite 样本充当 0.164.0 的佐证。候选断言
   `assert-SPEC-BODY-006` 核对 Lite 省略顶层字段、Lite 的 reasoning 与 text 定型、主线请求无顶层 `instructions` 且工具目录在
   `additional_tools`，以及数字档位在 HTTP 与 WS 均为整数。
 - **实现**：按模型 manifest 与 Option 值序列化，不硬编码某个模型的一次字段子集。数字档位由画像 ReasoningEffort 节
   （`CustomNumericSerialization=u64_integer`）驱动：能按 u64 解析的档位以 JSON 整数出站，turn metadata 仍记字符串；
   节缺省的画像一律发字符串。非 Lite 请求不再发送顶层 `instructions`，基础指令作为 `input` 最前的 developer 消息，
   由画像新增的 `BaseInstructions` 节承载；`responses_http`／`responses_ws` 的 `Body.Fields` 均不再含 `instructions`。
-- **状态**：✅ 源码充分；抓包充分（Lite 分支）。非 Lite 分支没有本轮官方样本，结论依据 0.163.0 源码。
+  Lite 请求里的基础指令消息与 `additional_tools` 的 id 方案由该节的 `IDScheme=uuidv7` 声明，处理方式见 SPEC-BODY-003。
+- **状态**：✅ 源码充分；抓包充分（Lite 分支）。非 Lite 分支没有本轮官方样本，结论依据 0.164.0 源码。
 
 ### SPEC-BODY-007 编码工作流 input 类型分布记录
 
@@ -840,8 +878,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **范围**：内置 OpenAI OAuth；模型支持图像生成时。
 - **规则**：非 Lite 可在顶层 `tools` 中发送 namespace `image_gen`／工具
   `imagegen`；Lite 将能力放入 `input.additional_tools` 的 exec 工具目录。
-  模型调用后由客户端请求独立 `images/generations` 或 `images/edits`。0.164.0 复核：该独立请求的 header 另带
-  `x-codex-turn-metadata`（值为当前 turn 的元数据 JSON，`image_request_headers` 在有 turn 元数据时插入），0.163.0 没有；线序位置未经官方样本核实。
+  模型调用后由客户端请求独立 `images/generations` 或 `images/edits`。0.164.0 起该独立请求的 header 另带
+  `x-codex-turn-metadata`（值为当前 turn 的元数据 JSON，`image_request_headers` 在有 turn 元数据时插入），0.163.0 没有；
+  两个回合头的线序位置已由 0.164.0 官方样本核对，见 SPEC-EP-022。
 - **源码**：[L1] `core/src/tools/spec_plan.rs:103-104`、
   `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:80-132`、
   `ext/image-generation/src/backend.rs:135-155`、`codex-api/src/endpoint/images.rs:62-98`。
@@ -859,6 +898,11 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   文件上传 PUT 使用服务端返回的区域 `*.oaiusercontent.com` URL。ChatGPT 认证下工作区路由先经
   `GET /backend-api/wham/accounts/check` 发现 `workspace_backend_origin`，Responses 的 origin 按其改写；默认路由
   （`NO_CONSTRAINT`）下保持 `chatgpt.com`。
+- **令牌刷新请求体**：`POST https://auth.openai.com/oauth/token`（JSON）的请求体由 `BTreeMap` 编码，键按字典序；0.164.0 起在
+  `grant_type` 与 `refresh_token` 之间多一个 `refresh_reason`，即 `{"client_id":…,"grant_type":"refresh_token","refresh_reason":"<原因>","refresh_token":…}`，
+  请求头不变。原因是闭集四值：`proactive_expiry`（access token 的 JWT `exp` 距现在不足 5 分钟）、`scheduled`（`exp` 不可解析且 `last_refresh`
+  早于 8 天）、`unauthorized_recovery`（401 恢复流程里的刷新步）、`forced`（显式调用，例如 app-server `getAuthStatus(refreshToken:true)`）；
+  它是调用方自报的诊断信息，不是令牌有效性证据。
 - **Files 规则**：`POST /backend-api/files` 的基础 Body 为 `file_name, file_size, use_case`；hosted
   connector 调用必须再同时发送 `codex_connector_id, codex_action_name, codex_model`，三者必须全有
   或全无。随后 PUT 必须逐字使用 create 响应返回的完整 URL；PUT 遇 502／503／504 或传输错误最多重试 5 次，全部尝试共享
@@ -871,16 +915,23 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `login/src/auth/manager.rs:223`、`core/src/realtime_conversation.rs:1375-1392`、
   `core/src/mcp_tool_call.rs:521-529`、`core/src/mcp_openai_file.rs:191-250`、
   `codex-api/src/files.rs:29-42`、`codex-api/src/files.rs:128-202`、`codex-api/src/files.rs:203-353`、
-  `codex-api/src/files.rs:355-432`。
+  `codex-api/src/files.rs:355-432`。0.164.0 的刷新原因见 `login/src/oauth/client.rs` 第 39-62 行（`RefreshReason` 四个取值）与第 97-113 行
+  （请求体拼装），调用点见 `login/src/auth/manager.rs` 第 1695-1720 行（原因入参）、第 2087-2101 行（401 恢复取 `UnauthorizedRecovery`）与第 3300-3318 行（主动刷新取
+  `ProactiveExpiry` 或 `Scheduled`），显式调用取 `Forced`。
 - **实测**：`oauth-ep002-allhosts`、`oauth-ep002-refresh`（P）；
   `audit-ep012-sideband-synth-20260730a`、
   `audit-ep002-file-upload-full2-20260730a`（R）；0.149.1 hosted 三元字段与大小优先级由官方源码测试、
   Sub2API 三跳集成测试及缺字段负例共同闭环。0.151.0 的 C2PA 正反样本由 Formal r8 的
-  `official-relay-file-upload-c2pa-negative／positive` 两个 Job 闭环。候选断言 `assert-SPEC-EP-002` 核对四类域名
-  SNI、create 返回 URL 与 PUT URL 一致，以及 C2PA 正反与 retry 三种 uploaded Body；工作区路由见 0.157.0
+  `official-relay-file-upload-c2pa-negative／positive` 两个 Job 闭环。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；
+  匹配数不是去重请求数）：`oauth-refresh-body-keys` 匹配 1 条（A13 刷新请求体键序为 `client_id, grant_type, refresh_reason, refresh_token`），
+  `oauth-refresh-reason-closed-set` 匹配 1 条（`refresh_reason` 在四值闭集内；官方驱动走 `getAuthStatus(refreshToken:true)`，只能采到 `forced`，其余三个取值依据源码与官方单测）。
+  候选断言 `assert-SPEC-EP-002` 核对四类域名
+  SNI、create 返回 URL 与 PUT URL 一致，C2PA 正反与 retry 三种 uploaded Body，以及刷新请求体键序和 `refresh_reason` 取值；工作区路由见 0.157.0
   `app-server/src/request_processors/account_processor/workspace_routing.rs` 第 253-290 行，blob PUT 重试见
   `codex-api/src/files.rs` 第 200-345 行。
-- **实现**：使用配置或服务端返回 URL；不得硬编码单一区域上传 host。create 与 uploaded 分别冻结
+- **实现**：画像 `oauth_refresh` 端点的 `Body.Fields` 为 `client_id, grant_type, refresh_reason, refresh_token`（`Closed`），`refresh_token` 由编译器注入；
+  `refresh_reason` 在服务内做四值闭集校验：后台刷新器取 `proactive_expiry`，其余入口（含管理端手动刷新）取 `forced`；网关没有“401 后刷新再重试”的路径，
+  所以不产生 `unauthorized_recovery`。旧画像不声明该字段时不发送。使用配置或服务端返回 URL；不得硬编码单一区域上传 host。create 与 uploaded 分别冻结
   Body attestation，uploaded 的 retry 只复用自身 invocation，避免把 hosted create 条件扩散到空 Body。工作区路由的
   发现与失败关闭见 SPEC-HDR-009；blob PUT 的重试网关首期不仿真。
 - **状态**：✅ 源码部分；抓包充分。
@@ -904,7 +955,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 ### SPEC-EP-006 models 的 URL 与方法
 
 - **范围**：内置 OpenAI OAuth。
-- **规则**：`GET {base}/models?client_version=0.163.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
+- **规则**：`GET {base}/models?client_version=0.164.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
   的值随 CLI 版本；exec 新增 `model/list`（`OnlineIfUncached`），可能使冷 home 的首个 `/models` 提前发出并变为同步等待，
   请求形态不变。0.164.0 复核：`model/list` 改为用 catalog 当前快照里的 config 与 models_manager 取列表
   （`list_models_from_snapshot`），刷新策略仍是 `OnlineIfUncached`，URL、方法、query 不变。
@@ -912,11 +963,11 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `model/list` 的触发见 `app-server/src/request_processors/catalog_processor.rs:296-304` 与 `exec/src/daybreak.rs:41-50`。
   0.163.0 另在 `codex-api/src/endpoint/models.rs:48-67` 增加 `model_catalog_url`（自定义 provider 专用）的 URL 构造，内置
   provider 不受影响。
-- **实测**：`audit-h1raw-20260730a`（R）验证 URL、方法与 query 形态。0.163.0 官方样本（Campaign
-  `c01630-formal-vc1-r2-20261020t131500z`，attempt `20261021T003916Z-24ff3483a4288709`；匹配数不是去重请求数）：场景 A09 的
-  `models-method-path-query` 匹配 18 条，method 为 GET，path 为 `/backend-api/codex/models`，query 只有
-  `client_version=0.163.0`。
-- **实现**：版本 query 与画像对应的 CLI 版本一致（0.163.0）。
+- **实测**：`audit-h1raw-20260730a`（R）验证 URL、方法与 query 形态。0.164.0 官方样本（Campaign
+  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：场景 A09 的
+  `models-method-path-query` 匹配 17 条，method 为 GET，path 为 `/backend-api/codex/models`，query 只有
+  `client_version=0.164.0`。
+- **实现**：版本 query 与画像对应的 CLI 版本一致（0.164.0）。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-EP-008 alpha-search 的 URL 与方法
@@ -965,7 +1016,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth；由 `Provider::url_for_path()` 构造的 Codex API URL。
 - **规则**：provider 级 `query_params=None`；query 只由端点自身添加。目前 models
-  添加 `client_version=0.163.0`，realtime/calls 添加 `intent` 与 `architecture`，
+  添加 `client_version=0.164.0`，realtime/calls 添加 `intent` 与 `architecture`，
   普通 responses 不带 query。0.163.0 复核：行为不变，provider 级 `query_params` 仍为 `None`。
 - **源码**：[L1] `codex-client/src/provider.rs:55`、
   `model-provider-info/src/lib.rs:540`、
@@ -973,9 +1024,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `Provider` 与 `url_for_path` 在 0.163.0 移入 `codex-client`（原 `codex-api/src/provider.rs`）；models 的 `client_version`
   由 `codex-api/src/endpoint/models.rs:37-46` 追加，realtime/calls 的 query 见 `codex-api/src/endpoint/realtime_call.rs:221-222`。
 - **实测**：`audit-h1raw-20260730a`（models／responses）与
-  `webrtc-20260728T134028Z`（realtime），均为 R。0.163.0 官方样本（Campaign
-  `c01630-formal-vc1-r2-20261020t131500z`，attempt `20261021T003916Z-24ff3483a4288709`；场景 A01、A03、A11；匹配数不是去重
-  请求数）：`models-query-boundary` 匹配 10 条，models 的 query 只有 `client_version=0.163.0`；`realtime-query-boundary`
+  `webrtc-20260728T134028Z`（realtime），均为 R。0.164.0 官方样本（Campaign
+  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；场景 A01、A03、A11；匹配数不是去重
+  请求数）：`models-query-boundary` 匹配 10 条，models 的 query 只有 `client_version=0.164.0`；`realtime-query-boundary`
   匹配 1 条，realtime calls 只有 `intent=quicksilver` 与 `architecture=avas`；`responses-no-query` 匹配 3 条，场景 A03 的普通
   Responses 不带 query。
 - **实现**：不得给全部 Codex API URL 透传统一 query；自定义 provider 不属于本条。
@@ -1065,26 +1116,37 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   否则为 `opaque`，generations 与 edits 相同。edits 的 `images` 项按引用方式取两种形态之一：按路径引用本地图片时为
   `{"image_url": data URL}`；按数量引用会话近期图片时，会话里 file-backed 的图片为 `{"file_id": …}`、不附带
   image_url，内联图片仍为 `{"image_url": …}`。
-  两者 header 线序均为
-  `version, authorization, chatgpt-account-id, content-type, originator,
-  user-agent, accept, cookie, host, content-length`。
+  0.164.0 起两者 header 线序均为
+  `version, x-codex-image-turn-id, x-codex-turn-metadata, authorization, chatgpt-account-id, content-type, originator,
+  user-agent, accept, cookie, host, content-length`：`x-codex-image-turn-id`（本次图像请求的 turn id）与 `x-codex-turn-metadata`
+  （值为当前 turn 的元数据 JSON）紧跟 `version`；官方 CLI 默认路径上元数据是 14 键，键序为 `session_id, thread_id, reasoning_effort, turn_id,
+  model, thread_source, turn_trigger, sandbox, sandbox_mode, auto_review_enabled, node_repl_auto_review_required, node_repl_disabled,
+  turn_started_at_unix_ms, codex_version`（`reasoning_effort` 在 `turn_id` 前、`model` 在 `turn_id` 后是 `swap_remove` 的副作用）；默认路径下官方不写
+  `originator` 头，由 HTTP 客户端默认头补在 `content-type` 之后，`accept` 位于 `originator`、`user-agent` 之后。body 不变。
 - **源码**：[L1] `codex-api/src/images.rs:6-31`、
   `codex-api/src/endpoint/images.rs:62-98`、
   `ext/image-generation/src/tool.rs:484-636`（`request_for_call_args` 在第 489-493 行选 background，`recent_images`、
   `output_images` 取按数量引用的图片），图片引用类型见 `protocol/src/models.rs:929-935`（`ImageReference`，untagged）。
   0.163.0 另在响应头读取 `x-codex-imagegen-request-id` 供界面条目使用（`codex-api/src/endpoint/images.rs:101-116`），不影响出站。
   0.164.0 复核：请求体（generations／edits 的字段与取值、`images` 的两种引用形态）未变，`request_for_call_args` 只是多返回入参图片的路径与 sha256 供界面使用；
-  出站变化有二：header 另带 `x-codex-turn-metadata`（见 SPEC-EP-001，线序位置未核实）；生成结果会交给附件库上传（`UploadResult::File` 时界面条目引用 file_id，失败时退回内联，
+  出站变化有二：header 另带 `x-codex-turn-metadata`（见 SPEC-EP-001，线序已由 0.164.0 官方样本核对）；生成结果会交给附件库上传（`UploadResult::File` 时界面条目引用 file_id，失败时退回内联，
   `ext/image-generation/src/tool.rs:259-292`），这是 0.164.0 新增的出站面，是否经 Files 端点及其形态未经官方样本核实，不改变 images 请求本身。另外 `ext/image-generation/src/backend.rs:141-143`
-  在 0.163.0 已有 `x-codex-image-turn-id` header，上面的线序来自 0.160.0 官方样本、没有它，该 header 在官方样本里的有无与位置未核实。
+  在 0.163.0 已有 `x-codex-image-turn-id` header，0.160.0 官方样本的线序没有它；0.164.0 官方样本确认它与 `x-codex-turn-metadata` 一同紧跟 `version`。
 - **实测**：`clean-image-20260728T132405Z`（generations）与 `relay-imgedit1`
-  （edits），均含 R；0.160.0 官方 generations 与 edits 样本线序为上列十项，generations 默认 `background=opaque`
+  （edits），均含 R；0.160.0 官方 generations 与 edits 样本线序为不含两个回合头的十项，generations 默认 `background=opaque`
   （2 条）、要求透明时为 `transparent`（1 条），edits 首项为 file_id（1 条）或 image_url（2 条），background 均为
-  `opaque`。候选断言 `assert-SPEC-EP-022` 核对两者线序、两种 body、edits 的 JSON data URL、background 两种取值与
-  file_id 项不带 image_url；accept 位置由默认头合并时机决定（见 SPEC-HDR-002）。
+  `opaque`。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；场景 A09；匹配数不是去重请求数）：
+  `image-header-order` 匹配 41 条（generations 与 edits 的 header 线序都是上列十二项），`image-turn-metadata-default-keys` 匹配 41 条
+  （`x-codex-turn-metadata` 为上列 14 键且键序一致），`generation-body-order` 与 `edit-body-order` 各匹配 2 条，`generation-background-default-opaque`
+  匹配 2 条；`edit-json-data-url`、`generation-background-transparent`、`edit-file-id-reference`、`edit-file-id-without-url` 各匹配 0 条，
+  这些取值形态沿用 0.160.0 官方样本，由候选断言核对。候选断言 `assert-SPEC-EP-022` 核对两者线序、两个回合头与 14 键默认元数据、两种 body、edits 的 JSON data URL、
+  background 两种取值与 file_id 项不带 image_url；accept 位置由默认头合并时机决定（见 SPEC-HDR-002）。
 - **实现**：`n=None` 时省略；edits 以内联 data URL 发送，远程 URL 拒绝。background 与 file_id 引用由画像
   ImageGeneration 节驱动：入站要求透明背景时发 `transparent`，其余发节内默认值 `opaque`；节允许 file_id 时入站
-  file_id 引用以 `{"file_id": …}` 发出，否则失败关闭。节缺省的画像 background 原样透传、edits 只收 image_url。
+  file_id 引用以 `{"file_id": …}` 发出，否则失败关闭。节缺省的画像 background 原样透传、edits 只收 image_url。两个回合头由画像 `images_generations`、`images_edits` 端点按槽位声明
+  （`x-codex-image-turn-id` 为 Slot 20，`x-codex-turn-metadata` 为 Slot 25），只在画像声明时生效，旧画像字节不变：`x-codex-image-turn-id` 取本次调用的 turn id；
+  `x-codex-turn-metadata` 按官方扩展请求规则装配，入站带同回合 Responses 事实时取其会话字段，没有时（非 Codex 客户端直接调图像接口）由画像
+  `TurnMetadata.SessionDefaults` 登记的默认会话模型补 `model`、`reasoning_effort` 与 `node_repl_auto_review_required`，凑齐 14 键，漏登记会静默退回 12 键。
 - **状态**：✅ 源码部分；抓包充分。
 
 ### SPEC-EP-023 压缩选择与 reason
