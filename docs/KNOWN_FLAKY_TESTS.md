@@ -39,6 +39,6 @@
 - 修复：`refreshCachedOpenAIModels` 的领头者内部在请求上游前再看一次缓存，已是新鲜状态就直接复用；
   stale 与未命中照常刷新。新增 `openai_models_cache_refresh_test.go`：一个确定性用例（旧代码必红）、一个 stale／过期仍刷新用例、
   一个 300 轮冷读并发用例（旧代码第 11 轮即红）。修复后同口径 19200 次 0 次红。
-- 修复提交：见该条所在提交（reg0164/fix-flaky 分支）。
+- 修复提交：`acbe032f697bf7d1cc64adb04f601a0665b6ed3c`（`fix(openai): 模型清单缓存合并刷新在领头者内复核缓存，避免并发冷读重复请求上游`）。
 - 注意：该用例走真实 loopback HTTP，用 `-count` 很大并多进程同时跑时会耗尽本机临时端口（TIME_WAIT 过万），
   表现为 OAuth 账号清单缺项，与本条无关，压测时分批并等 TIME_WAIT 排空。
