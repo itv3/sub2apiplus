@@ -427,6 +427,12 @@ func (b *officialForwardHTTPBody) finalizeHTTPBodyPayloadMembers(
 		return nil, false, err
 	}
 	keys := officialJSONOrderedTopLevelKeys(payload, order, nil)
+	// 画像声明 uuidv7 增量窗口方案时，重编码带 id 的 additional_tools 项要固定为官方键序（type,id,role,tools）；
+	// 其余编码入口都经 officialJSONIndexWithAdditionalToolsKeyOrder 置位，本分支用自己的写出器，也要置位，
+	// 否则网关补 id 的工具项会写成“原键序在前、id 在后”的非官方形态。
+	index = officialJSONIndexWithAdditionalToolsKeyOrder(
+		index, body, officialCodexOrdersAdditionalToolsKeys(options.ProfileMode, officialCodexEndpointResponsesHTTP),
+	)
 	members := make([]officialegress.JSONObjectMember, 0, len(keys))
 	for _, key := range keys {
 		quotedKey, err := json.Marshal(key)
@@ -585,6 +591,9 @@ func (w *openAIWSHTTPBridgeJSONSegments) appendValue(index *officialJSONRawIndex
 		}
 		sort.Strings(additional)
 		keys = append(keys, additional...)
+		if index != nil && index.orderAdditionalToolsKeys {
+			keys = orderOfficialAdditionalToolsKeys(typed, keys)
+		}
 		w.appendByte('{')
 		for i, key := range keys {
 			if i > 0 {

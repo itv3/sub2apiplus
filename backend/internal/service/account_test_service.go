@@ -3417,6 +3417,15 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image endpoint URL: %s", err.Error()))
 	}
+	// 与真实转发（ForwardImages）一致，先把已校验的发布模式运行态快照绑到上下文：画像声明 images 回合头槽位
+	// （x-codex-image-turn-id、x-codex-turn-metadata，0.164 起）时，身份事实补齐按快照里的发布模式读画像；
+	// 不绑则快照缺省为空模式，被当作“未声明”，编译器随后因缺结构化 Header 事实而整条请求失败。
+	ctx, err = bindOfficialCodexRuntimeStateFromIngress(
+		ctx, c, credentialAccount, releaseMode, codexEndpointID(endpointProfile.ID),
+	)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image runtime state: %s", err.Error()))
+	}
 	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkImagesOAuthTest)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", err.Error()))
