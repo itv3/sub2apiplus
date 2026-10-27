@@ -30,7 +30,12 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败；
 ``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）；
 ``--reexecute-gates``：入口门禁重新执行全集（方案 D12：升级开工的入口空跑、一致性验收、收尾合入前用），这一步不沿用
-记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。``--audit-reads``：入口门禁检查实际读集；
+记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。
+入口门禁什么时候被强制重做（B-09 修正）：只有三种情形——带 ``--full-set-request``、带 ``--unit-inherit-request``、显式
+``--reexecute-gates``（这三种门禁消费会过期的凭据，或操作员明确要求）。缺省的重新执行模式没有任何会过期的凭据，门禁与其他步骤
+一样按步骤记录判定沿用还是重做，失败后续跑不再白白重跑数小时的全集。两条只属于编排器的补充规则（不改 ``entry_steps.py``，它在
+执行器身份里）：沿用的入口门禁记录完成时间超过 24 小时一律重做；门禁本轮要重做时，判了沿用的 atomic-double 连带重做
+（门禁耗时会让它的时效窗口在运行期间过期，发布认证重放会报账本终态漂移）。``--audit-reads``：入口门禁检查实际读集；
 建立可逐单元承接的测试记录时，同时带 ``--audit-strict --audit-policy <登记策略>``，把完整审计和精确输入合同传到实际
 执行器。登记策略与审计选项进入入口门禁、pre-A3 的步骤输入；续跑保持这些选项，只执行失效或缺少有效记录的单元。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
@@ -130,6 +135,39 @@ class OrchestratorError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _epoch_now() -> float:
+    """当前墙钟（UTC 秒）。单独成函数，是为了让测试可以把时钟拨快来验证沿用时效，不必真等 24 小时。"""
+
+    return datetime.now(timezone.utc).timestamp()
+
+
+# B-09 强制重做入口门禁的原因（只在请求模式下使用，见 ``Orchestrator.gates_force_reexecute``）。
+GATES_FORCE_REASON = "B-09：每次开工重新核对全集承接身份、时效与撤销；不得沿用旧步骤缓存"
+# 沿用的入口门禁记录的时效上限（小时）：对齐 B-09 全集收据的最长期限（86400 秒）。门禁输入摘要没变时结论本身不会过期，但
+# 一份一天前的结论不该无限期顶替一次真实的全集执行，所以超过上限一律重做。这个上限放在编排器里而不是 entry_steps.py：
+# entry_steps.py 属于执行器身份（unit_records.EXECUTOR_FILES），改它会让全部单元记录与后台验证结论作废。
+ENTRY_GATES_REUSE_MAX_AGE_HOURS = 24
+# 门禁要重做时，沿用的 atomic-double 记录为什么也要连带重采。
+ATOMIC_COUPLED_REASON = ("入口门禁本轮要重做，而门禁要跑数小时：atomic-double 即使现在还在时效窗口内，等走到发布认证时多半已过期，"
+                         "重放会报“账本终态漂移”，所以连带重新采集")
+
+
+def entry_gates_age_problem(completed_at_utc: Any, *, now: float) -> str | None:
+    """沿用的入口门禁记录够不够新：完成时间超过 ``ENTRY_GATES_REUSE_MAX_AGE_HOURS`` 小时、读不出或在未来返回原因，否则返回 None。"""
+
+    try:
+        completed = datetime.strptime(str(completed_at_utc), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return f"沿用的入口门禁记录完成时间读不出（{completed_at_utc!r}），无法核对时效上限，不沿用"
+    age_hours = (now - completed) / 3600
+    if age_hours < -5 / 60:
+        return f"沿用的入口门禁记录完成时间在未来（{completed_at_utc}），不沿用"
+    if age_hours > ENTRY_GATES_REUSE_MAX_AGE_HOURS:
+        return (f"沿用的入口门禁记录已是 {age_hours:.1f} 小时前完成的，超过沿用上限 {ENTRY_GATES_REUSE_MAX_AGE_HOURS} 小时"
+                "（编排器规定：过旧的结论不顶替一次真实的全集执行），重新执行")
+    return None
 
 
 def fresh(base: Path) -> Path:
@@ -990,16 +1028,51 @@ class Orchestrator:
                      if check in self.preflight_failed and step_id in steps]
         return blockers
 
+    def gates_force_reexecute(self) -> bool:
+        """入口门禁是否无条件强制重做（不看步骤记录）。
+
+        B-09 的“每次开工重新核对”只对消费会过期凭据的模式有意义：全集通过（全集收据有期限、校时凭证与撤销查询都会过期）、
+        逐单元承接（承接来源要实时复核），以及操作员显式要求的 ``--reexecute-gates``。缺省的重新执行模式没有任何会过期的
+        凭据：门禁是对固定提交的一次真实全集执行，结论只取决于步骤输入，应与其他步骤一样按步骤记录判定沿用还是重做。"""
+
+        return self.reexecute_gates or self.full_set_request is not None or self.unit_inherit_request is not None
+
+    def _evaluate(self, is_formal: bool, in_range: set[str]) -> dict[str, Any]:
+        """全部步骤的判定：``ES.evaluate`` 之上加三条只属于编排器的规则（都只在 Formal 建成之前生效）。
+
+        1. 请求模式（``gates_force_reexecute``）强制重做入口门禁；缺省模式按步骤记录。
+        2. 沿用的入口门禁记录超过 ``ENTRY_GATES_REUSE_MAX_AGE_HOURS`` 小时改判重做。
+        3. 入口门禁本轮要重做时，判了沿用的 atomic-double 连带重做：门禁一跑数小时，atomic-double 的时效窗口会在这期间过期，
+           发布认证重放它会报“账本终态漂移”。
+
+        规则 2、3 通过 ``force`` 再评估一次实现，下游步骤（发布认证、P0 收据等）照常按上游重做传播。"""
+
+        if is_formal:
+            return ES.evaluate(self.ctx, is_formal_built=True)
+        force: dict[str, str] = {"entry-gates": GATES_FORCE_REASON} if self.gates_force_reexecute() else {}
+        evaluation = ES.evaluate(self.ctx, is_formal_built=False, force=force or None)
+        initial = dict(force)
+        decisions = {step["step_id"]: step for step in evaluation["steps"]}
+        if decisions["entry-gates"]["decision"] == "reuse":
+            record = ES.read_record(self.steps_dir, "entry-gates") or {}
+            problem = entry_gates_age_problem(record.get("completed_at_utc"), now=_epoch_now())
+            if problem is not None:
+                force["entry-gates"] = problem
+        gates_rerun = "entry-gates" in force or decisions["entry-gates"]["decision"] == "run"
+        if gates_rerun and "entry-gates" in in_range and decisions["atomic-double"]["decision"] == "reuse":
+            force["atomic-double"] = ATOMIC_COUPLED_REASON
+        # 没有新增强制就沿用第一次的评估结果（缺省模式、门禁记录新鲜时的常态）。
+        return evaluation if force == initial else ES.evaluate(self.ctx, is_formal_built=False, force=force)
+
     def orchestrate(self, *, plan_only: bool = False, from_step: str | None = None, to_step: str | None = None,
                     formal: bool | None = None) -> dict[str, Any]:
         if self.scope_error is not None:
             raise self.scope_error
         is_formal = ES.formal_built(self.ctx) if formal is None else formal
-        force = None if is_formal else {"entry-gates": "B-09：每次开工重新核对全集承接身份、时效与撤销；不得沿用旧步骤缓存"}
-        evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal, force=force)
-        decisions = {step["step_id"]: step for step in evaluation["steps"]}
         start = ORDER.index(from_step) if from_step else 0
         stop = ORDER.index(to_step) if to_step else len(ORDER) - 1
+        evaluation = self._evaluate(is_formal, set(ORDER[start:stop + 1]))
+        decisions = {step["step_id"]: step for step in evaluation["steps"]}
         if start > stop:
             raise OrchestratorError("起点在终点之后")
         for index, step_id in enumerate(ORDER):

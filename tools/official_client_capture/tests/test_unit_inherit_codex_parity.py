@@ -691,6 +691,22 @@ ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS: dict[str, str] = {
     "tools/ci/background_validation.py": "5232ffa04deef6c3fe5ecae3bc235d5efe33417271c1b9361d1744f34c006ec9",
 }
 ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/background_validation.py": []}
+# B-09 强制重做改为仅请求模式（0.164 登记前的入口修复）：入口门禁不再在缺省模式下无条件强制重做，只在全集请求、逐单元承接请求、
+# 显式 --reexecute-gates 三种情形强制；另加沿用记录 24 小时时效上限与门禁重做时 atomic-double 连带重采（都只在编排器里）。
+# Codex 在三种请求模式下的判定不变，缺省模式改为按步骤记录判定；新规则由 test_ci_entry_orchestrator.EntryGatesReuseTests 逐条核对，
+# 与改造前基线的对照见 test_driver_client_table_codex_parity.EntryPlanCodexParityTests（对照时把判定换回旧的无条件强制）。
+ENTRY_GATES_REQUEST_ONLY_BASELINE_COMMIT = "949765f799e2239f761b0109b1fe7075ed94cbc0"
+ENTRY_GATES_REQUEST_ONLY_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_orchestrator.py": "b46d06f0f0d9825bb92b00e9f683aa41b2c04e033d296038690f93326da7f680",
+}
+ENTRY_GATES_REQUEST_ONLY_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_orchestrator.py": [
+        '记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。``--audit-reads``：入口门禁检查实际读集；',
+        '        force = None if is_formal else {"entry-gates": "B-09：每次开工重新核对全集承接身份、时效与撤销；不得沿用旧步骤缓存"}',
+        '        evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal, force=force)',
+        '        decisions = {step["step_id"]: step for step in evaluation["steps"]}',
+    ],
+}
 # df90c329e接线测试单元的明确登记与收窄提案；无policy、无scope仍按原静态输入与Codex旧消费路径。
 # 策略校验的ID集合扩至实际测试单元，错误文案相应说明；旧承接、旧记录及未审计执行由原行为对照守住。
 READ_SCOPE_HISTORY_BASELINE = '8d72f39f69d4d71b8fef9d8ae56dfa7ab1c7fc63'
@@ -1025,6 +1041,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      ENTRY_PROFILE_REQUESTS_SOURCE_DIGESTS, ENTRY_PROFILE_REQUESTS_SOURCE_REMOVED_LINES),
     ("空跑审计策略透传", ENTRY_DRYRUN_AUDIT_BASELINE_COMMIT,
      ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS, ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES),
+    ("B-09 强制重做改为仅请求模式", ENTRY_GATES_REQUEST_ONLY_BASELINE_COMMIT,
+     ENTRY_GATES_REQUEST_ONLY_SOURCE_DIGESTS, ENTRY_GATES_REQUEST_ONLY_SOURCE_REMOVED_LINES),
     # >>> 收尾登记行（自动生成，勿手改）
     ('收尾登记 background_validation.py', CLOSEOUT_PY_1_BASELINE, CLOSEOUT_PY_1_DIGESTS, CLOSEOUT_PY_1_REMOVED),
     ('收尾登记 entry_dryrun.py', CLOSEOUT_PY_2_BASELINE, CLOSEOUT_PY_2_DIGESTS, CLOSEOUT_PY_2_REMOVED),

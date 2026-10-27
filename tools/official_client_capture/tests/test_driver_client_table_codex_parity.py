@@ -345,9 +345,19 @@ class EntryPlanCodexParityTests(unittest.TestCase):
             module.print_summary(result)
         return _without_clock(result), printed.getvalue().replace(str(run_dir), "<run>")
 
+    @staticmethod
+    def _legacy_evaluate(orchestrator, is_formal: bool, in_range: set[str]) -> dict:
+        """改造前的判定：Formal 建成之前入口门禁无条件强制重做，不看步骤记录。B-09 强制重做改为仅请求模式之后，新编排器的缺省判定
+        不再是这样；对照时把新编排器的判定函数换回它，其余（打印、各步骤的判定与原因）仍逐字对照。新规则（缺省按记录、24 小时
+        时效、atomic-double 连带）由 test_ci_entry_orchestrator.EntryGatesReuseTests 单独核对。"""
+
+        force = None if is_formal else {"entry-gates": eo.GATES_FORCE_REASON}
+        return eo.ES.evaluate(orchestrator.ctx, is_formal_built=is_formal, force=force)
+
     def assert_plans_match(self, label: str) -> None:
         old_result, old_table = self._plan(self.old)
-        new_result, new_table = self._plan(eo)
+        with mock.patch.object(eo.Orchestrator, "_evaluate", self._legacy_evaluate):
+            new_result, new_table = self._plan(eo)
         self.assertEqual(new_result, old_result, label)
         self.assertEqual(new_table, old_table, f"{label}：打印的判定表逐字相同")
 

@@ -224,6 +224,10 @@ class OrchestratorTestCase(unittest.TestCase):
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
+    def actions_products(result: dict) -> dict[str, dict]:
+        return {step["step_id"]: step["products"] for step in result["steps"]}
+
+    @staticmethod
     def actions(result: dict) -> dict[str, str]:
         return {step["step_id"]: step["action"] + (("／" + step["status"]) if step["status"] else "") for step in result["steps"]}
 
@@ -233,11 +237,21 @@ class OrchestratorFlowTests(OrchestratorTestCase):
         first = self.orchestrate()
         self.assertEqual(first["exit_code"], 0, self.actions(first))
         self.assertTrue(all(action == "执行／passed" for action in self.actions(first).values()), self.actions(first))
+        gate_runs = len(self.commands.gates_modes)
         second = self.orchestrate()
         self.assertEqual(second["exit_code"], 0)
         actions = self.actions(second)
-        self.assertEqual({step for step, action in actions.items() if action != "沿用"}, {"entry-preflight", "client-launch-probe", "entry-gates", "p0-receipt", "vc0-closeout"})
+        # B-09 修正：缺省模式不带请求，入口门禁按步骤记录沿用，续跑只重做实时类步骤。
+        self.assertEqual({step for step, action in actions.items() if action != "沿用"}, {"entry-preflight", "client-launch-probe"})
+        self.assertEqual(len(self.commands.gates_modes), gate_runs, "缺省模式续跑不再重跑入口门禁")
         self.assertEqual(self.commands.count("create"), 1, "账本只建一次")
+        # 显式 --reexecute-gates 仍强制重做入口门禁，下游 P0 收据与收口按上游重做传播。
+        forced = self.orchestrate(reexecute_gates=True)
+        forced_actions = self.actions(forced)
+        self.assertEqual({step for step, action in forced_actions.items() if action != "沿用"},
+                         {"entry-preflight", "client-launch-probe", "entry-gates", "atomic-double", "release-certification",
+                          "p0-receipt", "vc0-closeout"}, "门禁重做时 atomic-double 连带重采，发布认证随之重做")
+        self.assertEqual(len(self.commands.gates_modes), gate_runs + 1)
 
     def test_occupied_formal_coordinates_get_serial_paths_and_downstream_uses_the_record(self) -> None:
         result = self.orchestrate()
@@ -284,7 +298,7 @@ class OrchestratorFlowTests(OrchestratorTestCase):
                 self.assertEqual(actions[previous], "执行／passed", f"{previous} 续跑通过")
                 before = eo.ORDER[:eo.ORDER.index(previous)]
                 self.assertEqual({s for s in before if actions[s] != "沿用"},
-                                 {s for s in before if eo.ES.STEP_BY_ID[s].live or s == "entry-gates"}, f"{previous} 之前只重做实时检查和 B-09 准入")
+                                 {s for s in before if eo.ES.STEP_BY_ID[s].live}, f"{previous} 之前只重做实时检查（入口门禁按记录沿用）")
             if step:
                 self.assertEqual((result["exit_code"], actions[step]), (1, "执行／failed"), step)
                 self.assertIn(f"{step} 没通过", result["stopped_because"])
@@ -370,19 +384,24 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual(self.actions(result)["vc0-closeout"], "未到达")
 
     def test_entry_gates_default_to_reexecute_and_never_skip_contract_check(self) -> None:
-        """B-09：无请求默认全量重跑；再次开工也必须重新核对，旧步骤缓存不能旁路。"""
+        """B-09 修正：缺省（无请求）模式仍是全量重新执行，但续跑按步骤记录沿用，不再无条件重跑；显式 --reexecute-gates 才强制。"""
 
         first = self.orchestrate()
         self.assertEqual(first["exit_code"], 0, self.actions(first))
         self.assertEqual(self.commands.gates_modes, ["re-execute"])
-        second = self.orchestrate(reexecute_gates=True)
+        second = self.orchestrate()
         self.assertEqual(second["exit_code"], 0, self.actions(second))
         actions = self.actions(second)
+        self.assertEqual((actions["entry-gates"], actions["p0-receipt"], actions["vc0-closeout"]), ("沿用",) * 3)
+        self.assertEqual(self.commands.gates_modes, ["re-execute"], "缺省续跑按记录沿用入口门禁，不再调用")
+        third = self.orchestrate(reexecute_gates=True)
+        self.assertEqual(third["exit_code"], 0, self.actions(third))
+        actions = self.actions(third)
         self.assertEqual((actions["entry-gates"], actions["p0-receipt"], actions["vc0-closeout"]), ("执行／passed",) * 3)
         self.assertEqual(actions["ledger"], "沿用")
         self.assertEqual(self.commands.gates_modes, ["re-execute", "re-execute"])
         self.assertTrue(all("--parallel" not in call for call in self.commands.calls), "缺省门禁 argv 不增加并发参数")
-        reasons = next(step for step in second["steps"] if step["step_id"] == "entry-gates")["reasons"]
+        reasons = next(step for step in third["steps"] if step["step_id"] == "entry-gates")["reasons"]
         self.assertIn("B-09", "；".join(reasons))
 
     def test_full_set_request_reaches_the_gate_and_force_reexecute_is_preserved(self) -> None:
@@ -579,7 +598,8 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual(self.commands.count("create"), 1)
 
     def test_pre_a3_redo_still_rechecks_the_full_set_contract(self) -> None:
-        """pre-A3 缺失时重签，同时重新核对 B-09；不能因旧入口记录仍在就跳过时效检查。"""
+        """pre-A3 缺失时只重签 pre-A3：缺省模式入口门禁按记录沿用（单独走 pre-a3 组合）；显式 --reexecute-gates 时入口门禁
+        与 pre-A3 同一次运行，照旧重新核对全集（B-09）。"""
 
         first = self.orchestrate()
         self.assertEqual(first["exit_code"], 0, self.actions(first))
@@ -588,6 +608,16 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         before = len(self.commands.calls)
         second = self.orchestrate()
         actions = self.actions(second)
+        self.assertEqual((actions["entry-gates"], actions["pre-a3"]), ("沿用", "执行／passed"), actions)
+        gates = [call for call in self.commands.calls[before:] if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+        self.assertEqual(len(gates), 1, gates)
+        self.assertEqual((_option(gates[0], "--profile"), _option(gates[0], "--pre-a3-mode"), _option(gates[0], "--mode")),
+                         ("pre-a3", "run", "re-execute"))
+        # 显式重新执行：入口门禁与 pre-A3 同一次运行（原有断言）。
+        Path(self.actions_products(second)["pre-a3"]["certification"]).unlink()
+        before = len(self.commands.calls)
+        third = self.orchestrate(reexecute_gates=True)
+        actions = self.actions(third)
         self.assertEqual((actions["entry-gates"], actions["pre-a3"]), ("执行／passed", "执行／passed"), actions)
         gates = [call for call in self.commands.calls[before:] if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
         self.assertEqual(len(gates), 1, gates)
@@ -625,7 +655,7 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
                          ("abc", "测试批准人", "已修复"))
         before = eo.ORDER[:eo.ORDER.index("vc0-closeout")]
         self.assertEqual({step for step in before if self.actions(approved)[step] != "沿用"},
-                         {step for step in before if eo.ES.STEP_BY_ID[step].live or step in {"entry-gates", "p0-receipt"}}, "批准后仍核对 B-09，重签相应 P0，账本不重建")
+                         {step for step in before if eo.ES.STEP_BY_ID[step].live}, "批准后入口门禁与 P0 收据按记录沿用，只重做实时检查，账本不重建")
         self.assertEqual(self.commands.count("create"), 1)
 
     def test_closeout_holds_the_machine_reservation_around_the_first_batch(self) -> None:
@@ -1133,6 +1163,131 @@ class RecordedEntryBridgeTests(OrchestratorTestCase):
                     self.assertEqual(_option(call, "--unit-inherit-request"), str(self.fx.root / "entry-request.json"))
                 else:
                     self.assertNotIn("--unit-inherit-request", call)
+
+
+class EntryGatesReuseTests(OrchestratorTestCase):
+    """B-09 强制重做改为仅请求模式（入口门禁沿用修正）：缺省按记录判定、24 小时时效上限、门禁重做时 atomic-double 连带重采。"""
+
+    def gate_calls(self) -> int:
+        return sum(1 for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh"))
+
+    def atomic_calls(self) -> int:
+        return sum(1 for call in self.commands.calls if call[:2] == ["docker", "exec"])
+
+    @staticmethod
+    def reasons(result: dict, step_id: str) -> str:
+        return "；".join(next(step for step in result["steps"] if step["step_id"] == step_id)["reasons"])
+
+    def finished_at(self) -> float:
+        """入口门禁记录的完成时间（UTC 秒），用来把编排器的时钟拨到“记录之后若干小时”。"""
+
+        record = eo.ES.read_record(self.fx.steps_dir, "entry-gates")
+        return eo.datetime.strptime(record["completed_at_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=eo.timezone.utc).timestamp()
+
+    def test_default_mode_follows_the_step_record(self) -> None:
+        """缺省模式（无请求、无 --reexecute-gates）：门禁不被强制；只有 pre-A3 缺失时也不连带重跑门禁。"""
+
+        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "p", steps_dir=self.fx.steps_dir,
+                                       runner=self.commands, es_runner=self.fx.runner)
+        self.assertFalse(orchestrator.gates_force_reexecute())
+        self.assertEqual(self.orchestrate()["exit_code"], 0)
+        self.assertEqual((self.gate_calls(), self.atomic_calls()), (1, 1))
+        plan = self.orchestrate(plan_only=True)
+        decisions = {step["step_id"]: step["decision"] for step in plan["steps"]}
+        self.assertEqual((decisions["entry-gates"], decisions["atomic-double"]), ("reuse", "reuse"), "--plan 与实际执行用同一套判定")
+        again = self.orchestrate()
+        self.assertEqual(self.actions(again)["entry-gates"], "沿用")
+        self.assertEqual(self.actions(again)["atomic-double"], "沿用", "门禁沿用时 atomic-double 不连带")
+        self.assertEqual((self.gate_calls(), self.atomic_calls()), (1, 1))
+
+    def test_changed_input_still_reruns_the_default_gates(self) -> None:
+        """沿用的前提是输入没变：换了并发参数，缺省模式的门禁照样按记录判重做。"""
+
+        self.assertEqual(self.orchestrate()["exit_code"], 0)
+        changed = self.orchestrate(gate_parallel=3)
+        self.assertEqual(self.actions(changed)["entry-gates"], "执行／passed")
+        self.assertIn("输入变了", self.reasons(changed, "entry-gates"))
+        self.assertNotIn("B-09", self.reasons(changed, "entry-gates"), "不是被强制，是输入变了")
+
+    def test_the_three_request_modes_still_force_the_gates(self) -> None:
+        """带全集请求、带逐单元承接请求、显式 --reexecute-gates 三种情形，同一提交续跑也强制重做入口门禁。"""
+
+        request = self.fx.root / "request.json"
+        inherit = self.fx.root / "inherit.json"
+        _write_json(inherit, {"revision": 1})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        cases = {
+            "full-set-pass": {"full_set_request": request, "full_set_work": self.fx.root / "background-work"},
+            "unit-inherit": {"unit_inherit_request": inherit},
+            "re-execute": {"reexecute_gates": True},
+        }
+        for mode, options in cases.items():
+            with self.subTest(mode=mode):
+                before = self.gate_calls()
+                first = self.orchestrate(to_step="atomic-double", **options)
+                self.assertEqual(first["exit_code"], 0, self.actions(first))
+                second = self.orchestrate(to_step="atomic-double", **options)
+                self.assertEqual(second["exit_code"], 0, self.actions(second))
+                self.assertEqual(self.commands.gates_modes[-1], mode)
+                self.assertEqual(self.actions(second)["entry-gates"], "执行／passed")
+                self.assertIn("B-09", self.reasons(second, "entry-gates"))
+                self.assertGreaterEqual(self.gate_calls() - before, 2, "第二轮没有因记录沿用而跳过")
+        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "q", steps_dir=self.fx.steps_dir,
+                                       runner=self.commands, es_runner=self.fx.runner, unit_inherit_request=inherit)
+        self.assertTrue(orchestrator.gates_force_reexecute())
+
+    def test_a_gates_record_older_than_24_hours_is_redone_with_a_clear_reason(self) -> None:
+        self.assertEqual(self.orchestrate()["exit_code"], 0)
+        finished = self.finished_at()
+        with mock.patch.object(eo, "_epoch_now", return_value=finished + 23.5 * 3600):
+            young = self.orchestrate(plan_only=True)
+        self.assertEqual({step["step_id"]: step["decision"] for step in young["steps"]}["entry-gates"], "reuse", "23.5 小时仍可沿用")
+        gates_before = self.gate_calls()
+        with mock.patch.object(eo, "_epoch_now", return_value=finished + 25 * 3600):
+            planned = self.orchestrate(plan_only=True)
+            decisions = {step["step_id"]: step["decision"] for step in planned["steps"]}
+            self.assertEqual((decisions["entry-gates"], decisions["atomic-double"]), ("run", "run"), "--plan 也显示重做")
+            reasons = self.reasons(planned, "entry-gates")
+            self.assertIn("25.0 小时前完成", reasons)
+            self.assertIn("沿用上限 24 小时", reasons)
+            self.assertEqual(self.gate_calls(), gates_before, "只判定不执行")
+            old = self.orchestrate()
+        self.assertEqual(old["exit_code"], 0, self.actions(old))
+        self.assertEqual(self.actions(old)["entry-gates"], "执行／passed")
+        self.assertEqual(self.gate_calls(), gates_before + 1)
+        self.assertEqual(self.actions(old)["ledger"], "沿用", "账本不重建")
+        self.assertEqual(self.commands.count("create"), 1)
+
+    def test_unreadable_or_future_gates_record_time_is_not_reused(self) -> None:
+        now = 1_800_000_000.0
+        for text in ("", "昨天", None):
+            self.assertIn("读不出", eo.entry_gates_age_problem(text, now=now) or "", text)
+        future = eo.datetime.fromtimestamp(now + 3600, eo.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertIn("在未来", eo.entry_gates_age_problem(future, now=now) or "")
+        fresh_text = eo.datetime.fromtimestamp(now - 24 * 3600, eo.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertIsNone(eo.entry_gates_age_problem(fresh_text, now=now), "正好 24 小时仍沿用")
+
+    def test_redoing_the_gates_also_recollects_a_reusable_atomic_double(self) -> None:
+        """门禁本轮要重做（这里用 --reexecute-gates）：atomic-double 即使在时效窗口内判了沿用，也连带重采，
+        发布认证随之重做；门禁不重做时两者都沿用（见 test_default_mode_follows_the_step_record）。"""
+
+        self.assertEqual(self.orchestrate()["exit_code"], 0)
+        self.assertEqual(self.atomic_calls(), 1)
+        second = self.orchestrate(reexecute_gates=True)
+        actions = self.actions(second)
+        self.assertEqual((second["exit_code"], actions["atomic-double"], actions["release-certification"]),
+                         (0, "执行／passed", "执行／passed"), actions)
+        self.assertEqual(self.atomic_calls(), 2)
+        self.assertIn("连带重新采集", self.reasons(second, "atomic-double"))
+        self.assertEqual(actions["ledger"], "沿用")
+
+    def test_atomic_double_is_not_coupled_when_the_gates_are_out_of_range(self) -> None:
+        """门禁不在本次范围（--to 在它之前）时不会重跑，也就不连带 atomic-double。"""
+
+        self.assertEqual(self.orchestrate()["exit_code"], 0)
+        planned = self.orchestrate(reexecute_gates=True, to_step="policy-activation", plan_only=True)
+        decisions = {step["step_id"]: step["decision"] for step in planned["steps"]}
+        self.assertEqual((decisions["entry-gates"], decisions["atomic-double"]), ("run", "reuse"))
 
 
 if __name__ == "__main__":
