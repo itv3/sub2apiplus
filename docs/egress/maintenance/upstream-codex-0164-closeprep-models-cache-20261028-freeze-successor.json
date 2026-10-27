@@ -1,0 +1,61 @@
+{
+  "base_commit": "d715a3a9b159895cbe4c82f245813b7dd913a00d",
+  "changed_path_count": 3,
+  "current_commit": "fb80d4da7310f0f78f043124a99db52670ca92e3",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7122,
+  "frozen_path_count": 2318,
+  "identity_sha256": "1a4c05d474bd3f4c78c191c268b8ed931fb4b284f1f9025b931cd834c982d9cb",
+  "issued_at_utc": "2026-10-27T21:23:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-closeprep-models-cache-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256s": [
+        "9b2adaabdac7cc0f8ea8ca67c23b716241fc5ebaa0fef0de43606ea270294ae2"
+      ],
+      "reason": "模型清单缓存并发冷读缺陷修复（领头者内复核缓存），线上真实缺陷；不改变官方客户端画像、Persona、wire 或生产出站 path=backend/internal/service/openai_codex_models_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2dd9a1441223c8b54297940d6c1447dc00f9ef87bb8594d1bc6cb12f9ee81894"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/internal/service/openai_models_cache_refresh_test.go",
+    "docs/KNOWN_FLAKY_TESTS.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
