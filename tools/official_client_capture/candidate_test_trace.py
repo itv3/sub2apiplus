@@ -318,8 +318,12 @@ FROZEN_MAPPING_SHA256 = (
 # content_item_metadata 的非 Lite 项被剥（0.164 没有非 Lite 的 wire 场景，选不到样本）、历史各段 turn_id 为网关派生稳定值（需跨请求比较取值）、除 turn_id 外各键与入站相同
 # （需入站原文对照），均靠 W1b 的 Go 单测。验收契约：rule_counts dual_wire=25／candidate_profile=18，validation_modes、side_restricted_checks、side_coverage 逐字不变，
 # expected_check_ids 只有 BODY-003 多 7 条、WS-005 多 5 条。
+# 2026-10-27（0.164.0 FIX2，VC-2 批准预览被拒后）：目标断言画像校验（codex_upgrade._validate_assertion_profile_manifest）拒绝任何字符串里出现 baseline 版本字面量，
+# 而 0.164.0 的 baseline 就是 0.163.0；本文件从 0.163.0 版复制来的 4 处描述文字（SPEC-BODY-006 的 main-instructions-absent／main-additional-tools-present 两条检查描述、
+# 场景 A04／A06 的描述）写着“0.163.0 起为 Lite 模型”。摘要由 0cd9b3cb… 换为 9e20778d…，只把这 4 句去掉版本字面量（“主线（Lite 模型）”“主线轨道（主线是 Lite 模型）”），
+# 其余逐字不变（8 行替换，无增删）；规则数、检查 ID、选择器、判据、验收契约一律不变。
 FROZEN_PROFILE_SHA256 = (
-    "0cd9b3cb40964ea1bece871362d099313d8e68926dcc5bf13aff6c73d659254c"
+    "9e20778dea7493d4631931f5e078663d1c6f17c92fd00475e392a148540e4c39"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

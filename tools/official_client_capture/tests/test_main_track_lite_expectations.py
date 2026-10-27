@@ -713,7 +713,13 @@ class Expectation0164WireChecksTests(unittest.TestCase):
 
         raw = (TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8")
         reverted = json.loads(raw.replace("0.164.0", "0.163.0").replace(r"0\\.164\\.0", r"0\\.163\\.0"))
-        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8"))
+        # 0.164.0 目标断言画像里不得出现 baseline（0.163.0）版本字面量（codex_upgrade 的目标断言画像校验会拒绝），所以
+        # SPEC-BODY-006 两条检查描述里的“0.163.0 起为 Lite 模型”在 0.164.0 文件里写成了“Lite 模型”；这里对 0.163.0 文件
+        # 套同一组替换后再比，其余字逐字相同的要求不变。
+        old_raw = (TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8")
+        for before, after in (("0.163.0 起为 Lite", "Lite"), ("0.163.0 起主线", "主线")):
+            old_raw = old_raw.replace(before, after)
+        old = json.loads(old_raw)
         changed = sorted(
             new["rule_id"] for new, before in zip(reverted["rules"], old["rules"]) if new != before
         )

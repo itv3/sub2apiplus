@@ -191,7 +191,7 @@
             "provider": "openai_oauth",
             "variant": "http_default"
           },
-          "rationale": "主线 v2 模型条件成功收据同时证明目标模型 use_responses_lite=true（0.163.0 起主线是 Lite 模型），并以 responses_request 角色绑定实际 POST Responses 原始请求；连接号不参与证据语义。"
+          "rationale": "主线 v2 模型条件成功收据同时证明目标模型 use_responses_lite=true（主线是 Lite 模型），并以 responses_request 角色绑定实际 POST Responses 原始请求；连接号不参与证据语义。"
         }
       ]
     },
@@ -347,7 +347,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 是主线 WS 会话（0.163.0 起主线是 Lite 模型）；本 job 显式开启 runtime_metrics，只能作为条件头正例，禁止再冒充默认握手。"
+          "rationale": "A06 是主线 WS 会话（主线是 Lite 模型）；本 job 显式开启 runtime_metrics，只能作为条件头正例，禁止再冒充默认握手。"
         }
       ]
     },
@@ -467,7 +467,7 @@
             "provider": "openai_oauth",
             "body_length": "automatic"
           },
-          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）。本条派生 HTTP/1.1 请求观测，供「全量上行无 POST /backend-api/codex/responses/compact」的不可达断言使用；变体与 remote_compaction_v2=disabled_explicitly 由采集参数给出，不从被测字节反推。0.154 的 session_header_scope、compression、cookie_state 只描述 legacy 请求，目标版本已无该请求，故删除。"
+          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（主线 {model} 是 Lite 模型）。本条派生 HTTP/1.1 请求观测，供「全量上行无 POST /backend-api/codex/responses/compact」的不可达断言使用；变体与 remote_compaction_v2=disabled_explicitly 由采集参数给出，不从被测字节反推。0.154 的 session_header_scope、compression、cookie_state 只描述 legacy 请求，目标版本已无该请求，故删除。"
         },
         {
           "glob": "relay/*.client_to_upstream.bin",
@@ -489,7 +489,7 @@
             "compaction_mode": "auto",
             "provider": "openai_oauth"
           },
-          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）。内置 OpenAI provider 默认走 WS，V2 压缩请求位于 response.create 帧内；本条派生 WS 帧观测，证明显式关闭后仍选择 V2（input 末项 compaction_trigger）。"
+          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（主线 {model} 是 Lite 模型）。内置 OpenAI provider 默认走 WS，V2 压缩请求位于 response.create 帧内；本条派生 WS 帧观测，证明显式关闭后仍选择 V2（input 末项 compaction_trigger）。"
         }
       ]
     },
@@ -1326,7 +1326,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "作业固定主线 {model}（0.163.0 起是 Lite 模型，与 official-relay-ws-default 同样按作业模型参数标 track/mode）、只走 HTTP 的 provider 与数字档位配置，variant／reasoning_effort_config 由采集参数推出。不取模型条件收据：上游可能拒绝该档位，成功收据会误判样本不成立；不标 compression、residency，免得被压缩与 residency 判据误选。"
+          "rationale": "作业固定主线 {model}（Lite 模型，与 official-relay-ws-default 同样按作业模型参数标 track/mode）、只走 HTTP 的 provider 与数字档位配置，variant／reasoning_effort_config 由采集参数推出。不取模型条件收据：上游可能拒绝该档位，成功收据会误判样本不成立；不标 compression、residency，免得被压缩与 residency 判据误选。"
         }
       ]
     },
@@ -1380,7 +1380,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（flex-unavailable）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（flex-unavailable）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1407,7 +1407,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（interrupted）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（interrupted）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1434,7 +1434,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（interrupted）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（interrupted）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1568,7 +1568,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（incomplete-terminal）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（incomplete-terminal）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1595,7 +1595,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（incomplete-terminal）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（incomplete-terminal）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1623,7 +1623,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "中继对每个 Responses WS 升级回 429 + retry-after: 2（作业参数 RELAY_WS_UPGRADE_429_RETRY_AFTER 决定，retry_after=present 由此推出），客户端重试用尽后改发 HTTP POST，所以按与 official-relay-conn-retry 相同的口径标 transport=http（升级请求与降级 POST 同在 h1 请求流里）；upstream_response=relay_synthetic 标明本作业含中继合成的 429、不得当作生产自然成功（降级 POST 转发生产）。主线 {model}（0.163.0 起是 Lite 模型）。重试次数、间隔与降级前等待是 PROTO-002 的判定对象，只由原始字节与 relay.json 的 ws_upgrade_429／ws_upgrade_429_fallback_post 核对，不反推进标签。"
+          "rationale": "中继对每个 Responses WS 升级回 429 + retry-after: 2（作业参数 RELAY_WS_UPGRADE_429_RETRY_AFTER 决定，retry_after=present 由此推出），客户端重试用尽后改发 HTTP POST，所以按与 official-relay-conn-retry 相同的口径标 transport=http（升级请求与降级 POST 同在 h1 请求流里）；upstream_response=relay_synthetic 标明本作业含中继合成的 429、不得当作生产自然成功（降级 POST 转发生产）。主线 {model}（Lite 模型）。重试次数、间隔与降级前等待是 PROTO-002 的判定对象，只由原始字节与 relay.json 的 ws_upgrade_429／ws_upgrade_429_fallback_post 核对，不反推进标签。"
         }
       ]
     },
@@ -1652,7 +1652,7 @@
             "provider": "openai_oauth",
             "retry_after": "present"
           },
-          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出，其余标签与无值对照逐项相同，保证两者只差这一个条件；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出，其余标签与无值对照逐项相同，保证两者只差这一个条件；主线 {model}（Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
         }
       ]
     },
@@ -1680,7 +1680,7 @@
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 不附 Retry-After（对照样本，无 retry_after 标签，约定同 official-relay-conn-retry）；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 不附 Retry-After（对照样本，无 retry_after 标签，约定同 official-relay-conn-retry）；主线 {model}（Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
         }
       ]
     },
@@ -2039,7 +2039,7 @@
             "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动序列第 2 个 POST 是 default 轮：主线模型（0.163.0 起是 Lite 模型）、zstd、cookie jar 已由 prime 轮建立。不标 variant——A03 的 variant 维度由 Lite 轨承载（该场景 precondition 是 use_responses_lite=true），主线轮只作为 track 对照。"
+          "rationale": "驱动序列第 2 个 POST 是 default 轮：主线模型（Lite 模型）、zstd、cookie jar 已由 prime 轮建立。不标 variant——A03 的 variant 维度由 Lite 轨承载（该场景 precondition 是 use_responses_lite=true），主线轮只作为 track 对照。"
         },
         {
           "glob": "scenarios/A03/relay/conn004.client_to_upstream.bin",
@@ -2116,7 +2116,7 @@
             "mode": "lite",
             "provider": "openai_oauth"
           },
-          "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），主线模型（0.163.0 起是 Lite 模型）；GET 无 body，不标 body_length/compression。"
+          "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），主线模型（Lite 模型）；GET 无 body，不标 body_length/compression。"
         },
         {
           "glob": "scenarios/A04/relay/conn002.client_to_upstream.bin",
@@ -2364,7 +2364,7 @@
             "variant": "default",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，0.163.0 起是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）；同一断言也证明第 2 个 response.create 帧是首个业务帧（frame_role=first_business，绑定帧索引 1），0.164.0 起 additional_tools 前缀由它带出。",
+          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）；同一断言也证明第 2 个 response.create 帧是首个业务帧（frame_role=first_business，绑定帧索引 1），0.164.0 起 additional_tools 前缀由它带出。",
           "frame_labels": {
             "0": {
               "frame_role": "warmup"

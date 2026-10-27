@@ -280,7 +280,7 @@
     },
     {
       "scenario_id": "A04",
-      "description": "Responses HTTP 主线轨道（0.163.0 起主线是 Lite 模型）、按样本标注压缩条件及条件 Header 矩阵",
+      "description": "Responses HTTP 主线轨道（主线是 Lite 模型）、按样本标注压缩条件及条件 Header 矩阵",
       "trigger": "使用主线模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支。",
       "preconditions": [
         "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
@@ -340,7 +340,7 @@
     },
     {
       "scenario_id": "A06",
-      "description": "Responses WS 主线轨道（0.163.0 起主线是 Lite 模型）、warmup 与增量帧",
+      "description": "Responses WS 主线轨道（主线是 Lite 模型）、warmup 与增量帧",
       "trigger": "在同一 WS 会话依次执行 warmup、首轮和可复用前缀的增量请求。",
       "preconditions": [
         "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
@@ -2550,7 +2550,7 @@
         "A01",
         "A04"
       ],
-      "description": "主线 {model}（0.163.0 起是 Lite 模型）：普通 HTTP Responses 与启动 models 原始字节",
+      "description": "主线 {model}（Lite 模型）：普通 HTTP Responses 与启动 models 原始字节",
       "required": true,
       "steps": [
         {
@@ -2625,7 +2625,7 @@
       "scenario_ids": [
         "A04"
       ],
-      "description": "主线 {model}（0.163.0 起是 Lite 模型）：关闭请求压缩的 HTTP Responses 负样本",
+      "description": "主线 {model}（Lite 模型）：关闭请求压缩的 HTTP Responses 负样本",
       "required": true,
       "steps": [
         {
@@ -2838,7 +2838,7 @@
         "A09",
         "A10"
       ],
-      "description": "legacy compact 不可达正场景（turn-state 维度）：沿用 0.154 原触发参数（--disable remote_compaction_v2、model_auto_compact_token_limit=2000（0.163.0 起主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000）、中继在 WS response.metadata 边界注入 turn-state）。0.156.1 起忽略该特性键，自动压缩必须仍走 /responses + compaction_trigger（reason=context_limit、implementation=responses_compaction_v2），全量上行字节不得出现 POST /backend-api/codex/responses/compact",
+      "description": "legacy compact 不可达正场景（turn-state 维度）：沿用 0.154 原触发参数（--disable remote_compaction_v2、model_auto_compact_token_limit=2000（主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000）、中继在 WS response.metadata 边界注入 turn-state）。0.156.1 起忽略该特性键，自动压缩必须仍走 /responses + compaction_trigger（reason=context_limit、implementation=responses_compaction_v2），全量上行字节不得出现 POST /backend-api/codex/responses/compact",
       "required": true,
       "steps": [
         {
@@ -2904,7 +2904,7 @@
         "A09",
         "A10"
       ],
-      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=2000（0.163.0 起主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000），不注入 turn-state；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
+      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=2000（主线是 Lite 模型，沿用 Lite 轨的阈值；此前为 4000），不注入 turn-state；模型条件收据证明 use_responses_lite=true（主线 {model} 是 Lite 模型）；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
       "required": true,
       "steps": [
         {
