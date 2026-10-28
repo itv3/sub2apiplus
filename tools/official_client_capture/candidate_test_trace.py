@@ -340,8 +340,12 @@ FROZEN_MAPPING_SHA256 = (
 # 选择条件读引擎派生的 thread_role 与 frame_role=replay 标签），画像场景列表加 A20～A22。载荷审核：叶子只增不减，既有叶子逐字不变；规则数 43、
 # 验收契约分组仍 dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-WS-005 多 5 条，side_coverage.candidate 多 A20～A22。
 # 摘要 566d0881… 变为 6dec5ff5…。
+# 2026-10-29（0.165.0 第二轮登记，W1 configuration_update）：SPEC-BODY-006 追加 4 条检查（A04 数字档位 HTTP 与 A05 数字档位 WS 不产生 configuration_update；
+# 标了 ws_prewarm=none 的 A04 HTTP 首轮带 configuration_update；A05／A06 的 response.create 帧不带），scenario_ids 补 A06（判据场景须是规则场景的子集）；证据标签声明
+# 给官方 http-response／http-response-plain 与候选 A04 非数字档位 HTTP 入站标 ws_prewarm=none。载荷审核：叶子只增不减，既有叶子逐字不变；验收契约分组仍
+# dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-BODY-006 多 4 条。摘要 6dec5ff5… 变为 de164a62…。
 FROZEN_PROFILE_SHA256 = (
-    "6dec5ff516f2d47969c3e63df2979b98ad740c42223e66b6468f1cea43c55666"
+    "de164a6292d97ae581b156ecac20ee08fb2d9a46b3dbaf32b2593c66853e7457"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

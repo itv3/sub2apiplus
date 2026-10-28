@@ -189,7 +189,8 @@
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth",
-            "variant": "http_default"
+            "variant": "http_default",
+            "ws_prewarm": "none"
           },
           "rationale": "主线 v2 模型条件成功收据同时证明目标模型 use_responses_lite=true（主线是 Lite 模型），并以 responses_request 角色绑定实际 POST Responses 原始请求；连接号不参与证据语义。"
         }
@@ -218,7 +219,8 @@
             "compression": "plain",
             "body_length": "automatic",
             "provider": "openai_oauth",
-            "variant": "http_default"
+            "variant": "http_default",
+            "ws_prewarm": "none"
           },
           "rationale": "采集脚本以 --disable enable_request_compression 关闭 Stage::Stable 的压缩 feature；v2 模型条件成功收据以 responses_request 角色选择实际 POST Responses，compression=plain 仍由采集配置权威给出，不从被测 body 反推。"
         }
@@ -2244,7 +2246,8 @@
             "transport": "http",
             "track": "main",
             "mode": "lite",
-            "provider": "openai_oauth"
+            "provider": "openai_oauth",
+            "ws_prewarm": "none"
           },
           "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），主线模型（Lite 模型）；GET 无 body，不标 body_length/compression。"
         },
@@ -2266,7 +2269,8 @@
             "residency": "unset",
             "compression": "plain",
             "body_length": "automatic",
-            "provider": "openai_oauth"
+            "provider": "openai_oauth",
+            "ws_prewarm": "none"
           },
           "rationale": "驱动第 1 个 POST 是 baseline 轮：set_account_features unset false（不设置 residency），请求体明文（脚本不带 Content-Encoding），构成 residency 负例与 BODY-002 responses-plain 的 plain 样本。"
         },
@@ -2288,7 +2292,8 @@
             "residency": "us",
             "compression": "plain",
             "body_length": "automatic",
-            "provider": "openai_oauth"
+            "provider": "openai_oauth",
+            "ws_prewarm": "none"
           },
           "rationale": "账号特性切换会重启服务并先产生一条 models GET，因此第 2 个 POST 是 conn004：set_account_features us false 将账号 extra 的 official_codex_enforce_residency 置 us，residency=us 由该采集参数与驱动轮次共同推出，供 HDR-002 residency 正例选样。"
         },
@@ -2310,7 +2315,8 @@
             "residency": "unset",
             "compression": "plain",
             "body_length": "automatic",
-            "provider": "openai_oauth"
+            "provider": "openai_oauth",
+            "ws_prewarm": "none"
           },
           "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与主线 body 判据。"
         },

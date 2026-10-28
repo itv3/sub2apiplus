@@ -12,6 +12,15 @@
       "path": "/WebSocketContinuation/ReplayOnSameConnection",
       "before": null,
       "after": true
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-006"
+      ],
+      "op": "add",
+      "path": "/ReasoningEffort/ConfigurationUpdate",
+      "before": null,
+      "after": "http_first_turn"
     }
   ]
 }

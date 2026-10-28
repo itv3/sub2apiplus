@@ -3241,6 +3241,134 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape.input._types",
+            "value": "configuration_update"
+          },
+          "description": "自定义（数字）推理档位不产生 configuration_update 项，请求级 effort 也不钉死：A04 数字档位样本的 input 类型里没有 configuration_update",
+          "id": "numeric-effort-http-no-configuration-update",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.reasoning_effort_config",
+                "value": "numeric"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape.input._types",
+            "value": "configuration_update"
+          },
+          "description": "WS response.create 同一规则：数字推理档位的帧 input 类型里没有 configuration_update",
+          "id": "numeric-effort-ws-no-configuration-update",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.reasoning_effort_config",
+                "value": "numeric"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape.input._types",
+            "value": "configuration_update"
+          },
+          "description": "不带 WS 预热的 OpenAI provider（正式 HTTP 采集用，名叫 OpenAI、supports_websockets=false）首轮 input 末尾带 configuration_update；候选侧第三方入站的 HTTP 出站（画像声明 http_first_turn、目录支持该模型、请求 effort 是已知档位）同形。有 WS 预热的路径首轮不带，所以只选标了 ws_prewarm=none 的样本（数字档位样本不产生，已另有判据排除）",
+          "id": "configuration-update-http-first-turn",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.ws_prewarm",
+                "value": "none"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.reasoning_effort_config"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape.input._types",
+            "value": "configuration_update"
+          },
+          "description": "有 WS 预热的路径首轮不带 configuration_update（预热已钉死基线）；没有改 effort 的场景里所有 response.create 帧都不带（候选侧网关 WS 出站从不合成）",
+          "id": "configuration-update-ws-absent-without-effort-change",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
         }
       ],
       "description": "HTTP Responses 的 Lite/非 Lite 字段与 Option 省略规则",
@@ -3248,7 +3376,8 @@
       "scenario_ids": [
         "A03",
         "A04",
-        "A05"
+        "A05",
+        "A06"
       ]
     },
     {

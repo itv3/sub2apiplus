@@ -739,7 +739,8 @@ class Expectation0164WireChecksTests(unittest.TestCase):
         # BODY-006 的检查集合回到 0.163.0 的集合（逐 ID 相同）。
         old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_163_0.json").read_text(encoding="utf-8"))
         old_ids = [check["id"] for rule in old["rules"] if rule["rule_id"] == "SPEC-BODY-006" for check in rule["checks"]]
-        self.assertEqual(body006_ids, old_ids)
+        # 其后各版在 BODY-006 的末尾追加的判据（只有子类登记）；官方侧会执行，所以每一条都要能被审计。
+        self.assertEqual(body006_ids, old_ids + getattr(self, "ADDED_CHECKS_0165", {}).get("SPEC-BODY-006", []))
 
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
         """差异报告只落了五条规则；其余规则的检查集合与 0.163.0 逐项相同（版本号换回后比较）。"""
@@ -912,6 +913,12 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
     ]
     # 规则新增的检查（追加在原检查之后，按此顺序）。
     ADDED_CHECKS_0165 = {
+        "SPEC-BODY-006": [
+            "numeric-effort-http-no-configuration-update",
+            "numeric-effort-ws-no-configuration-update",
+            "configuration-update-http-first-turn",
+            "configuration-update-ws-absent-without-effort-change",
+        ],
         "SPEC-WS-005": [
             "replay-frame-no-previous-response-id",
             "replay-frame-no-generate",
@@ -921,7 +928,10 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         ],
     }
     # 规则的 scenario_ids 变化（旧值必须是新值的前缀）。
-    SCENARIO_IDS_0165 = {"SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"]}
+    SCENARIO_IDS_0165 = {
+        "SPEC-BODY-006": ["A03", "A04", "A05", "A06"],  # W1 的 WS 判据选 A05、A06，判据场景必须是规则场景的子集
+        "SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"],
+    }
     ADDED_SCENARIOS_0165 = ["A20", "A21", "A22"]
 
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
@@ -966,6 +976,104 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             body003 = next(rule for rule in document["rules"] if rule["rule_id"] == "SPEC-BODY-003")
             check = next(item for item in body003["checks"] if item["id"] == "main-messages-keep-passthrough")
             self.assertEqual(check["assertion"]["value"], 1)
+
+    # ---- W1：configuration_update（SPEC-BODY-006 的 4 条判据；provider 条件用标签 ws_prewarm 表达） ----
+
+    @staticmethod
+    def http_observation_with(types, labels, *, method="POST", path="/backend-api/codex/responses", scenario="A04"):
+        return candidate_rule_assertion.Observation(
+            record_id=f"{scenario}-http",
+            scenario_id=scenario,
+            record_type="http_request",
+            artifact_path="relay/conn001.client_to_upstream.bin",
+            evidence_paths=("relay/conn001.client_to_upstream.bin",),
+            labels=labels,
+            data={"method": method, "path": path, "wire_protocol": "http",
+                  "body": {"shape": {"input": {"_types": types}}}},
+        )
+
+    @staticmethod
+    def ws_observation_with(types, labels, *, scenario="A06", event="response.create"):
+        return candidate_rule_assertion.Observation(
+            record_id=f"{scenario}-frame",
+            scenario_id=scenario,
+            record_type="websocket_frame",
+            artifact_path="relay/conn001.client_to_upstream.bin",
+            evidence_paths=("relay/conn001.client_to_upstream.bin",),
+            labels=labels,
+            data={"event_type": event, "shape": {"input": {"_types": types}}},
+        )
+
+    def run_body006(self, check_id, observations) -> bool:
+        rule, check = self.check("SPEC-BODY-006", check_id)
+        matched = candidate_rule_assertion._select_observations(observations, check["select"], rule["scenario_ids"])
+        return candidate_rule_assertion._evaluate_assertion(matched, check["assertion"])[0]
+
+    HTTP_PROBE_LABELS = {"transport": "http", "mode": "lite", "track": "main", "ws_prewarm": "none"}
+
+    def test_http_first_turn_requires_configuration_update_only_for_the_no_ws_prewarm_provider(self) -> None:
+        check = "configuration-update-http-first-turn"
+        with_update = ["additional_tools", "message", "message", "configuration_update"]
+        without_update = ["additional_tools", "message", "message"]
+        self.assertTrue(self.run_body006(check, [self.http_observation_with(with_update, self.HTTP_PROBE_LABELS)]))
+        # 官方无预热 provider 首轮没带（或网关没合成）：失败。
+        self.assertFalse(self.run_body006(check, [self.http_observation_with(without_update, self.HTTP_PROBE_LABELS)]))
+        # 有 WS 预热的 HTTP 样本（内置 provider 先试 WS，首轮不带；residency／runtime-metrics 一类）没标 ws_prewarm，不被选中，也不能让空选择放行。
+        default_provider = {"transport": "http", "mode": "lite", "variant": "default"}
+        self.assertFalse(self.run_body006(check, [self.http_observation_with(without_update, default_provider)]))
+        self.assertTrue(self.run_body006(check, [
+            self.http_observation_with(with_update, self.HTTP_PROBE_LABELS),
+            self.http_observation_with(without_update, default_provider),
+        ]))
+        # 数字档位样本（reasoning_effort_config=numeric）不产生 update，不进这条判据。
+        numeric = {**self.HTTP_PROBE_LABELS, "reasoning_effort_config": "numeric"}
+        self.assertTrue(self.run_body006(check, [
+            self.http_observation_with(with_update, self.HTTP_PROBE_LABELS),
+            self.http_observation_with(without_update, numeric),
+        ]))
+
+    def test_numeric_effort_never_produces_configuration_update(self) -> None:
+        numeric = {"transport": "http", "reasoning_effort_config": "numeric"}
+        types = ["additional_tools", "message", "message"]
+        self.assertTrue(self.run_body006("numeric-effort-http-no-configuration-update", [self.http_observation_with(types, numeric)]))
+        self.assertFalse(self.run_body006(
+            "numeric-effort-http-no-configuration-update",
+            [self.http_observation_with([*types, "configuration_update"], numeric)]))
+        ws_numeric = {"transport": "websocket", "reasoning_effort_config": "numeric"}
+        self.assertTrue(self.run_body006("numeric-effort-ws-no-configuration-update", [self.ws_observation_with(types, ws_numeric, scenario="A05")]))
+        self.assertFalse(self.run_body006(
+            "numeric-effort-ws-no-configuration-update",
+            [self.ws_observation_with([*types, "configuration_update"], ws_numeric, scenario="A05")]))
+        # 失败关闭：没有数字档位样本时不得空过。
+        self.assertFalse(self.run_body006("numeric-effort-http-no-configuration-update", [self.http_observation_with(types, {"transport": "http"})]))
+
+    def test_ws_frames_without_an_effort_change_never_carry_configuration_update(self) -> None:
+        check = "configuration-update-ws-absent-without-effort-change"
+        clean = [self.ws_observation_with(["additional_tools", "message"], {}), self.ws_observation_with([], {}, scenario="A05")]
+        self.assertTrue(self.run_body006(check, clean))
+        self.assertFalse(self.run_body006(check, [*clean, self.ws_observation_with(["message", "configuration_update"], {})]))
+        self.assertFalse(self.run_body006(check, []))
+
+    def test_ws_prewarm_label_marks_exactly_the_no_prewarm_http_samples(self) -> None:
+        """ws_prewarm=none 只标官方经 openai-http-probe provider 的 A04 HTTP 作业与候选 A04 的非数字档位 HTTP 入站。"""
+
+        document = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
+        marked = sorted(
+            (entry["side"], entry["job_id"], tuple(rule["scenario_ids"]))
+            for entry in document["entries"]
+            for rule in entry["rules"]
+            if rule["labels"].get("ws_prewarm") == "none"
+        )
+        self.assertEqual(
+            sorted({(side, job) for side, job, _ in marked}),
+            [("candidate", "candidate-frozen-core"), ("official", "official-relay-http-response"), ("official", "official-relay-http-response-plain")],
+        )
+        self.assertEqual({scenarios for _, _, scenarios in marked}, {("A04",)})
+        for entry in document["entries"]:
+            for rule in entry["rules"]:
+                if rule["labels"].get("ws_prewarm") == "none":
+                    self.assertEqual(rule["labels"].get("transport"), "http")
+                    self.assertNotIn("reasoning_effort_config", rule["labels"])
 
     # ---- W3：WS 整段重放不重连（SPEC-WS-005，A20～A22；线程角色与重放帧标签由引擎派生，这里手造带标签的观测跑正反例） ----
 

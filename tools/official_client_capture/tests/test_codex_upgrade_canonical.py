@@ -1180,6 +1180,8 @@ class CanonicalImportTests(unittest.TestCase):
     EXPECTED_0165_PATCHES = (
         # W3：官方客户端换模型、压缩后新窗口、目录不支持 update 的模型改推理强度时在同一连接上整段重放；声明后网关对自管续链客户端不重连、不补预热。
         ("add", "/WebSocketContinuation/ReplayOnSameConnection", ("SPEC-WS-005",)),
+        # W1：窗口内改推理强度以 input 里的 configuration_update 表达；声明后网关对第三方入站的 HTTP 出站（对应官方不带 WS 预热的 provider）首轮合成该项。
+        ("add", "/ReasoningEffort/ConfigurationUpdate", ("SPEC-BODY-006",)),
     )
 
     def test_0165_patch_manifest_binds_real_active_profile(self) -> None:
