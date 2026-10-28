@@ -476,7 +476,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/client.rs:2120-2193`、`core/src/client.rs:1118`。续接前缀的判定由 `prepare_websocket_request`
   返回 `Result<Continuation, Failure>` 给出（0.163.0 起复用失败原因逐项记录，只影响遥测，不改变字段）。0.164.0 的预热入参
   来自 `core/src/session/startup_prewarm.rs` 第 398-433 行（`PrewarmInput::Base` 为空 `Vec`，增量窗口下 `tools` 与基础指令都被清空）；首个业务帧
-  的增量项由 `get_incremental_items`（`core/src/client.rs` 第 1535-1566 行）取出，预热帧为空时整份 `request.input` 都是增量。官方单测
+  的增量项由 `get_incremental_items`（`core/src/client.rs` 第 1535-1566 行）取出，预热帧为空时整份 `request.input` 都是增量。0.165 起会话内改 effort 走 `configuration_update`，该项进入 `input`（增量帧里也可能出现）；连续多条在发出前只留最后一条，
+  使该帧 `input` 与上次请求前缀不一致时，同一连接上会发不带 `previous_response_id` 的整段帧，下一帧恢复增量续链；WS 且预热已完成时首轮不带该项（依据 0.165 官方测试，未经官方样本核实）。槽位与判据不变。官方单测
   `core/tests/suite/agent_websocket.rs` 的 incremental tools 用例断言预热帧 `input` 为 `[]`、业务帧续链预热响应且 `input` 含 `additional_tools`。
 - **实测**：`clean-tool-20260728T132346Z`（R）覆盖 Lite；
   `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧；这两份 R 类样本采集版本早于 0.164.0，字段顺序以
@@ -730,7 +731,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   id，不再按“线程 id 加内容字节”现场重算 UUIDv5。工具集中途变化时，历史中间插追加只含变化定义的 `additional_tools`，不改前缀；
   压缩之后是新窗口，重新记录一对新 id。窗口是否增量只看历史里有没有工具声明项：从旧窗口续聊的请求仍是旧形态（前缀每次现场重算，
   id 为 UUIDv5），所以同一客户端会同时发出两种前缀形态，不能按版本号二选一。WS 的前缀只在第一条业务帧出现（预热帧的
-  `input` 为空，见 SPEC-WS-005），其后的增量帧不重复发送。
+  `input` 为空，见 SPEC-WS-005），其后的增量帧不重复发送。0.165 起 Lite 模型的 `input` 在用户消息之后还可能带 `configuration_update` 项（会话内改 effort 的承载，见 SPEC-BODY-006），它不属于工具目录或基础指令前缀，上述前缀结构不变。
 - **源码**：[L1] `core/src/client.rs:957-977`、
   `core/src/client.rs:1016-1031`、`core/src/client.rs:1118`。0.165.0 源码（相对 0.164.0 仅行号平移）：`features/src/lib.rs` 第 1665-1670 行把
   `incremental_tools` 设为 Stable 且默认开启；`core/src/session/world_state.rs` 第 44-56 行按历史是否含工具声明项判定窗口是否增量；
@@ -812,6 +813,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `gpt-6.1-sol`、`gpt-6-astra`、新增的 `gpt-6.1-terra` 为真）；生效时 `record_reasoning_effort_override`（`core/src/session/reasoning_effort.rs:28-91`）在历史中记入
   `ConfigurationUpdate`（序列化为 `input` 里 `type=configuration_update`、`reasoning.effort=<档位>` 的项，`protocol/src/models.rs:1306-1308`），请求的 `reasoning.effort` 也改按
   该会话窗口内固定的档位发送（`core/src/session/reasoning_effort.rs:94-135`、`core/src/session/reasoning_effort.rs:137-157`），所以 0.165.0 默认路径下 Lite 请求的 `input` 可能带该项，是否构成仿真偏差需官方样本核实。
+  0.165 起会话内改 effort 走 `configuration_update`：用户在同一上下文窗口内再改 effort，只追加新的 `configuration_update` 项，请求级 `reasoning.effort` 仍是窗口内首次采样钉下的基线；
+  自定义数字档位（非 `disabled`）不产生该项、也不钉基线，上文数字档位形态不受影响。本条判据语义不变。
   另：`reasoning.summary` 增加提供方能力判断（`core/src/client.rs:967`，`model-provider/src/capabilities.rs:14-15`，默认 `true`），内置 OpenAI 不受影响。
 - **源码**：[L1] `codex-api/src/common.rs:278-304`、
   `core/src/client.rs:957-1131`、`core/src/client.rs:991-1007`、`core/src/client.rs:1043-1048`、`core/src/client.rs:658-664`（`build_responses_request` 从第 980 行起，对任何模型都不再产生顶层 `instructions`）、
@@ -846,7 +849,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **范围**：采集与观测记录；固定十轮编码任务。
 - **记录**：20 个含 input 的请求／帧共 377 项，最大长度 95；类型为
   `message 134`、`reasoning 87`、`custom_tool_call_output 79`、
-  `custom_tool_call 71`、`additional_tools 6`。
+  `custom_tool_call 71`、`additional_tools 6`。这是历史采集记录；0.165 起会话内改 effort 走 `configuration_update`，`input` 类型分布里另可能出现该类型（见 SPEC-BODY-006）。
 - **源码**：[L3] 场景统计无 L1/L2 协议常量。
 - **实测**：`audit-body007-workflow-clean-20260730a`（R），20/20 连接双向完整。
 - **实现**：不实现这些计数；仅用来确认测试场景确实包含真实工具调用。
@@ -1129,7 +1132,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   路径已移除），默认能力为 `Unsupported`，仅 OpenAI 与 Azure Responses 提供方在 `ProviderCapabilities::from_config`
   （上列 `capabilities.rs` 第 33-44 行）里提升为 `V2`；内置 OpenAI OAuth 不受影响，自定义 provider 默认改走本地压缩。0.165.0 里 `ProviderCapabilities`
   另增 `reasoning_summaries` 字段（默认 `true`），与压缩无关；`remote_compaction_v2` 仍是 Removed 键，`x-codex-beta-features` 仍恒含它
-  （`core/src/session/mod.rs:1317-1329`，已启用的实验特性集合未变）。
+  （`core/src/session/mod.rs:1317-1329`，已启用的实验特性集合未变）。0.165 起会话内改 effort 走 `configuration_update`：压缩请求的 `reasoning.effort` 取窗口内钉下的基线，压缩成功后基线作废、下一窗口重建，压缩触发项与字段不变。
 - **实测**：`relay-tui-recap-20260728T112358Z`（manual）与
   `audit-ep021-auto-clean-20260730a`（auto），均为 R。候选断言 `assert-SPEC-EP-021` 核对含 compaction_trigger 的
   POST、没有 `/responses/compact` 请求、HTTP 与 WS 恒带 beta 头；`remote_compaction_v2` 为 Removed 键见 0.157.0
@@ -1192,7 +1195,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/session/turn.rs:1393-1615`、
   `core/src/compact_model_fallback.rs:43-52`、
   `core/src/compact_remote_v2_attempt.rs:172`。0.165.0 复核（以下分派自 0.163.0 起如此，0.164.0 到 0.165.0 未变；`core/src/session/turn.rs` 只新增
-  用户提示遥测与一个 `PrivateSessionEvent` 匹配分支，与压缩选择无关）：四种 reason 与两种遥测 implementation 标签（`responses`、
+  用户提示遥测与一个 `PrivateSessionEvent` 匹配分支，与压缩选择无关；0.165 起会话内改 effort 走 `configuration_update`，只影响压缩请求携带的 effort，不影响选择与 reason）：四种 reason 与两种遥测 implementation 标签（`responses`、
   `responses_compaction_v2`）未变，`ResponsesCompact` 标签已随 V1 移除；预压缩新增异步压缩候选
   （`async_compaction`，开发中特性、默认关闭；`core/src/session/turn.rs:1405-1422`，候选就绪即按 `ContextLimit` 触发），
   模型降档与 `comp_hash` 变化合并为同一 reason 分派（`core/src/session/turn.rs:1438-1520`）。新增的稳定特性
