@@ -1,0 +1,666 @@
+#!/usr/bin/env python3
+"""egress-ctl：更换“指定出口”的运维脚本（只做运维编排，不属于任何受管根，不进升级工具的任何身份）。
+
+背景
+----
+sub2apiplus 与 capture-cli 的出口由 ``/etc/sub2api-egress/policy.json`` 指定（``allowed_public_ipv4``、``nodes.exit``），
+由用户授权、想换就换；“出口不是指定值就断网”由独立的守护层（sub2api-egress-guard.service 等）执行，本脚本不改它的逻辑。
+本脚本把“换出口”固化成一条带校验、带审计、可回滚的流程，职责只限：
+
+1. 用**现行运行包**（``/var/lib/sub2api-egress/bundles/<摘要>/``）里的 ``validate_egress_policy`` 校验草稿策略；
+2. 对比新旧策略并打印差异；apply 必须带 ``--authorized-by`` 与 ``--reason``；
+3. 备份旧策略，向 ``/var/lib/sub2api-egress/audit.jsonl`` 追加变更审计（只追加，每条带前一条的哈希，形成哈希链）；
+4. 按“出口端 → 源端”的顺序调用既有的 ``egress-install``，并且**从现行运行包内执行**，不换运行包；
+5. ``egress-check`` 通过才算完成；任何一步失败就回滚旧策略并重装两端，再核对一次。
+
+边界（刻意如此）
+----------------
+* 不 import 仓库里任何受管模块；对运行包里函数的使用只通过**子进程**调用运行包自带的公开函数
+  （``validate_egress_policy``、``egress_policy_sha256``），解释器隔离模式（``-I``），不继承环境变量里的路径。
+* 不放宽读取侧的任何校验：策略文件属主、权限、父目录仍由运行包的读取代码强制检查。
+* 不触碰业务容器、不改 compose、不改任何账号状态；``apply`` 会让守护在重装期间闭锁受保护容器（这是预期的维护窗口行为）。
+* ``--dry-run`` 只读：不写策略、不写审计、不装任何东西。
+
+用法见同目录 RUNBOOK.md。退出码：0 成功；1 参数或校验错误（未改任何状态）；2 执行失败但已回滚并核对通过；
+3 执行失败且回滚后仍未通过核对（保护处于守护自动闭锁状态，须人工处理）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import difflib
+import fcntl
+import getpass
+import hashlib
+import io
+import ipaddress
+import json
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import tarfile
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Sequence
+
+DEFAULT_POLICY = Path("/etc/sub2api-egress/policy.json")
+DEFAULT_KEY = Path("/etc/sub2api-egress/private.key")
+DEFAULT_RUNTIME_ROOT = Path("/var/lib/sub2api-egress")
+DEFAULT_GUARD_UNIT = Path("/etc/systemd/system/sub2api-egress-guard.service")
+AUDIT_SCHEMA = "egress-ctl-audit/v1"
+GENESIS = "0" * 64
+MAX_DRAFT_BYTES = 1 << 20
+
+# 子进程里执行的校验片段：只调用运行包里的两个公开函数，结果以 JSON 打到标准输出。
+VALIDATE_SNIPPET = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as module
+policy = module.validate_egress_policy(json.loads(sys.stdin.read()))
+print(json.dumps({"policy_sha256": module.egress_policy_sha256(policy)}))
+"""
+
+
+class CtlError(Exception):
+    """参数或校验错误：尚未改动任何状态。"""
+
+
+class StepFailed(Exception):
+    """执行阶段某一步失败：由调用方回滚。"""
+
+
+@dataclass
+class Result:
+    returncode: int
+    stdout: bytes = b""
+    stderr: bytes = b""
+
+    @property
+    def text(self) -> str:
+        return (self.stdout + b"\n" + self.stderr).decode("utf-8", "replace").strip()[-600:]
+
+
+def default_runner(argv: Sequence[str], input_bytes: bytes | None = None, timeout: float = 300.0) -> Result:
+    try:
+        done = subprocess.run(list(argv), input=input_bytes, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return Result(124, b"", f"超时（{timeout} 秒）：{' '.join(argv[:4])}".encode())
+    except OSError as error:
+        return Result(127, b"", str(error).encode())
+    return Result(done.returncode, done.stdout, done.stderr)
+
+
+@dataclass
+class Config:
+    """路径与外部依赖都收在这里，测试时整体替换。"""
+
+    policy_path: Path = DEFAULT_POLICY
+    key_path: Path = DEFAULT_KEY
+    runtime_root: Path = DEFAULT_RUNTIME_ROOT
+    guard_unit: Path = DEFAULT_GUARD_UNIT
+    audit_path: Path | None = None
+    backup_dir: Path | None = None
+    runner: Callable[..., Result] = default_runner
+    sleep: Callable[[float], None] = time.sleep
+    is_root: Callable[[], bool] = lambda: os.geteuid() == 0
+    out: Any = field(default_factory=lambda: sys.stdout)
+    err: Any = field(default_factory=lambda: sys.stderr)
+
+    def __post_init__(self) -> None:
+        if self.audit_path is None:
+            self.audit_path = self.runtime_root / "audit.jsonl"
+        if self.backup_dir is None:
+            self.backup_dir = self.runtime_root / "policy-backups"
+
+    def say(self, message: str) -> None:
+        print(message, file=self.out)
+
+    def warn(self, message: str) -> None:
+        print(message, file=self.err)
+
+
+# ------------------------------------------------------------------ 基础工具
+
+def canonical(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def pretty(policy: dict[str, Any]) -> list[str]:
+    return json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+
+
+def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """同目录临时文件 + fsync + rename：写不完整就保留旧字节。属主尽量设为 root（非 root 运行时跳过，仅测试用）。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.new-{os.getpid()}-{uuid.uuid4().hex[:6]}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        if os.geteuid() == 0:
+            os.chown(temporary, 0, 0)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+# ------------------------------------------------------------------ 运行包
+
+@dataclass(frozen=True)
+class Bundle:
+    directory: Path
+    script: Path
+    python: str
+    identity: str
+    files: dict[str, str]
+
+
+def locate_bundle(cfg: Config) -> Bundle:
+    """从守护单元的 ExecStart 找到“现行运行包”，并按 bundle.json 复核每个文件的摘要与目录身份。"""
+
+    try:
+        unit = cfg.guard_unit.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CtlError(f"读不到守护单元 {cfg.guard_unit}：{error}（出口守护尚未安装？）") from error
+    line = next((item for item in unit.splitlines() if item.startswith("ExecStart=") and "egress-guard" in item), None)
+    if line is None:
+        raise CtlError("守护单元里没有 egress-guard 的 ExecStart")
+    words = shlex.split(line[len("ExecStart="):])
+    if len(words) < 3 or words[2] != "egress-guard":
+        raise CtlError(f"守护单元 ExecStart 形态不认识：{line}")
+    python, script = words[0], Path(words[1])
+    bundles = cfg.runtime_root / "bundles"
+    if script.name != "arm64_supervised_deploy.py" or script.parent.name != "tools" or script.parent.parent.parent != bundles:
+        raise CtlError(f"守护没有运行在持久运行包内：{script}")
+    directory = script.parent.parent
+    try:
+        manifest = json.loads((directory / "bundle.json").read_text(encoding="utf-8"))
+        files = dict(manifest["files"])
+        actual = {name: sha256_hex((directory / name).read_bytes()) for name in files}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise CtlError(f"运行包 {directory.name[:12]} 的 bundle.json 或文件读取失败：{error}") from error
+    if actual != files or sha256_hex(canonical(files)) != directory.name or manifest.get("bundle_sha256") != directory.name:
+        raise CtlError(f"运行包 {directory.name[:12]} 的文件摘要与登记不符，拒绝使用")
+    return Bundle(directory, script, python, directory.name, files)
+
+
+def validate_with_bundle(cfg: Config, bundle: Bundle, policy: Any) -> str:
+    """用运行包里的 validate_egress_policy 校验；通过则返回运行包算出的策略摘要。"""
+
+    done = cfg.runner([bundle.python, "-I", "-B", "-c", VALIDATE_SNIPPET, str(bundle.directory)],
+                      json.dumps(policy).encode("utf-8"), 60.0)
+    if done.returncode != 0:
+        detail = done.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise CtlError("运行包的策略校验拒绝了该策略：" + (detail[-1] if detail else f"rc={done.returncode}"))
+    try:
+        return str(json.loads(done.stdout.decode("utf-8"))["policy_sha256"])
+    except (ValueError, KeyError) as error:
+        raise CtlError(f"策略校验输出不可解析：{done.text}") from error
+
+
+# ------------------------------------------------------------------ 草稿与对比
+
+def read_draft(source: str, stdin: Any = None) -> tuple[dict[str, Any], bytes]:
+    if source == "-":
+        raw = (stdin or sys.stdin.buffer).read(MAX_DRAFT_BYTES + 1)
+    else:
+        path = Path(source)
+        if path.is_symlink() or not path.is_file():
+            raise CtlError(f"草稿不是普通文件：{source}")
+        raw = path.read_bytes()
+    if len(raw) > MAX_DRAFT_BYTES:
+        raise CtlError("草稿过大")
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise CtlError(f"草稿不是合法 JSON：{error}") from error
+    if not isinstance(value, dict):
+        raise CtlError("草稿顶层必须是对象")
+    return value, raw
+
+
+def read_current(cfg: Config, bundle: Bundle) -> tuple[dict[str, Any], str]:
+    try:
+        raw = cfg.policy_path.read_bytes()
+        value = json.loads(raw)
+    except (OSError, ValueError) as error:
+        raise CtlError(f"读不到现行策略 {cfg.policy_path}：{error}（需要 root）") from error
+    return value, validate_with_bundle(cfg, bundle, value)
+
+
+def compare_rules(old: dict[str, Any], new: dict[str, Any], authorized_by: str | None) -> None:
+    """本脚本自己的变更规则（运行包校验之外）：全部不通过就一条都不执行。"""
+
+    if new["revision"] <= old["revision"]:
+        raise CtlError(f"新策略 revision（{new['revision']}）必须大于现行 revision（{old['revision']}）")
+    old_allowed, new_allowed = set(old["allowed_public_ipv4"]), set(new["allowed_public_ipv4"])
+    if new_allowed != old_allowed and (new_allowed & old_allowed) and not new_allowed <= old_allowed:
+        raise CtlError("切换期间不得把新旧出口同时放进 allowed_public_ipv4（那是真正放宽保护）；"
+                       "宁可短暂闭锁，也不放行两个")
+    if authorized_by is not None and new["authorization"]["actor"] != authorized_by:
+        raise CtlError("草稿的 authorization.actor 必须等于 --authorized-by，保证策略里的授权记录与审计一致")
+    for address in new_allowed:
+        if not ipaddress.IPv4Address(address).is_global:
+            raise CtlError(f"allowed_public_ipv4 含非全局单播地址：{address}")
+
+
+def summary_lines(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+    def exit_of(policy: dict[str, Any]) -> str:
+        node = policy["nodes"]["exit"]
+        return f"{node['endpoint']['ipv4']}:{node['endpoint']['port']}（公钥 {node['public_key'][:8]}…，接口 {node['public_interface']}）"
+
+    return [f"policy_id        {old['policy_id']} -> {new['policy_id']}",
+            f"revision         {old['revision']} -> {new['revision']}",
+            f"授权人           {old['authorization']['actor']} -> {new['authorization']['actor']}",
+            f"允许的出口 IPv4  {old['allowed_public_ipv4']} -> {new['allowed_public_ipv4']}",
+            f"出口节点         {exit_of(old)} -> {exit_of(new)}"]
+
+
+def render_diff(old: dict[str, Any], new: dict[str, Any]) -> str:
+    lines = list(difflib.unified_diff(pretty(old), pretty(new), "现行 policy.json", "草稿", lineterm="", n=2))
+    return "\n".join(lines) if lines else "（新旧策略完全相同）"
+
+
+# ------------------------------------------------------------------ 审计
+
+def _entry_hash(entry: dict[str, Any]) -> str:
+    return sha256_hex(canonical({key: value for key, value in entry.items() if key != "entry_sha256"}))
+
+
+def audit_append(cfg: Config, fields: dict[str, Any]) -> dict[str, Any]:
+    """追加一条审计：O_APPEND + 独占锁；每条记前一条的 entry_sha256（首条为全零），整体 fsync。"""
+
+    path = cfg.audit_path
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        size = os.fstat(descriptor).st_size
+        data = b""
+        while len(data) < size:
+            chunk = os.pread(descriptor, size - len(data), len(data))
+            if not chunk:
+                break
+            data += chunk
+        lines = [item for item in data.split(b"\n") if item]
+        if lines:
+            last = json.loads(lines[-1])
+            if last.get("entry_sha256") != _entry_hash(last):
+                raise CtlError("审计日志最后一条自摘要不符，拒绝在其后追加（先 audit-verify 排查）")
+            seq, previous = last["seq"] + 1, last["entry_sha256"]
+        else:
+            seq, previous = 1, GENESIS
+        entry = {"schema": AUDIT_SCHEMA, "seq": seq, "prev_sha256": previous, "at_utc": utc_now(), **fields}
+        entry["entry_sha256"] = _entry_hash(entry)
+        os.write(descriptor, canonical(entry) + b"\n")
+        os.fsync(descriptor)
+        return entry
+    finally:
+        os.close(descriptor)
+
+
+def audit_verify(path: Path) -> tuple[bool, str]:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return False, f"读不到审计日志：{error}"
+    previous, count = GENESIS, 0
+    for number, line in enumerate((item for item in data.split(b"\n") if item), 1):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            return False, f"第 {number} 行不是合法 JSON"
+        if entry.get("seq") != number or entry.get("prev_sha256") != previous or entry.get("entry_sha256") != _entry_hash(entry):
+            return False, f"第 {number} 行的序号、前链或自摘要不符（日志被改动或截断）"
+        previous, count = entry["entry_sha256"], number
+    return True, f"审计链完整，共 {count} 条"
+
+
+# ------------------------------------------------------------------ 出口端（ssh）
+
+@dataclass
+class Exit:
+    target: str
+    ssh_options: list[str]
+    key_path: Path
+    had_policy: bool | None = None
+    backup_name: str | None = None
+
+    def argv(self, remote_command: str) -> list[str]:
+        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *self.ssh_options, self.target, remote_command]
+
+
+def remote(cfg: Config, exit_side: Exit, command: str, data: bytes | None = None, timeout: float = 300.0) -> Result:
+    return cfg.runner(exit_side.argv(command), data, timeout)
+
+
+def ensure_exit_bundle(cfg: Config, exit_side: Exit, bundle: Bundle) -> None:
+    """出口机上没有同一运行包就把现行运行包原样推过去（内容寻址，字节不变，所以运行包 ID 不变）。"""
+
+    root = shlex.quote(str(cfg.runtime_root / "bundles" / bundle.identity))
+    check = " && ".join(f"echo {digest}'  '{root}/{name} | sha256sum -c --quiet -" for name, digest in sorted(bundle.files.items()))
+    if remote(cfg, exit_side, f"test -f {root}/bundle.json && {check}").returncode == 0:
+        return
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        entries = [("bundle.json", (bundle.directory / "bundle.json").read_bytes())]
+        entries += [(name, (bundle.directory / name).read_bytes()) for name in sorted(bundle.files)]
+        made: set[str] = set()
+        for name, content in entries:
+            parent = ""
+            for part in name.split("/")[:-1]:
+                parent = f"{parent}/{part}".lstrip("/")
+                if parent not in made:
+                    info = tarfile.TarInfo(parent)
+                    info.type, info.mode, info.uid, info.gid = tarfile.DIRTYPE, 0o700, 0, 0
+                    archive.addfile(info)
+                    made.add(parent)
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.uid, info.gid = len(content), 0o400, 0, 0
+            archive.addfile(info, io.BytesIO(content))
+    base = shlex.quote(str(cfg.runtime_root / "bundles"))
+    script = (f"set -e; umask 077; install -d -m 0700 {base}; t=$(mktemp -d {base}/.push-XXXXXX); "
+              f"tar -x --no-same-owner -C \"$t\"; chmod 0700 \"$t\"; mv \"$t\" {root}")
+    done = remote(cfg, exit_side, script, buffer.getvalue())
+    if done.returncode != 0:
+        raise StepFailed(f"向出口机推送运行包失败：{done.text}")
+
+
+def exit_backup_and_push(cfg: Config, exit_side: Exit, policy_bytes: bytes, old_sha: str) -> None:
+    """出口机：备份它现有的策略（若有），再原子替换为新策略（root:root 0600）。"""
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backups = shlex.quote(str(cfg.runtime_root / "policy-backups"))
+    policy = shlex.quote(str(cfg.policy_path))
+    name = f"policy-{stamp}-exit-before.json"
+    script = (f"set -e; umask 077; install -d -m 0700 {shlex.quote(str(cfg.policy_path.parent))}; "
+              f"if [ -f {policy} ]; then install -d -m 0700 {backups}; cp -p {policy} {backups}/{name}; echo HAD_POLICY; else echo NO_POLICY; fi")
+    done = remote(cfg, exit_side, script)
+    if done.returncode != 0 or done.stdout.decode().strip() not in {"HAD_POLICY", "NO_POLICY"}:
+        raise StepFailed(f"出口机备份旧策略失败：{done.text}")
+    exit_side.had_policy = done.stdout.decode().strip() == "HAD_POLICY"
+    exit_side.backup_name = name if exit_side.had_policy else None
+    push_exit_policy(cfg, exit_side, policy_bytes)
+
+
+def push_exit_policy(cfg: Config, exit_side: Exit, policy_bytes: bytes) -> None:
+    directory = shlex.quote(str(cfg.policy_path.parent))
+    policy = shlex.quote(str(cfg.policy_path))
+    script = (f"set -e; umask 077; t=$(mktemp {directory}/.policy-new-XXXXXX); cat > \"$t\"; chmod 0600 \"$t\"; "
+              f"chown root:root \"$t\"; mv -f \"$t\" {policy}")
+    done = remote(cfg, exit_side, script, policy_bytes)
+    if done.returncode != 0:
+        raise StepFailed(f"向出口机写入策略失败：{done.text}")
+
+
+def install_command(bundle: Bundle, cfg: Config, role: str, key_path: Path) -> list[str]:
+    return [bundle.python, "-B", str(bundle.script), "egress-install", "--role", role, "--policy", str(cfg.policy_path),
+            "--runtime-root", str(cfg.runtime_root), "--key", str(key_path)]
+
+
+def install_exit(cfg: Config, exit_side: Exit, bundle: Bundle) -> None:
+    command = " ".join(shlex.quote(word) for word in install_command(bundle, cfg, "exit", exit_side.key_path))
+    done = remote(cfg, exit_side, command, None, 600.0)
+    if done.returncode != 0:
+        raise StepFailed(f"出口端 egress-install 失败：{done.text}")
+
+
+def exit_guard_active(cfg: Config, exit_side: Exit) -> bool:
+    return remote(cfg, exit_side, "systemctl is-active --quiet sub2api-egress-guard.service", None, 30.0).returncode == 0
+
+
+# ------------------------------------------------------------------ 源端
+
+def install_origin(cfg: Config, bundle: Bundle) -> None:
+    done = cfg.runner(install_command(bundle, cfg, "origin", cfg.key_path), None, 600.0)
+    if done.returncode != 0:
+        raise StepFailed(f"源端 egress-install 失败：{done.text}")
+
+
+def egress_check(cfg: Config, bundle: Bundle) -> Result:
+    return cfg.runner([bundle.python, "-B", str(bundle.script), "egress-check", "--policy", str(cfg.policy_path)], None, 60.0)
+
+
+def wait_for_check(cfg: Config, bundle: Bundle, timeout: float, interval: float = 3.0) -> Result:
+    """重装后守护要几秒才发布合规状态：轮询到通过或超时。"""
+
+    deadline = time.monotonic() + timeout
+    while True:
+        done = egress_check(cfg, bundle)
+        if done.returncode == 0 or time.monotonic() >= deadline:
+            return done
+        cfg.sleep(interval)
+
+
+# ------------------------------------------------------------------ 命令
+
+@dataclass
+class Plan:
+    bundle: Bundle
+    old: dict[str, Any]
+    new: dict[str, Any]
+    new_bytes: bytes
+    old_bytes: bytes
+    old_sha: str
+    new_sha: str
+
+
+def prepare(cfg: Config, draft_source: str, authorized_by: str | None, stdin: Any = None) -> Plan:
+    bundle = locate_bundle(cfg)
+    draft, _raw = read_draft(draft_source, stdin)
+    new_sha = validate_with_bundle(cfg, bundle, draft)
+    old, old_sha = read_current(cfg, bundle)
+    compare_rules(old, draft, authorized_by)
+    # 写盘用 canonical 之外的稳定格式：缩进 JSON + 末尾换行，便于人读；摘要由运行包按 canonical 重算，与格式无关。
+    new_bytes = (json.dumps(draft, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return Plan(bundle, old, draft, new_bytes, cfg.policy_path.read_bytes(), old_sha, new_sha)
+
+
+def print_plan(cfg: Config, plan: Plan, args: argparse.Namespace) -> None:
+    cfg.say("== 变更摘要")
+    for line in summary_lines(plan.old, plan.new):
+        cfg.say("  " + line)
+    cfg.say(f"  策略摘要         {plan.old_sha[:16]}… -> {plan.new_sha[:16]}…")
+    cfg.say("== 差异")
+    cfg.say(render_diff(plan.old, plan.new))
+    cfg.say("== 将按下列顺序执行（出口端先、源端后；均从现行运行包内调用，不换运行包）")
+    cfg.say(f"  运行包 {plan.bundle.identity[:12]}…（{plan.bundle.directory}）")
+    target = getattr(args, "exit_ssh", None) or "（未指定 --exit-ssh，实际执行必须指定）"
+    cfg.say(f"  1. 备份源端旧策略到 {cfg.backup_dir}，追加审计 begin")
+    cfg.say(f"  2. 出口端 {target}：备份旧策略、写入新策略、必要时推送同一运行包、egress-install --role exit")
+    cfg.say("  3. 源端：写入新策略、egress-install --role origin")
+    cfg.say(f"  4. 轮询 egress-check（最长 {args.check_timeout} 秒）；通过才放行，失败则回滚旧策略并重装两端")
+
+
+def command_validate(cfg: Config, args: argparse.Namespace) -> int:
+    bundle = locate_bundle(cfg)
+    draft, _ = read_draft(args.draft)
+    cfg.say(f"校验通过：策略摘要 {validate_with_bundle(cfg, bundle, draft)}（运行包 {bundle.identity[:12]}…）")
+    return 0
+
+
+def command_diff(cfg: Config, args: argparse.Namespace) -> int:
+    plan = prepare(cfg, args.draft, args.authorized_by)
+    print_plan(cfg, plan, args)
+    return 0
+
+
+def command_audit_verify(cfg: Config, args: argparse.Namespace) -> int:
+    ok, message = audit_verify(cfg.audit_path)
+    (cfg.say if ok else cfg.warn)(message)
+    return 0 if ok else 1
+
+
+def audit_fields(plan: Plan, args: argparse.Namespace, operation: str, event: str, **extra: Any) -> dict[str, Any]:
+    return {"event": event, "operation_id": operation, "authorized_by": args.authorized_by, "reason": args.reason,
+            "operator": os.environ.get("SUDO_USER") or getpass.getuser(), "host": socket.gethostname(),
+            "old_policy_sha256": plan.old_sha, "new_policy_sha256": plan.new_sha,
+            "old_revision": plan.old["revision"], "new_revision": plan.new["revision"],
+            "old_allowed_public_ipv4": plan.old["allowed_public_ipv4"], "new_allowed_public_ipv4": plan.new["allowed_public_ipv4"],
+            "exit_target": args.exit_ssh, "bundle_id": plan.bundle.identity, **extra}
+
+
+def command_apply(cfg: Config, args: argparse.Namespace, stdin: Any = None) -> int:
+    plan = prepare(cfg, args.draft, args.authorized_by, stdin)
+    print_plan(cfg, plan, args)
+    if args.dry_run:
+        current = egress_check(cfg, plan.bundle)
+        cfg.say("== 当前保护状态（只读 egress-check）：" + ("通过" if current.returncode == 0 else f"未通过（{current.text}）"))
+        cfg.say("--dry-run：到此为止，未改动任何状态，未写审计。")
+        return 0
+    if not cfg.is_root():
+        raise CtlError("apply 必须以 root 执行")
+    if not args.exit_ssh:
+        raise CtlError("apply 必须用 --exit-ssh 指定出口端（root@主机）")
+    if not args.confirm_maintenance_window:
+        raise CtlError("apply 会让守护闭锁受保护容器：确认无升级派发、入口或后台验证在跑后，加 --confirm-maintenance-window")
+    operation = uuid.uuid4().hex
+    exit_side = Exit(args.exit_ssh, list(args.ssh_option or []), Path(args.exit_key))
+    results: dict[str, Any] = {}
+    # 先备份再审计：begin 写不进去就一步都不动。
+    cfg.backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    backup = cfg.backup_dir / f"policy-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{plan.old_sha[:8]}.json"
+    atomic_write(backup, plan.old_bytes)
+    installed = cfg.runtime_root / "installed.json"
+    if installed.is_file():
+        atomic_write(cfg.backup_dir / (backup.name[:-5] + ".installed.json"), installed.read_bytes())
+    audit_append(cfg, audit_fields(plan, args, operation, "begin", origin_backup=str(backup)))
+    touched = {"exit": False, "origin": False}
+    try:
+        touched["exit"] = True
+        ensure_exit_bundle(cfg, exit_side, plan.bundle)
+        exit_backup_and_push(cfg, exit_side, plan.new_bytes, plan.old_sha)
+        install_exit(cfg, exit_side, plan.bundle)
+        results["exit_install"] = {"status": "ok", "had_previous_policy": exit_side.had_policy}
+        cfg.say("出口端安装完成")
+        touched["origin"] = True
+        atomic_write(cfg.policy_path, plan.new_bytes)
+        install_origin(cfg, plan.bundle)
+        results["origin_install"] = {"status": "ok"}
+        cfg.say("源端安装完成，等待守护发布合规状态……")
+        checked = wait_for_check(cfg, plan.bundle, args.check_timeout)
+        if checked.returncode != 0:
+            raise StepFailed(f"egress-check 未通过：{checked.text}")
+        if not exit_guard_active(cfg, exit_side):
+            raise StepFailed("出口端守护未处于 active")
+        results["egress_check"] = {"status": "passed"}
+    except (StepFailed, OSError) as error:
+        results["failure"] = str(error)
+        cfg.warn(f"执行失败：{error}；开始回滚")
+        rollback = do_rollback(cfg, plan, exit_side, touched, args)
+        audit_append(cfg, audit_fields(plan, args, operation, "result", status="failed", results=results, rollback=rollback))
+        return 2 if rollback["status"] == "ok" else 3
+    audit_append(cfg, audit_fields(plan, args, operation, "result", status="ok", results=results))
+    cfg.say("完成：egress-check 通过。接着做容器内三探针站复核与稳定性观察（见 RUNBOOK.md 第 6 步）。")
+    return 0
+
+
+def do_rollback(cfg: Config, plan: Plan, exit_side: Exit, touched: dict[str, bool], args: argparse.Namespace) -> dict[str, Any]:
+    """回滚：旧策略写回，按同一顺序（出口端 → 源端）重装，再 egress-check 一次。每一步的结果都如实记录。"""
+
+    report: dict[str, Any] = {"status": "ok", "steps": {}}
+
+    def attempt(name: str, action: Callable[[], None]) -> None:
+        try:
+            action()
+            report["steps"][name] = "ok"
+        except (StepFailed, OSError) as error:
+            report["steps"][name] = f"failed: {error}"
+            report["status"] = "failed"
+
+    if touched["exit"]:
+        if exit_side.had_policy is False:
+            report["steps"]["exit"] = "出口机原本没有策略，保持新装状态（只对本源端的旧策略不再有对端）"
+        elif exit_side.had_policy is None:
+            report["steps"]["exit"] = "出口机尚未改动"
+        else:
+            attempt("exit_restore_policy", lambda: push_exit_policy(cfg, exit_side, plan.old_bytes))
+            attempt("exit_install", lambda: install_exit(cfg, exit_side, plan.bundle))
+    if touched["origin"]:
+        attempt("origin_restore_policy", lambda: atomic_write(cfg.policy_path, plan.old_bytes))
+        attempt("origin_install", lambda: install_origin(cfg, plan.bundle))
+    checked = wait_for_check(cfg, plan.bundle, args.check_timeout)
+    report["steps"]["egress_check"] = "passed" if checked.returncode == 0 else f"failed: {checked.text}"
+    if checked.returncode != 0:
+        report["status"] = "failed"
+    cfg.warn("回滚" + ("完成并通过 egress-check" if report["status"] == "ok" else "后仍有失败：守护保持自动闭锁，须人工处理，详见审计日志"))
+    return report
+
+
+# ------------------------------------------------------------------ 入口
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="egress-ctl", description="更换指定出口的运维脚本（校验、差异、审计、两端按序安装、失败回滚）")
+    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
+    parser.add_argument("--key", type=Path, default=DEFAULT_KEY, help="源端私钥路径（只传给安装器，本脚本不读取）")
+    parser.add_argument("--guard-unit", type=Path, default=DEFAULT_GUARD_UNIT)
+    parser.add_argument("--audit-log", type=Path, default=None)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    validate = commands.add_parser("validate", help="用现行运行包校验草稿策略（只读）")
+    validate.add_argument("--draft", required=True, help="草稿路径；- 表示标准输入")
+
+    def change_arguments(item: argparse.ArgumentParser) -> None:
+        item.add_argument("--draft", required=True, help="草稿路径；- 表示标准输入")
+        item.add_argument("--authorized-by", required=True, help="授权人，必须等于草稿 authorization.actor")
+        item.add_argument("--reason", required=True, help="变更原因（写入审计）")
+        item.add_argument("--check-timeout", type=float, default=120.0)
+
+    diff = commands.add_parser("diff", help="校验草稿并打印与现行策略的差异（只读）")
+    change_arguments(diff)
+    apply = commands.add_parser("apply", help="出口端先、源端后安装新策略；失败回滚")
+    change_arguments(apply)
+    apply.add_argument("--exit-ssh", help="出口端 root@主机；实际执行必填")
+    apply.add_argument("--exit-key", default=str(DEFAULT_KEY), help="出口端私钥路径（出口机上）")
+    apply.add_argument("--ssh-option", action="append", help="附加给 ssh 的 -o 选项原文，可重复")
+    apply.add_argument("--dry-run", action="store_true", help="只校验并打印差异与计划，不改任何状态、不写审计")
+    apply.add_argument("--confirm-maintenance-window", action="store_true",
+                       help="确认已处于维护窗口：无升级派发、入口或后台验证在跑")
+    commands.add_parser("audit-verify", help="校验审计日志哈希链")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, cfg: Config | None = None, stdin: Any = None) -> int:
+    args = build_parser().parse_args(argv)
+    cfg = cfg or Config(policy_path=args.policy, key_path=args.key, runtime_root=args.runtime_root,
+                        guard_unit=args.guard_unit, audit_path=args.audit_log)
+    os.umask(0o077)
+    try:
+        if args.command == "validate":
+            return command_validate(cfg, args)
+        if args.command == "diff":
+            return command_diff(cfg, args)
+        if args.command == "apply":
+            return command_apply(cfg, args, stdin)
+        return command_audit_verify(cfg, args)
+    except CtlError as error:
+        cfg.warn(f"egress-ctl：{error}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
