@@ -126,10 +126,15 @@ def synthetic_models_payload(slugs: tuple[str, ...]) -> bytes:
 
 SYNTHETIC_CORE_MODELS_BODY = synthetic_models_payload(_SYNTHETIC_CORE_MODEL_SLUGS)
 SYNTHETIC_AUX_MODELS_BODY = synthetic_models_payload(_SYNTHETIC_AUX_MODEL_SLUGS)
+# A20～A22（0.165 起）：会话内换模型、压缩后续聊、改推理强度的整段重放，候选侧与 A06 同样走一条入站 WS 连接、
+# 上游只出现预热加若干业务帧；它们不是 HTTP 场景。
 _SYNTHETIC_CORE_SCENARIOS = frozenset(
-    {"A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"}
+    {"A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15", "A20", "A21", "A22"}
 )
-_SYNTHETIC_CORE_WS_SCENARIOS = frozenset({"A05", "A06", "A07"})
+_SYNTHETIC_CORE_WS_SCENARIOS = frozenset({"A05", "A06", "A07", "A20", "A21", "A22"})
+# 只有 A21 的 WS 业务帧可能带 compaction_trigger：上游按官方形态回一个 compaction 输出项，客户端（候选驱动）据此
+# 在压缩后的整段重放帧里带回它；其余场景一律保持空输出。
+_SYNTHETIC_CORE_COMPACTION_SCENARIOS = frozenset({"A21"})
 _SYNTHETIC_CORE_HTTP_SCENARIOS = frozenset(
     {"A03", "A04", "A07", "A08", "A10", "A15"}
 )
@@ -2506,6 +2511,21 @@ class Relay:
                         "x-codex-turn-state": _SYNTHETIC_CORE_TURN_STATE,
                     },
                 })
+            output_items: list[dict] = []
+            compaction_requested = self.args.candidate_core_scenario in _SYNTHETIC_CORE_COMPACTION_SCENARIOS and any(
+                isinstance(item, dict) and item.get("type") == "compaction_trigger"
+                for item in (payload_json.get("input") if isinstance(payload_json.get("input"), list) else [])
+            )
+            if compaction_requested:
+                # 压缩请求（A21）：官方上游回一个 compaction 输出项（不透明的 encrypted_content），客户端用它替换旧窗口。
+                compaction_item = {
+                    "type": "compaction",
+                    "id": f"cmp_candidate_core_{self.args.candidate_core_scenario.lower()}_{ordinal:04d}",
+                    "encrypted_content": "candidate-core-compacted-history",
+                }
+                output_items.append(compaction_item)
+                events.append({"type": "response.output_item.added", "output_index": 0, "item": compaction_item})
+                events.append({"type": "response.output_item.done", "output_index": 0, "item": compaction_item})
             events.append({
                 "type": "response.completed",
                 "response": {
@@ -2513,7 +2533,7 @@ class Relay:
                     "object": "response",
                     "model": model,
                     "status": "completed",
-                    "output": [],
+                    "output": output_items,
                     "usage": {
                         "input_tokens": 1,
                         "output_tokens": 1,

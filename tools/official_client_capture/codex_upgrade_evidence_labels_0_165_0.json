@@ -2780,6 +2780,132 @@
             "surface": "relay"
           },
           "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A20/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A20"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "default",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A20 会话中途换模型：主线模型 → LITE_MODEL → 换回主线模型，三帧入站都不带 previous_response_id。（0.165.0 起，候选合成入站，不接官方客户端；与 A06 同一做法）驱动 drive_candidate_gateway_ws.py 的计划模式在同一条入站连接上串行发帧，网关出站只有一条 WS 连接（A05 建立的 Cookie jar 沿用，A06 之后不重启网关，首个上游连接就是 WS 握手），第 1 条 response.create 消息是网关预热（响应 id 0001 不经过驱动，驱动逐帧核对业务帧响应 id 从 0002 起连续，多补一个预热就会出现缺口而当场失败；frame_role=warmup 由此推出），第 2 条是首个业务消息（frame_role=first_business）。线程角色与整段重放帧标签由引擎按出站帧派生，不在这里声明。",
+          "frame_labels": {
+            "event:response.create:0": {
+              "frame_role": "warmup"
+            },
+            "event:response.create:1": {
+              "frame_role": "first_business"
+            }
+          }
+        },
+        {
+          "glob": "scenarios/A20/egress.pcap",
+          "scenario_ids": [
+            "A20"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A21/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A21"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "default",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A21 压缩后续聊：两轮（第二轮增量）→ 压缩触发帧（previous_response_id 加单项 compaction_trigger，窗口 0）→ 压缩后整段重放（窗口号由驱动写成 1，带上游在压缩帧响应里回的 compaction 项）→ 窗口 1 的增量续轮；上游共 6 条 response.create。（0.165.0 起，候选合成入站，不接官方客户端；与 A06 同一做法）驱动 drive_candidate_gateway_ws.py 的计划模式在同一条入站连接上串行发帧，网关出站只有一条 WS 连接（A05 建立的 Cookie jar 沿用，A06 之后不重启网关，首个上游连接就是 WS 握手），第 1 条 response.create 消息是网关预热（响应 id 0001 不经过驱动，驱动逐帧核对业务帧响应 id 从 0002 起连续，多补一个预热就会出现缺口而当场失败；frame_role=warmup 由此推出），第 2 条是首个业务消息（frame_role=first_business）。线程角色与整段重放帧标签由引擎按出站帧派生，不在这里声明。",
+          "frame_labels": {
+            "event:response.create:0": {
+              "frame_role": "warmup"
+            },
+            "event:response.create:1": {
+              "frame_role": "first_business"
+            }
+          }
+        },
+        {
+          "glob": "scenarios/A21/egress.pcap",
+          "scenario_ids": [
+            "A21"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A22/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A22"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "default",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A22 目录里不支持 update 的模型改推理强度：同一模型 effort low 一轮后改 high 整段重放（入站不带 previous_response_id、不带 configuration_update）。（0.165.0 起，候选合成入站，不接官方客户端；与 A06 同一做法）驱动 drive_candidate_gateway_ws.py 的计划模式在同一条入站连接上串行发帧，网关出站只有一条 WS 连接（A05 建立的 Cookie jar 沿用，A06 之后不重启网关，首个上游连接就是 WS 握手），第 1 条 response.create 消息是网关预热（响应 id 0001 不经过驱动，驱动逐帧核对业务帧响应 id 从 0002 起连续，多补一个预热就会出现缺口而当场失败；frame_role=warmup 由此推出），第 2 条是首个业务消息（frame_role=first_business）。线程角色与整段重放帧标签由引擎按出站帧派生，不在这里声明。",
+          "frame_labels": {
+            "event:response.create:0": {
+              "frame_role": "warmup"
+            },
+            "event:response.create:1": {
+              "frame_role": "first_business"
+            }
+          }
+        },
+        {
+          "glob": "scenarios/A22/egress.pcap",
+          "scenario_ids": [
+            "A22"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
         }
       ]
     },

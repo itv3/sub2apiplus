@@ -109,13 +109,16 @@ class SelectorSyntaxTest(unittest.TestCase):
         """0.165.0 的 A06 帧标签按事件类型序号命中，不再写原始帧序号（候选分片数变化时索引会漂移）。"""
 
         document = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
-        keys = [
-            key
-            for entry in document["entries"]
-            for rule in entry["rules"]
-            for key in (rule.get("frame_labels") or {})
-        ]
-        self.assertEqual(sorted(keys), ["event:response.create:0", "event:response.create:1"])
+        by_scenario: dict[str, list[str]] = {}
+        for entry in document["entries"]:
+            for rule in entry["rules"]:
+                for key in (rule.get("frame_labels") or {}):
+                    by_scenario.setdefault(rule["scenario_ids"][0], []).append(key)
+        # A06 保持原样；A20～A22（候选合成场景，同一条入站连接上网关预热加业务帧）同样按事件类型序号声明 warmup／first_business。
+        self.assertEqual(sorted(by_scenario), ["A06", "A20", "A21", "A22"])
+        for scenario, keys in by_scenario.items():
+            with self.subTest(scenario=scenario):
+                self.assertEqual(sorted(keys), ["event:response.create:0", "event:response.create:1"])
 
 
 class ResolveSelectorsTest(unittest.TestCase):

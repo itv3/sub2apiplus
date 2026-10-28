@@ -205,7 +205,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
             self.assertIn(expected, a15)
         self.assertIn('"A15": {"models_manifest": 1}', self.source)
         self.assertIn(
-            'if scenario in {"A03", "A06", "A07", "A15"} and actual != minimum:',
+            'if scenario in {"A03", "A06", "A07", "A15", "A20", "A21", "A22"} and actual != minimum:',
             self.source,
         )
 
@@ -313,7 +313,157 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn("wait_action A06 responses_ws_response_create 3", self.source)
         self.assertIn("resp_candidate_core_a06_0002", self.source)
         self.assertIn("resp_candidate_core_a06_0003", self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15", "A20", "A21", "A22"}', self.source)
+
+    def test_ws_replay_scenarios_use_the_plan_driver_on_one_connection(self) -> None:
+        """A20～A22（0.165.0 起）：每个场景一条入站 WS 连接、网关预热加驱动帧数的 response.create、恰一次握手。"""
+
+        self.assertIn("run_response_ws_plan()", self.source)
+        self.assertIn("target_ws_replay=$(python3", self.source)
+        self.assertIn("if (( target_ws_replay == 1 )); then", self.source)
+        for scenario, plan, creates in (
+            ("A20", "model-switch", 4), ("A21", "compact-continue", 6), ("A22", "effort-change", 3),
+        ):
+            with self.subTest(scenario=scenario):
+                self.assertIn(f"start_capture {scenario}", self.source)
+                self.assertIn(f"run_response_ws_plan {scenario} {plan}", self.source)
+                self.assertIn(f"wait_action {scenario} responses_ws_handshake_success", self.source)
+                self.assertIn(f"wait_action {scenario} responses_ws_response_create {creates}", self.source)
+                self.assertIn(
+                    f'minimums["{scenario}"] = {{"responses_ws_handshake_success": 1, "responses_ws_response_create": {creates}}}',
+                    self.source,
+                )
+        # 计划驱动的受控响应 id 前缀由场景号推出，序号从 0002 起（0001 是网关预热）；驱动自己逐帧核对。
+        self.assertIn("--expected-id-prefix", self.source)
+        self.assertIn("--second-model \"$lite_model\"", self.source)
+        self.assertIn("--no-update-model \"$no_update_model\"", self.source)
+        # 场景只在 0.165.0 起运行，更早的版本场景集合与改造前相同。
+        replay_block = self.source[self.source.index("if (( target_ws_replay == 1 )); then"):self.source.index("# A07：单次生产入口调用")]
+        self.assertIn("start_capture A20", replay_block)
+        self.assertNotIn("start_capture A07", replay_block)
+        # A20～A22 排在 A06 之后、A07 之前，中间不重启网关：A05 建立的 Cookie jar 继续有效。
+        self.assertLess(self.source.index("start_capture A06"), self.source.index("start_capture A20"))
+        self.assertLess(self.source.index("start_capture A22"), self.source.index("start_capture A07"))
+        self.assertNotIn("restart_service", replay_block)
+
+    def test_ws_replay_models_are_validated_before_any_docker_call(self) -> None:
+        validation = self.source.index("no_update_model=${NO_UPDATE_MODEL:-gpt-5.6-sol}")
+        self.assertLess(validation, self.source.index("work_dir=\"$capture_root/runs/$run_id\""))
+        self.assertIn("A20 换模型需要两个不同的模型", self.source)
+        self.assertIn("候选网关 WebSocket 驱动器没有计划模式", self.source)
+
+    def test_summary_and_exact_counts_cover_replay_scenarios_only_from_0165(self) -> None:
+        self.assertIn('scenario_ids += ["A20", "A21", "A22"]', self.source)
+        self.assertIn("(0, 165, 0)", self.source)
+
+    def _run_replay_block(self, version: str) -> list[list[str]]:
+        """桩环境真实执行 A20～A22 段（含版本开关行），返回按序记录的调用。"""
+
+        gate = next(line for line in self.source.splitlines() if line.startswith("target_ws_replay=$("))
+        start = self.source.index("if (( target_ws_replay == 1 )); then\n  # A20")
+        end = self.source.index("# A07：单次生产入口调用")
+        harness = r"""
+set -e -o pipefail
+codex_version=$1
+LOG=$2
+main_model=main-model
+lite_model=lite-model
+no_update_model=no-update-model
+record() { local IFS=$'\t'; printf '%s\n' "$*" >>"$LOG"; }
+start_capture() { record start_capture "$1"; }
+stop_capture() { record stop_capture; }
+wait_action() { record wait_action "$@"; }
+run_response_ws_plan() { record run_response_ws_plan "$@"; }
+"""
+        with tempfile.TemporaryDirectory(prefix="replay-harness-") as tmp:
+            log = Path(tmp) / "calls.tsv"
+            log.touch()
+            result = subprocess.run(
+                ["bash", "-c", harness + gate + "\n" + self.source[start:end], "replay-harness", version, str(log)],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            return [line.split("\t") for line in log.read_text(encoding="utf-8").splitlines()]
+
+    def test_replay_block_runs_only_from_0165_and_in_order(self) -> None:
+        for version in ("0.157.0", "0.163.0", "0.164.0"):
+            with self.subTest(version=version):
+                self.assertEqual(self._run_replay_block(version), [])
+        for version in ("0.165.0", "0.165.1", "0.166.0"):
+            with self.subTest(version=version):
+                self.assertEqual(self._run_replay_block(version), [
+                    ["start_capture", "A20"], ["run_response_ws_plan", "A20", "model-switch", "--second-model", "lite-model"],
+                    ["wait_action", "A20", "responses_ws_handshake_success"],
+                    ["wait_action", "A20", "responses_ws_response_create", "4"], ["stop_capture"],
+                    ["start_capture", "A21"], ["run_response_ws_plan", "A21", "compact-continue"],
+                    ["wait_action", "A21", "responses_ws_handshake_success"],
+                    ["wait_action", "A21", "responses_ws_response_create", "6"], ["stop_capture"],
+                    ["start_capture", "A22"], ["run_response_ws_plan", "A22", "effort-change", "--no-update-model", "no-update-model"],
+                    ["wait_action", "A22", "responses_ws_handshake_success"],
+                    ["wait_action", "A22", "responses_ws_response_create", "3"], ["stop_capture"],
+                ])
+
+    def test_model_validation_runs_before_work_dir_with_clear_errors(self) -> None:
+        """模型名与 A20 的两个模型必须不同，在任何 docker 调用之前拒绝（真实执行校验段）。"""
+
+        start = self.source.index("no_update_model=${NO_UPDATE_MODEL:-gpt-5.6-sol}")
+        end = self.source.index('work_dir="$capture_root/runs/$run_id"')
+        for version, main, lite, extra, message in (
+            ("0.165.0", "gpt-6.1-sol", "gpt-6.1-sol", "", "LITE_MODEL 不能等于 MAIN_MODEL"),
+            ("0.165.0", "gpt-6.1-sol", "bad model", "", "只能包含字母、数字"),
+            ("0.165.0", "gpt-6.1-sol", "gpt-6-astra", "-bad", "只能包含字母、数字"),
+        ):
+            with self.subTest(main=main, lite=lite, extra=extra):
+                script = "\n".join([
+                    "set -e", f"codex_version={version}", f"main_model='{main}'", f"lite_model='{lite}'",
+                    f"export NO_UPDATE_MODEL='{extra}'" if extra else ":",
+                    self.source[start:end],
+                ])
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+        for version, lite in (("0.165.0", "gpt-6-astra"), ("0.164.0", "gpt-6.1-sol")):
+            with self.subTest(version=version):
+                script = "\n".join(["set -e", f"codex_version={version}", "main_model=gpt-6.1-sol", f"lite_model={lite}", self.source[start:end]])
+                self.assertEqual(subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False).returncode, 0)
+
+    def test_0165_replay_scenarios_are_declared_and_labeled_for_the_candidate(self) -> None:
+        """A20～A22 在 candidate-frozen-core 名下有证据条目：scenario_ids 追加、每个场景一条 WS 连接加 pcap，
+        标签与帧标签与 A06 同形；期望清单里选 A20～A22 的候选侧判据因此有证据来源。"""
+
+        root = Path(__file__).parents[1]
+        manifest = json.loads((root / "codex_upgrade_scenarios_0_165_0.json").read_text(encoding="utf-8"))
+        job = next(item for item in manifest["capture_jobs"] if item["id"] == "candidate-frozen-core")
+        self.assertEqual(job["scenario_ids"][-3:], ["A20", "A21", "A22"])
+        self.assertEqual(job["scenario_ids"][:8], ["A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"])
+        environment = job["steps"][0]["environment"]
+        self.assertEqual(environment["LITE_MODEL"], "{lite_model}")
+        self.assertEqual(environment["MAIN_MODEL"], "{model}")
+        for dependency in ("drive_candidate_gateway_ws.py", "upstream_byte_relay.py", "run_candidate_core_capture.sh"):
+            self.assertIn(dependency, job["tool_dependencies"])
+        labels = json.loads((root / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
+        entry = next(item for item in labels["entries"] if item["job_id"] == "candidate-frozen-core")
+        rules = {rule["glob"]: rule for rule in entry["rules"]}
+        a06 = rules["scenarios/A06/relay/conn001.client_to_upstream.bin"]
+        for scenario in ("A20", "A21", "A22"):
+            with self.subTest(scenario=scenario):
+                rule = rules[f"scenarios/{scenario}/relay/conn001.client_to_upstream.bin"]
+                self.assertEqual(rule["scenario_ids"], [scenario])
+                for key in ("kind", "parser", "derive", "labels", "frame_labels"):
+                    self.assertEqual(rule[key], a06[key], key)
+                self.assertEqual(rule["labels"]["transport"], "websocket")
+                pcap = rules[f"scenarios/{scenario}/egress.pcap"]
+                self.assertEqual((pcap["kind"], pcap["parser"]), ("pcap", "pcap_client_hello"))
+        # 期望清单里选 A20～A22 且只在候选侧机器验的规则，都落在这三个场景的 WS 证据上（record_type 为 websocket_frame／http_request）。
+        expectations = json.loads((root / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8"))
+        selected = {
+            scenario
+            for rule in expectations["rules"]
+            for check in rule["checks"]
+            for scenario in check["select"].get("scenario_ids", [])
+            if scenario in {"A20", "A21", "A22"}
+        }
+        self.assertEqual(selected, {"A20", "A21", "A22"})
 
     def test_a03_uses_cold_lite_prime_before_cookie_replay(self) -> None:
         prime = self.source.index(
@@ -332,7 +482,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('run_response_request A03 "lite-turn-$turn"', self.source)
         self.assertIn("wait_action A03 responses_http_success 4", self.source)
         self.assertIn('"A03": {"responses_http_success": 4}', self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15", "A20", "A21", "A22"}', self.source)
         self.assertIn('event.get("set_cookie_names") == ["_cfuvid"]', self.source)
         self.assertIn(
             'any(b"\\r\\ncookie: <secret>" not in request',

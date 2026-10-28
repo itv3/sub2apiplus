@@ -1505,12 +1505,23 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
                 ]
         return result
 
+    # 0.165.0 起候选冻结核心作业多采 A20～A22（候选合成的 WS 整段重放场景）：scenario_ids 只允许在上一版基础上追加这三个，
+    # 其余执行参数不变。
+    CANDIDATE_REPLAY_SCENARIOS = ["A20", "A21", "A22"]
+
     def assert_carried_fields_equal(self, current: dict, previous: dict) -> None:
         for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
             if field == "steps":
                 self.assertEqual(
                     self.comparable_steps(current[field]), self.comparable_steps(previous[field]), field
                 )
+            elif (
+                field == "scenario_ids"
+                and current["id"] == "candidate-frozen-core"
+                and current[field] != previous[field]
+                and self.MANIFEST_SUFFIX >= "0_165_0"
+            ):
+                self.assertEqual(current[field], previous[field] + self.CANDIDATE_REPLAY_SCENARIOS, field)
             else:
                 self.assertEqual(current[field], previous[field], field)
 
@@ -1925,12 +1936,16 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
                 )
                 self.assertEqual(environment["CODEX_VERSION"], "{target_version}")
                 self.assertEqual(environment["MODEL"], extra.get("MODEL", "{model}"))
-        # 场景编号接上一版清单的 A17，无缺号；新场景都是官方独有（没有候选作业）。
+        # 场景编号接上一版清单的 A17，无缺号；A18、A19 官方独有（没有候选作业），A20～A22 另有候选合成作业
+        # candidate-frozen-core（同一条入站 WS 连接上的整段重放，候选侧不接官方客户端）。
         ids = [item["scenario_id"] for item in self.manifest["evidence_scenarios"]]
         self.assertEqual(ids[-5:], ["A18", "A19", "A20", "A21", "A22"])
         for scenario_id in ("A18", "A19", "A20", "A21", "A22"):
-            self.assertEqual([job["id"] for job in self.manifest["capture_jobs"] if scenario_id in job["scenario_ids"]], [
-                job_id for job_id, item in self.EXPECTED_0165.items() if item[0] == scenario_id])
+            expected_jobs = [job_id for job_id, item in self.EXPECTED_0165.items() if item[0] == scenario_id]
+            if scenario_id in self.CANDIDATE_REPLAY_SCENARIOS:
+                expected_jobs.append("candidate-frozen-core")
+            self.assertEqual(
+                [job["id"] for job in self.manifest["capture_jobs"] if scenario_id in job["scenario_ids"]], expected_jobs)
         # 没有把规则清单外的编号（如 SPEC-BODY-007）写进 covers。
         for item in self.manifest["evidence_scenarios"]:
             self.assertLessEqual(set(item["covers"]), rules, item["scenario_id"])

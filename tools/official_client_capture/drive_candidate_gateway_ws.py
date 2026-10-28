@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""通过同一条网关 WebSocket 串行执行两轮候选 Responses 请求。"""
+"""通过同一条网关 WebSocket 串行执行候选 Responses 请求。
+
+两种用法：
+  * 双轮（A06）：``--first-body``／``--second-body`` 两个请求模板，第二轮带首轮真实 response.id 续链；
+  * 计划（0.165 起的 A20～A22）：``--plan`` 选择一份内置的会话计划（换模型、压缩后续聊、改推理强度），同一条连接上
+    按官方客户端的方式发整段重放帧（不带 previous_response_id）、压缩触发帧和随压缩推进的窗口号，见 ``build_plan``。
+"""
 
 from __future__ import annotations
 
@@ -56,6 +62,16 @@ class TurnResult:
     response_id: str
     terminal_event: str
     events: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class HandshakeIdentity:
+    """计划模式的握手身份：会话、线程、窗口头与握手用 turn metadata（单行 JSON）。"""
+
+    session_id: str
+    thread_id: str
+    window_id: str
+    turn_metadata: str
 
 
 class BufferedSocket:
@@ -284,9 +300,10 @@ def _open_gateway(
     path: str,
     api_key: str,
     codex_version: str,
-    first_body: Path,
+    first_body: Path | None,
     session_affinity: str,
     timeout: float,
+    handshake: "HandshakeIdentity | None" = None,
 ) -> GatewayWebSocket:
     """完成严格 HTTP/1.1 Upgrade，并返回保留尾随字节的 WebSocket。"""
 
@@ -300,18 +317,28 @@ def _open_gateway(
         raise ValueError("Codex 版本必须是完整的 x.y.z 版本。")
     if not path.startswith("/") or " " in path:
         raise ValueError("WebSocket path 必须是绝对路径且不能包含空格。")
-    turn_metadata = _read_limited_text(
-        Path(str(first_body) + ".turn-metadata"),
-        "X-Codex-Turn-Metadata",
-    )
-    thread_id = _read_limited_text(
-        Path(str(first_body) + ".thread-id"),
-        "Thread-Id",
-    )
-    window_id = _read_limited_text(
-        Path(str(first_body) + ".window-id"),
-        "X-Codex-Window-Id",
-    )
+    if handshake is not None:
+        # 计划模式：握手头的身份由计划自己给出（官方客户端也是建连时一次写定，之后复用连接不再重发）。
+        turn_metadata = _reject_header_control("X-Codex-Turn-Metadata", handshake.turn_metadata)
+        thread_id = _reject_header_control("Thread-Id", handshake.thread_id)
+        window_id = _reject_header_control("X-Codex-Window-Id", handshake.window_id)
+        session_id = _reject_header_control("Session-Id", handshake.session_id)
+    else:
+        if first_body is None:
+            raise ValueError("缺少首轮请求模板或握手身份。")
+        turn_metadata = _read_limited_text(
+            Path(str(first_body) + ".turn-metadata"),
+            "X-Codex-Turn-Metadata",
+        )
+        thread_id = _read_limited_text(
+            Path(str(first_body) + ".thread-id"),
+            "Thread-Id",
+        )
+        window_id = _read_limited_text(
+            Path(str(first_body) + ".window-id"),
+            "X-Codex-Window-Id",
+        )
+        session_id = "11111111-1111-4111-8111-111111111111"
     key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
     host_header = f"{host}:{port}"
     request_lines = [
@@ -326,7 +353,7 @@ def _open_gateway(
         "Originator: sub2apiplus_candidate_capture",
         f"Version: {codex_version}",
         "X-Codex-Terminal: unknown",
-        "Session-Id: 11111111-1111-4111-8111-111111111111",
+        f"Session-Id: {session_id}",
         f"Thread-Id: {thread_id}",
         f"X-Client-Request-Id: {thread_id}",
         f"X-Codex-Window-Id: {window_id}",
@@ -569,6 +596,336 @@ def run_session(
         client.close()
 
 
+# ---------------------------------------------------------------------------
+# 计划模式（0.165 起的 A20～A22）
+# ---------------------------------------------------------------------------
+# 候选网关的验收对象是“官方客户端式的入站帧序列”：A20 会话中途换模型、A21 压缩后续聊、A22 目录里不支持
+# configuration_update 的模型改推理强度。官方客户端在这三种情形下都在**同一条 WS 连接**上发整段重放帧（不带
+# previous_response_id、不带 generate），压缩后窗口号加一并由客户端自己写进每帧 client_metadata 的
+# x-codex-window-id 与 turn metadata。候选采集不接官方客户端（A05／A06 也是合成入站），本驱动按同一形态合成
+# 这些帧；形态依据官方 0.165.0 TUI 的非正式实采（m1 换模型、c1 压缩续聊、e6 目录不支持 update 的模型改强度）。
+#
+# 计划里不带 configuration_update：候选侧目前没有任何判据读它（官方 A18／A19 才是它的证据来源），入站带上它
+# 只会让第三方入站形态多一个变量。
+
+PLAN_NAMES = ("model-switch", "compact-continue", "effort-change")
+# 每个计划的会话与线程标识：与 A06 的固定会话互不相同，网关按会话派生的状态不会跨场景串用。
+PLAN_SESSION_IDS = {
+    "model-switch": "20200000-0000-4000-8000-000000000020",
+    "compact-continue": "21210000-0000-4000-8000-000000000021",
+    "effort-change": "22220000-0000-4000-8000-000000000022",
+}
+PLAN_INSTALLATION_ID = "33333333-3333-4333-8333-333333333333"
+PLAN_COMPACTION_MARKER = "$candidate_plan_previous_compaction_item"
+PLAN_INSTRUCTIONS = "候选核心抓包固定指令"
+PLAN_ID_PREFIX_PATTERN = re.compile(r"^resp_candidate_core_a2[0-2]_$")
+
+
+@dataclass(frozen=True)
+class PlanStep:
+    """计划里的一帧：label 用作产物名；chain 为真时带上一帧真实响应 id 续链；其余字段已经是完整的 response.create。"""
+
+    label: str
+    body: dict[str, Any]
+    chain: bool
+    request_kind: str
+
+
+def _plan_turn_id(plan: str, index: int) -> str:
+    """每帧一个固定的 UUIDv4 形态回合 id（候选网关会自己派生出站回合 id，这里只求入站互不相同）。"""
+
+    base = PLAN_SESSION_IDS[plan].replace("-", "")[:8]
+    return f"{base}-0000-4000-8000-{index:012d}"
+
+
+def _plan_carrier() -> dict[str, Any]:
+    """与 A06 的 prepare_a06_bodies 相同的 additional_tools 载体：整段重放帧里它仍排在 input 最前。"""
+
+    return {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [{
+            "type": "custom",
+            "name": "exec",
+            "description": "执行候选核心验证命令",
+        }],
+    }
+
+
+def _plan_user(text: str) -> dict[str, Any]:
+    return {"type": "message", "role": "user", "content": text}
+
+
+def _plan_body(
+    plan: str,
+    index: int,
+    *,
+    model: str,
+    effort: str,
+    input_items: list[dict[str, Any]],
+    window_number: int,
+    request_kind: str,
+) -> dict[str, Any]:
+    """一帧非 Lite 入站 response.create（与 A06 的 write_request_body 非 Lite 形态同源），窗口号与回合 id 逐帧给出。"""
+
+    session_id = PLAN_SESSION_IDS[plan]
+    turn_id = _plan_turn_id(plan, index)
+    window_id = f"{session_id}:{window_number}"
+    metadata = {
+        "installation_id": PLAN_INSTALLATION_ID,
+        "session_id": session_id,
+        "thread_id": session_id,
+        "turn_id": turn_id,
+        "window_id": window_id,
+        "window_number": window_number,
+        "request_kind": request_kind,
+        "thread_source": "user",
+        "capture_variant": f"{plan}-{index}",
+    }
+    body = {
+        "type": "response.create",
+        "model": model,
+        "instructions": PLAN_INSTRUCTIONS,
+        "input": input_items,
+        "tools": [{
+            "type": "function",
+            "name": "read_file",
+            "description": "读取文件",
+            "strict": False,
+            "parameters": {"type": "object", "properties": {}},
+        }],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+        "reasoning": {"effort": effort, "context": "all_turns", "summary": "auto"},
+        "store": False,
+        "stream": True,
+        "include": ["reasoning.encrypted_content"],
+        "prompt_cache_key": session_id,
+        "client_metadata": {
+            "x-codex-installation-id": PLAN_INSTALLATION_ID,
+            "session_id": session_id,
+            "thread_id": session_id,
+            "turn_id": turn_id,
+            "x-codex-window-id": window_id,
+            "x-codex-turn-metadata": json.dumps(metadata, separators=(",", ":")),
+        },
+    }
+    return body
+
+
+def build_plan(
+    plan: str,
+    *,
+    main_model: str,
+    second_model: str = "",
+    no_update_model: str = "",
+    user_text: str = "candidate core probe",
+) -> tuple[HandshakeIdentity, list[PlanStep]]:
+    """生成一份计划的握手身份与有序帧。
+
+    * model-switch（A20）：主线模型一轮 → 换成第二个模型整段重放 → 换回主线模型整段重放；窗口号始终 0。
+    * compact-continue（A21）：两轮（第二轮增量续链）→ 压缩触发帧（增量，窗口 0）→ 压缩后整段重放（带上游回的
+      compaction 项，窗口号 1）→ 窗口 1 里的增量续轮。
+    * effort-change（A22）：目录里不支持 update 的模型 effort low 一轮 → 同一模型 effort high 整段重放；窗口号始终 0。
+    """
+
+    if plan not in PLAN_NAMES:
+        raise ValueError(f"未知计划：{plan}")
+    for label, value in (("main-model", main_model), ("second-model", second_model), ("no-update-model", no_update_model)):
+        if value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
+            raise ValueError(f"--{label} 只能包含字母、数字、点、下划线和连字符。")
+    if not user_text or "\r" in user_text or "\n" in user_text:
+        raise ValueError("user_text 不能为空且不能含换行。")
+    users = [f"{user_text} {number}" for number in range(1, 6)]
+    carrier = _plan_carrier()
+    session_id = PLAN_SESSION_IDS[plan]
+    steps: list[PlanStep] = []
+
+    def add(label: str, chain: bool, request_kind: str = "turn", **fields: Any) -> None:
+        steps.append(PlanStep(label, _plan_body(plan, len(steps) + 1, request_kind=request_kind, **fields), chain, request_kind))
+
+    if plan == "model-switch":
+        if not main_model or not second_model or main_model == second_model:
+            raise ValueError("model-switch 需要两个互不相同的模型（--main-model、--second-model）。")
+        add("turn-1", False, model=main_model, effort="high", window_number=0,
+            input_items=[carrier, _plan_user(users[0])])
+        add("switch-to-second", False, model=second_model, effort="high", window_number=0,
+            input_items=[carrier, _plan_user(users[0]), _plan_user(users[1])])
+        add("switch-back", False, model=main_model, effort="high", window_number=0,
+            input_items=[carrier, _plan_user(users[0]), _plan_user(users[1]), _plan_user(users[2])])
+    elif plan == "compact-continue":
+        if not main_model:
+            raise ValueError("compact-continue 需要 --main-model。")
+        add("turn-1", False, model=main_model, effort="high", window_number=0,
+            input_items=[carrier, _plan_user(users[0])])
+        # 续轮与 A06 同形：保留首轮业务前缀（不含载体）并追加一条用户消息。
+        add("turn-2", True, model=main_model, effort="high", window_number=0,
+            input_items=[_plan_user(users[0]), _plan_user(users[1])])
+        add("compaction", True, request_kind="compaction", model=main_model, effort="high", window_number=0,
+            input_items=[{"type": "compaction_trigger"}])
+        add("replay-after-compaction", False, model=main_model, effort="high", window_number=1,
+            input_items=[carrier, _plan_user(users[0]), _plan_user(users[1]),
+                         {PLAN_COMPACTION_MARKER: True}, _plan_user(users[2])])
+        add("turn-after-replay", True, model=main_model, effort="high", window_number=1,
+            input_items=[_plan_user(users[0]), _plan_user(users[1]), {PLAN_COMPACTION_MARKER: True},
+                         _plan_user(users[2]), _plan_user(users[3])])
+    else:
+        if not no_update_model:
+            raise ValueError("effort-change 需要 --no-update-model。")
+        add("turn-1", False, model=no_update_model, effort="low", window_number=0,
+            input_items=[carrier, _plan_user(users[0])])
+        add("effort-raised", False, model=no_update_model, effort="high", window_number=0,
+            input_items=[carrier, _plan_user(users[0]), _plan_user(users[1])])
+
+    first = steps[0].body["client_metadata"]
+    handshake = HandshakeIdentity(
+        session_id=session_id,
+        thread_id=session_id,
+        window_id=f"{session_id}:0",
+        turn_metadata=first["x-codex-turn-metadata"],
+    )
+    return handshake, steps
+
+
+def _event_output_items(events: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    """取一轮的全部输出项：终态事件 response.output 优先；网关只转发逐项事件时退回 response.output_item.done。"""
+
+    for event in reversed(events):
+        response = event.get("response")
+        if event.get("type") in SUCCESS_TERMINALS and isinstance(response, dict):
+            output = response.get("output")
+            if isinstance(output, list) and output:
+                return [item for item in output if isinstance(item, dict)]
+    return [
+        event["item"] for event in events
+        if event.get("type") == "response.output_item.done" and isinstance(event.get("item"), dict)
+    ]
+
+
+def _resolve_plan_body(
+    body: dict[str, Any],
+    compaction_item: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把计划里的“上游回的 compaction 项”占位换成真实输出项；没有真实项时拒绝，不伪造。"""
+
+    resolved = json.loads(json.dumps(body))
+    items: list[Any] = []
+    for item in resolved["input"]:
+        if isinstance(item, dict) and PLAN_COMPACTION_MARKER in item:
+            if compaction_item is None:
+                raise WebSocketProtocolError("压缩触发帧的响应里没有 compaction 输出项，不能构造压缩后的整段重放帧。")
+            items.append(compaction_item)
+        else:
+            items.append(item)
+    resolved["input"] = items
+    return resolved
+
+
+def run_plan(
+    *,
+    host: str,
+    port: int,
+    path: str,
+    api_key: str,
+    codex_version: str,
+    plan: str,
+    main_model: str,
+    second_model: str,
+    no_update_model: str,
+    user_text: str,
+    output_dir: Path,
+    summary_path: Path,
+    session_affinity: str,
+    expected_id_prefix: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """在同一连接内按计划串行发帧；每帧终态都校验响应 id，整份计划的 id 必须是受控序列 0002、0003…（0001 是网关预热）。"""
+
+    if timeout <= 0 or timeout > 600:
+        raise ValueError("timeout 必须在 0..600 秒内。")
+    if port < 1 or port > 65535:
+        raise ValueError("port 必须在 1..65535。")
+    if not PLAN_ID_PREFIX_PATTERN.fullmatch(expected_id_prefix):
+        raise ValueError("expected_id_prefix 必须形如 resp_candidate_core_a20_。")
+    handshake, steps = build_plan(
+        plan, main_model=main_model, second_model=second_model, no_update_model=no_update_model, user_text=user_text,
+    )
+    for step in steps:
+        target = output_dir / f"{step.label}.sse"
+        if target.exists():
+            raise FileExistsError(f"拒绝覆盖已有验收产物：{target}")
+    if summary_path.exists():
+        raise FileExistsError(f"拒绝覆盖已有验收产物：{summary_path}")
+    client = _open_gateway(
+        host=host, port=port, path=path, api_key=api_key, codex_version=codex_version, first_body=None,
+        session_affinity=session_affinity, timeout=timeout, handshake=handshake,
+    )
+    try:
+        results: list[TurnResult] = []
+        compaction_item: dict[str, Any] | None = None
+        previous_id = ""
+        for index, step in enumerate(steps):
+            body = _resolve_plan_body(step.body, compaction_item)
+            if step.chain:
+                if not previous_id:
+                    raise WebSocketProtocolError("计划要求续链但没有上一帧的响应 id。")
+                body = {**{"type": body["type"], "model": body["model"]}, "previous_response_id": previous_id,
+                        **{key: value for key, value in body.items() if key not in {"type", "model"}}}
+            client.send_json(body)
+            result = _collect_turn(client, timeout)
+            expected = f"{expected_id_prefix}{index + 2:04d}"
+            if result.response_id != expected:
+                raise WebSocketProtocolError(
+                    f"第 {index + 1} 帧的响应 id {result.response_id!r} 不是受控序列的 {expected!r}："
+                    "网关多发或少发了上游帧（例如补了第二个预热）。"
+                )
+            results.append(result)
+            previous_id = result.response_id
+            items = _event_output_items(result.events)
+            found = [item for item in items if item.get("type") == "compaction"]
+            if step.request_kind == "compaction":
+                if len(found) != 1:
+                    raise WebSocketProtocolError("压缩触发帧的响应必须恰有 1 个 compaction 输出项。")
+                compaction_item = found[0]
+            elif found:
+                raise WebSocketProtocolError("非压缩帧的响应不应带 compaction 输出项。")
+        secret = api_key.encode("utf-8")
+        for result in results:
+            encoded_events = json.dumps(result.events, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            if secret in encoded_events:
+                raise WebSocketProtocolError("服务端事件意外包含入口凭据，拒绝落盘。")
+        for step, result in zip(steps, results):
+            _write_sse(output_dir / f"{step.label}.sse", result)
+        summary = {
+            "schema_version": "candidate-gateway-ws-plan/v1",
+            "codex_version": codex_version,
+            "plan": plan,
+            "status": "complete",
+            "transport": "websocket",
+            "http_status": 101,
+            "same_connection": True,
+            "session_affinity": session_affinity,
+            "turns": [
+                {
+                    "turn": number,
+                    "label": step.label,
+                    "model": step.body["model"],
+                    "chained": step.chain,
+                    "request_kind": step.request_kind,
+                    "window_number": json.loads(step.body["client_metadata"]["x-codex-turn-metadata"])["window_number"],
+                    "response_id": result.response_id,
+                    "terminal_event": result.terminal_event,
+                    "event_types": [event["type"] for event in result.events],
+                }
+                for number, (step, result) in enumerate(zip(steps, results), start=1)
+            ],
+        }
+        _write_private(summary_path, (json.dumps(summary, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        return summary
+    finally:
+        client.close()
+
+
 def main() -> int:
     """解析参数并执行双轮候选网关 WebSocket 验收。"""
 
@@ -578,11 +935,26 @@ def main() -> int:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--path", default="/v1/responses")
     parser.add_argument("--codex-version", required=True)
-    parser.add_argument("--first-body", type=Path, required=True)
-    parser.add_argument("--second-body", type=Path, required=True)
-    parser.add_argument("--first-output", type=Path, required=True)
-    parser.add_argument("--second-output", type=Path, required=True)
+    parser.add_argument("--first-body", type=Path)
+    parser.add_argument("--second-body", type=Path)
+    parser.add_argument("--first-output", type=Path)
+    parser.add_argument("--second-output", type=Path)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument(
+        "--plan",
+        choices=PLAN_NAMES,
+        help="计划模式（0.165 起的 A20～A22）：同一连接内按内置会话计划发整段重放帧；与双轮参数互斥。",
+    )
+    parser.add_argument("--main-model", default="", help="计划模式的主线模型。")
+    parser.add_argument("--second-model", default="", help="model-switch 的第二个模型。")
+    parser.add_argument("--no-update-model", default="", help="effort-change 用的、目录里不支持 update 的模型。")
+    parser.add_argument("--user-text", default="candidate core probe", help="计划模式的用户消息正文前缀。")
+    parser.add_argument("--plan-output-dir", type=Path, help="计划模式逐帧 SSE 产物目录。")
+    parser.add_argument(
+        "--expected-id-prefix",
+        default="",
+        help="计划模式的受控响应 id 前缀，如 resp_candidate_core_a20_；序号必须从 0002 起连续。",
+    )
     parser.add_argument("--session-affinity", default="candidate-core-a06")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
@@ -593,8 +965,43 @@ def main() -> int:
     )
     arguments = parser.parse_args()
     try:
+        two_turn = (arguments.first_body, arguments.second_body, arguments.first_output, arguments.second_output)
+        if arguments.plan:
+            if any(item is not None for item in two_turn):
+                parser.error("--plan 不能与 --first-body／--second-body／--first-output／--second-output 同用")
+            if arguments.plan_output_dir is None or not arguments.expected_id_prefix:
+                parser.error("--plan 必须同时给 --plan-output-dir 与 --expected-id-prefix")
+        elif any(item is None for item in two_turn):
+            parser.error("双轮模式必须给 --first-body、--second-body、--first-output、--second-output")
         with os.fdopen(os.dup(arguments.api_key_fd), "rb") as key_stream:
             api_key = read_api_key(key_stream)
+        if arguments.plan:
+            summary = run_plan(
+                host=arguments.host,
+                port=arguments.port,
+                path=arguments.path,
+                api_key=api_key,
+                codex_version=arguments.codex_version,
+                plan=arguments.plan,
+                main_model=arguments.main_model,
+                second_model=arguments.second_model,
+                no_update_model=arguments.no_update_model,
+                user_text=arguments.user_text,
+                output_dir=arguments.plan_output_dir,
+                summary_path=arguments.summary,
+                session_affinity=arguments.session_affinity,
+                expected_id_prefix=arguments.expected_id_prefix,
+                timeout=arguments.timeout,
+            )
+            print(
+                json.dumps(
+                    {"status": summary["status"], "same_connection": summary["same_connection"],
+                     "turn_count": len(summary["turns"]), "plan": summary["plan"]},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
         summary = run_session(
             host=arguments.host,
             port=arguments.port,

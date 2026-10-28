@@ -49,6 +49,21 @@ if [[ ! $run_id =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "RUN_ID 只能包含字母、数字、点、下划线和连字符。" >&2
   exit 2
 fi
+# A20～A22（0.165.0 起）：会话内换模型、压缩后续聊、改推理强度的整段重放。A20 的第二个模型取 LITE_MODEL（须与 MAIN_MODEL 不同），
+# A22 用目录里不支持 configuration_update 的模型（NO_UPDATE_MODEL，缺省 gpt-5.6-sol，合成目录里有）。三个模型名都在任何
+# docker 调用之前校验，与官方作业的 SWITCH_MODEL／MODEL 同一字符集。
+no_update_model=${NO_UPDATE_MODEL:-gpt-5.6-sol}
+for model_name in "$main_model" "$lite_model" "$no_update_model"; do
+  if [[ ! $model_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "MAIN_MODEL、LITE_MODEL 与 NO_UPDATE_MODEL 只能包含字母、数字、点、下划线和连字符。" >&2
+    exit 2
+  fi
+done
+target_ws_replay=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 165, 0) else 0)' "$codex_version")
+if (( target_ws_replay == 1 )) && [[ $main_model == "$lite_model" ]]; then
+  echo "A20 换模型需要两个不同的模型：LITE_MODEL 不能等于 MAIN_MODEL。" >&2
+  exit 2
+fi
 
 work_dir="$capture_root/runs/$run_id"
 container_work_dir="$capture_mount/runs/$run_id"
@@ -441,7 +456,11 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 scenarios = []
-for scenario_id in ("A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"):
+scenario_ids = ["A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"]
+# 0.165.0 起多 A20～A22；目标版本是命令行第 12 个参数，旧版本的汇总与改造前逐字相同。
+if tuple(map(int, sys.argv[12].split("."))) >= (0, 165, 0):
+    scenario_ids += ["A20", "A21", "A22"]
+for scenario_id in scenario_ids:
     scenario_root = root / "scenarios" / scenario_id
     interventions = scenario_root / "relay" / "intervention.jsonl"
     actions = Counter()
@@ -728,6 +747,10 @@ gateway_help=$(python3 "$gateway_ws_driver" --help 2>&1 || true)
 if ! grep -q -- '--api-key-fd' <<<"$gateway_help" ||
   ! grep -q -- '--codex-version' <<<"$gateway_help"; then
   echo "候选网关 WebSocket 双轮驱动器缺失或没有目标版本参数。" >&2
+  exit 1
+fi
+if (( target_ws_replay == 1 )) && ! grep -q -- '--plan' <<<"$gateway_help"; then
+  echo "候选网关 WebSocket 驱动器没有计划模式（--plan），不能采 A20～A22。" >&2
   exit 1
 fi
 
@@ -1222,6 +1245,34 @@ run_response_ws_session() {
     3< <(printf '%s' "$api_key")
 }
 
+# 计划模式（A20～A22）：同一条入站连接上按内置会话计划发帧。第 1 个业务帧的响应 id 必须是受控序列的 0002（0001 是网关预热），
+# 之后逐帧连续；多补预热或少发帧都会让 id 序列出现缺口，驱动当场失败。
+run_response_ws_plan() {
+  local scenario=$1
+  local plan=$2
+  shift 2
+  local trigger_root="$work_dir/scenarios/$scenario/trigger"
+  local id_prefix="resp_candidate_core_$(printf '%s' "$scenario" | tr 'A-Z' 'a-z')_"
+  clear_account_gate
+  mkdir -p "$trigger_root/plan"
+  python3 "$gateway_ws_driver" \
+    --host 127.0.0.1 \
+    --port "$service_port" \
+    --path /v1/responses \
+    --codex-version "$codex_version" \
+    --plan "$plan" \
+    --main-model "$main_model" \
+    --plan-output-dir "$trigger_root/plan" \
+    --expected-id-prefix "$id_prefix" \
+    --summary "$trigger_root/ws-plan-session.json" \
+    --session-affinity "candidate-core-$(printf '%s' "$scenario" | tr 'A-Z' 'a-z')" \
+    --user-text "candidate core probe${PROMPT_HTML_PROBE:-}" \
+    --timeout 180 \
+    "$@" \
+    --api-key-fd 3 \
+    3< <(printf '%s' "$api_key")
+}
+
 # A03：先用 Lite zstd 冷请求建立 Cookie jar；该请求与官方 Lite 专项的
 # 冷启动前提一致。随后抓默认非 Lite 样本，并用两轮 Lite zstd 建立
 # turn-state 闭环。
@@ -1351,6 +1402,33 @@ fi
 wait_action A06 responses_ws_handshake_success
 wait_action A06 responses_ws_response_create 3
 stop_capture
+
+# A20～A22（0.165.0 起）：候选网关对官方客户端式“整段重放”的行为。入站仍是合成的（与 A05／A06 同一做法，候选采集不接官方
+# 客户端），帧形态与窗口号取自官方 0.165.0 TUI 的非正式实采：官方客户端在换模型、压缩后新窗口、目录不支持 update 的模型
+# 改推理强度时，都在同一条连接上发整段重放帧（不带 previous_response_id、不带 generate），压缩后窗口号加一并由客户端自己
+# 写进每帧 client_metadata 的 x-codex-window-id。每个场景一条入站连接、上游应恰有一次握手加“预热＋业务帧”。
+if (( target_ws_replay == 1 )); then
+  # A20：主线模型 → LITE_MODEL → 换回主线模型。
+  start_capture A20
+  run_response_ws_plan A20 model-switch --second-model "$lite_model"
+  wait_action A20 responses_ws_handshake_success
+  wait_action A20 responses_ws_response_create 4
+  stop_capture
+
+  # A21：两轮（第二轮增量）→ 压缩触发帧 → 压缩后整段重放（窗口 1，带上游回的 compaction 项）→ 窗口 1 里的增量续轮。
+  start_capture A21
+  run_response_ws_plan A21 compact-continue
+  wait_action A21 responses_ws_handshake_success
+  wait_action A21 responses_ws_response_create 6
+  stop_capture
+
+  # A22：目录里不支持 configuration_update 的模型，effort low 一轮后改 high 整段重放。
+  start_capture A22
+  run_response_ws_plan A22 effort-change --no-update-model "$no_update_model"
+  wait_action A22 responses_ws_handshake_success
+  wait_action A22 responses_ws_response_create 3
+  stop_capture
+fi
 
 # A07：单次生产入口调用；冻结次数的 502 WS 握手失败后才允许 HTTP SSE 成功。
 start_capture A07
@@ -2582,6 +2660,11 @@ if ws_cookie_prime:
 if tuple(map(int, codex_version.split("."))) >= (0, 159, 0):
     minimums["A04"] = {"responses_http_success": 6}
     minimums["A05"] = {**minimums["A05"], "responses_ws_response_create": 3}
+# 0.165.0 起 A20～A22：各一次 WS 握手（整段重放不重连），response.create 次数＝网关预热 1＋驱动帧数（4／6／3）。
+if tuple(map(int, codex_version.split("."))) >= (0, 165, 0):
+    minimums["A20"] = {"responses_ws_handshake_success": 1, "responses_ws_response_create": 4}
+    minimums["A21"] = {"responses_ws_handshake_success": 1, "responses_ws_response_create": 6}
+    minimums["A22"] = {"responses_ws_handshake_success": 1, "responses_ws_response_create": 3}
 for scenario, wanted in minimums.items():
     scenario_root = root / "scenarios" / scenario / "relay"
     manifest = json.loads((scenario_root / "relay.json").read_text(encoding="utf-8"))
@@ -2611,7 +2694,7 @@ for scenario, wanted in minimums.items():
         counts[event["action"]] += 1
     for action, minimum in wanted.items():
         actual = counts[action]
-        if scenario in {"A03", "A06", "A07", "A15"} and actual != minimum:
+        if scenario in {"A03", "A06", "A07", "A15", "A20", "A21", "A22"} and actual != minimum:
             raise SystemExit(f"{scenario} {action} 次数 {actual} != {minimum}")
         if actual < minimum:
             raise SystemExit(f"{scenario} {action} 次数 {actual} < {minimum}")

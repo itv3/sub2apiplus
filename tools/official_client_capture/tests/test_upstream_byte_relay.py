@@ -1400,6 +1400,141 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
         self.assertIn("禁止配置任何生产上游", production_map.stderr)
 
 
+class SyntheticCoreReplayScenariosTest(unittest.TestCase):
+    """A20～A22（0.165.0 起）：候选合成 WS 场景。入站同 A06，上游只回最小成功事件；A21 的压缩帧另回一个 compaction 输出项。"""
+
+    @staticmethod
+    def _masked_text_frame(payload: dict) -> bytes:
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        mask = b"\x01\x02\x03\x04"
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(raw))
+        if len(raw) < 126:
+            return bytes([0x81, 0x80 | len(raw)]) + mask + masked
+        return bytes([0x81, 0x80 | 126]) + struct.pack(">H", len(raw)) + mask + masked
+
+    def _serve(self, scenario: str, frames: list[dict]) -> list[dict]:
+        """用真实的 Relay 处理函数跑一条核心 WS 连接，返回上游回给客户端的全部 JSON 事件。"""
+
+        with tempfile.TemporaryDirectory(prefix="relay-replay-") as directory:
+            # 不走 Relay.__init__（它要加载 TLS 证书）：只补处理 WS 业务帧用到的几个属性。
+            relay = object.__new__(Relay)
+            relay.args = SimpleNamespace(candidate_core_scenario=scenario)
+            relay.out = Path(directory)
+            relay._core_ws_response_creates = 0
+            relay._stop_requested = False
+
+            class Recorder:
+                def write(self, direction: str, data: bytes) -> None:
+                    pass
+
+            class Writer:
+                def __init__(self) -> None:
+                    self.data = bytearray()
+
+                def write(self, data: bytes) -> None:
+                    self.data.extend(data)
+
+                async def drain(self) -> None:
+                    pass
+
+            async def run() -> bytes:
+                relay._core_counter_lock = asyncio.Lock()
+                reader = asyncio.StreamReader()
+                for frame in frames:
+                    reader.feed_data(self._masked_text_frame(frame))
+                reader.feed_eof()
+                writer = Writer()
+                await relay._serve_synthetic_core_websocket(
+                    reader, writer, Recorder(), 1, "GET /backend-api/codex/responses HTTP/1.1", {},
+                )
+                return bytes(writer.data)
+
+            wire = asyncio.run(run())
+        events, position = [], 0
+        while position < len(wire):
+            length = wire[position + 1]
+            position += 2
+            if length == 126:
+                length = struct.unpack(">H", wire[position:position + 2])[0]
+                position += 2
+            events.append(json.loads(wire[position:position + length]))
+            position += length
+        return events
+
+    def test_scenarios_are_ws_only_and_fail_closed_for_http(self) -> None:
+        line = "GET /backend-api/codex/responses HTTP/1.1"
+        head = (
+            line.encode("ascii") + b"\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n\r\n"
+        )
+        for scenario in ("A20", "A21", "A22"):
+            with self.subTest(scenario=scenario):
+                handshake = _synthetic_core_response(scenario, "chatgpt.com", line, head, b"", 1, "0.165.0")
+                self.assertIsNotNone(handshake)
+                self.assertTrue(handshake.websocket)
+                self.assertIsNone(_synthetic_core_response(
+                    scenario, "chatgpt.com", "POST /backend-api/codex/responses HTTP/1.1", b"", b"", 1, "0.165.0",
+                ), "新场景没有 HTTP Responses，POST 一律本地拒绝")
+                models = _synthetic_core_response(
+                    scenario, "chatgpt.com", "GET /backend-api/codex/models?client_version=0.165.0 HTTP/1.1", b"", b"", 1, "0.165.0",
+                )
+                self.assertIsNotNone(models)
+                self.assertEqual(models.action, "models_manifest")
+        for name in (b'"slug":"gpt-6.1-sol"', b'"slug":"gpt-6-astra"', b'"slug":"gpt-5.6-sol"'):
+            self.assertIn(name, models.wire)
+
+    def test_cli_accepts_new_scenarios_only_with_candidate_core_profile(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        for scenario in ("A20", "A21", "A22"):
+            with self.subTest(scenario=scenario):
+                done = subprocess.run(
+                    [sys.executable, str(script), "--cert", "missing.crt", "--key", "missing.key", "--output", _isolated_output(self),
+                     "--codex-version", "0.165.0", "--candidate-core-scenario", scenario],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(done.returncode, 2)
+                self.assertIn("--candidate-core-scenario 只能与 candidate-core-v1 同时使用", done.stderr)
+        bad = subprocess.run(
+            [sys.executable, str(script), "--cert", "missing.crt", "--key", "missing.key", "--output", _isolated_output(self),
+             "--synthetic-profile", "candidate-core-v1", "--allow-synthetic-responses", "--codex-version", "0.165.0",
+             "--candidate-core-scenario", "A23"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn("invalid choice", bad.stderr)
+
+    def test_a21_compaction_frame_gets_a_compaction_output_item(self) -> None:
+        events = self._serve("A21", [
+            {"type": "response.create", "model": "m", "generate": False, "input": []},
+            {"type": "response.create", "model": "m", "input": [{"type": "message"}]},
+            {"type": "response.create", "model": "m", "previous_response_id": "resp_candidate_core_a21_0002",
+             "input": [{"type": "compaction_trigger"}]},
+            {"type": "response.create", "model": "m", "input": [{"type": "message"}]},
+        ])
+        completed = [event for event in events if event["type"] == "response.completed"]
+        self.assertEqual([event["response"]["id"] for event in completed],
+                         [f"resp_candidate_core_a21_{n:04d}" for n in (1, 2, 3, 4)])
+        self.assertEqual([len(event["response"]["output"]) for event in completed], [0, 0, 1, 0])
+        item = completed[2]["response"]["output"][0]
+        self.assertEqual(item["type"], "compaction")
+        self.assertEqual(item["id"], "cmp_candidate_core_a21_0003")
+        done = [event for event in events if event["type"] == "response.output_item.done"]
+        self.assertEqual([event["item"] for event in done], [item])
+        added = [event for event in events if event["type"] == "response.output_item.added"]
+        self.assertEqual(len(added), 1)
+
+    def test_other_scenarios_never_emit_compaction_items(self) -> None:
+        for scenario in ("A06", "A20", "A22"):
+            with self.subTest(scenario=scenario):
+                events = self._serve(scenario, [
+                    {"type": "response.create", "model": "m", "input": [{"type": "compaction_trigger"}]},
+                ])
+                completed = [event for event in events if event["type"] == "response.completed"]
+                self.assertEqual(len(completed), 1)
+                self.assertEqual(completed[0]["response"]["output"], [])
+                self.assertFalse([event for event in events if event["type"].startswith("response.output_item")])
+
+
 class ScrubbedRelayEvidenceTest(unittest.TestCase):
     def test_manifest_copy_creates_destination_without_wire_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
