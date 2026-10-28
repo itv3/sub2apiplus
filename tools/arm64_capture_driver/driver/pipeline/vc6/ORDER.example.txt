@@ -1,0 +1,34 @@
+# VC-6 执行顺序示例（复制到 <PREP>/vc6/ORDER.txt 再按本轮改；vc-pipeline.sh 的 VC6 阶段逐行执行）。
+# 行格式：  run <名字> <脚本> [标志]      |      handoff <名字> <说明>
+#   <脚本> 写相对本目录（<驱动目录>/pipeline/vc6/）的文件名，或绝对路径。
+#   标志（逗号分隔）：
+#     capture＝步骤开始前打开采集账号（该步骤要发真实业务请求）；
+#     off＝步骤成功后立刻关回采集账号（最后一个 capture 步骤成功后无论如何关）；
+#     retry＝调度者声明该步骤“可证明幂等”，失败后按 PIPE_RETRY_MAX 重试。缺省没有任何步骤带 retry：这些脚本多数拒绝覆盖已完成的阶段、
+#            或会写收据／批次，失败后盲目重跑只会失败或重复写；只有读完脚本确认幂等的步骤（下面只有 clean-cache）才加。
+#   run 步骤成功后写 <PREP>/pipeline/vc6-done/<名字>，--from VC6 续跑时自动跳过；强制重跑先删对应标记。
+#   handoff 等待 $RUNROOT/handoff/<名字>.done，由本机脚本 local/vc6-local-commit.sh 做完后自动创建（推荐起跑带 --wait-handoff 60）。
+# 顺序要点：① 首次交付收据先于私有归档（deliver-1 → private-archive）；② 门禁收据、激活收据的三连命令（facts／finalize／replay）
+# 收成 vc6-gate-receipt.sh 与 vc6-activation-receipt.sh；③ 晋升后清缓存收成 vc6-clean-cache.sh；④ 带参数的 switch／deliver 各包一层，
+# 因为 ORDER 的 run 行不能带参数。清理执行（vc6-cleanup-execute.sh）不在这里：老板批准后手工跑，见 README“VC-6 清理”。
+run     prep                  pre-vc6-prep.sh
+run     promote               vc6-promote.sh
+run     clean-cache           vc6-clean-cache.sh                 retry
+run     gates                 vc6-gates.sh
+handoff local-sync            本机执行：bash <驱动目录>/pipeline/local/vc6-local-commit.sh sync（同步生产树提交并上传增量 bundle，写 vc6-pc.txt）
+run     gate-receipt          vc6-gate-receipt.sh
+run     build                 vc6-build.sh
+run     canary                vc6-canary.sh
+run     switch-production     vc6-switch-production.sh           capture
+run     switch-rollback       vc6-switch-rollback.sh             capture
+run     switch-restore        vc6-switch-restore.sh              capture,off
+run     activation-receipt    vc6-activation-receipt.sh
+run     canonical-activation  vc6-canonical-activation.sh
+handoff local-retire          本机执行：bash <驱动目录>/pipeline/local/vc6-local-commit.sh retire（退休提交并上传增量 bundle，写 vc6-retire-pc.txt）
+run     retire-build          vc6-retire-build.sh
+run     retire-switch         vc6-retire-switch.sh               capture,off
+run     retire-canonical      vc6-retire-canonical.sh
+run     deliver-1             vc6-deliver-1.sh
+run     private-archive       vc6-private-archive.sh
+run     cleanup-decision      vc6-cleanup-decision.sh
+run     deliver-2             vc6-deliver-2.sh
