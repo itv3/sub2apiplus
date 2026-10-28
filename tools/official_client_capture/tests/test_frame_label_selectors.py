@@ -84,19 +84,38 @@ class SelectorSyntaxTest(unittest.TestCase):
         pattern = schema["properties"]["artifacts"]["items"]["properties"]["frame_labels"]["propertyNames"]["pattern"]
         self.assertEqual(pattern, cra.FRAME_LABEL_SELECTOR_PATTERN)
 
+    # 选择键写法在 0.165.0 的声明里才开始使用；更早版本的声明已封存证据的重放与重新编目不能变，必须仍是旧写法。
+    FIRST_SELECTOR_VERSION = (0, 165, 0)
+
     def test_every_existing_declaration_key_still_parses_as_a_raw_frame_index(self) -> None:
-        """历史声明里的 frame_labels 键必须全是旧写法且仍合法：已封存证据的重放与重新编目不能变。"""
+        """历史声明里的 frame_labels 键必须全是旧写法且仍合法；0.165.0 起的声明可用任一合法选择键。"""
 
         checked = 0
         for path in sorted(TOOL_ROOT.glob("codex_upgrade_evidence_labels_*.json")):
             document = json.loads(path.read_text(encoding="utf-8"))
+            version = tuple(int(part) for part in document["codex_version"].split("."))
             for entry in document["entries"]:
                 for rule in entry["rules"]:
                     for key in (rule.get("frame_labels") or {}):
                         checked += 1
                         with self.subTest(path=path.name, key=key):
-                            self.assertEqual(parse_frame_label_selector(key)[0], "frame")
+                            parsed = parse_frame_label_selector(key)
+                            self.assertIsNotNone(parsed)
+                            if version < self.FIRST_SELECTOR_VERSION:
+                                self.assertEqual(parsed[0], "frame")
         self.assertGreater(checked, 0)
+
+    def test_0165_a06_declaration_uses_event_selectors(self) -> None:
+        """0.165.0 的 A06 帧标签按事件类型序号命中，不再写原始帧序号（候选分片数变化时索引会漂移）。"""
+
+        document = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
+        keys = [
+            key
+            for entry in document["entries"]
+            for rule in entry["rules"]
+            for key in (rule.get("frame_labels") or {})
+        ]
+        self.assertEqual(sorted(keys), ["event:response.create:0", "event:response.create:1"])
 
 
 class ResolveSelectorsTest(unittest.TestCase):

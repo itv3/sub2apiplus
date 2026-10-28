@@ -908,19 +908,29 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
 
 
 class CandidateA06FrameLabelsTests(unittest.TestCase):
-    """证据标签里每个 A06 ``frame_labels`` 索引都必须落在真实候选帧布局的 response.create 起始帧上。
+    """证据标签里每个 A06 ``frame_labels`` 选择键，在真实候选帧布局上都必须落在 response.create 消息的起始帧上。
 
-    背景：上一版登记时标签写成索引 1，候选网关向上游发出的压缩消息被拆成多个分片帧，预热消息占原始帧 0 至 6，
+    背景：上一版登记时标签写成原始帧序号 1，候选网关向上游发出的压缩消息被拆成多个分片帧，预热消息占原始帧 0 至 6，
     首个业务消息的起始帧其实是 7；手造观测的单测从不核对标签声明与真实分片布局，所以登记全绿、实采才暴露。
-    这里用真实候选实采的帧布局夹具（只记帧序号、事件类型、fin、分片数）核对：标签索引落在续帧上（没有 event_type）会让
-    选择器命中 0 条，封存预检才拒绝——这条测试把拒绝提前到登记阶段。
+    现在标签按事件类型序号命中（``event:response.create:N``，不依赖分片数），这里仍用真实候选实采的帧布局夹具
+    （只记帧序号、事件类型、fin、分片数）核对：旧布局（一条消息拆 7 帧）与官方式布局（一消息一帧）下，选择键都必须
+    命中、且命中的是 response.create 起始帧；写成原始帧序号落在续帧上的旧写法必须能被识别。
     """
 
     FIXTURE = Path(__file__).resolve().parent / "fixtures" / "candidate_a06_ws_frames_0164.json"
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.frames = {item["frame_index"]: item for item in json.loads(cls.FIXTURE.read_text(encoding="utf-8"))["frames"]}
+        cls.frames = json.loads(cls.FIXTURE.read_text(encoding="utf-8"))["frames"]
+
+    @staticmethod
+    def with_opcode(frames: list[dict]) -> list[dict]:
+        """夹具只记起始帧的事件类型；补上数据消息起始帧的操作码，便于调用引擎的选择键解析器。"""
+
+        return [
+            {**frame, "opcode": "TEXT" if frame["event_type"] else "CONT"}
+            for frame in frames
+        ]
 
     def a06_frame_labels(self, path: Path) -> dict[str, dict[str, str]]:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -935,31 +945,47 @@ class CandidateA06FrameLabelsTests(unittest.TestCase):
         return found[0]
 
     def test_fixture_is_a_real_fragmented_layout(self) -> None:
-        starts = sorted(index for index, item in self.frames.items() if item["event_type"] == "response.create")
+        by_index = {item["frame_index"]: item for item in self.frames}
+        starts = sorted(index for index, item in by_index.items() if item["event_type"] == "response.create")
         self.assertEqual(starts, [0, 7, 14])
         # 每条消息的分片数与起始帧间距一致，最后一个分片带 fin。
-        self.assertEqual([self.frames[index]["message_fragment_count"] for index in starts], [7, 7, 3])
-        self.assertTrue(self.frames[6]["fin"] and self.frames[13]["fin"] and self.frames[16]["fin"])
+        self.assertEqual([by_index[index]["message_fragment_count"] for index in starts], [7, 7, 3])
+        self.assertTrue(by_index[6]["fin"] and by_index[13]["fin"] and by_index[16]["fin"])
 
-    def test_every_labeled_index_is_a_response_create_start_frame(self) -> None:
+    def test_declared_selectors_land_on_response_create_start_frames(self) -> None:
         for suffix in ("0_164_0", "0_165_0"):
             with self.subTest(suffix=suffix):
                 labels = self.a06_frame_labels(TOOL_ROOT / f"codex_upgrade_evidence_labels_{suffix}.json")
-                self.assertEqual({key: value["frame_role"] for key, value in labels.items()}, {"0": "warmup", "7": "first_business"})
-                for key in labels:
-                    frame = self.frames[int(key)]
-                    self.assertEqual(frame["event_type"], "response.create", f"frame_labels[{key}] 落在续帧上，选择器会命中 0 条")
-                # 首个业务消息紧接在预热消息最后一个分片之后开始：起始帧 = 预热起始帧 + 预热消息的分片数。
-                warmup, business = int(next(k for k, v in labels.items() if v["frame_role"] == "warmup")), int(
-                    next(k for k, v in labels.items() if v["frame_role"] == "first_business")
-                )
-                self.assertEqual(business, warmup + self.frames[warmup]["message_fragment_count"])
+                resolved = candidate_rule_assertion.resolve_frame_label_selectors(labels, self.with_opcode(self.frames), "A06")
+                by_index = {item["frame_index"]: item for item in self.frames}
+                for index in resolved:
+                    self.assertEqual(by_index[index]["event_type"], "response.create", f"标签落在续帧 {index} 上")
+                # 旧写法（原始帧序号 0／7）与新写法（事件类型序号 0／1）在 0.164 的分片布局上落到同一组起始帧。
+                self.assertEqual({index: value["frame_role"] for index, value in resolved.items()}, {0: "warmup", 7: "first_business"})
 
-    def test_a_label_on_a_continuation_frame_is_detected(self) -> None:
-        """上一版登记的错误写法（first_business 绑在索引 1）在这份真实布局上必须被识别为落在续帧上。"""
+    def test_0165_selectors_do_not_depend_on_fragment_count(self) -> None:
+        """0.165 声明按事件类型序号命中：候选改成一消息一帧后（每帧都是起始帧）标签自动落到官方式的 0／1。"""
 
-        self.assertIsNone(self.frames[1]["event_type"])
-        self.assertNotEqual(self.frames[1]["event_type"], "response.create")
+        labels = self.a06_frame_labels(TOOL_ROOT / "codex_upgrade_evidence_labels_0_165_0.json")
+        self.assertEqual(sorted(labels), ["event:response.create:0", "event:response.create:1"])
+        single_frame = [
+            {"frame_index": index, "event_type": "response.create", "opcode": "TEXT", "fin": True, "message_fragment_count": 1}
+            for index in range(3)
+        ]
+        resolved = candidate_rule_assertion.resolve_frame_label_selectors(labels, single_frame, "A06")
+        self.assertEqual({index: value["frame_role"] for index, value in resolved.items()}, {0: "warmup", 1: "first_business"})
+
+    def test_an_index_label_on_a_continuation_frame_is_rejected(self) -> None:
+        """上一版登记的错误写法（first_business 绑在原始帧序号 1）在真实分片布局上落在续帧：解析器不拒，但续帧没有 event_type，
+        选择器筛不到它——这条测试钉住“续帧没有事件类型”这一前提，旧写法因此会在封存预检零命中。"""
+
+        by_index = {item["frame_index"]: item for item in self.frames}
+        self.assertIsNone(by_index[1]["event_type"])
+        resolved = candidate_rule_assertion.resolve_frame_label_selectors(
+            {"1": {"frame_role": "first_business"}}, self.with_opcode(self.frames), "A06"
+        )
+        self.assertEqual(list(resolved), [1])
+        self.assertIsNone(by_index[list(resolved)[0]]["event_type"])
 
 
 if __name__ == "__main__":
