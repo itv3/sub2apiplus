@@ -1,0 +1,63 @@
+{
+  "base_commit": "c9e7903f89340523c9eca3bd7be9a623cbd9842c",
+  "changed_path_count": 4,
+  "current_commit": "e53b8e0a1df6d55991f6733dd9f85855fbb59a06",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7161,
+  "frozen_path_count": 2318,
+  "identity_sha256": "c7537c80b358231b1d1abf13f1a2b8103c6f56c1b351ecd94f4ae8081f747046",
+  "issued_at_utc": "2026-10-28T06:21:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-slim2b-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/OpenAIQuotaResetCell.vue",
+      "predecessor_sha256s": [
+        "427469c248405fa506bf02dd9b2a721f67166477d5a8df901eb73e5561e57636"
+      ],
+      "reason": "点数取整逻辑收进新文件 utils/codexCredits.ts，OpenAIQuotaResetCell.vue 只留一行 import 与一处调用，显示行为不变 path=frontend/src/components/account/OpenAIQuotaResetCell.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5a16e752d813588586d276f16dfee6899b87605944426a8eecf8dc95a5ba4c8d"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/OpenAIQuotaResetCell.spark_shadow.spec.ts",
+      "predecessor_sha256s": [
+        "008c3e2965593dcd5eb38729aef68c84da7ef97d3e22eef4633ee51e0d0385ee"
+      ],
+      "reason": "点数取整逻辑收进新文件 utils/codexCredits.ts，OpenAIQuotaResetCell.vue 只留一行 import 与一处调用，显示行为不变 path=frontend/src/components/account/__tests__/OpenAIQuotaResetCell.spark_shadow.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "db53c1d04fc83ce438c3be21dc4605231602236d5e49443da92823db108b258d"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "frontend/src/utils/__tests__/codexCredits.spec.ts",
+    "frontend/src/utils/codexCredits.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
