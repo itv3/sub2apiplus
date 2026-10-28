@@ -2493,7 +2493,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		// 定型之前的帧：整段重放帧的重试要从它重新定型（见下面 retryIngressTurn 之后的说明）。
+		// 定型之前的帧：重试要从它重新定型（见下面 retryIngressTurn 之后的说明）。
 		payloadBeforeFinalize := currentPayload
 		finalPayload, _, finalizeErr := prepareOpenAIOfficialEgressSemanticWSFrame(
 			ctx,
@@ -2634,13 +2634,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				continue
 			}
 			if retryIngressTurn(relayErr, turn, connID) {
-				if skipDerivedPrewarm {
-					// 整段重放帧复用了原连接，原连接被对端关闭后第一次写入才会发现，这里换新连接重试同一帧。
-					// 此时 currentPayload 已是定型后的帧（逐项 turn_id、基础指令等已由网关写入），再拿它与客户端原帧做
-					// 业务历史比对会被判成“被篡改”；要退回定型之前的帧，让新连接上的帧与第一次由同一份输入定型。
-					currentPayload = payloadBeforeFinalize
-					currentPayloadBytes = len(payloadBeforeFinalize)
-				}
+				// 换新连接重试同一帧。此时 currentPayload 已是定型之后的帧（逐项 turn_id、基础指令、turn-state 等已由网关
+				// 写入），下一轮再拿它与客户端原帧做业务历史比对会被判成“被篡改”（1008，frame validation failed:
+				// input was modified）。所有可重试的帧（没有 previous_response_id 的全量帧；带续链锚点的严格亲和帧不重试）
+				// 都要退回定型之前的帧，让新连接上的帧与第一次由同一份输入定型。
+				currentPayload = payloadBeforeFinalize
+				currentPayloadBytes = len(payloadBeforeFinalize)
 				continue
 			}
 			finalErr := relayErr

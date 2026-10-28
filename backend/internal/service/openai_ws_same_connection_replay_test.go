@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -752,6 +753,93 @@ func TestOpenAIWSReplayOnSameConnectionOfficialTitleThreadStaysOnOneConnection(t
 	withReplayOnSameConnectionProfile(t, mode, false)
 	legacy, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
 	require.Len(t, legacy, 2, "旧做法：预热之后的全量帧被拆到第二条连接并补预热")
+}
+
+// replayRunWithUpstreamClose 驱动一条下游 WS 入站会话；终端在第 connection 条连接收到第 frameNo 个 response.create 时
+// 把所有上游连接关掉（只触发一次，该帧不应答），模拟对端在写入前后断开。返回终端上的握手。
+func replayRunWithUpstreamClose(
+	t *testing.T,
+	mode string,
+	userAgent string,
+	connection int,
+	frameNo int,
+	steps []replayStep,
+) []codexGateWireRequest {
+	t.Helper()
+	server := startCodexGateWireServer(t, nil)
+	gate := newCodexGateService(t, mode, server)
+	codexGateUseRecorderManifest(gate.service, gate.account)
+	gate.enableWebSocket(t, server)
+	var fired atomic.Bool
+	server.setWebSocketResponder(func(request codexGateWireRequest, frame codexGateWireFrame) [][]byte {
+		if codexGateWebSocketFrameType(frame) != "response.create" {
+			return nil
+		}
+		if connection > 0 && request.connection == connection && len(request.frames) == frameNo && fired.CompareAndSwap(false, true) {
+			server.mu.Lock()
+			for open := range server.open {
+				_ = open.Close()
+			}
+			server.mu.Unlock()
+			return nil
+		}
+		return codexGateDefaultWebSocketResponse(request, frame)
+	})
+	header := http.Header{"User-Agent": []string{userAgent}}
+	var ws *codexGateWebSocketIngress
+	last := ""
+	for index, step := range steps {
+		frame := step(last)
+		if index == 0 {
+			ws = gate.startWebSocketIngress(t, header, codexGateIngressAPIKey(), frame)
+		} else {
+			ws.send(t, frame)
+		}
+		last = ws.readUntilCompleted(t)
+	}
+	ws.close(t)
+	if connection > 0 {
+		require.True(t, fired.Load(), "终端没有触发断开")
+	}
+	return codexGateWebSocketHandshakes(server)
+}
+
+// 派生帧被可重试的失败（上游在写入前后断开）打断后，换新连接重试同一帧：重试用定型之前的帧重新定型，
+// 不会因为拿定型后的帧与客户端原帧比对而被判成“被篡改”（1008）。此前凡是走 retryIngressTurn 的派生帧
+// （没有 previous_response_id 的全量帧：第三方客户端的首帧与每轮整段历史、预热帧与网关补出的业务帧）重试一次就会收到 1008。
+// 这里用旧画像（网关补预热那条路径）与第三方客户端覆盖：断在预热帧、断在业务帧、第二轮整段历史断在业务帧。
+func TestOpenAIWSRetryAfterUpstreamClosedKeepsDerivedFrameValid(t *testing.T) {
+	mode := officialClientProfileModeActive
+	withReplayOnSameConnectionProfile(t, mode, false)
+	turnOne := replayFullFrame(t, "gpt-5.5", replayBaseItem(), codexGateMessage("developer", "developer context"), codexGateMessage("user", "turn one"))
+	turnTwo := replayFullFrame(t, "gpt-5.5", replayBaseItem(), codexGateMessage("developer", "developer context"),
+		codexGateMessage("user", "turn one"), codexGateMessage("user", "turn two"))
+	cases := []struct {
+		name       string
+		connection int
+		frameNo    int
+		steps      []replayStep
+	}{
+		{"首帧断在网关补的预热帧", 1, 1, []replayStep{turnOne}},
+		{"首帧断在业务帧", 1, 2, []replayStep{turnOne}},
+		{"第二轮整段历史断在业务帧", 2, 2, []replayStep{turnOne, turnTwo}},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			baseline := replayRunWithUpstreamClose(t, mode, codexGateThirdPartyUserAgent, 0, 0, item.steps)
+			handshakes := replayRunWithUpstreamClose(t, mode, codexGateThirdPartyUserAgent, item.connection, item.frameNo, item.steps)
+			require.Equal(t, len(baseline)+1, len(handshakes), "断开后恰多一条新连接，会话照常完成")
+			last := codexGateResponseCreateFrames(handshakes[len(handshakes)-1])
+			baseLast := codexGateResponseCreateFrames(baseline[len(baseline)-1])
+			require.Equal(t, len(baseLast), len(last), "新连接上的帧序列与没有断开时最后一条连接相同：预热帧与链上它的业务帧")
+			for index := range last {
+				require.Equal(t,
+					replayFrameFieldsExcept(baseLast[index], "previous_response_id", "client_metadata"),
+					replayFrameFieldsExcept(last[index], "previous_response_id", "client_metadata"),
+					"第 %d 帧：重试后的帧与没有断开时的帧内容一致", index+1)
+			}
+		})
+	}
 }
 
 func TestShouldReplayOnSameOpenAIWSConnection(t *testing.T) {
