@@ -1,0 +1,50 @@
+{
+  "schema_version": "codex-runtime-profile-removal/v1",
+  "status": "complete",
+  "campaign_id": "c01640-formal-vc1-r1-20261027t000000z",
+  "completed_at_utc": "2026-10-28T05:19:07Z",
+  "active_version": "0.164.0",
+  "rollback_version": "0.163.0",
+  "removed_version": "0.160.0",
+  "production_activation_sha256": "1a885b3e9637815ba1aa32d81b6d734d424d0961259210c1f8a6fd3d040464d8",
+  "consumer_scan": {
+    "catalog_references": 0,
+    "selector_references": 0,
+    "unknown_references": 0
+  },
+  "consumer_scan_method": {
+    "catalog_references": "selector 指向的 active release graph 与 active snapshot catalog 中 0.160.0 及其画像摘要的出现次数（退休构建树复算）",
+    "selector_references": "catalogdata/runtime/release-catalog.json 中 0.160.0 的出现次数",
+    "unknown_references": "backend/ 与 frontend/ 中对 catalogdata/runtime/profiles/0.160.0/ 路径或画像摘要（d33a4f09…）的引用，排除：保留的画像字节本身、历史 snapshot-catalogs／release-graphs 归档、profilecontract/testdata 版本专属测试快照与索引；另有 1 个测试文件把该画像摘要当历史夹具常量（backend/internal/officialegress/profilecontract/optional_sections_legacy_baseline_test.go），它们读的是原地保留的画像字节，不是运行消费者，单列于 known_test_fixture_references；其余未解释引用 0",
+    "runtime_projection": "cmd/egressruntimedump 导出的运行 Catalog 闭集由 49 个文件变为 49 个：移出 ./profiles/0.160.0/d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c.json，新增 ./snapshot-catalogs/cfc19daa4027f1032bc82f6867361e75dc961bc8cd3e7e0e65c85b3f9c30b1a3.json，./release-catalog.json 内容随 selector 切换更新；profiles 仅剩 0.163.0、0.164.0；0.160.0 不再出现在任何运行投影文件中（ARM64 退休构建树复算，证据 stages/retire_switch/runtime-projection-before-files.txt 与 runtime-projection-files.txt）"
+  },
+  "known_test_fixture_references": [
+    "backend/internal/officialegress/profilecontract/optional_sections_legacy_baseline_test.go"
+  ],
+  "runtime_catalog_removed": true,
+  "historical_evidence_preserved": true,
+  "historical_archive_references": {
+    "historical_snapshot_catalogs": 5,
+    "historical_release_graphs": 4,
+    "historical_transition_test_references": 1,
+    "note": "历史 snapshot catalog 与 release graph 逐字保留，仍按内容寻址引用 0.160.0；与 0.149.1、0.151.0、0.154.0、0.157.0 退休先例一致，不计入 consumer_scan"
+  },
+  "retired_runtime_profiles": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.160.0/d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c.json",
+      "sha256": "affe6f66b4c817a205225ffda0524d3c5f9802271e50ecab8d1369c5523a1384",
+      "removed_from_runtime_projection_in_commit": "bb9510d1c",
+      "state": "retained_as_frozen_terminal_artifact"
+    }
+  ],
+  "runtime_catalog_after_removal": {
+    "catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source": "campaign:c01640-formal-vc1-r1-20261027t000000z/retirement:codex-legacy-profile"
+    },
+    "release_graph_sha256": "b37768e0306f80702e45fd7e7f81de93ccfeb07de979153151903b1df7e9faed",
+    "snapshot_catalog_sha256": "cfc19daa4027f1032bc82f6867361e75dc961bc8cd3e7e0e65c85b3f9c30b1a3",
+    "promotion_intermediate_snapshot_catalog_sha256": "729cbb49ab5fe59e2ac6f30b3094233308daa3503b06a4f1ced76a8c14b1d7e2"
+  },
+  "retained_bytes_rationale": "0.160.0 的画像字节按原路径逐字保留：d33a4f09…（0.160.0 期 Active，其后一轮又作为 Previous 回滚版本）被历次升级的晋升／激活／终态收据逐文件登记，属 §4.6.7 第 1 类，不得删除、改名或移动。退休因此按运行投影口径执行：Catalog、selector 与运行投影均不再引用该版本，画像字节作为历史终态制品原地保留，与 0.149.1、0.151.0、0.154.0、0.157.0 退休同一处置。"
+}
