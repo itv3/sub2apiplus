@@ -2780,7 +2780,7 @@ ImmortalWrt 192.168.9.1
 Mac／控制端
 ├── 本机：权威源码、候选提交链，以及 Claude Desktop、Claude Code CLI、Claude Code for VS Code 本机正例
 └── SSH → ARM64（官方取证、候选验收、构建与部署统一环境；数据根 /root/docker/capture-cli/data）
-          └── capture-cli 与 sub2apiplus 两个受保护容器经指定出口 DMIT 69.63.195.102 出网
+          └── capture-cli 与 sub2apiplus 两个受保护容器经 policy.json 指定的出口出网
 
 DMIT：线上 Sub2API 生产机，兼作 ARM64 指定出口的出口端；不做候选验收
 ```
@@ -2808,8 +2808,8 @@ Persona。Mac 的代理状态也不会自动影响 ARM64 或 DMIT，服务器侧
 
 官方取证在数据根 `/root/docker/capture-cli/data` 下的隔离容器里进行，不得改变宿主全局状态：
 
-1. 真实上游步骤只在采集容器 `capture-cli`（`capture-network` 固定 IPv4 `172.30.0.10`）执行，经指定出口 DMIT
-   `69.63.195.102` 出网；采集前后都通过出口守护的实时准入，旧环境收据不能替代当前准入；
+1. 真实上游步骤只在采集容器 `capture-cli`（`capture-network` 固定 IPv4 `172.30.0.10`）执行，经 `policy.json`
+   指定的出口出网（出口由用户指定、可更换，文档与工具不写具体地址）；采集前后都通过出口守护的实时准入，旧环境收据不能替代当前准入；
 2. 合成步骤只在断网容器 `capture-cli-synthetic` 执行：`network_mode: none`，与 `capture-cli` 同镜像、挂载逐项相同
    （去掉 Docker 控制面），hosts 等逐容器文件不共用来源；它不在出口准入里；
 3. 目标版本按 VC-0 冻结的 `binary_sha256` 装两处：宿主 `/opt/claude-<v>/claude`（实体目录）与数据根

@@ -1071,7 +1071,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             with mock.patch.object(receipt, "require_runtime_egress", side_effect=AssertionError("历史重放不得读取当前出口")):
                 old = receipt.replay(legacy_root, "legacy-receipt.json")
                 self.assertEqual(receipt.receipt_equivalence_sha256(legacy_root, old), expected)
-                for address, mtu in (("144.34.230.210", 1420), ("69.63.195.102", 1360), ("1.0.0.1", 1380)):
+                for address, mtu in zip((runtime_egress_fixtures.FIXTURE_EXIT_IPV4, *runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S), (1420, 1360, 1380)):
                     changed = json.loads(json.dumps(facts))
                     runtime = changed["runtime_egress"]
                     policy = runtime["policy"]

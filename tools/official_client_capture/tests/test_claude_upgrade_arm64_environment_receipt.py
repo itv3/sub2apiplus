@@ -406,7 +406,7 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
                     [attempt["attempt"] for attempt in container["tls_readiness"][0]["attempts"]],
                     list(range(1, codex_arm.TLS_READINESS_ATTEMPTS + 1)),
                 )
-                self.assertEqual(container["public_egress"]["ip_address"], "69.63.195.102")
+                self.assertEqual(container["public_egress"]["ip_address"], runtime_egress_fixtures.FIXTURE_EXIT_IPV4)
 
         # 外部命令：只调用 docker；curl 每容器连续 3 次、无凭据 HEAD；摘要前后各读一次；版本探针清空环境、隔离 HOME。
         self.assertTrue(all(argv[0] == "docker" for argv in host.calls))

@@ -26,7 +26,7 @@
       "interface": "wg-egress",
       "tunnel_ipv4": "10.79.32.1/30",
       "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-      "endpoint": {"ipv4": "213.35.102.31", "port": 51832},
+      "endpoint": {"ipv4": "8.8.4.102", "port": 51832},
       "listen_port": 51832,
       "mtu": 1420,
       "public_interface": "eth0"
@@ -35,13 +35,13 @@
       "interface": "wg-egress",
       "tunnel_ipv4": "10.79.32.2/30",
       "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-      "endpoint": {"ipv4": "69.63.195.102", "port": 51832},
+      "endpoint": {"ipv4": "1.0.0.102", "port": 51832},
       "listen_port": 51832,
       "mtu": 1420,
       "public_interface": "eth0"
     }
   },
-  "allowed_public_ipv4": ["69.63.195.102"],
+  "allowed_public_ipv4": ["1.0.0.102"],
   "probe_urls": ["https://api.ipify.org", "https://checkip.amazonaws.com", "https://ifconfig.me/ip"],
   "probe_quorum": 2,
   "probe_refresh_seconds": 15,
