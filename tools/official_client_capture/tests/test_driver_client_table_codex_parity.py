@@ -102,6 +102,16 @@ def assert_handed_over(case: unittest.TestCase, label: str, batch: str, owners: 
     case.assertTrue(owners, f"{label} 在 {batch} 之后又改过，但没有一批登记它当前的内容：追加一批（基线提交、改后摘要与残差）")
 
 
+# 对照基线时登记的有意偏差（相对路径 → (基线原文, 现行写法, 理由)）。
+# 入口编排器不再把出口策略文件当 environment-p0 的输入：出口由老板指定、想换就换，换策略不得让入口步骤失效；
+# 保护不变弱（entry-preflight 的 guard.sh egress-check 与环境收据采集时的实时准入每次都核对）。除这一行，其余仍逐字对照。
+BASELINE_DELIBERATE_DEVIATIONS: dict[str, tuple[tuple[bytes, bytes, str], ...]] = {
+    "tools/ci/entry_steps.py": ((
+        b'Input("environment", "file", "/etc/sub2api-egress/policy.json"),\n', b"",
+        "environment-p0 不再以出口策略整文件为输入"),),
+}
+
+
 def load_baseline(relative: str, name: str, *, siblings: dict[str, types.ModuleType] | None = None) -> types.ModuleType | None:
     """从 git 历史读出改造前的模块源码，作为独立模块对象加载：``__file__`` 指向仓库里的同一位置，加载期间临时登记在
     ``sys.modules``（dataclass 按模块名回查）并按需替换同目录的兄弟模块（``siblings``），结束后恢复。"""
@@ -109,6 +119,10 @@ def load_baseline(relative: str, name: str, *, siblings: dict[str, types.ModuleT
     source = git_source(relative)
     if source is None:
         return None
+    for before, after, reason in BASELINE_DELIBERATE_DEVIATIONS.get(relative, ()):
+        # 登记过的有意偏差：把基线里的这一行按现行决定改掉再对照，其余仍逐字对照。行在基线里找不到就失败，防止登记陈旧。
+        assert before in source, f"基线 {relative} 里找不到登记的偏差行（{reason}）"
+        source = source.replace(before, after)
     module = types.ModuleType(name)
     module.__file__ = str(REPO_ROOT / relative)
     with mock.patch.dict(sys.modules, {name: module, **(siblings or {})}):

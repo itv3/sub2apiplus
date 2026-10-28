@@ -71,6 +71,10 @@ def load_baseline(relative: str, name: str) -> types.ModuleType | None:
     source = git_source(relative)
     if source is None:
         return None
+    # 有意偏差与 B5a-06 对照模块共用同一份登记（出口策略文件不再是 environment-p0 的输入），其余仍逐字对照。
+    for before, after, reason in b5a06.BASELINE_DELIBERATE_DEVIATIONS.get(relative, ()):
+        assert before in source, f"基线 {relative} 里找不到登记的偏差行（{reason}）"
+        source = source.replace(before, after)
     module = types.ModuleType(name)
     module.__file__ = str(REPO_ROOT / relative)
     with mock.patch.dict(sys.modules, {name: module}):
@@ -1004,6 +1008,20 @@ CLOSEOUT_PY_8_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
 CLOSEOUT_PY_8_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
 CLOSEOUT_PY_8_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}
 # <<< 收尾登记常量
+# 入口编排器不再把出口策略文件 /etc/sub2api-egress/policy.json 当 environment-p0 的输入（出口由老板指定、想换就换，
+# 换策略不得让入口步骤失效；保护仍由 entry-preflight 的 egress-check 与环境收据采集时的实时准入每次核对）。
+# 对 Codex：该步骤的输入声明少一项，步骤表对照基线时由 test_driver_client_table_codex_parity.BASELINE_DELIBERATE_DEVIATIONS 登记。
+ENTRY_EGRESS_POLICY_BASELINE_COMMIT = "b6c3cd0f049e4ab4a271bae2f976e726d07c5998"
+ENTRY_EGRESS_POLICY_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "4c57d915784ab2c3873a9be72464b0d7b947daceafa6c1681b396f8519181e4e",
+}
+ENTRY_EGRESS_POLICY_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_steps.py": ['其他前序产物）、环境（内核、Python、Go、node、容器镜像、二进制、录制数据、出口策略）。输入范围拿不准的一律从宽',
+ '        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。',
+ '            Input("environment", "file", "/etc/sub2api-egress/policy.json"),'],
+}
+
+
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("后台失败的受控逐单元后继", BACKGROUND_INHERIT_BASELINE, BACKGROUND_INHERIT_DIGESTS, BACKGROUND_INHERIT_REMOVED),
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_REMOVED),
@@ -1043,6 +1061,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS, ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES),
     ("B-09 强制重做改为仅请求模式", ENTRY_GATES_REQUEST_ONLY_BASELINE_COMMIT,
      ENTRY_GATES_REQUEST_ONLY_SOURCE_DIGESTS, ENTRY_GATES_REQUEST_ONLY_SOURCE_REMOVED_LINES),
+    ("入口不再以出口策略为输入", ENTRY_EGRESS_POLICY_BASELINE_COMMIT,
+     ENTRY_EGRESS_POLICY_SOURCE_DIGESTS, ENTRY_EGRESS_POLICY_SOURCE_REMOVED_LINES),
     # >>> 收尾登记行（自动生成，勿手改）
     ('收尾登记 background_validation.py', CLOSEOUT_PY_1_BASELINE, CLOSEOUT_PY_1_DIGESTS, CLOSEOUT_PY_1_REMOVED),
     ('收尾登记 entry_dryrun.py', CLOSEOUT_PY_2_BASELINE, CLOSEOUT_PY_2_DIGESTS, CLOSEOUT_PY_2_REMOVED),
