@@ -475,6 +475,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   前缀不可复用时官方在**同一条连接**上整段重放。官方客户端每次发 WS 请求前先判断能否在上一次请求加其输出之上续链；以下任一情形不能续链：
   换模型、工具目录、`tool_choice`、`parallel_tool_calls`、推理档位（0.165.0 起为窗口内钉死的基线）、`store`、`stream`、`include`、`service_tier`、`prompt_cache_key`、`text` 任一变化；`input` 不再以上次请求加输出为前缀（`input_mismatch`／`input_shortened`，含上下文压缩后的新窗口）；0.165.0 起相邻 `configuration_update` 合并后与上次请求前缀不一致。
   此时客户端在同一连接上发一帧全量 `response.create`：不带 `previous_response_id`、不带 `generate`、`input` 为完整历史，不重新握手、不补预热。握手头（`x-codex-routing-hint` 的模型、`x-codex-window-id`）保持建连时的旧值，新模型与新窗口号只出现在每帧 `client_metadata`。压缩请求本身是增量帧（`previous_response_id` 加单项 `compaction_trigger`，`request_kind=compaction`），压缩完成后的下一轮才是全量帧，再下一轮恢复增量。只有连接键（`ResetOn`：认证代次、账号 owner、`base_url`）变化或连接已断才新建连接，新连接上同样直接发全量帧、不补预热。断线重连后的整段重放带窗口内最新一条 update；WS 且预热已完成时首轮不带 update。
+  上下文压缩后进入新窗口：窗口号（`x-codex-window-id` 的 `<线程>:<窗口号>` 后缀、turn metadata 的 `window_id`／`window_number`）加一，`context_window_id` 换新；握手头只在建连时发出，复用的连接握手里仍是旧窗口号，新值只在每帧里；新建连接的握手用推进后的值。
   每条 `response.create` 消息的文本是 `serde_json` 序列化结果原样发出：没有末尾换行，字符串里的 `<`、`>`、`&`、U+2028、U+2029 按字面量写出，不转成 `\u003c` 等转义（非正式实采：官方两条消息都不以换行结尾，70967 字节那条消息里有 72 个字面 `<`）。
 - **源码**：[L1] `codex-api/src/common.rs:331-357`、
   `core/src/client.rs:2120-2193`、`core/src/client.rs:1118`。续接前缀的判定由 `prepare_websocket_request`
@@ -498,6 +499,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `Body.Fields` 按上列槽位重排并移除 `instructions`。画像 `BaseInstructions.IDScheme=uuidv7` 声明增量窗口形态：网关为第三方客户端派生的预热帧 `input` 为
   `[]`，首个业务帧保留 `additional_tools` 与基础指令消息（不再剥离），并以预热响应 id 续链。
   整段重放：画像 `WebSocketContinuation.ReplayOnSameConnection=true` 声明该形态。网关对本会话内自己发过 `generate=false` 预热帧的下游客户端（自管续链），其不带 `previous_response_id`、不带 `generate`、非工具结果续轮的全量帧复用当前上游连接原样转发：不新建连接、不补预热、不链 `previous_response_id`；复用的连接被对端关闭时换新连接重试同一帧，新连接上同样不补预热。从未自己发过预热帧的客户端（第三方每个用户轮次发整段历史）仍由“新连接＋网关预热＋链预热响应”承接，画像不声明该字段时一律如此。官方入站的整段重放帧里 `configuration_update` 在整段历史中原位原字节保留。官方出站的帧编译与最终写入不做 HTML 转义，也不追加换行（`marshalOpenAIWSReadonlyJSON`、`WritePreparedJSON`）。
+  窗口推进：画像 `TurnMetadata.WindowTracking` 声明后网关读客户端原帧的窗口号推进；`CodexIdentityFacts.WindowAdvances` 令 invocation 摘要不再绑定窗口标识。已知偏差：窗口号来源是下游客户端帧里的窗口号，对不发 `x-codex-window-id` 的第三方客户端窗口号不推进（保持 `:0`）。
 - **状态**：✅ 源码充分；抓包充分（0.165.0 非正式实采补充整段重放与改 effort 场景，正式场景随 0.165 登记补入）。
 
 ## 2.8 Header
@@ -772,13 +774,14 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **机制**：HTTP 从初始响应头 `x-codex-turn-state` 读取；WS 从 `response.metadata.headers` 读取。保存到当前 turn
   后，后续 HTTP responses 通过 header、WS 通过 `client_metadata` 原样回送。账号 owner 变化时清空已保存的
   turn-state，下一请求不回送。
+  0.165.0：turn-state 的作用域是回合——官方每个回合新建模型客户端会话（`core/src/client.rs:694-709`、`core/src/session/turn.rs:194-195`），同一回合内的后续请求（工具结果续轮、同回合压缩）回送本回合已收到的值，新用户轮次的第一个请求不回送上一回合的值；预热帧响应里收到的值随预热过的会话交给第一个回合，所以紧跟预热帧的业务帧仍回送。
 - **源码**：[L1] `codex-api/src/sse/responses.rs:66-74`、
   `codex-api/src/endpoint/responses_websocket.rs:849-852`、
-  `core/src/client.rs:2112-2119`、`core/src/client.rs:2495-2511`。
+  `core/src/client.rs:2112-2119`、`core/src/client.rs:2495-2511`、`core/src/client.rs:694-709`、`core/src/session/turn.rs:194-195`（回合作用域，见机制）。
 - **实测**：`audit-ep014-turnstate-echo-20260730a` 与 `audit-body004-ws-turnstate-20260730a`（R）完成 HTTP、WS
   两条输入→保存→回送闭环。候选断言 `assert-SPEC-BODY-004` 核对回送值不变、两条通道均闭环、owner 变化后不回送；
   清空见 0.157.0 `core/src/client.rs` 第 1538-1542 行。
-- **实现**：Sub2API 若终结上下游流，必须保存并回送；透明转发时不得丢失或重复生成；账号 owner 变化时清空。
+- **实现**：Sub2API 若终结上下游流，必须保存并回送；透明转发时不得丢失或重复生成；账号 owner 变化时清空。画像 `TurnState.ResetOnNewTurn=true` 时网关在新用户轮次（非工具续轮、非首帧、上一帧不是客户端预热帧）先清空已保存的值；不声明保持旧行为。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-BODY-005 tool_choice 是字符串
@@ -878,6 +881,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **范围**：内置 OpenAI OAuth；Responses（HTTP body 与 WS `response.create`）。
 - **规则**：普通会话每个 Responses 请求的 `client_metadata` 携带 `guardian_credits_requested`（字符串 `"true"`）与常量
   `mcp_attribution`（字符串 `{"status":"none"}`）；guardian 审阅请求同样写入 `mcp_attribution`。
+  0.165.0：WS `response.create` 的 `client_metadata` 另带逐请求动态键：`root_turn_id`（回合帧，预热无）、`ws_request_header_x_openai_internal_codex_responses_lite`（本请求模型走 Lite 时为 `"true"`）、`x-codex-ws-stream-request-start-ms`（发送前一刻的 Unix 毫秒，每个 WS 请求都带，含预热帧）。预热帧 10 键，回合帧（含压缩帧）11 键。
 - **源码**：[L1] `mcp_attribution` 的键常量与写入见 `core/src/responses_metadata.rs:48`、`core/src/responses_metadata.rs:371-382`，
   `guardian_credits_requested` 作为保留键见 `core/src/responses_metadata.rs:68-71`，写入条件（非 guardian 审阅、ChatGPT 认证、
   Codex 后端路由）见 `core/src/client.rs:1248-1279`。该机制在 0.149.1 不存在（对 `guardian_credits_requested` 0 命中）。
@@ -888,7 +892,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：
   `http-guardian-credits`、`http-mcp-attribution` 各匹配 4 条（场景 A03、A04 的 HTTP Responses），`ws-guardian-credits`、`ws-mcp-attribution` 各匹配 16 条（场景 A05、A06 的
   `response.create`）。候选断言 `assert-SPEC-BODY-008` 核对 HTTP 与 WS 两类载体的两项取值。
-- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。
+- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明后由编译器写入动态键（`root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间）。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致（未核实，旧行为同）；HTTP 路径官方 `client_metadata` 也带 `root_turn_id`，网关 HTTP 尚未补。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-BODY-009 x-codex-turn-metadata 的键集合
@@ -917,7 +921,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   （键为 21 键的有序子集、必含 13 键）；新增的 `history_initialization` 由源码确认（0.163.0 起，0.165.0 复核仍成立）。`turn-metadata-keys` 与
   `turn-metadata-analytics-default` 两项判据在 0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，
   attempt `20261027T135446Z-d8a16a8e788de81e`）各匹配 0 条：这是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
-- **实现**：网关只生成有可信取值的 14 键；允许集合里另外 8 键没有可信取值，网关不生成。画像 `TurnMetadata.Keys`
+- **实现**：网关生成有可信取值的键：基础 14 键；画像 `WindowTracking` 声明时另生成 `window_number`、`context_window_id`；画像 `RootThreadKeys` 声明时，根线程另生成 `agent_name`（`/root`）与 `root_turn_id`（回合帧，等于 `turn_id`，预热无）。`sandbox_mode`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled` 取决于用户本地配置或模型目录，网关没有可信来源，维持不生成。压缩请求（`WSCompactionRequests`）：`request_kind=compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象，不带 `model`、`reasoning_effort`、`turn_trigger`。画像 `TurnMetadata.Keys`
   增加 `history_initialization`（字典序位于 `context_window_id` 与 `installation_id` 之间）。网关生成回合 id 时按该库的位布局与单调上下文编码（内嵌毫秒回拨 7 毫秒），开始时间由 `turn_id` 推出：内嵌毫秒加以 `turn_id` 为种子、按上述 143 个样本的分布确定性抽取的 0～7 毫秒（29 毫秒离群值不计入）；会话、线程、item id 的内嵌毫秒另回拨 50 毫秒，使其总早于首个回合 id。
 - **状态**：✅ 源码充分；抓包充分（13 个既有必含键沿用 0.157.0 官方样本，新增的 `history_initialization` 由源码确认，0.165.0
   复核仍成立）。
@@ -1150,6 +1154,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `x-codex-beta-features: remote_compaction_v2`。TUI 压缩走 WS 时触发项位于 `response.create` 帧中。
   0.165.0：压缩请求自身的 `reasoning.effort` 优先取窗口钉死的基线；压缩成功后钉子重置、旧 `configuration_update` 随历史压缩消失；WS 上压缩后的下一帧是无 `previous_response_id` 的整段重放，再下一轮恢复增量
   （非正式实采 c1、c2：压缩请求本身是增量帧 `previous_response_id`＋单项 `compaction_trigger`，`request_kind=compaction`，其 turn metadata 没有 `model`、`reasoning_effort` 键；压缩完成后的整段重放帧在同一连接上）。
+  WS 上的压缩请求是 `previous_response_id` 加单项 `compaction_trigger` 的增量帧：请求体不带 `access_programs`，turn metadata 如 SPEC-BODY-009 所述。
 - **源码**：[L1] `core/src/compact_remote_v2_attempt.rs:172`、
   `model-provider/src/capabilities.rs:21-44`、
   `features/src/lib.rs:2151-2156`、`core/src/tasks/compact.rs:63-76`。0.165.0 复核（该状态自 0.163.0 起如此，0.164.0 到 0.165.0 未变）：`RemoteCompactionSupport` 只剩 `V2` 与 `Unsupported`（V1 与 `/responses/compact`

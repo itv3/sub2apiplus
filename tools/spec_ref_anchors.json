@@ -924,6 +924,20 @@
         "end": 2511,
         "context_sha256": "afa5598b0068d92dd0e7b160c5004c2a94e80d24b89eec06c3f544f35032d020",
         "anchor": "fn build_responses_headers("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 694,
+        "end": 709,
+        "context_sha256": "511285afa9192fa85720b8b56751998cddd297b463e5cc0b0359b4bdcdad6190",
+        "anchor": "pub fn new_session(&self) -> ModelClientSession {"
+      },
+      {
+        "path": "core/src/session/turn.rs",
+        "start": 194,
+        "end": 195,
+        "context_sha256": "0ad367ad25b7c1de72db90184ee0f016a2352c1171dcd4264e9b45d01439df27",
+        "anchor": "let mut client_session ="
       }
     ],
     "SPEC-BODY-005": [
