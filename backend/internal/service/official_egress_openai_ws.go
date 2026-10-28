@@ -785,7 +785,9 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	accessProgramsModified := normalizeOfficialCodexAccessPrograms(
 		payload,
 		officialCodexAccessProgramsSection(egressContext.ProfileMode()),
-		!isPrewarmFrame && officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+		// 压缩请求（compaction_trigger 增量帧）官方不带 access_programs，同预热帧一样不生成。
+		!isPrewarmFrame && !officialCodexWSIsCompactionRequest(egressContext, payload) &&
+			officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
 	)
 
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
@@ -1936,6 +1938,12 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if !prewarm {
 		turnMetadata["turn_started_at_unix_ms"] = turnStartedAtMS
 	}
+	// WS 压缩请求：request_kind 是 compaction 并带 compaction 对象，不写 model／reasoning_effort／turn_trigger（见 official_egress_openai_ws_compaction.go）。
+	compactionMetadata, compactionRequest := officialCodexWSCompactionMetadata(egressContext, payload)
+	if compactionRequest {
+		turnMetadata["request_kind"] = "compaction"
+		turnMetadata["compaction"] = compactionMetadata
+	}
 	// 画像 TurnMetadata 节声明的新键：payload 已完成定型（reasoning 默认值已补齐）；
 	// prewarm 帧不属于某一轮，不写 turn_trigger。画像没有该节时不做任何改动。
 	extension := officialCodexTurnMetadataExtension{
@@ -1946,7 +1954,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		extension.WindowNumber = &windowNumber
 		extension.ContextWindowID = contextWindowID
 	}
-	if !prewarm {
+	if compactionRequest {
+		extension.Model, extension.ReasoningEffort = "", ""
+	}
+	if !prewarm && !compactionRequest {
 		conditional := egressContext.codexRuntimeState.ConditionalHeaders
 		extension.TurnTrigger = officialCodexTurnTrigger(
 			egressContext.codexRuntimeState.SurfaceID,

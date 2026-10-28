@@ -121,6 +121,16 @@ type TurnMetadataSection struct {
 	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
 	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
 	WindowTracking bool `json:"WindowTracking,omitempty"`
+	// WSCompactionRequests：WS 上的压缩请求（`compaction_trigger` 增量帧）按官方写元数据与请求体。
+	//
+	// 官方压缩请求是一帧 previous_response_id 加单项 `{"type":"compaction_trigger"}` 的增量帧：请求体不带 access_programs；
+	// turn metadata 的 request_kind 是 compaction，带 compaction{trigger,reason,implementation,phase,strategy}，不带
+	// model、reasoning_effort、turn_trigger（官方 0.165 实采）。声明 true 后网关对这类帧同样这样写；compaction 取值落在本节
+	// CompactionImplementations／CompactionPhases 闭集内（声明时 CompactionImplementations 必须含 responses_compaction_v2）。
+	// 缺省（false）表示旧行为：按普通业务帧处理（补 access_programs、request_kind=turn、写 model 与 reasoning_effort）。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
+	WSCompactionRequests bool `json:"WSCompactionRequests,omitempty"`
 }
 
 // TurnMetadataSessionDefaults 是目标版本客户端默认会话模型的 turn metadata 取值，登记时取自该版本官方内置
@@ -411,6 +421,9 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 			if value, declared := fields["WindowTracking"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 WindowTracking 存在时必须为 true", name)
 			}
+			if value, declared := fields["WSCompactionRequests"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 WSCompactionRequests 存在时必须为 true", name)
+			}
 		}
 		if name == SectionTurnState {
 			if value, declared := fields["ResetOnNewTurn"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
@@ -475,6 +488,9 @@ func validateOptionalSection(name string, value any) error {
 					return fmt.Errorf("WindowTracking 存在时 Keys 必须包含 %s", key)
 				}
 			}
+		}
+		if section.WSCompactionRequests && !slices.Contains(section.CompactionImplementations, "responses_compaction_v2") {
+			return errors.New("WSCompactionRequests 存在时 CompactionImplementations 必须包含 responses_compaction_v2")
 		}
 		return validateTurnMetadataSessionDefaults(section)
 	case *ClientMetadataSection:

@@ -1139,6 +1139,76 @@ func TestOpenAIWSWindowTrackingAdvancesWindowAfterCompaction(t *testing.T) {
 	}
 }
 
+// WS 压缩请求（画像 TurnMetadata.WSCompactionRequests）。官方 0.165 压缩续聊会话（c1）的压缩帧：previous_response_id 加单项
+// compaction_trigger；请求体不带 access_programs；turn metadata 的 request_kind 是 compaction，带 compaction 对象，
+// 不带 model、reasoning_effort、turn_trigger；压缩前后的普通业务帧不受影响。画像不声明（对照）时按普通业务帧处理。
+func TestOpenAIWSCompactionRequestFrameMatchesOfficial(t *testing.T) {
+	mode := officialClientProfileModeActive
+	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
+	if !section.UsesUUIDv7IDs() {
+		t.Skip("槽位画像不是增量窗口方案，实采帧的前缀形态不适用")
+	}
+	session := loadCodex0165Session(t, "c1_ws_compact_continue")
+	var steps []replayStep
+	for index := 1; index <= 6; index++ {
+		steps = append(steps, session.step(t, index))
+	}
+	official := session.frames[4]
+	officialTM := replayFrameTurnMetadata(official)
+	require.Equal(t, "compaction", officialTM.Get("request_kind").String())
+	require.False(t, officialTM.Get("model").Exists())
+	require.False(t, gjson.GetBytes(official, "access_programs").Exists())
+
+	withReplayOnSameConnectionProfile(t, mode, true)
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WSCompactionRequests = true })
+	handshakes, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
+	require.Len(t, handshakes, 1)
+	frames := codexGateResponseCreateFrames(handshakes[0])
+	require.Len(t, frames, 6)
+	compaction := frames[3]
+	require.Equal(t, `{"type":"compaction_trigger"}`, gjson.GetBytes(compaction, "input.0").Raw)
+	require.Equal(t, codexGateJSONFieldOrder(t, official), codexGateJSONFieldOrder(t, compaction), "压缩帧的顶层字段序与官方一致（没有 access_programs）")
+	tm := replayFrameTurnMetadata(compaction)
+	require.Equal(t, "compaction", tm.Get("request_kind").String())
+	require.Equal(t, officialTM.Get("compaction").Raw, tm.Get("compaction").Raw, "compaction 对象的键序与取值与官方一致")
+	for _, key := range []string{"model", "reasoning_effort", "turn_trigger"} {
+		require.False(t, tm.Get(key).Exists(), "压缩请求的 turn metadata 不带 %s：%s", key, tm.Raw)
+	}
+	require.True(t, tm.Get("turn_started_at_unix_ms").Exists())
+	// 压缩之前与之后的普通业务帧不受影响：照常带 access_programs、model、reasoning_effort、turn_trigger。
+	for _, index := range []int{1, 2, 4, 5} {
+		label := fmt.Sprintf("第 %d 帧", index+1)
+		require.True(t, gjson.GetBytes(frames[index], "access_programs").Exists(), label)
+		other := replayFrameTurnMetadata(frames[index])
+		require.Equal(t, "turn", other.Get("request_kind").String(), label)
+		require.True(t, other.Get("model").Exists() && other.Get("reasoning_effort").Exists() && other.Get("turn_trigger").Exists(), label)
+		require.False(t, other.Get("compaction").Exists(), label)
+	}
+
+	// 对照：不声明。
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WSCompactionRequests = false })
+	legacyHandshakes, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
+	legacy := codexGateResponseCreateFrames(legacyHandshakes[0])[3]
+	require.True(t, gjson.GetBytes(legacy, "access_programs").Exists(), "旧行为：压缩帧按普通业务帧补 access_programs")
+	require.Equal(t, "turn", replayFrameTurnMetadata(legacy).Get("request_kind").String())
+}
+
+// WS 压缩请求的 compaction 对象与 HTTP 压缩（resolveDerivedOfficialOpenAICompactionMetadata）按同一规则取值。
+func TestOfficialCodexCompactionMetadataForReasonMatchesHTTPRule(t *testing.T) {
+	mode := officialClientProfileModeActive
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"x"},{"type":"compaction_trigger"}]}`)
+	for _, reason := range []string{"user_requested", "context_limit", "model_downshift", "comp_hash_changed", "", "bogus"} {
+		t.Run("原因="+reason, func(t *testing.T) {
+			ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ginContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			ginContext.Request.Header.Set("x-codex-turn-metadata", `{"compaction":{"reason":"`+reason+`"}}`)
+			want, ok := resolveDerivedOfficialOpenAICompactionMetadata(ginContext, body, mode)
+			require.True(t, ok)
+			require.Equal(t, want, officialCodexCompactionMetadataForReason(reason))
+		})
+	}
+}
+
 func TestShouldReplayOnSameOpenAIWSConnection(t *testing.T) {
 	full := []byte(`{"type":"response.create","model":"gpt-5.5","input":[]}`)
 	cases := []struct {
