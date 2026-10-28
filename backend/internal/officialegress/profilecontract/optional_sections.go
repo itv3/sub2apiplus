@@ -163,6 +163,21 @@ type WebSocketRetrySection struct {
 type WebSocketContinuationSection struct {
 	// ResetOn：任一条件变化即新建 WS 并全量发送（排序去重，取值见 continuationResetKinds）。
 	ResetOn []string `json:"ResetOn"`
+	// ReplayOnSameConnection：声明官方客户端在“请求属性变化或输入前缀不再可复用”时的整段重放形态。
+	//
+	// 官方客户端每次发 WS 请求前先判断能否在上一次请求加其输出之上续链；不能时（换模型、工具目录或推理档位等
+	// 请求属性变化，上下文压缩后新窗口，input 不再以上次请求加输出为前缀，相邻 configuration_update 合并等）
+	// 在原连接上发一帧不带 previous_response_id、不带 generate 的全量 response.create：不重连、不补预热、
+	// permessage-deflate 上下文延续。只有认证代次、账号 owner 等连接键变化（见 ResetOn）或连接已断才会新建连接。
+	//
+	// 节里声明 true 后，执行层对“自己管理续链”的下游客户端（本会话内自己发过 generate=false 预热帧）发来的这类
+	// 全量帧，复用原上游连接并原样转发：不新建连接、不补预热帧、不把预热响应挂成 previous_response_id。
+	// 其余下游客户端（第三方，每个用户轮次都是整段历史）仍按旧方式归一成官方形态。
+	// 缺省（false）表示旧行为：全量帧一律由新连接承接并补预热。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	ReplayOnSameConnection bool `json:"ReplayOnSameConnection,omitempty"`
 }
 
 // ReasoningEffortSection 声明 reasoning.effort 的出站序列化。
@@ -358,6 +373,13 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		if name == SectionBaseInstructions {
 			if value, declared := fields["IDScheme"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 IDScheme 存在时不得为空串", name)
+			}
+		}
+		// omitempty 的布尔字段同理不得显式写成 false：false 与缺省无法区分，规范化 JSON 却会省略它，
+		// 同一份语义于是对应两种官方摘要。声明该能力只能写 true，不声明就省略。
+		if name == SectionWebSocketContinuation {
+			if value, declared := fields["ReplayOnSameConnection"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 ReplayOnSameConnection 存在时必须为 true", name)
 			}
 		}
 	}
