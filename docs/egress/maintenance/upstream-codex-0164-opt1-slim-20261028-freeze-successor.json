@@ -1,0 +1,95 @@
+{
+  "base_commit": "d715a3a9b159895cbe4c82f245813b7dd913a00d",
+  "changed_path_count": 6,
+  "current_commit": "664dcdd199a9ccfffcf9b60274aba0795b4a7b3d",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7122,
+  "frozen_path_count": 2318,
+  "identity_sha256": "26c698328e3d85c8d87de15d68dff965d22a22ad4b580fd55efa0d1b377be1d5",
+  "issued_at_utc": "2026-10-28T03:37:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-opt1-slim-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_chat_completions.go",
+      "predecessor_sha256s": [
+        "18f5d00a6c82c90ac5b2fecc4a763d4d9d1dbe201706abefc8a6ce6e7d525021"
+      ],
+      "reason": "优化一满载换号的入口接入代码收进新文件的重构：热点文件 openai_gateway_handler.go 只留一次调用，行为不变 path=backend/internal/handler/openai_chat_completions.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4ff8e4cc40821016962b30c5bc8e08cb39eb76f48ec0dd034a29ddfa58c0d624"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "de283284c1fff60d68758df07f8eb680b7cb1560f6704dfdf5b59d54775f2e3d"
+      ],
+      "reason": "优化一满载换号的入口接入代码收进新文件的重构：热点文件 openai_gateway_handler.go 只留一次调用，行为不变 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/step5-capture-speedup-and-pending-fixes-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3603e300062230018639239f858c9c9a76344c5eb842d0c642fb61fb828aff81"
+    }
+  ],
+  "unregistered_path_count": 4,
+  "unregistered_paths": [
+    "backend/internal/handler/openai_gateway_composite_capacity.go",
+    "backend/internal/handler/openai_gateway_composite_capacity_test.go",
+    "backend/internal/handler/openai_gateway_composite_entry.go",
+    "backend/internal/handler/openai_gateway_composite_entry_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
