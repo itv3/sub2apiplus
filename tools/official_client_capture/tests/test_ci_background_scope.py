@@ -24,6 +24,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import background_validation as bv
 
@@ -710,6 +711,133 @@ class WrapperDefaultScopeTests(unittest.TestCase):
         text = self.WRAPPER.read_text(encoding="utf-8")
         self.assertIn("--gate-scope auto", text)
         self.assertIn("gate_scope_resolved", text)
+
+    def test_last_passed_rides_along_with_the_default_auto(self) -> None:
+        argv = self.run_wrapper("codex", "--select-base", "last-passed")
+        self.assertEqual(self.scopes(argv), ["auto"])
+        self.assertEqual(argv[argv.index("--select-base") + 1], "last-passed")
+
+    def test_the_manual_names_last_passed_and_why_the_admission_accepts_it(self) -> None:
+        text = self.WRAPPER.read_text(encoding="utf-8")
+        self.assertIn("--select-base last-passed", text)
+        self.assertIn("子集结论", text)
+
+
+COMMIT2 = "c" * 40
+COMMIT3 = "d" * 40
+
+
+class LastPassedBaseTests(ScopeCase):
+    """``--select-base last-passed``（Codex 升级工具优化第 2 项）：比对基点取同一运行根里上一个已通过的后台验证的提交。
+
+    核实结论（读代码）：VC-5 统一准入（``vc5_admission.state`` → ``check(require_passed=True, client=…)``）接受本客户端计划的子集结论，
+    ``scope_problem`` 只拒“另一客户端”的子集，``scope_label`` 对非发版 tag 的基点只写“不是发版 tag 提交”而不拒绝——所以这个选项有意义。"""
+
+    VERIFIED = {"old_commit": COMMIT, "new_commit": COMMIT2, "status": "verified", "method": "测试替身"}
+
+    def first_full_conclusion(self) -> dict:
+        started = self.start()
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        return {**payload, "result": started["result"]}
+
+    def start_in_process(self, *options: str, commit: str = COMMIT2, ancestry=None, **extra: str) -> dict:
+        """进程内起跑（要替换祖先核对）：真正的后台运行进程仍是子进程，继承这里设好的环境（入口门禁替身）。"""
+
+        argv = ["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test",
+                "--commit", commit, "--entry-gates", str(self.gates), "--preflight", "off", "--reuse", "off", *options]
+        patch_ancestry = mock.patch.object(bv, "_verify_ancestry", **({"return_value": self.VERIFIED} if ancestry is None else ancestry))
+        with mock.patch.dict(os.environ, self.environ(**extra)), patch_ancestry:
+            return bv.start(bv._parse(argv))
+
+    def test_the_last_passed_commit_becomes_the_registered_base_and_the_subset_still_passes_admission(self) -> None:
+        first = self.first_full_conclusion()
+        self.calls.write_text("", encoding="utf-8")
+        selection = {**SELECTION, "base_commit": COMMIT, "head_commit": COMMIT2, "base_is_release": False, "base_release_tags": []}
+        info = {**INFO_SUBSET, "base_commit": COMMIT, "base_source": "explicit", "base_tag": None}
+        started = self.start_in_process("--gate-scope", "auto", "--select-base", "last-passed",
+                                        FAKE_SELECTION_JSON=json.dumps(selection), FAKE_SCOPE_INFO_JSON=json.dumps(info))
+        self.assertEqual(started["select_base_origin"]["commit"], COMMIT)
+        self.assertEqual(started["select_base_origin"]["ancestry"], "verified")
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual((payload["select_base"], payload["input_contract"]["select_base"]), (COMMIT, COMMIT), "输入合同登记的是解析出的具体提交")
+        origin = payload["select_base_origin"]
+        self.assertEqual((origin["kind"], origin["commit"], origin["status"]), ("last-passed", COMMIT, "passed"))
+        self.assertEqual(origin["result"], first["result"], "基点来自上一个通过的结论文件")
+        self.assertEqual(len(origin["result_sha256"]), 64)
+        calls = self.calls.read_text(encoding="utf-8")
+        self.assertIn(f"--select-base:{COMMIT}", calls.split(), "交给入口门禁的是具体提交，不是 last-passed 这个词")
+        self.assertNotIn("last-passed", calls)
+        # VC-5 统一准入走的 check：本客户端的子集结论照样通过，提示写明范围与“不是发版 tag 提交”；另一客户端一律不认。
+        code, message = self.boundary()
+        self.assertEqual(code, 0, message)
+        self.assertIn("【子集：codex 计划，跳过 4/10 个测试模块，基点 " + COMMIT[:12] + "（不是发版 tag 提交）", message)
+        self.assertIsNone(bv.scope_problem(payload, "codex"))
+        self.assertIsNotNone(bv.scope_problem(payload, "claude"))
+
+    def test_without_any_passed_conclusion_it_refuses_instead_of_guessing(self) -> None:
+        outcome = self.start("--gate-scope", "auto", "--select-base", "last-passed", expect=2)
+        self.assertIn("没有可作比对基点的已通过后台验证结论", outcome["stderr"])
+        self.assertIn("不带这个选项", outcome["stderr"], "写明第一次验证怎么办")
+        self.assertEqual(bv.results(self.runroot), [], "被拒绝的启动不留结论")
+
+    def test_a_passed_conclusion_that_is_not_an_ancestor_is_not_a_base(self) -> None:
+        self.first_full_conclusion()
+        with self.assertRaises(bv.ValidationError) as caught:
+            self.start_in_process("--gate-scope", "auto", "--select-base", "last-passed",
+                                  ancestry={"side_effect": bv.ValidationError("旧提交不是新提交的祖先：来源后台属于另一条历史线")})
+        message = str(caught.exception)
+        self.assertIn("没有可作比对基点", message)
+        self.assertIn(COMMIT[:12], message)
+        self.assertIn("不是新提交的祖先", message)
+
+    def test_it_takes_the_newest_passed_ancestor_and_skips_untrusted_or_foreign_conclusions(self) -> None:
+        def conclusion(name: str, commit: str, completed: str, **changes):
+            path = self.root / f"{name}.json"
+            path.write_text(name, encoding="utf-8")
+            return path, {"commit": commit, "status": "passed", "completed_at_utc": completed, "work": str(self.root / "work"), **changes}
+
+        candidates = [conclusion("newest", COMMIT3, "2026-10-29T03:00:00Z"),
+                      conclusion("failed", "e" * 40, "2026-10-29T04:00:00Z", status="failed"),
+                      conclusion("claude", "f" * 40, "2026-10-29T05:00:00Z", client="claude"),
+                      conclusion("same", COMMIT2, "2026-10-29T06:00:00Z"),
+                      conclusion("older", COMMIT, "2026-10-29T01:00:00Z")]
+        args = bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                          "--branch", "codex/test", "--commit", COMMIT2])
+
+        def verify(old, new, **_kwargs):
+            if old == COMMIT3:
+                raise bv.ValidationError("旧提交不是新提交的祖先")
+            return {**self.VERIFIED, "old_commit": old}
+
+        with mock.patch.object(bv, "results", return_value=candidates), mock.patch.object(bv, "_verify_ancestry", side_effect=verify) as checked, \
+                mock.patch.object(bv, "scope_problem", return_value=None):
+            base, origin = bv._resolve_last_passed_base(args, client="codex")
+        self.assertEqual(base, COMMIT, "状态不是 passed、别的客户端、就是本次提交的结论都不参选；更新的那个不是祖先就退到更旧的")
+        self.assertEqual([call.args[0] for call in checked.call_args_list], [COMMIT3, COMMIT], "按完成时间新的在前逐个核对祖先")
+        self.assertEqual(origin["kind"], "last-passed")
+        # 筛选印证有问题的“通过”结论不可信，不能当基点
+        with mock.patch.object(bv, "results", return_value=[candidates[-1]]), mock.patch.object(bv, "_verify_ancestry", return_value=self.VERIFIED), \
+                mock.patch.object(bv, "scope_problem", return_value="筛选范围被改过"):
+            with self.assertRaisesRegex(bv.ValidationError, "不可信的通过结论：筛选范围被改过"):
+                bv._resolve_last_passed_base(args, client="codex")
+
+    def test_the_word_is_only_meaningful_with_a_filtered_scope(self) -> None:
+        self.first_full_conclusion()
+        outcome = self.start("--gate-scope", "full", "--select-base", "last-passed", expect=2)
+        self.assertIn("只在", outcome["stderr"])
+
+    def test_client_plan_resolves_it_too_and_keeps_its_own_combination_rules(self) -> None:
+        self.first_full_conclusion()
+        # client-plan 与 auto 同一条解析路径；组合约束（子集不接入口空跑）沿用既有校验，不因基点写法不同而放宽。
+        with self.assertRaisesRegex(bv.ValidationError, "不能接入口空跑"):
+            self.start_in_process("--gate-scope", "client-plan", "--select-base", "last-passed", "--then-dryrun")
+        selection = {**SELECTION, "base_commit": COMMIT, "head_commit": COMMIT2}
+        started = self.start_in_process("--gate-scope", "client-plan", "--select-base", "last-passed", FAKE_SELECTION_JSON=json.dumps(selection))
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual((payload["gate_scope"], payload["select_base"]), ("client-plan", COMMIT))
 
 
 if __name__ == "__main__":
