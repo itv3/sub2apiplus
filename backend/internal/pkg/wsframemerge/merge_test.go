@@ -26,33 +26,33 @@ func encodeFrame(fin bool, rsv, opcode byte, key *[4]byte, payload []byte) []byt
 	if fin {
 		b0 |= 0x80
 	}
-	out.WriteByte(b0)
+	_ = out.WriteByte(b0)
 	maskBit := byte(0)
 	if key != nil {
 		maskBit = 0x80
 	}
 	switch {
 	case len(payload) > 65535:
-		out.WriteByte(maskBit | 127)
+		_ = out.WriteByte(maskBit | 127)
 		var l [8]byte
 		binary.BigEndian.PutUint64(l[:], uint64(len(payload)))
-		out.Write(l[:])
+		_, _ = out.Write(l[:])
 	case len(payload) > 125:
-		out.WriteByte(maskBit | 126)
+		_ = out.WriteByte(maskBit | 126)
 		var l [2]byte
 		binary.BigEndian.PutUint16(l[:], uint16(len(payload)))
-		out.Write(l[:])
+		_, _ = out.Write(l[:])
 	default:
-		out.WriteByte(maskBit | byte(len(payload)))
+		_ = out.WriteByte(maskBit | byte(len(payload)))
 	}
 	body := append([]byte(nil), payload...)
 	if key != nil {
-		out.Write(key[:])
+		_, _ = out.Write(key[:])
 		for i := range body {
 			body[i] ^= key[i&3]
 		}
 	}
-	out.Write(body)
+	_, _ = out.Write(body)
 	return out.Bytes()
 }
 

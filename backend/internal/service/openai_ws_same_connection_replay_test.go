@@ -443,7 +443,7 @@ func TestOpenAIWSReplayOnSameConnectionClosedUpstreamReplaysOnNewConnectionWitho
 		[]any{replayBaseItem(), codexGateMessage("developer", "developer context"), codexGateMessage("user", "turn one")}, nil))
 	last = ws.readUntilCompleted(t)
 	ws.send(t, codexGateWSIngressFrame(t, "gpt-5.5", last, "", []any{codexGateMessage("user", "turn two")}, nil))
-	last = ws.readUntilCompleted(t)
+	_ = ws.readUntilCompleted(t)
 
 	// 对端关闭当前上游连接。
 	server.mu.Lock()

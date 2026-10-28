@@ -29,13 +29,17 @@ func TestTurnMetadataRootThreadKeysDefaultsAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(decoded)
-	if decoded.(*TurnMetadataSection).RootThreadKeys || strings.Contains(string(encoded), "RootThreadKeys") {
+	defaultSection, ok := decoded.(*TurnMetadataSection)
+	if !ok || defaultSection.RootThreadKeys || strings.Contains(string(encoded), "RootThreadKeys") {
 		t.Fatal("缺省应为 false 且不出现在序列化里")
 	}
 	good := turnMetadataWithRootThreadKeys(t, `["agent_name","analytics_enabled","model","root_turn_id","session_id"]`)
 	declared, err := DecodeOptionalSection(SectionTurnMetadata, good)
-	if err != nil || !declared.(*TurnMetadataSection).RootThreadKeys {
-		t.Fatalf("声明被拒绝或未生效：%v", err)
+	if err != nil {
+		t.Fatalf("声明被拒绝：%v", err)
+	}
+	if declaredSection, ok := declared.(*TurnMetadataSection); !ok || !declaredSection.RootThreadKeys {
+		t.Fatalf("声明未生效：%#v", declared)
 	}
 	cases := []struct {
 		label   string
@@ -99,13 +103,17 @@ func TestClientMetadataDynamicKeysDefaultsAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(decoded)
-	if decoded.(*ClientMetadataSection).DynamicKeys != nil || strings.Contains(string(encoded), "DynamicKeys") {
+	defaultSection, ok := decoded.(*ClientMetadataSection)
+	if !ok || defaultSection.DynamicKeys != nil || strings.Contains(string(encoded), "DynamicKeys") {
 		t.Fatal("缺省应为空且不出现在序列化里")
 	}
 	allKeys := `["root_turn_id","ws_request_header_x_openai_internal_codex_responses_lite","x-codex-ws-stream-request-start-ms"]`
 	declared, err := DecodeOptionalSection(SectionClientMetadata, clientMetadataWithDynamicKeys(t, allKeys))
-	if err != nil || len(declared.(*ClientMetadataSection).DynamicKeys) != 3 {
+	if err != nil {
 		t.Fatalf("合法声明被拒绝：%v", err)
+	}
+	if declaredSection, ok := declared.(*ClientMetadataSection); !ok || len(declaredSection.DynamicKeys) != 3 {
+		t.Fatalf("合法声明未生效：%#v", declared)
 	}
 	cases := []struct {
 		label   string

@@ -51,7 +51,7 @@ func (c *singleFrameRecordingConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.mu.Lock()
-		c.buf.Write(p[:n])
+		_, _ = c.buf.Write(p[:n])
 		c.mu.Unlock()
 	}
 	return n, err
@@ -112,7 +112,7 @@ func dialOfficialSingleFrameServer(t *testing.T, messages [][]byte) ([][]byte, [
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(64 << 20)
 		for {
 			_, message, readErr := conn.Read(r.Context())
@@ -138,7 +138,7 @@ func dialOfficialSingleFrameServer(t *testing.T, messages [][]byte) ([][]byte, [
 		CompressionThreshold: officialOpenAIWSCompressionThresholdBytes,
 	})
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	var got [][]byte
 	for _, message := range messages {
 		require.NoError(t, client.Write(ctx, coderws.MessageText, message))

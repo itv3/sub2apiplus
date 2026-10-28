@@ -24,7 +24,8 @@ func TestReasoningEffortSectionConfigurationUpdateDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("旧版本节被拒绝：%v", err)
 	}
-	if legacy.(*ReasoningEffortSection).ConfigurationUpdate != "" {
+	legacySection, ok := legacy.(*ReasoningEffortSection)
+	if !ok || legacySection.ConfigurationUpdate != "" {
 		t.Fatalf("缺省必须为空：%#v", legacy)
 	}
 	encoded, err := json.Marshal(legacy)

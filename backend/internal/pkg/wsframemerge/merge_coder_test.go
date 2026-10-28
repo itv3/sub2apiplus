@@ -52,7 +52,7 @@ func (c *recordingConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.mu.Lock()
-		c.buf.Write(p[:n])
+		_, _ = c.buf.Write(p[:n])
 		c.mu.Unlock()
 	}
 	return n, err
@@ -98,7 +98,6 @@ type echoServer struct {
 	url      string
 	listener *recordingListener
 	received chan []byte
-	closeFn  func()
 }
 
 func startEchoServer(t *testing.T) *echoServer {
@@ -109,7 +108,7 @@ func startEchoServer(t *testing.T) *echoServer {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(64 << 20)
 		for {
 			_, msg, err := conn.Read(r.Context())
@@ -143,7 +142,7 @@ func sendAll(t *testing.T, wrap bool, threshold int, messages [][]byte) ([][]byt
 		CompressionThreshold: threshold,
 	})
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	client.SetReadLimit(1 << 20)
 	var got [][]byte
 	for i, message := range messages {
@@ -258,7 +257,7 @@ func TestCoderMergeKeepsPingPongWorkingDuringWrites(t *testing.T) {
 		CompressionThreshold: 1,
 	})
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 
 	// 后台读循环：处理服务端的 pong 和 ack。
 	acks := make(chan struct{}, 64)
