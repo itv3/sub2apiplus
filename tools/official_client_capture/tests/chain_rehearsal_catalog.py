@@ -288,7 +288,7 @@ BLINDSPOT_PROBES: tuple[Probe, ...] = (
     ),
     Probe(
         "closeout-env-nested-executor-isolation",
-        "收尾门禁带收尾环境变量时的测试隔离：把 codex_closeout.run_gates 设的环境变量全部注入，再跑会嵌套起执行器的最小测试全集",
+        "收尾门禁带收尾环境变量时的测试隔离：把 codex_closeout.GATE_ENV_WHITELIST 里会被单元继承的环境变量全部注入，再跑会嵌套起执行器的最小测试全集",
         "收尾", "收尾全量门禁（执行器环境）",
         blindspots.closeout_env_runner(),
         history=("ccb44bab5", "cd75bb9ee", "上一版收尾门禁 test_ci_background_validation_retry 等 3 个单元红，整轮白跑 2.1 小时"),

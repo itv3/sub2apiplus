@@ -8,9 +8,9 @@
    再交给二进制启动一次（只看启动前期有没有被拒，零请求），任何被拒的组合当场列出。
 2. **标签与判据对不上真实候选证据**：见 ``registration_preview``；空跑的合成夹具里 WS 观测是手造的，从不核对标签声明与真实分片布局。
    → ``PriorCandidateReplayRunner``：把本树最新的标签声明与候选期望清单对**上一版真实候选证据**回放（seal 预检可达性＋assert-rules）。
-3. **收尾门禁带收尾环境变量时的测试隔离**：``codex_closeout.run_gates`` 给门禁设了 ``UNIT_EXECUTOR_RETRY_LEDGER``，被测试嵌套起的
-   临时执行器继承，3 个单元红、整轮白跑 2.1 小时；本机不带变量全绿。→ ``closeout_env_runner``：把 ``run_gates`` 实际设置的全部环境
-   变量（从源码里取，不手抄）原样注入，再跑一遍会嵌套起执行器的最小测试全集。
+3. **收尾门禁带收尾环境变量时的测试隔离**：收尾门禁给门禁进程设了 ``UNIT_EXECUTOR_RETRY_LEDGER``，被测试嵌套起的
+   临时执行器继承，3 个单元红、整轮白跑 2.1 小时；本机不带变量全绿。→ ``closeout_env_runner``：把 ``codex_closeout.GATE_ENV_WHITELIST``
+   里分类为“会被单元继承”（units）的全部环境变量（从该白名单里取，不手抄、不另写一套判定）原样注入，再跑一遍会嵌套起执行器的最小测试全集。
 
 三个探针都带自检：干净树必须通过，历史缺陷放回去必须被报出（见 ``chain_rehearsal_catalog.BLINDSPOT_PROBES``）。
 """
@@ -57,8 +57,6 @@ REJECTION_PATTERNS = (
 )
 # 启动探测里用的功能开关取值：与实采入口的缺省一致（relay 场景脚本的 DISABLE_FEATURES 缺省）。
 DEFAULT_PROBE_ENVIRONMENT = {"DISABLE_FEATURES": "plugins apps"}
-# 收尾环境变量里不需要注入的两个：只给驱动的入口环境文件、与无害的字节码开关（和 test_ci_retry_ledger_across_closeouts 的守卫一致）。
-CLOSEOUT_ENV_EXEMPT = frozenset({"ARM64_VC_ENV", "PYTHONDONTWRITEBYTECODE"})
 # 会嵌套起临时执行器、或读收尾环境变量的最小测试全集（按“含 ``**os.environ`` 且碰执行器/门禁/后台验证”筛出；
 # 新增这类模块时 ``test_chain_rehearsal_blindspots`` 的清单自检会红，提醒补进来）。
 CLOSEOUT_NESTED_EXECUTOR_MODULES = (
@@ -395,24 +393,18 @@ class PriorCandidateReplayRunner(Runner):
 
 
 def closeout_gate_environment(tree: Path) -> dict[str, str]:
-    """``codex_closeout.run_gates`` 实际给门禁设置的环境变量名（从源码语法树里取，不手抄），去掉不需要注入的两个。"""
+    """收尾门禁注入、且会被测试单元继承的环境变量名：取 ``tools/codex_closeout.py`` 里 ``GATE_ENV_WHITELIST`` 中分类为 ``units`` 的项。
+
+    白名单是收尾工具自己的登记表（每个注入变量必须先在这里分类，起跑前预检按它拒绝多余的注入），探针直接读它，不另写一套判定；
+    语法树取字面量，不 import 被测树里的模块。``driver``（只给驱动读的入口环境文件）与 ``harmless``（无害的字节码开关）不会被单元继承，
+    不需要注入。"""
 
     source = (tree / "tools" / "codex_closeout.py").read_text(encoding="utf-8")
-    module = ast.parse(source)
-    function = next(node for node in ast.walk(module) if isinstance(node, ast.FunctionDef) and node.name == "run_gates")
-    names: list[str] = []
-    def splats_os_environ(node: ast.Dict) -> bool:
-        # 展开项的键是 None；值必须正好是 ``os.environ``（run_gates 里还有别的 ``**`` 字典，例如完成占位的 extra，不是环境）。
-        return any(
-            key is None and isinstance(value, ast.Attribute) and value.attr == "environ"
-            and isinstance(value.value, ast.Name) and value.value.id == "os"
-            for key, value in zip(node.keys, node.values)
-        )
-
-    for node in ast.walk(function):
-        if isinstance(node, ast.Dict) and splats_os_environ(node):
-            names += [key.value for key in node.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)]
-    return {name: "" for name in names if name not in CLOSEOUT_ENV_EXEMPT}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "GATE_ENV_WHITELIST" for target in node.targets):
+            whitelist = ast.literal_eval(node.value)
+            return {name: "" for name, entry in whitelist.items() if entry[0] == "units"}
+    return {}
 
 
 # 历史重放在“受管树副本”（只含受管树、驱动目录、tools/ci 与 codex_closeout）里跑，副本里没有仓库根的 Makefile、后端目录等，
@@ -435,7 +427,7 @@ def closeout_env_runner(modules: Sequence[str] = CLOSEOUT_NESTED_EXECUTOR_MODULE
 
 
 class CloseoutEnvRunner(Runner):
-    """把收尾门禁给执行器设的环境变量全部注入，再跑会嵌套起执行器的最小测试全集。
+    """把收尾门禁白名单里会被单元继承的环境变量全部注入，再跑会嵌套起执行器的最小测试全集。
 
     变量取值是工作目录下的占位路径（只要“设了”这件事；需要真实账本目录的用例经显式 env 字典自带）。测试包导入时会剔除
     ``GATE_EXECUTOR_ENV_NAMES``；剔除清单缺了新增变量时，嵌套执行器会继承它，对应单元就红，探针当场报出。
@@ -451,7 +443,7 @@ class CloseoutEnvRunner(Runner):
     def run(self, context: RunContext) -> Outcome:
         names = closeout_gate_environment(context.tree)
         if not names:
-            return Outcome("error", "没有从 codex_closeout.run_gates 里取到任何环境变量名（源码结构变了？）")
+            return Outcome("error", "没有从 codex_closeout.GATE_ENV_WHITELIST 里取到任何 units 类环境变量名（源码结构变了？）")
         extra = {name: str(context.work / f"closeout-env-{name.lower()}") for name in names}
         in_copy = context.origin_tree is not None and context.origin_tree != context.tree
         modules = self.copy_tree_modules if in_copy else self.modules

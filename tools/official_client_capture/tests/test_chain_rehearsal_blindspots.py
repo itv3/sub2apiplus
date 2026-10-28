@@ -97,13 +97,24 @@ class StartupFlagRunnerTest(unittest.TestCase):
 
 
 class CloseoutEnvironmentTest(unittest.TestCase):
-    def test_names_come_from_run_gates_source_and_include_the_retry_ledger(self) -> None:
+    def test_names_come_from_gate_env_whitelist_and_include_the_retry_ledger(self) -> None:
         names = blindspots.closeout_gate_environment(REPO)
         self.assertIn("UNIT_EXECUTOR_RETRY_LEDGER", names)
-        # 只取 ``{**os.environ, ...}`` 那一个字典的键：全是环境变量风格的大写名，不会混进 run_gates 里别的字典的键。
+        # 只取白名单里分类为 units（会被单元继承）的项：全是环境变量风格的大写名；driver／harmless 两类不需要注入。
         self.assertTrue(all(re.fullmatch(r"[A-Z][A-Z0-9_]*", name) for name in names), sorted(names))
         self.assertNotIn("ARM64_VC_ENV", names)
         self.assertNotIn("PYTHONDONTWRITEBYTECODE", names)
+
+    def test_names_are_exactly_the_units_entries_of_the_closeout_whitelist(self) -> None:
+        """探针取的集合必须等于收尾工具自己白名单里 units 类的集合（用被测树的真实模块对照，防两边各说各话）。"""
+
+        from tools import codex_closeout
+
+        expected = {name for name, entry in codex_closeout.GATE_ENV_WHITELIST.items() if entry[0] == "units"}
+        self.assertEqual(set(blindspots.closeout_gate_environment(REPO)), expected)
+        # 收尾实际注入的变量都在白名单里（工具自己的预检也这么要求），所以白名单取法不会漏掉注入项。
+        injected = codex_closeout.gate_injected_env({"gate": {"vc_env": "/x"}}, "/y")
+        self.assertLessEqual(set(injected), set(codex_closeout.GATE_ENV_WHITELIST))
 
     def test_module_list_covers_every_test_that_nests_an_executor(self) -> None:
         """清单自检：含 ``**os.environ`` 且碰执行器／门禁／后台验证的 test_ci_* 模块都得在清单里，新增这类模块要补进来。"""
