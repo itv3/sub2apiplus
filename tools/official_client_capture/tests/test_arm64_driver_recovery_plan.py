@@ -266,6 +266,148 @@ class PlanPreviewTests(_WorldCase):
         self.assertIn("同时出现在官方与候选目录", result.stderr)
 
 
+READINESS_PLACEHOLDER_ATTEMPT = "no-attempt-readiness-failed-batch12"
+
+
+class ReadinessFailureWithoutAttemptTests(_WorldCase):
+    """OPT-23：候选就绪静态检查失败、零请求退出、没有创建 attempt 目录。
+
+    此前恢复计划在这里只会停在“reconcile：找不到目标 attempt”，人工改走“对账 → 同批次重派”；现在认出这个情形，
+    把没有 attempt 的步骤标成不适用，先对账入账，再停在人工并打印同批次重派命令（本计划不代办，也不会派发）。
+    现场形状取自上一次升级的真实失败：失败的静态收据（``model-mapping`` 一项）、占位 ATTEMPT 名、RUNROOT 里的候选批次后台脚本。
+    """
+
+    def readiness_world(self, *, status: str = "failed", script: bool = True, **kwargs) -> rw.World:
+        world = self.make_world(**kwargs)
+        world.write_params(ATTEMPT=READINESS_PLACEHOLDER_ATTEMPT)
+        self.write_receipt(world, "static-20261027T212230110000Z-985698fb82a5.json", status)
+        if script:
+            rw.write(world.runroot / "vc5-run-batch.sh", "#!/bin/bash\necho ran\n", 0o700)
+        return world
+
+    @staticmethod
+    def write_receipt(world: rw.World, name: str, status: str, **override) -> Path:
+        failed = status == "failed"
+        payload = {
+            "schema_version": "codex-upgrade-candidate-readiness-static/v1", "campaign_id": world.campaign, "candidate_id": world.candidate,
+            "status": status, "observed_at_utc": "2026-10-27T21:22:30.110Z", "live_request_count": 0,
+            "failure_observations": ([{"check_id": "candidate-readiness.model-mapping", "failure_code": "model-mapping-not-clean"}] if failed else []),
+        }
+        payload.update(override)
+        directory = world.campaign_dir / "control" / "candidate-readiness" / world.candidate / "static-receipts"
+        return rw.write_json(directory / name, payload)
+
+    def test_the_failed_readiness_scene_is_recognized_and_the_redispatch_command_is_printed(self) -> None:
+        world = self.readiness_world()
+        plan = world.plan()
+        self.assertEqual(self.statuses(plan), {
+            "resume": "done", "evolution": "done", "reconcile-runs": "done", "reconcile": "skipped",
+            "approve": "skipped", "authorize": "skipped", "continue": "blocked"})
+        self.assertEqual(plan["overall"], "blocked")
+        self.assertEqual(plan["next"]["step"], "continue")
+        self.assertIn("candidate-readiness.model-mapping=model-mapping-not-clean", self.step(plan, "reconcile")["detail"])
+        command = self.step(plan, "continue")["command"]
+        self.assertIn(f"cd {world.runroot}", command)
+        self.assertIn(f"setsid -f bash {world.runroot}/vc5-run-batch.sh", command)
+        self.assertIn("vc5-run-batch.out", command)
+        self.assertIn(".failed-", command, "旧日志与 pid 要改名留档，不能直接覆盖")
+        self.assertEqual(plan["readiness"]["failed_checks"], [{"check_id": "candidate-readiness.model-mapping", "failure_code": "model-mapping-not-clean"}])
+        self.assertTrue(any("没有创建 attempt" in warning for warning in plan["warnings"]))
+        text = world.run("--plan").stdout
+        self.assertIn("命令：cd ", text, "阻塞步骤的重派命令要在预览里打印出来")
+        self.assertNotIn("尚无预览，执行 reconcile 步骤后产出", text)
+
+    def test_readiness_scene_preview_is_read_only_and_repeatable(self) -> None:
+        world = self.readiness_world()
+        first = world.run("--plan")
+        before_data, before_run = rw.tree_digest(world.data, skip=(".stub/calls.jsonl",)), rw.tree_digest(world.runroot)
+        second = world.run("--plan")
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(before_data, rw.tree_digest(world.data, skip=(".stub/calls.jsonl",)))
+        self.assertEqual(before_run, rw.tree_digest(world.runroot))
+
+    def test_apply_reconciles_the_failed_parent_run_first_then_stops_at_the_command_and_never_dispatches(self) -> None:
+        world = self.readiness_world()
+        world.add_tail_run("run-b", "failed", 200.0)
+        before = self.statuses(world.plan())
+        self.assertEqual(before["reconcile-runs"], "pending")
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertEqual(world.write_calls().count("reconcile-supervisor-run"), 1, "失败的父 run 先对账入账")
+        self.assertEqual(world.dispatches(), [], "同批次重派由人执行，本计划不派发")
+        self.assertIn("RECOVERY_PLAN_STOPPED step=continue status=needs-operator", result.stderr)
+        self.assertIn("setsid -f bash", result.stderr, "停下时下一步直接给出重派命令")
+        again = world.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OPERATOR)
+        self.assertEqual(world.write_calls().count("reconcile-supervisor-run"), 1, "再执行不重复对账")
+
+    def test_a_newer_passed_receipt_means_this_is_not_the_scene_and_the_original_block_stays(self) -> None:
+        """最新一份静态收据已通过（批次已重派过，或 ATTEMPT 只是填错了）：不能悄悄当成已处理。"""
+        world = self.readiness_world()
+        self.write_receipt(world, "static-20261027T213356154000Z-3edef637dc4e.json", "passed")
+        plan = world.plan()
+        self.assertEqual(self.step(plan, "reconcile")["status"], "blocked")
+        self.assertIn("找不到目标 attempt", self.step(plan, "reconcile")["detail"])
+        self.assertNotIn("readiness", plan)
+
+    def test_no_static_receipt_keeps_the_original_block(self) -> None:
+        world = self.make_world()
+        world.write_params(ATTEMPT=READINESS_PLACEHOLDER_ATTEMPT)
+        plan = world.plan()
+        self.assertEqual(self.step(plan, "reconcile")["status"], "blocked")
+        self.assertNotIn("readiness", plan)
+
+    def test_an_unreadable_or_foreign_latest_receipt_fails_closed(self) -> None:
+        for label, damage in (("坏 JSON", lambda path: path.write_text("{坏", encoding="utf-8")),
+                              ("别的候选", lambda path: rw.write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "candidate_id": "别的候选"}))):
+            with self.subTest(label):
+                world = self.readiness_world()
+                damage(next((world.campaign_dir / "control" / "candidate-readiness").rglob("static-*.json")))
+                plan = world.plan()
+                self.assertEqual(self.step(plan, "reconcile")["status"], "blocked", label)
+                self.assertIn("找不到目标 attempt", self.step(plan, "reconcile")["detail"])
+                self.assertNotIn("readiness", plan)
+
+    def test_a_running_batch_process_blocks_without_a_redispatch_command(self) -> None:
+        world = self.readiness_world()
+        rw.write(world.runroot / "vc5-run-batch.pid", f"{os.getpid()}\n")
+        step = self.step(world.plan(), "continue")
+        self.assertEqual(step["status"], "blocked")
+        self.assertIn("仍在运行", step["detail"])
+        self.assertEqual(step["command"], "", "批次还在跑时不能给重派命令")
+
+    def test_a_missing_batch_script_points_to_vc5_start(self) -> None:
+        world = self.readiness_world(script=False)
+        step = self.step(world.plan(), "continue")
+        self.assertEqual(step["status"], "blocked")
+        self.assertIn("vc5-start.sh", step["detail"])
+        self.assertEqual(step["command"], "")
+
+    def test_other_attempts_in_the_candidate_directory_add_a_wrong_attempt_warning(self) -> None:
+        world = self.readiness_world()
+        world.add_attempt("20261021T192333Z-beaeb421943592c6")  # 夹具本来就有一个默认 attempt，加上这个共 2 个
+        warnings = "\n".join(world.plan()["warnings"])
+        self.assertIn("另有 2 个 attempt", warnings)
+        self.assertIn("ATTEMPT 填错", warnings)
+
+    def test_the_printed_command_is_runnable_and_archives_the_old_files(self) -> None:
+        """命令本身可执行：旧的批次日志、pid、vc5-all 日志改名留档，再用后台脚本重派（本机没有 setsid，用同名替身顶）。"""
+        world = self.readiness_world()
+        rw.write(world.runroot / "vc5-run-batch.sh", "#!/bin/bash\necho redispatched > \"$(dirname \"$0\")/redispatched.txt\"\n", 0o700)
+        for name in ("vc5-run-batch.out", "vc5-run-batch.pid", "vc5-all.out"):
+            rw.write(world.runroot / name, f"旧 {name}\n")
+        fake_bin = world.root / "fake-bin"
+        rw.write(fake_bin / "setsid", "#!/bin/sh\nshift\nexec \"$@\"\n", 0o700)
+        command = self.step(world.plan(), "continue")["command"]
+        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual((world.runroot / "redispatched.txt").read_text(encoding="utf-8").strip(), "redispatched")
+        for name in ("vc5-run-batch.out", "vc5-run-batch.pid", "vc5-all.out"):
+            archived = sorted(path for path in world.runroot.glob(name + ".failed-*"))
+            self.assertEqual(len(archived), 1, name)
+            self.assertEqual(archived[0].read_text(encoding="utf-8"), f"旧 {name}\n", "留档的是原内容，不是截断后的")
+
+
 class ApplyTests(_WorldCase):
     def _full_chain_world(self, **kwargs) -> rw.World:
         """账本停线＋演进未登记：完整链 resume → evolution → 对账 → 批准 → 授权 → 续跑；全部批准预先由"人"提交。"""
