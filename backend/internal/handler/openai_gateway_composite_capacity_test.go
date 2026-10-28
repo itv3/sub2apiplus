@@ -26,7 +26,7 @@ func TestMessagesDispatchMappedModelForPlatform(t *testing.T) {
 	require.Equal(t, "gpt-5.5", messagesDispatchMappedModelForPlatform(apiKey, service.PlatformOpenAI, "claude-opus-4"))
 	require.Equal(t, "", messagesDispatchMappedModelForPlatform(nil, service.PlatformOpenAI, "claude-opus-4"))
 
-	// 原函数改走共用实现后行为不变。
+	// 上游原样的 resolveOpenAIMessagesDispatchMappedModel 与上面的满载换号用实现口径一致（逐平台对照见 openai_gateway_composite_entry_test.go）。
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformDeepseek))
