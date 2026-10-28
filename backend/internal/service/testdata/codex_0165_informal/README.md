@@ -11,3 +11,7 @@
 - `t1_ws_title_thread`：每个 TUI 会话启动后另开的 gpt-5.6-luna 标题线程（独立 WS 连接）：帧 1 预热，帧 2 业务帧（预热之后在同一连接上发的全量帧，无 previous_response_id、无 generate，因为工具目录与预热不同）。
 
 换模型、压缩、改 effort 引起的整段重放都在原连接上，握手只有一次，握手头里的 routing hint 与 window id 保持旧值。
+
+- `c3_http_compact_continue`（HTTP，非 WS 帧）：官方 HTTP 压缩续聊会话里 7 个 `/backend-api/codex/responses` 请求的 `client_metadata`（含压缩请求）。只留身份与回合元数据，
+  请求正文已略去；原始记录里已打码的安装 id 换成固定的合成 UUID（turn metadata 内的 installation_id 同步替换）。每行 `{"kind":"http_request","index":n,"request_kind":…,"input_types":[…],"client_metadata":{…}}`。
+  官方事实：9 个键（含 `root_turn_id`、`guardian_credits_requested`、`mcp_attribution`），根线程上 `root_turn_id` 等于 `turn_id`。生成脚本在 local-analysis/opt-0165/scratch/W3/make_http_fixture.py。

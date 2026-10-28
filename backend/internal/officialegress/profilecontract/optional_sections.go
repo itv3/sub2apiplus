@@ -166,7 +166,8 @@ type ClientMetadataSection struct {
 	// 引擎支持的闭集且不得为空串；存在时不能为空表。omitempty 保证未使用该字段的节
 	// 序列化形态与摘要不变。
 	KeyConditions map[string]ConditionKind `json:"KeyConditions,omitempty"`
-	// DynamicKeys：WS 帧里由客户端逐请求写入的动态键（排序去重，取值见 clientMetadataDynamicKeyKinds）。
+	// DynamicKeys：由客户端逐请求写入的动态键（排序去重，取值见 clientMetadataDynamicKeyKinds）。端点范围：WS 帧三个键都生效；
+	// HTTP 回合请求只有 root_turn_id 生效（Lite 在 HTTP 上是请求头，发送时间戳是 WS 专属）。
 	//
 	// 官方 0.165 的 WS response.create 的 client_metadata 除身份键与常量外还带：root_turn_id（根回合 id，预热帧没有）、
 	// ws_request_header_x_openai_internal_codex_responses_lite（本请求的模型走 Lite 时为 "true"）、
