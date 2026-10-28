@@ -330,21 +330,22 @@ func generateOfficialStableUUIDV7(key officialUUIDV7CacheKey) string {
 //	bit  64..65   变体 0b10
 //	bit  66..127  rand_b（62 位）= 计数器第 25..0 位（26 位）+ 36 位随机数（计数器第 27、26 位被变体覆盖）
 //
-// 因此官方 id 的 rand_a 的第 2、3 位恒为 0（本地实采的 287 个 UUIDv7 全部满足）。
-// 网关其他 id（session、thread 等）仍用 google/uuid 的 NewV7（rand_a 是亚毫秒时间），那是另一回事。
+// 因此官方 id 的 rand_a 的第 2、3 位恒为 0（本地实采的 645 个不同 UUIDv7 全部满足）。同一毫秒内的 id 共用计数器，
+// rand_a 几乎相同；不同毫秒的 rand_a 是重置时的随机值，看上去就是随机位。网关的所有官方 UUIDv7
+// （回合、会话、线程、item）都用本生成器。
 //
 // turn_started_at_unix_ms 是任务真正开始时读系统时钟，晚于提交时刻（id 内嵌毫秒）一个很短的间隔。
-// 本地升级证据库里的官方实采（39 个不同回合，其中 2 个来自真实上游）里，这个差值是 1～4 毫秒，
-// 分布见 officialCodexTurnStartGapSamples。网关只做到“差值服从同一分布”：turn_id 在网关判定出新回合
+// 本地升级证据库里的官方实采（143 个不同回合）里，这个差值是 0～7 毫秒（另有 1 个 29 毫秒的离群值，
+// 是采集机上另有进程争用 CPU 所致，未计入），分布见 officialCodexTurnStartGapSamples。网关只做到“差值服从同一分布”：turn_id 在网关判定出新回合
 // 的时刻生成，内嵌毫秒回拨 officialCodexTurnSubmitLeadMs 毫秒，开始时间由 turn_id 无状态推出
 // （内嵌毫秒 + 以 turn_id 为种子的确定性抽样差值）。这样同一回合无论重试、续轮还是换路径，
 // 开始时间都一致，且推出的时间不会晚于生成时刻（官方的开始时间也恒早于该回合的请求发出时刻）。
 // ---------------------------------------------------------------------------
 
 const (
-	// officialCodexTurnSubmitLeadMs 是 turn_id 内嵌毫秒相对生成时刻的回拨量，等于实采差值的最大值，
+	// officialCodexTurnSubmitLeadMs 是 turn_id 内嵌毫秒相对生成时刻的回拨量，等于分布里差值的最大值，
 	// 保证“内嵌毫秒 + 抽样差值”不晚于生成时刻。
-	officialCodexTurnSubmitLeadMs = 4
+	officialCodexTurnSubmitLeadMs = 7
 
 	// officialCodexIDLeadMs 是会话、线程、item id 内嵌毫秒相对生成时刻的回拨量，须大于回合 id 的回拨量。
 	officialCodexIDLeadMs = 50
@@ -359,14 +360,19 @@ const (
 )
 
 // officialCodexTurnStartGapSamples 是官方实采中 turn_started_at_unix_ms 减 turn_id 内嵌毫秒的差值分布
-// （差值毫秒 -> 回合个数）。数据来源：非正式实采 37 个回合（ARM64 上官方客户端对本地假上游）加真实上游
-// 实采 2 个回合，共 39 个；其中 1 毫秒 13 个、2 毫秒 18 个、3 毫秒 7 个、4 毫秒 1 个。
-// 样本只覆盖开发机上的 exec 与 app-server 场景，没有覆盖“首轮要刷新模型目录”等可能拉长差值的场景，
-// 待 ARM64 实采更多样本后再校准。
+// （差值毫秒 -> 回合个数），两批官方样本合并：
+//   - 上一版与更早版本官方客户端的非正式实采 37 个回合加真实上游实采 2 个回合，共 39 个（1 毫秒 13、2 毫秒 18、
+//     3 毫秒 7、4 毫秒 1）；
+//   - 当前版本官方客户端在 ARM64 上的非正式实采 105 个回合（主线程与标题线程，不含预热）：0 毫秒 2、1 毫秒 47、
+//     2 毫秒 19、3 毫秒 17、4 毫秒 12、5 毫秒 4、6 毫秒 2、7 毫秒 1、29 毫秒 1。29 毫秒的离群值发生在采集机另有
+//     一路 TUI 争用 CPU 时，不计入表中，所以合并后共 143 个。
+//
+// 样本都来自开发机上的 exec、TUI 与 app-server 场景（假上游居多），没有“网络很慢”“首轮要刷新模型目录”之类
+// 可能拉长差值的场景；真实流量下的长尾待实采后再校准。
 var officialCodexTurnStartGapSamples = [...]struct {
 	gapMs int64
 	count uint64
-}{{1, 13}, {2, 18}, {3, 7}, {4, 1}}
+}{{0, 2}, {1, 60}, {2, 37}, {3, 24}, {4, 13}, {5, 4}, {6, 2}, {7, 1}}
 
 // officialCodexTurnClock 与 officialCodexTurnRandom 只为让测试固定时间与随机数。
 var (

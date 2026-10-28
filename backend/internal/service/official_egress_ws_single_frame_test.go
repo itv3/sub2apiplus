@@ -2,8 +2,10 @@ package service
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -182,6 +184,45 @@ func TestOfficialEgressWebSocketWritesOneCompressedFramePerMessage(t *testing.T)
 		require.Equal(t, byte(1), frame.opcode, "message %d 为文本帧", i)
 		require.Equal(t, byte(0x40), frame.rsv, "message %d 必须置 RSV1，小消息也压缩", i)
 	}
+}
+
+// 官方客户端用上下文接管：同一连接上每条消息共用 LZ77 窗口（每条连接的第一条消息能被全新解压器单独解开，之后的不能；
+// 官方实采 124 条消息的结论）。握手提议是 `permessage-deflate; client_max_window_bits`，没有 no_context_takeover。
+// 候选侧同样启用：线上第二条重复内容的消息单独解压必然失败，接续同一解压上下文则成功。
+func TestOfficialEgressWebSocketKeepsCompressionContextTakeover(t *testing.T) {
+	text := bytes.Repeat([]byte(`{"type":"response.create","input":[{"role":"user","text":"context takeover probe"}]}`), 30)
+	got, frames := dialOfficialSingleFrameServer(t, [][]byte{text, text, text})
+	for _, message := range got {
+		require.True(t, bytes.Equal(text, message))
+	}
+	var data []singleFrameWire
+	for _, frame := range frames {
+		if frame.opcode <= 2 {
+			data = append(data, frame)
+		}
+	}
+	require.Len(t, data, 3)
+	tail := []byte{0x00, 0x00, 0xff, 0xff}
+	inflate := func(segments ...[]byte) ([]byte, error) {
+		var stream []byte
+		for _, segment := range segments {
+			stream = append(append(stream, segment...), tail...)
+		}
+		out, readErr := io.ReadAll(flate.NewReader(bytes.NewReader(stream)))
+		if errors.Is(readErr, io.ErrUnexpectedEOF) {
+			readErr = nil // 流以同步标记结尾、没有最终块：读到末尾报这个错属正常，已读出的内容有效
+		}
+		return out, readErr
+	}
+	first, err := inflate(data[0].payload)
+	require.NoError(t, err, "第一条消息可单独解开")
+	require.True(t, bytes.Equal(text, first))
+	alone, aloneErr := inflate(data[1].payload)
+	require.True(t, aloneErr != nil || !bytes.Equal(text, alone), "第二条消息单独解压不能得到原文：它引用了前一条消息的窗口")
+	chained, err := inflate(data[0].payload, data[1].payload, data[2].payload)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(bytes.Repeat(text, 3), chained), "接续同一解压上下文可依次还原")
+	require.Less(t, len(data[1].payload), len(data[0].payload), "重复内容的后续消息应比首条更小（引用了窗口）")
 }
 
 func TestOfficialEgressWebSocketRoundTripperLeavesNon101ResponsesUntouched(t *testing.T) {

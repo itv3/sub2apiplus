@@ -12,7 +12,7 @@ import (
 
 // 回合 id 与回合开始时间的官方形态测试。
 //
-// 官方 turn_id 来自 Uuid::now_v7()（Rust uuid 库，官方 Cargo.lock 锁定的版本）；turn_started_at_unix_ms 比 turn_id 内嵌毫秒晚 1～4 毫秒。
+// 官方 turn_id 来自 Uuid::now_v7()（Rust uuid 库，官方 Cargo.lock 锁定的版本）；turn_started_at_unix_ms 比 turn_id 内嵌毫秒晚 0～7 毫秒。
 // 位布局的依据是 Rust uuid 库源码（v7.rs 的 new_v7、timestamp.rs 的 encode_unix_timestamp_millis 与 ContextV7），
 // 并用本地官方实采里的 287 个 UUIDv7 交叉验证了“rand_a 第 2、3 位恒为 0”这一特征。
 
@@ -61,8 +61,15 @@ func TestOfficialCodexTurnUUIDV7MatchesOfficialLayout(t *testing.T) {
 }
 
 func TestOfficialCodexTurnUUIDV7SamplesFromOfficialCaptureSatisfyTheLayout(t *testing.T) {
-	// 官方客户端实采的回合 id（本地非正式实采，exec 与 app-server 场景）。
+	// 官方客户端实采的回合 id（本地非正式实采，exec 与 app-server 场景；后 6 个来自当前版本官方客户端的 358 个不同
+	// UUIDv7，全部满足该布局特征，其 rand_a 看上去是随机位：每个新毫秒重置计数器，同毫秒内才递增）。
 	for _, text := range []string{
+		"01a1838e-3131-7002-8571-f57cb99012e6",
+		"01a1838f-a7f2-70d2-9e6c-2048fad78354",
+		"01a18388-7b2e-7800-ae89-8a762f248cfa",
+		"01a18395-2103-7081-8013-7d04d824adf4",
+		"01a1838d-f09a-7ce1-9802-ac53c1d50892",
+		"01a18394-367a-7631-a74e-a5525bddef9f",
 		"01a1794c-8017-7560-8816-ae77f473a5ee",
 		"01a1793d-088b-7da3-a56f-d5aad9041eb0",
 		"01a17935-da56-7f41-a0c4-b36390804a73",
@@ -117,8 +124,8 @@ func TestOfficialCodexTurnStartedAtIsDerivedFromTurnIDAndNeverLaterThanTheClock(
 		parsed, err := uuid.Parse(turnID)
 		require.NoError(t, err)
 		gap := startedAt - officialCodexEmbeddedMs(parsed)
-		require.GreaterOrEqual(t, gap, int64(1))
-		require.LessOrEqual(t, gap, int64(4))
+		require.GreaterOrEqual(t, gap, int64(0))
+		require.LessOrEqual(t, gap, int64(officialCodexTurnSubmitLeadMs))
 		require.LessOrEqual(t, startedAt, current.UnixMilli(), "开始时间不晚于 id 生成时刻")
 		again, _ := officialCodexTurnStartedAtMs(turnID)
 		require.Equal(t, startedAt, again, "同一 turn_id 的开始时间稳定")
@@ -143,19 +150,19 @@ func TestOfficialCodexTurnStartGapFollowsTheOfficialSampleDistribution(t *testin
 		require.InDelta(t, want, got, 0.015, "gap=%dms", sample.gapMs)
 	}
 	require.Len(t, counts, len(officialCodexTurnStartGapSamples), "不应出现分布之外的间隔")
-	require.Equal(t, uint64(39), func() uint64 {
+	require.Equal(t, uint64(143), func() uint64 {
 		var sum uint64
 		for _, sample := range officialCodexTurnStartGapSamples {
 			sum += sample.count
 		}
 		return sum
-	}(), "样本总数与实采一致（37 + 2）")
-	// 平均间隔应接近样本均值 74/39 毫秒（约 1.9）。
+	}(), "样本总数与实采一致（39 + 105 - 1 个离群）")
+	// 平均间隔应接近样本均值 297/143 毫秒（约 2.08）。
 	var mean float64
 	for gap, count := range counts {
 		mean += float64(gap) * float64(count)
 	}
-	require.InDelta(t, 74.0/39.0, mean/total, 0.05)
+	require.InDelta(t, 297.0/143.0, mean/total, 0.05)
 }
 
 func TestOfficialCodexTurnStartedAtMsRejectsNonV7(t *testing.T) {
