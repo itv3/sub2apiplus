@@ -4118,6 +4118,43 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.client_metadata.root_turn_id",
+            "value": "str:<len=36>"
+          },
+          "description": "HTTP Responses 回合请求（含 HTTP 压缩请求）body 的 client_metadata 带 root_turn_id（36 位 UUID；根线程上等于 turn_id，与 WS 回合帧一致）；只选根线程（turn metadata 的 thread_source 为 user），子代理、guardian、记忆合并线程没有官方样本不入判据",
+          "id": "http-turn-request-root-turn-id",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
         }
       ],
       "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；另带常量 mcp_attribution（guardian 审阅请求同样写入）",
@@ -4294,6 +4331,154 @@
                 "operator": "equal",
                 "path": "data.shape.generate",
                 "value": "bool:false"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "agent_name"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 agent_name 键（根线程为 /root）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-agent-name-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "root_turn_id"
+          },
+          "description": "HTTP 回合请求（含压缩请求）turn metadata 含 root_turn_id 键（根线程上等于 turn_id）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-root-turn-id-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "window_number"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 window_number 键（窗口号即 x-codex-window-id 的后缀，压缩后加一）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-window-number-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "context_window_id"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 context_window_id 键（每个上下文窗口一个 id，窗口内各请求相同，压缩后换新）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-context-window-id-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
               }
             ]
           }
