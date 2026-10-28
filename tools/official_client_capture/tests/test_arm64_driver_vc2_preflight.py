@@ -235,12 +235,12 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(fresh.OFFICIAL_EXECUTED_MODES, frozenset({fresh.contract.MODE_DUAL_WIRE}))
 
     def test_default_modes_never_fail_candidate_profile_checks_on_official_evidence(self):
-        """0.160.0／0.163.0 官方证据实测（0.164.0 清单由 0.163.0 终态复制，判据相同）：候选侧专有标签的 8 个判据在官方证据上必然不过，缺省口径下只能是待候选。"""
+        """0.160.0／0.163.0 官方证据实测（其后各版清单由上一版终态复制，判据相同）：候选侧专有标签的 8 个判据在官方证据上必然不过，缺省口径下只能是待候选。"""
         known = {("SPEC-WS-005", "warmup-generate-false"), ("SPEC-BODY-001", "http-closed-fields"),
                  ("SPEC-EP-001", "independent-image-endpoints"), ("SPEC-EP-022", "image-header-order"),
                  ("SPEC-EP-022", "generation-background-default-opaque"), ("SPEC-EP-022", "generation-background-transparent"),
                  ("SPEC-EP-022", "edit-file-id-reference"), ("SPEC-EP-022", "edit-file-id-without-url")}
-        for version in ("0_160_0", "0_163_0", "0_164_0"):
+        for version in ("0_160_0", "0_163_0", "0_164_0", "0_165_0"):
             with self.subTest(version=version):
                 profile = self.module.checker.load_profile(
                     REPO_ROOT / f"tools/official_client_capture/candidate_rule_expectations_{version}.json",

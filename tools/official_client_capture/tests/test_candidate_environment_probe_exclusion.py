@@ -517,7 +517,7 @@ class EnvironmentProbeDeclarationContractTest(unittest.TestCase):
         """0.157.0 起的目标版本声明携带排除；更早的历史版本声明不追溯加排除，官方封存证据的编目口径不动。
 
         0.160.0 声明（由 0.159.2 版改名，0.159.2 版又由 0.157.0 版逐字替换版本号得到）、0.163.0 声明（由 0.160.0 版复制）与 0.164.0 声明
-        （由 0.163.0 版复制）的三个候选 direct 作业 sidecar pcap 排除集合随之承接。
+        （由 0.163.0 版复制）与 0.165.0 声明（由 0.164.0 版复制）的三个候选 direct 作业 sidecar pcap 排除集合随之承接。
         """
 
         for path in sorted(TOOL_ROOT.glob("codex_upgrade_evidence_labels_*.json")):

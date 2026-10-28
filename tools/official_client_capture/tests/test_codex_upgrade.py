@@ -4690,7 +4690,7 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_current_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
-        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0"):
+        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0", "0.165.0"):
             suffix = version.replace(".", "_")
             scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
             scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -4738,7 +4738,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
-            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0"}:
+            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0", "0.165.0"}:
                 auxiliary = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -4756,7 +4756,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 wham_command = wham_job["steps"][1]["argv"][2]
                 self.assertIn("--entrypoint python3", wham_command)
                 self.assertNotIn("{runtime_image} python3 ", wham_command)
-                if version in {"0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0"}:
+                if version in {"0.154.0", "0.156.1", "0.157.0", "0.160.0", "0.163.0", "0.164.0", "0.165.0"}:
                     self.assertIn(
                         "run_root={repo_root}/runs/{campaign_id}-official-wham-safe",
                         wham_command,
@@ -15504,6 +15504,57 @@ class CodexUpgradeTest(unittest.TestCase):
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
 
+    def test_0165_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.165.0：内置目录的 model_presets.rs 与上一版逐字节相同，models.json 只多一个未被采集的 gpt-6.1-terra（不收录），
+        主线 Lite 模型 gpt-6.1-sol 与 Lite 轨 gpt-6-astra 沿用。新升级对只登记自 0.164.0 起跳（0.164.0 是真实 Active），旧升级对保留且一字不改。"""
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.164.0",
+            target_version="0.165.0",
+            model="gpt-6.1-sol",
+            lite_model="gpt-6-astra",
+        )
+        # 新增 0.165.0 不影响此前登记的升级对。
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.163.0",
+            target_version="0.164.0",
+            model="gpt-6.1-sol",
+            lite_model="gpt-6-astra",
+        )
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.157.0",
+            target_version="0.160.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+
+        mutations = (
+            # 基线只能是 0.164.0；跳版（0.163.0→0.165.0）与未登记的目标版本都不受支持。
+            ({"baseline_version": "0.163.0"}, "不支持的 Codex 升级对"),
+            ({"baseline_version": "0.160.0"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.166.0"}, "不支持的 Codex 升级对"),
+            # 已下线的旧主线、同族的 gpt-6-luna，以及内置目录新增但未被采集的 gpt-6.1-terra 都不是 0.165.0 的主线模型。
+            ({"model": "gpt-5.5"}, "主升级线只能使用 gpt-6.1-sol"),
+            ({"model": "gpt-6-luna"}, "主升级线只能使用 gpt-6.1-sol"),
+            ({"model": "gpt-6.1-terra"}, "主升级线只能使用 gpt-6.1-sol"),
+            ({"lite_model": "gpt-6.1-sol"}, "Lite 专项只能使用 gpt-6-astra"),
+            ({"lite_model": "gpt-6.1-terra"}, "Lite 专项只能使用 gpt-6-astra"),
+        )
+        baseline = {
+            "baseline_version": "0.164.0",
+            "target_version": "0.165.0",
+            "model": "gpt-6.1-sol",
+            "lite_model": "gpt-6-astra",
+        }
+        for mutation, message in mutations:
+            with self.subTest(mutation=mutation):
+                values = {**baseline, **mutation}
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade._validate_upgrade_pair_models(**values)
+
     def test_0157_label_vocabulary_adds_daemon_mode_without_new_retirements(self) -> None:
         """0.157.0 标签声明新增 A17 的 tui_mode=daemon；相对 0.154.0 的弃用取值与 0.156.1 相同。"""
 
@@ -15530,9 +15581,9 @@ class CodexUpgradeTest(unittest.TestCase):
         reference = profile["codex_version"]
         self.assertEqual(reference, "0.145.0")
         tool_root = Path(codex_upgrade.__file__).resolve().parent
-        # 每个目标版本的 Campaign 基线是它的上一版（0.160.0 的基线 0.157.0、0.163.0 的基线 0.160.0、0.164.0 的基线 0.163.0）；
-        # 三个目标版本的标签声明相对冻结画像所属版本 0.145.0 的弃用取值相同，0.163.0、0.164.0 登记时分别由上一版的声明逐字替换版本号得到。
-        for baseline_version, target_version in (("0.157.0", "0.160.0"), ("0.160.0", "0.163.0"), ("0.163.0", "0.164.0")):
+        # 每个目标版本的 Campaign 基线是它的上一版（0.160.0 的基线 0.157.0、0.163.0 的基线 0.160.0、0.164.0 的基线 0.163.0、0.165.0 的基线 0.164.0）；
+        # 四个目标版本的标签声明相对冻结画像所属版本 0.145.0 的弃用取值相同，0.163.0、0.164.0、0.165.0 登记时分别由上一版的声明逐字替换版本号得到。
+        for baseline_version, target_version in (("0.157.0", "0.160.0"), ("0.160.0", "0.163.0"), ("0.163.0", "0.164.0"), ("0.164.0", "0.165.0")):
             with self.subTest(target_version=target_version):
                 stale, _ = codex_upgrade._retired_official_label_values(baseline_version, target_version)
                 self.assertNotIn("optional_missing", stale.get("variant", frozenset()))

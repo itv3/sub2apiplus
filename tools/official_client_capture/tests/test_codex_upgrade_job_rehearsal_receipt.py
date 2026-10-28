@@ -1206,6 +1206,11 @@ class JobRehearsalReceiptTests(unittest.TestCase):
 
         self.assert_model_condition_identity_tracks_declaration("0.164.0")
 
+    def test_0165_model_condition_identity_tracks_the_main_track_declaration(self) -> None:
+        """0.165.0 清单由 0.164.0 终态复制、主线声明沿用 Lite：同一组演练收据断言逐项成立。"""
+
+        self.assert_model_condition_identity_tracks_declaration("0.165.0")
+
     def assert_model_condition_identity_tracks_declaration(self, version: str) -> None:
         scenario_path = Path(receipt.__file__).with_name(f"codex_upgrade_scenarios_{version.replace('.', '_')}.json")
         manifest = json.loads(scenario_path.read_text(encoding="utf-8"))
