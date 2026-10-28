@@ -58,6 +58,12 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 0.164.0 的内置目录（models-manager/models.json 与 model_presets.rs）与 0.163.0 逐字节相同（这两个文件在 rust-v0.163.0 与 rust-v0.164.0 之间无任何差异），
 # 沿用 0.163.0 的两条轨道：主线 gpt-6.1-sol（Lite）、Lite 专项 gpt-6-astra。登记时只核对了内置目录；gpt-6.1-sol 对采集账号是否仍可用
 # 属于上游服务侧事实，开工前要按 codex-0163 的做法用 codex exec 各发一次最小请求复核（不入总账、不作证据）。
+# 0.165.0 的内置目录：model_presets.rs 与上一版逐字节相同；models.json 只多一个条目 gpt-6.1-terra（priority=7，visibility=list，use_responses_lite=true，
+# supported_in_api=true，supports_reasoning_effort_updates=true，服务档 priority 为 1.5x，model_messages 多一个 instructions_variables 键），
+# 其余 11 个条目逐字段相同（含主线 gpt-6.1-sol 与 Lite 专项 gpt-6-astra 的 supports_reasoning_effort_updates 本来就是 true），排第一的默认模型仍是 gpt-6.1-sol（priority=1），Lite 专项 gpt-6-astra（priority=2）不变。
+# 所以沿用两条轨道：主线 gpt-6.1-sol（Lite）、Lite 专项 gpt-6-astra；新增的 gpt-6.1-terra 没有被本升级采过也不是任何轨道的默认模型，
+# 按下面“没被实测过的模型不进白名单”的规则不收录。若以后要把它纳入采集，必须同步改 h1_wire_probe、upstream_byte_relay 与 extract_compaction_reason 的模型集合。
+# 登记时只核对了内置目录；gpt-6.1-sol 对采集账号是否仍可用属于上游服务侧事实，开工前仍要用 codex exec 各发一次最小请求复核。
 #
 # 主线只收录已在本升级中实际采过或即将采的模型，而不是所有同 Lite 标志的模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
@@ -106,6 +112,11 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "main": ("gpt-6.1-sol",),
         "lite": ("gpt-6-astra",),
     },
+    "0.165.0": {
+        # 内置目录只多一个未被采集的 gpt-6.1-terra（不收录），默认主线模型与 Lite 专项模型不变；见上方说明。
+        "main": ("gpt-6.1-sol",),
+        "lite": ("gpt-6-astra",),
+    },
 }
 
 # 各目标版本主线轨道的 use_responses_lite 声明：True 表示主线模型本身就是 Lite 模型。
@@ -131,6 +142,7 @@ MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION: dict[str, bool] = {
     "0.160.0": False,
     "0.163.0": True,
     "0.164.0": True,
+    "0.165.0": True,
 }
 
 
@@ -176,7 +188,7 @@ def track_expected_use_responses_lite(codex_version: str, track: str) -> bool:
     """目标版本某条轨道的模型应有的 use_responses_lite；缺政策或缺声明时失败关闭。
 
     Lite 轨按定义恒为 True；主线按 MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 声明
-    （0.160.0 及更早为 False，0.163.0 起为 True，0.164.0 沿用）。作业默认期望、模型条件收据的期望坐标
+    （0.160.0 及更早为 False，0.163.0 起为 True，其后各版沿用）。作业默认期望、模型条件收据的期望坐标
     和场景清单显式字段的一致性校验都读这里，调用方不得自行比较版本号。
     """
 

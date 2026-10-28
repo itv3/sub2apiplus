@@ -527,6 +527,7 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
     "codex_upgrade_scenarios_0_160_0.json": RUNTIME_CODEX_BINARY_JOB_IDS,
     "codex_upgrade_scenarios_0_163_0.json": RUNTIME_CODEX_BINARY_JOB_IDS,
     "codex_upgrade_scenarios_0_164_0.json": RUNTIME_CODEX_BINARY_JOB_IDS,
+    "codex_upgrade_scenarios_0_165_0.json": RUNTIME_CODEX_BINARY_JOB_IDS,
     "run_sub2api_direct_matrix.sh": frozenset(
         {
             "candidate-core-direct",
@@ -10299,6 +10300,7 @@ SUPPORTED_UPGRADE_PAIRS = frozenset(
         ("0.157.0", "0.160.0"),
         ("0.160.0", "0.163.0"),
         ("0.163.0", "0.164.0"),
+        ("0.164.0", "0.165.0"),
     }
 )
 
@@ -11099,6 +11101,7 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "profile_rule_patches_0_160_0.json",
         "profile_rule_patches_0_163_0.json",
         "profile_rule_patches_0_164_0.json",
+        "profile_rule_patches_0_165_0.json",
     }
 )
 # 这些文件同时参与编排和评估。它们的变化必须由阶段限定 transition 明确批准，
@@ -11119,6 +11122,7 @@ _PHASE_EVALUATION_HYBRID_FILES = frozenset(
         "candidate_rule_expectations_0_160_0.json",
         "candidate_rule_expectations_0_163_0.json",
         "candidate_rule_expectations_0_164_0.json",
+        "candidate_rule_expectations_0_165_0.json",
         # 这份历史基线场景只因当前文档章节摘要更新而变化。它仍需由
         # transition 精确批准，但不参与 0.151 Candidate 请求字节生产；
         # 当前 preflight/no-op 会另行证明完整 Job 合同逐字等价。
@@ -11148,6 +11152,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "candidate_test_fact_map_0_160_0.json",
         "candidate_test_fact_map_0_163_0.json",
         "candidate_test_fact_map_0_164_0.json",
+        "candidate_test_fact_map_0_165_0.json",
         # ARM64 完整 Job 预检、环境快照和增量恢复只读取工具树与运行事实，
         # 不产生官方请求字节；watchdog 接线修复应保持在评估侧。
         "codex_upgrade_arm64_environment_receipt.py",
@@ -11166,6 +11171,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_evidence_labels_0_160_0.json",
         "codex_upgrade_evidence_labels_0_163_0.json",
         "codex_upgrade_evidence_labels_0_164_0.json",
+        "codex_upgrade_evidence_labels_0_165_0.json",
         # 版本化规则清单与候选期望（0.159.2 登记起）也登记进评估侧：它们在工具身份策略 v2 里同属 evidence_semantics 层，
         # 不参与请求字节生产；不登记会落入默认 shared 组件，把后续修复的失效范围扩大到按组件判定的全部作业。
         "codex_upgrade_rules_0_160_0.json",
@@ -11173,7 +11179,9 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_rules_0_163_0.json",
         "candidate_rule_expectations_0_163_0.json",
         "codex_upgrade_rules_0_164_0.json",
+        "codex_upgrade_rules_0_165_0.json",
         "candidate_rule_expectations_0_164_0.json",
+        "candidate_rule_expectations_0_165_0.json",
         # 计时台账只记录阶段事实，不改变请求或证据字节。
         "codex_upgrade_timing_ledger.py",
         "codex_upgrade_supervisor.py",
@@ -11274,6 +11282,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "profile_rule_patches_0_160_0.json",
         "profile_rule_patches_0_163_0.json",
         "profile_rule_patches_0_164_0.json",
+        "profile_rule_patches_0_165_0.json",
     }
 )
 
@@ -11439,6 +11448,7 @@ _SCENARIO_TOOL_FILES = frozenset(
         "codex_upgrade_scenarios_0_160_0.json",
         "codex_upgrade_scenarios_0_163_0.json",
         "codex_upgrade_scenarios_0_164_0.json",
+        "codex_upgrade_scenarios_0_165_0.json",
     }
 )
 
