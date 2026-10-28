@@ -277,6 +277,15 @@ def _parse_utc(value: Any) -> float | None:
         return None
 
 
+def summarize_log(text: str) -> str:
+    """收据里留的日志摘要：先是前 6 行 ``FAIL:``／``ERROR:``（红在哪个用例），再是最后 3 行（汇总行）；被拦下时一眼看出红在哪。"""
+
+    lines = text.splitlines()
+    failures = [line for line in lines if line.startswith(("FAIL:", "ERROR:"))][:6]
+    tail = [line for line in lines[-3:] if line not in failures]
+    return "\n".join([*failures, *tail])
+
+
 def capture_receipt_path(directory: Path, commit: str) -> Path:
     return Path(directory) / f"capture-tools-{commit}.json"
 
@@ -321,7 +330,7 @@ def check_capture_receipt(directory: Path, commit: str, *, min_seconds: float = 
         problems.append(f"收据记录的命令是 {receipt.get('command')!r}，不是完整目标 {CAPTURE_COMMAND!r}（定向测试不算）")
     code = receipt.get("exit_code")
     if type(code) is not int or code != 0:
-        tail = str(receipt.get("log_tail") or "").strip().splitlines()[-3:]
+        tail = str(receipt.get("log_tail") or "").strip().splitlines()[-9:]
         problems.append(f"本机 make test-capture-tools 在提交 {commit[:12]} 上没有通过（退出码 {code!r}）：先修好并对修复后的提交重跑完整测试，不要带着红的提交起跑"
                         + (f"；日志末尾：{' | '.join(tail)}" if tail else ""))
     if receipt.get("tree_clean") is not True:
@@ -467,7 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             log = args.log.read_bytes() if args.log is not None else b""
             path = write_capture_receipt(args.dir, commit=args.commit, exit_code=args.exit_code, started_at_utc=args.started, finished_at_utc=args.finished,
                                          host=args.host, tree_clean=args.tree_clean == "true", log_sha256=hashlib.sha256(log).hexdigest() if args.log else "",
-                                         log_tail="\n".join(log.decode("utf-8", "replace").splitlines()[-8:]))
+                                         log_tail=summarize_log(log.decode("utf-8", "replace")))
             print(f"本地收据已写：{path}")
             return EXIT_OK
         if args.command == "tui-receipt-write":

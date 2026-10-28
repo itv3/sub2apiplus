@@ -395,6 +395,8 @@ class CaptureReceiptTests(unittest.TestCase):
         value = json.loads(oc.capture_receipt_path(self.dir, self.COMMIT).read_text(encoding="utf-8"))
         self.assertEqual(value["log_sha256"], hashlib.sha256(log.read_bytes()).hexdigest())
         self.assertEqual(value["log_tail"], "a\nb\nOK")
+        self.assertEqual(oc.summarize_log("x\nFAIL: test_a (m.C.test_a)\n" + "y\n" * 20 + "ERROR: test_b\nRan 9 tests\n\nFAILED (failures=1)"),
+                         "FAIL: test_a (m.C.test_a)\nERROR: test_b\nRan 9 tests\n\nFAILED (failures=1)", "红的用例名与汇总行都进摘要")
         ok = subprocess.run([*base, "capture-receipt-check", "--dir", str(self.dir), "--commit", self.COMMIT], capture_output=True, text=True)
         self.assertEqual((ok.returncode, ok.stdout.strip()), (0, "通过"))
         bad = subprocess.run([*base, "capture-receipt-check", "--dir", str(self.dir), "--commit", "b" * 40], capture_output=True, text=True)
