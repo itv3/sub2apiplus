@@ -45,37 +45,75 @@ import (
 // replayOfficialUserAgent 是官方 Codex 客户端的 UA；重放判定不依赖 UA（见第三方用例），这里只是让官方场景更像真实入站。
 const replayOfficialUserAgent = "codex_cli_rs/test-client (Mac OS; arm64) Apple_Terminal"
 
-// withReplayOnSameConnectionProfile 把 mode 槽位的画像在 service 层读到的版本换成 WebSocketContinuation.ReplayOnSameConnection
-// 取值为 enabled 的同源画像（以正式目录里该槽位的画像快照为底稿，只改这一个字段），用例结束自动恢复。
-// 不论正式画像是否已声明该字段，用例看到的开关都由 enabled 决定：声明（true）与对照（false）都靠它固定。
-// 正式 ReleaseCatalog 与 Executor 不受影响：执行层不读这个字段，只有 service 层的入站转发读它。
-func withReplayOnSameConnectionProfile(t *testing.T, mode string, enabled bool) {
+// replayTestProfileDocs 记录本测试里各槽位当前叠加了哪些改写（累计），使多个开关可以先后叠加在同一槽位上。
+var replayTestProfileDocs = map[string]profilecontract.SnapshotDoc{}
+
+// withMutatedOfficialProfile 把 mode 槽位的画像在 service 层读到的版本换成改写后的同源画像（以正式目录里该槽位的画像快照为底稿，
+// 或在已叠加的改写上继续改写），用例结束自动恢复。正式 ReleaseCatalog 与 Executor 不受影响。
+// 同包其他夹具也替换这个包级入口，所以使用本夹具的用例不得并行。
+func withMutatedOfficialProfile(t *testing.T, mode string, mutate func(doc *profilecontract.SnapshotDoc)) {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
-	require.NoError(t, err)
-	doc := release.Profile().ToSnapshot()
-	require.NotEmpty(t, doc.WebSocketContinuation, "槽位 %s 的画像必须已有 WebSocketContinuation 节", mode)
-	var section profilecontract.WebSocketContinuationSection
-	require.NoError(t, json.Unmarshal(doc.WebSocketContinuation, &section))
-	section.ReplayOnSameConnection = enabled
-	raw, err := json.Marshal(section)
-	require.NoError(t, err)
-	doc.WebSocketContinuation = raw
+	key := normalizeOfficialClientProfileMode(mode)
+	doc, stacked := replayTestProfileDocs[key]
+	if !stacked {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
+		require.NoError(t, err)
+		doc = release.Profile().ToSnapshot()
+	}
+	mutate(&doc)
 	spec, err := profilecontract.NewProfileSpec(doc)
 	require.NoError(t, err)
 	patched, err := profilecontract.CompileExecutableProfile(spec)
 	require.NoError(t, err)
-	require.Equal(t, enabled, patched.Optional().WebSocketContinuation.ReplayOnSameConnection)
 
 	previous := officialCodexExecutableProfileForMode
+	previousDoc, hadDoc := replayTestProfileDocs[key]
+	replayTestProfileDocs[key] = doc
 	officialCodexExecutableProfileForMode = func(requested string) (profilecontract.ExecutableProfile, error) {
-		if normalizeOfficialClientProfileMode(requested) == normalizeOfficialClientProfileMode(mode) {
+		if normalizeOfficialClientProfileMode(requested) == key {
 			return patched, nil
 		}
 		return previous(requested)
 	}
-	t.Cleanup(func() { officialCodexExecutableProfileForMode = previous })
+	t.Cleanup(func() {
+		officialCodexExecutableProfileForMode = previous
+		if hadDoc {
+			replayTestProfileDocs[key] = previousDoc
+		} else {
+			delete(replayTestProfileDocs, key)
+		}
+	})
+}
+
+// withReplayOnSameConnectionProfile 把 mode 槽位 WebSocketContinuation.ReplayOnSameConnection 取值固定为 enabled。
+// 不论正式画像是否已声明该字段，用例看到的开关都由 enabled 决定：声明（true）与对照（false）都靠它固定。
+func withReplayOnSameConnectionProfile(t *testing.T, mode string, enabled bool) {
+	t.Helper()
+	withMutatedOfficialProfile(t, mode, func(doc *profilecontract.SnapshotDoc) {
+		require.NotEmpty(t, doc.WebSocketContinuation, "槽位 %s 的画像必须已有 WebSocketContinuation 节", mode)
+		var section profilecontract.WebSocketContinuationSection
+		require.NoError(t, json.Unmarshal(doc.WebSocketContinuation, &section))
+		section.ReplayOnSameConnection = enabled
+		raw, err := json.Marshal(section)
+		require.NoError(t, err)
+		doc.WebSocketContinuation = raw
+	})
 	require.Equal(t, enabled, officialCodexWebSocketReplayOnSameConnection(mode))
+}
+
+// withTurnStateResetOnNewTurnProfile 把 mode 槽位 TurnState.ResetOnNewTurn 取值固定为 enabled。
+func withTurnStateResetOnNewTurnProfile(t *testing.T, mode string, enabled bool) {
+	t.Helper()
+	withMutatedOfficialProfile(t, mode, func(doc *profilecontract.SnapshotDoc) {
+		require.NotEmpty(t, doc.TurnState, "槽位 %s 的画像必须已有 TurnState 节", mode)
+		var section profilecontract.TurnStateSection
+		require.NoError(t, json.Unmarshal(doc.TurnState, &section))
+		section.ResetOnNewTurn = enabled
+		raw, err := json.Marshal(section)
+		require.NoError(t, err)
+		doc.TurnState = raw
+	})
+	require.Equal(t, enabled, officialCodexTurnStateResetOnNewTurn(mode))
 }
 
 // replayStep 由上一轮完成事件的响应 ID 构造客户端要发的下一帧。
@@ -838,6 +876,118 @@ func TestOpenAIWSRetryAfterUpstreamClosedKeepsDerivedFrameValid(t *testing.T) {
 					replayFrameFieldsExcept(last[index], "previous_response_id", "client_metadata"),
 					"第 %d 帧：重试后的帧与没有断开时的帧内容一致", index+1)
 			}
+		})
+	}
+}
+
+// replayTurnStateValue 是假上游在第 frameNo 帧响应里下发的 turn-state。
+func replayTurnStateValue(connection int, frameNo int) string {
+	return fmt.Sprintf("ts-%d-%d", connection, frameNo)
+}
+
+// replayRunTurnStateSession 驱动官方客户端会话：预热、回合一首帧（响应带工具调用）、同一回合内的工具结果续轮、回合二首帧。
+// 假上游对每个响应（含预热帧的响应）下发 turn-state，返回各业务帧 client_metadata 里回送的 turn-state（空串表示没有）。
+func replayRunTurnStateSession(t *testing.T, mode string) []string {
+	t.Helper()
+	server := startCodexGateWireServer(t, nil)
+	server.setWebSocketResponder(func(request codexGateWireRequest, frame codexGateWireFrame) [][]byte {
+		if codexGateWebSocketFrameType(frame) != "response.create" {
+			return nil
+		}
+		responseID := fmt.Sprintf("resp_gate_ws_%d_%d", request.connection, len(request.frames))
+		events := [][]byte{[]byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"` +
+			replayTurnStateValue(request.connection, len(request.frames)) + `"}}`)}
+		output := `[]`
+		if strings.Contains(string(frame.payload), "turn one") {
+			// 回合一的响应带一个工具调用，客户端随后发工具结果续轮。
+			output = `[{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{}","status":"completed"}]`
+		}
+		events = append(events,
+			[]byte(`{"type":"response.created","response":{"id":"`+responseID+`","object":"response","status":"in_progress"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"`+responseID+`","object":"response","status":"completed","output":`+output+
+				`,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
+		return events
+	})
+	gate := newCodexGateService(t, mode, server)
+	codexGateUseRecorderManifest(gate.service, gate.account)
+	gate.enableWebSocket(t, server)
+	header := http.Header{"User-Agent": []string{replayOfficialUserAgent}}
+	steps := []replayStep{
+		replayPrewarmFrame(t, "gpt-5.5"),
+		replayChainFrame(t, "gpt-5.5", replayBaseItem(), codexGateMessage("developer", "developer context"), codexGateMessage("user", "turn one")),
+		replayChainFrame(t, "gpt-5.5", map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "ok"}),
+		replayChainFrame(t, "gpt-5.5", codexGateMessage("user", "turn two")),
+	}
+	var ws *codexGateWebSocketIngress
+	last := ""
+	for index, step := range steps {
+		frame := step(last)
+		if index == 0 {
+			ws = gate.startWebSocketIngress(t, header, codexGateIngressAPIKey(), frame)
+		} else {
+			ws.send(t, frame)
+		}
+		last = ws.readUntilCompleted(t)
+	}
+	ws.close(t)
+	handshakes := codexGateWebSocketHandshakes(server)
+	require.Len(t, handshakes, 1)
+	frames := codexGateResponseCreateFrames(handshakes[0])
+	require.Len(t, frames, 4)
+	var echoed []string
+	for _, frame := range frames {
+		echoed = append(echoed, gjson.GetBytes(frame, `client_metadata.x-codex-turn-state`).String())
+	}
+	return echoed
+}
+
+// turn-state 的作用域：官方每个回合新建模型客户端会话，turn-state 只在产生它的回合内回送。
+//   - 紧跟客户端预热帧的第一个业务帧回送预热响应里收到的值（预热过的会话交给第一个回合）；
+//   - 同一回合内的工具结果续轮回送本回合已收到的值；
+//   - 新用户轮次的第一个请求不回送上一回合的值。
+//
+// 画像声明 TurnState.ResetOnNewTurn 时网关与此一致；不声明（旧画像）时保持旧行为：保存的值回送给之后的每个请求。
+func TestOpenAIWSTurnStateScopedToTurnWhenProfileDeclares(t *testing.T) {
+	mode := officialClientProfileModeActive
+
+	withTurnStateResetOnNewTurnProfile(t, mode, true)
+	scoped := replayRunTurnStateSession(t, mode)
+	require.Equal(t, []string{
+		"",                         // 预热帧：还没有任何值
+		replayTurnStateValue(1, 1), // 回合一首帧：预热响应里收到的值随预热过的会话交给第一个回合
+		replayTurnStateValue(1, 2), // 同一回合内的工具结果续轮：回送本回合已收到的值
+		"",                         // 回合二首帧：新用户轮次，不回送上一回合的值
+	}, scoped, "声明 ResetOnNewTurn：turn-state 只在产生它的回合内回送")
+
+	withTurnStateResetOnNewTurnProfile(t, mode, false)
+	legacy := replayRunTurnStateSession(t, mode)
+	require.Equal(t, []string{
+		"",
+		replayTurnStateValue(1, 1),
+		replayTurnStateValue(1, 2),
+		replayTurnStateValue(1, 3), // 旧行为：上一回合收到的值跨回合回送
+	}, legacy, "对照：不声明时保持旧行为")
+}
+
+func TestShouldResetOpenAIWSTurnStateOnNewTurn(t *testing.T) {
+	cases := []struct {
+		name                          string
+		enabled                       bool
+		turn                          int
+		hasFunctionCallOutput         bool
+		previousFrameWasClientPrewarm bool
+		want                          bool
+	}{
+		{"新用户轮次", true, 3, false, false, true},
+		{"画像未声明", false, 3, false, false, false},
+		{"会话第一帧没有可清的值", true, 1, false, false, false},
+		{"工具结果续轮属于同一回合", true, 3, true, false, false},
+		{"紧跟预热帧的业务帧保留预热响应的值", true, 2, false, true, false},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			require.Equal(t, item.want, shouldResetOpenAIWSTurnStateOnNewTurn(
+				item.enabled, item.turn, item.hasFunctionCallOutput, item.previousFrameWasClientPrewarm))
 		})
 	}
 }

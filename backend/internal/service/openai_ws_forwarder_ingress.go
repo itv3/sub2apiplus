@@ -1860,6 +1860,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayOnSameConnEnabled = officialCodexWebSocketReplayOnSameConnection(egressContext.ProfileMode())
 	}
 	clientOwnsChain := false
+	// turn-state 只在产生它的回合内回送（画像 TurnState 节 ResetOnNewTurn）：官方每个回合新建模型客户端会话，
+	// 新用户轮次的第一个请求不回送上一回合收到的值。画像声明时，网关对派生出站的新用户轮次同样先清空已保存的值。
+	turnStateResetOnNewTurn := false
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled && egressContext != nil &&
+		isDerivedOpenAIOfficialEgressWSContext(ctx) {
+		turnStateResetOnNewTurn = officialCodexTurnStateResetOnNewTurn(egressContext.ProfileMode())
+	}
+	lastFrameWasClientPrewarm := false
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
 	lastTurnWindowID := ""
@@ -2112,6 +2120,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// 重放决定（官方判定不能增量时的形态），不是第三方“每轮整段历史”。
 		if replayOnSameConnEnabled && openAIWSPayloadIsClientPrewarm(currentPayload) {
 			clientOwnsChain = true
+		}
+		frameIsClientPrewarm := openAIWSPayloadIsClientPrewarm(currentPayload)
+		if shouldResetOpenAIWSTurnStateOnNewTurn(turnStateResetOnNewTurn, turn, hasFunctionCallOutput, lastFrameWasClientPrewarm) {
+			turnState = ""
 		}
 		skipDerivedPrewarm := shouldReplayOnSameOpenAIWSConnection(
 			replayOnSameConnEnabled,
@@ -2668,6 +2680,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnPrevRecoveryTried = false
 		lastTurnFinishedAt = time.Now()
 		lastTurnClean = true
+		lastFrameWasClientPrewarm = frameIsClientPrewarm
 		if hooks != nil && hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, result, nil)
 		}

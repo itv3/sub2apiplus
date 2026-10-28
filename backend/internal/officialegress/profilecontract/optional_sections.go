@@ -147,6 +147,17 @@ func (s ClientMetadataSection) ConditionFor(key string) ConditionKind {
 type TurnStateSection struct {
 	// ResetOnAccountOwnerChange：同一会话内上游账号 owner 变化时丢弃已保存的 turn-state 与 WS 续接状态。
 	ResetOnAccountOwnerChange bool `json:"ResetOnAccountOwnerChange"`
+	// ResetOnNewTurn：turn-state 只在产生它的那个回合内回送，新用户轮次开始时清空。
+	//
+	// 官方客户端每个回合新建一个模型客户端会话（核心 turn 流程里的 new_session），会话里保存 turn-state 的
+	// 单次写入容器随之换新：同一回合内的后续请求（工具结果续轮、压缩等）回送本回合已收到的值，新回合的第一个请求
+	// 不回送上一回合的值。例外：会话启动预热帧的响应里收到的值随“预热过的会话”交给第一个回合，所以紧跟预热帧的
+	// 第一个业务帧仍回送。节里声明 true 后，网关对派生出站的新用户轮次（不是工具结果续轮）同样清空已保存的值；
+	// 缺省（false）表示旧行为：保存的值在整个会话内回送给每个后续请求。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	ResetOnNewTurn bool `json:"ResetOnNewTurn,omitempty"`
 }
 
 // WebSocketRetrySection 声明 WS 可重试错误与降级预算。
@@ -380,6 +391,11 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		if name == SectionWebSocketContinuation {
 			if value, declared := fields["ReplayOnSameConnection"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 ReplayOnSameConnection 存在时必须为 true", name)
+			}
+		}
+		if name == SectionTurnState {
+			if value, declared := fields["ResetOnNewTurn"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 ResetOnNewTurn 存在时必须为 true", name)
 			}
 		}
 	}
