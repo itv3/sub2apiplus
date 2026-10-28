@@ -245,7 +245,9 @@ func TestOfficialOpenAIHTTPTurnStartUsesCurrentStableTime(t *testing.T) {
 	firstStartedAt := gjson.Get(first.turnMetadata, "turn_started_at_unix_ms").Int()
 	secondStartedAt := gjson.Get(second.turnMetadata, "turn_started_at_unix_ms").Int()
 
-	require.GreaterOrEqual(t, firstStartedAt, before)
+	// 回合开始时间由 turn_id 推出：turn_id 内嵌毫秒回拨了 officialCodexTurnSubmitLeadMs，再加 1～4 毫秒的官方实采间隔，
+	// 所以落在 [生成时刻 - 3, 生成时刻]，而不是不早于测试起点。
+	require.GreaterOrEqual(t, firstStartedAt, before-officialCodexTurnSubmitLeadMs)
 	require.LessOrEqual(t, firstStartedAt, after)
 	require.Equal(t, first.turnID, second.turnID)
 	require.Equal(t, firstStartedAt, secondStartedAt, "同一 turn 的独立请求必须复用开始时间")

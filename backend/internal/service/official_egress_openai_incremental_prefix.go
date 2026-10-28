@@ -102,7 +102,7 @@ func renderOfficialCodexIncrementalBaseInstructionsItemWithTurnID(
 	digest := officialContentDigest(sha256.Sum256([]byte(text)))
 	id := officialCodexStableItemID(section.IDPrefix, officialUUIDV7DomainBaseInstructions, threadID, digest)
 	if strings.TrimSpace(turnID) == "" {
-		turnID = generateOfficialStableUUIDV7(
+		turnID = generateOfficialStableTurnUUIDV7(
 			newOfficialUUIDV7Seed(officialUUIDV7DomainBaseInstructionsTurn).WriteString(threadID).WriteDigest(digest).Key(),
 		)
 	}

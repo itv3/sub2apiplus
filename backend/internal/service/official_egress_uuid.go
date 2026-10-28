@@ -2,12 +2,14 @@ package service
 
 import (
 	"container/list"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"hash"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -207,6 +209,12 @@ func newOfficialUUIDV7LRUCache(
 
 // resolve 返回键对应的稳定 UUIDv7；未命中或已过期时生成新值并登记。
 func (c *officialUUIDV7LRUCache) resolve(key officialUUIDV7CacheKey) string {
+	return c.resolveWith(key, newOfficialUUIDV7)
+}
+
+// resolveWith 同 resolve，只是未命中时用 generate 生成新值。回合 id 需要官方客户端同款的位布局，
+// 与 session、thread 等 id 的生成方式不同，所以由调用方指定。
+func (c *officialUUIDV7LRUCache) resolveWith(key officialUUIDV7CacheKey, generate func() string) string {
 	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -232,7 +240,7 @@ func (c *officialUUIDV7LRUCache) resolve(key officialUUIDV7CacheKey) string {
 		c.removeLocked(c.order.Back())
 		c.evictedCapacity++
 	}
-	value := newOfficialUUIDV7()
+	value := generate()
 	entry := &officialUUIDV7CacheEntry{key: key, value: value, lastUsed: now}
 	c.entries[key] = c.order.PushFront(entry)
 	return value
@@ -282,12 +290,16 @@ func (c *officialUUIDV7LRUCache) stats() officialUUIDV7CacheStats {
 	}
 }
 
+// newOfficialUUIDV7 生成 session、thread、item id 等非回合 id。位布局与官方 Uuid::now_v7() 逐位一致
+// （见文件末尾“官方 Codex 回合 id”一节），与回合 id 共用同一个单调上下文——官方进程内所有 UUIDv7 也共用一个。
+// 内嵌毫秒回拨 officialCodexIDLeadMs：官方的会话（线程）id 总比它的第一个回合 id 早几十毫秒生成
+// （实采差 26～46 毫秒），回拨后新会话里“会话 id 不晚于回合 id”的先后关系与官方一致，也避免回合 id
+// 因共用单调上下文被拉到与会话 id 同一毫秒、使回合开始时间晚于生成时刻。
+// 以前用 google/uuid 的 NewV7，rand_a 是亚毫秒时间，第 2、3 位为 0 的只有 25%，官方恒为 100%。
+// 各版本画像无需门控：本地各版官方实采（含当前与上一版）里的 UUIDv7 全部满足同一布局，且这些 id 本来就是
+// 记录时随机的值，不存在按固定字节重放的封存证据。
 func newOfficialUUIDV7() string {
-	value, err := uuid.NewV7()
-	if err != nil {
-		value = uuid.New()
-	}
-	return value.String()
+	return officialCodexTurnUUIDContext.generate(officialCodexTurnClock().UnixMilli() - officialCodexIDLeadMs)
 }
 
 var officialUUIDV7Cache = newOfficialUUIDV7LRUCache(
@@ -302,4 +314,227 @@ var officialUUIDV7Cache = newOfficialUUIDV7LRUCache(
 // UUIDv7 而不是把哈希位伪装成 v7 时间戳，避免出站身份与官方客户端形态不一致。
 func generateOfficialStableUUIDV7(key officialUUIDV7CacheKey) string {
 	return officialUUIDV7Cache.resolve(key)
+}
+
+// ---------------------------------------------------------------------------
+// 官方 Codex 回合 id（turn_id）与回合开始时间（turn_started_at_unix_ms）
+//
+// 官方客户端的 turn_id 是提交号 sub_id，由 Uuid::now_v7() 生成（Rust uuid 库，官方 Cargo.lock 锁定的版本）。该函数用进程内共享的
+// 单调上下文：每个新毫秒用随机的 41 位数重置 42 位计数器，同毫秒内计数器加一，毫秒回退时沿用上次的
+// 毫秒。位布局按 RFC 9562 的版本 7 排布，并带有该库编码函数的一个实现细节，我们逐位照做：
+//
+//	bit   0..47   毫秒时间戳（大端）
+//	bit  48..51   版本号 7
+//	bit  52..63   rand_a（12 位）= 计数器第 37..30 位，其后两位恒为 0，再接计数器第 29、28 位
+//	                （库把计数器最高 4 位丢进了被覆盖的字节，且在第 2、3 位处插入了变体占位的 0）
+//	bit  64..65   变体 0b10
+//	bit  66..127  rand_b（62 位）= 计数器第 25..0 位（26 位）+ 36 位随机数（计数器第 27、26 位被变体覆盖）
+//
+// 因此官方 id 的 rand_a 的第 2、3 位恒为 0（本地实采的 645 个不同 UUIDv7 全部满足）。同一毫秒内的 id 共用计数器，
+// rand_a 几乎相同；不同毫秒的 rand_a 是重置时的随机值，看上去就是随机位。网关的所有官方 UUIDv7
+// （回合、会话、线程、item）都用本生成器。
+//
+// turn_started_at_unix_ms 是任务真正开始时读系统时钟，晚于提交时刻（id 内嵌毫秒）一个很短的间隔。
+// 本地升级证据库里的官方实采（143 个不同回合）里，这个差值是 0～7 毫秒（另有 1 个 29 毫秒的离群值，
+// 是采集机上另有进程争用 CPU 所致，未计入），分布见 officialCodexTurnStartGapSamples。网关只做到“差值服从同一分布”：turn_id 在网关判定出新回合
+// 的时刻生成，内嵌毫秒回拨 officialCodexTurnSubmitLeadMs 毫秒，开始时间由 turn_id 无状态推出
+// （内嵌毫秒 + 以 turn_id 为种子的确定性抽样差值）。这样同一回合无论重试、续轮还是换路径，
+// 开始时间都一致，且推出的时间不会晚于生成时刻（官方的开始时间也恒早于该回合的请求发出时刻）。
+// ---------------------------------------------------------------------------
+
+const (
+	// officialCodexTurnSubmitLeadMs 是 turn_id 内嵌毫秒相对生成时刻的回拨量，等于分布里差值的最大值，
+	// 保证“内嵌毫秒 + 抽样差值”不晚于生成时刻。
+	officialCodexTurnSubmitLeadMs = 7
+
+	// officialCodexIDLeadMs 是会话、线程、item id 内嵌毫秒相对生成时刻的回拨量，须大于回合 id 的回拨量。
+	officialCodexIDLeadMs = 50
+
+	// Rust uuid 库的计数器常量：42 位计数器，重置时取 41 位随机数（最高位留空，防止同毫秒内溢出）。
+	officialCodexUUIDV7ReseedMask  = uint64(1)<<41 - 1
+	officialCodexUUIDV7MaxCounter  = uint64(1)<<42 - 1
+	officialCodexUUIDV7CounterLow  = uint64(1)<<30 - 1
+	officialCodexInvocationTurnTTL = 2 * time.Hour
+	// officialCodexInvocationTurnMax 是按调用（invocation）兜底生成的回合 id 缓存条目上限。
+	officialCodexInvocationTurnMax = 4096
+)
+
+// officialCodexTurnStartGapSamples 是官方实采中 turn_started_at_unix_ms 减 turn_id 内嵌毫秒的差值分布
+// （差值毫秒 -> 回合个数），两批官方样本合并：
+//   - 上一版与更早版本官方客户端的非正式实采 37 个回合加真实上游实采 2 个回合，共 39 个（1 毫秒 13、2 毫秒 18、
+//     3 毫秒 7、4 毫秒 1）；
+//   - 当前版本官方客户端在 ARM64 上的非正式实采 105 个回合（主线程与标题线程，不含预热）：0 毫秒 2、1 毫秒 47、
+//     2 毫秒 19、3 毫秒 17、4 毫秒 12、5 毫秒 4、6 毫秒 2、7 毫秒 1、29 毫秒 1。29 毫秒的离群值发生在采集机另有
+//     一路 TUI 争用 CPU 时，不计入表中，所以合并后共 143 个。
+//
+// 样本都来自开发机上的 exec、TUI 与 app-server 场景（假上游居多），没有“网络很慢”“首轮要刷新模型目录”之类
+// 可能拉长差值的场景；真实流量下的长尾待实采后再校准。
+var officialCodexTurnStartGapSamples = [...]struct {
+	gapMs int64
+	count uint64
+}{{0, 2}, {1, 60}, {2, 37}, {3, 24}, {4, 13}, {5, 4}, {6, 2}, {7, 1}}
+
+// officialCodexTurnClock 与 officialCodexTurnRandom 只为让测试固定时间与随机数。
+var (
+	officialCodexTurnClock  = time.Now
+	officialCodexTurnRandom = func(p []byte) error { _, err := rand.Read(p); return err }
+)
+
+// officialCodexUUIDV7Context 复刻 Rust uuid 库的共享单调上下文（ContextV7，不带额外时间精度）。
+type officialCodexUUIDV7Context struct {
+	mu      sync.Mutex
+	lastMs  int64
+	counter uint64
+}
+
+var officialCodexTurnUUIDContext = &officialCodexUUIDV7Context{}
+
+// officialCodexInvocationTurnCache 缓存“按调用兜底生成”的回合 id：同一次调用的多次 attempt 要拿到同一个
+// turn_id。条目少、存活短，单独成表，避免挤占 session、turn 等长期身份的缓存。
+var officialCodexInvocationTurnCache = newOfficialUUIDV7LRUCache(
+	officialCodexInvocationTurnTTL,
+	officialCodexInvocationTurnMax,
+	time.Now,
+)
+
+// newOfficialCodexTurnUUIDV7 生成一个官方形态的回合 id。
+func newOfficialCodexTurnUUIDV7() string {
+	nowMs := officialCodexTurnClock().UnixMilli()
+	return officialCodexTurnUUIDContext.generate(nowMs - officialCodexTurnSubmitLeadMs)
+}
+
+// generate 按 Rust uuid 库的上下文语义取下一个（毫秒，计数器）并编码成 UUID 文本。
+func (c *officialCodexUUIDV7Context) generate(ms int64) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ms > c.lastMs {
+		c.lastMs = ms
+		c.counter = officialCodexUUIDV7Reseed()
+	} else {
+		// 同一毫秒或时钟回退：沿用上次的毫秒，计数器加一。
+		ms = c.lastMs
+		c.counter++
+		if c.counter > officialCodexUUIDV7MaxCounter {
+			c.lastMs++
+			ms = c.lastMs
+			c.counter = officialCodexUUIDV7Reseed()
+		}
+	}
+	return encodeOfficialCodexUUIDV7(ms, c.counter)
+}
+
+func officialCodexUUIDV7Reseed() uint64 {
+	var raw [8]byte
+	if err := officialCodexTurnRandom(raw[:]); err != nil {
+		// 随机源失败时退回时间扰动，不能 panic：回合 id 只要求形态与单调，不要求密码学强度。
+		binary.BigEndian.PutUint64(raw[:], uint64(time.Now().UnixNano()))
+	}
+	return binary.BigEndian.Uint64(raw[:]) & officialCodexUUIDV7ReseedMask
+}
+
+// encodeOfficialCodexUUIDV7 按上面注释的位布局编码。counter 为 42 位计数器。
+func encodeOfficialCodexUUIDV7(ms int64, counter uint64) string {
+	// 先放 16 字节随机数；计数器占其最高 44 位（42 位计数器 + 在变体占位处插入的 2 位 0）。
+	var b [16]byte
+	if err := officialCodexTurnRandom(b[:]); err != nil {
+		binary.BigEndian.PutUint64(b[:8], uint64(time.Now().UnixNano()))
+		binary.BigEndian.PutUint64(b[8:], uint64(ms))
+	}
+	shifted := (counter>>30)<<32 | (counter & officialCodexUUIDV7CounterLow)
+	b[0] = byte(shifted >> 36)
+	b[1] = byte(shifted >> 28)
+	b[2] = byte(shifted >> 20)
+	b[3] = byte(shifted >> 12)
+	b[4] = byte(shifted >> 4)
+	b[5] = byte(shifted&0x0f)<<4 | b[5]&0x0f
+
+	var out uuid.UUID
+	// 毫秒时间戳：48 位大端。
+	out[0] = byte(ms >> 40)
+	out[1] = byte(ms >> 32)
+	out[2] = byte(ms >> 24)
+	out[3] = byte(ms >> 16)
+	out[4] = byte(ms >> 8)
+	out[5] = byte(ms)
+	// 版本 7 加 rand_a：库的编码函数取 b[1] 与 b[0] 的低 4 位，b[0] 的高 4 位被丢弃。
+	randA := uint16(b[1]) | (uint16(b[0])<<8)&0x0fff | 0x7000
+	binary.BigEndian.PutUint16(out[6:8], randA)
+	// 变体 0b10 加 rand_b。
+	out[8] = b[2]&0x3f | 0x80
+	copy(out[9:], b[3:10])
+	return out.String()
+}
+
+// generateOfficialStableTurnUUIDV7 是 generateOfficialStableUUIDV7 的回合 id 版本：键语义与缓存策略相同，
+// 只是未命中时按官方 Uuid::now_v7() 的位布局与内嵌毫秒语义生成。
+func generateOfficialStableTurnUUIDV7(key officialUUIDV7CacheKey) string {
+	return officialUUIDV7Cache.resolveWith(key, newOfficialCodexTurnUUIDV7)
+}
+
+// officialCodexInvocationID 为没有任何来源的调用兜底生成按调用稳定的 UUIDv7：同一 invocationSeed 与 purpose 的多次调用
+// 得到同一个值。取代以前由 invocation seed 做 SHA-256 再按 8-4-4-4-12 排版的写法（那不是 UUID，也没有时间位）。
+func officialCodexInvocationID(invocationSeed, purpose string, generate func() string) string {
+	key := newOfficialUUIDV7Seed("openai-official-egress-invocation").
+		WriteString(purpose).
+		WriteString(invocationSeed).
+		Key()
+	return officialCodexInvocationTurnCache.resolveWith(key, generate)
+}
+
+// officialCodexInvocationTurnID 是兜底的回合 id。
+func officialCodexInvocationTurnID(invocationSeed string) string {
+	return officialCodexInvocationID(invocationSeed, "turn", newOfficialCodexTurnUUIDV7)
+}
+
+// officialCodexInvocationSessionID 是兜底的会话（根线程）id。
+func officialCodexInvocationSessionID(invocationSeed string) string {
+	return officialCodexInvocationID(invocationSeed, "session", newOfficialUUIDV7)
+}
+
+// officialCodexInvocationUUIDV4 由 invocation seed 与用途确定性派生一个 UUIDv4（版本位 4、变体 10）：
+// installation id 与文件上传的 client request id 官方都是随机 v4，兜底时取确定性值以保证同一调用各 attempt 一致。
+func officialCodexInvocationUUIDV4(invocationSeed, purpose string) string {
+	sum := sha256.Sum256([]byte("openai-official-egress-invocation-v4\x00" + purpose + "\x00" + invocationSeed))
+	var raw uuid.UUID
+	copy(raw[:], sum[:16])
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return raw.String()
+}
+
+// officialCodexTurnStartGapMs 以 turnID 为种子确定性地从实采差值分布里抽一个毫秒数。
+func officialCodexTurnStartGapMs(turnID string) int64 {
+	var total uint64
+	for _, sample := range officialCodexTurnStartGapSamples {
+		total += sample.count
+	}
+	sum := sha256.Sum256([]byte("openai-official-egress-turn-start-gap\x00" + turnID))
+	pick := binary.BigEndian.Uint64(sum[:8]) % total
+	for _, sample := range officialCodexTurnStartGapSamples {
+		if pick < sample.count {
+			return sample.gapMs
+		}
+		pick -= sample.count
+	}
+	return officialCodexTurnStartGapSamples[len(officialCodexTurnStartGapSamples)-1].gapMs
+}
+
+// officialCodexTurnStartedAtMs 由回合 id 推出回合开始时间（毫秒）：内嵌毫秒加抽样差值。
+// turnID 不是 UUIDv7 时（例如客户端自带的非官方形态 id）没有内嵌时间可用，返回 false，由调用方沿用原来的取法。
+func officialCodexTurnStartedAtMs(turnID string) (int64, bool) {
+	parsed, err := uuid.Parse(strings.TrimSpace(turnID))
+	if err != nil || parsed.Version() != 7 {
+		return 0, false
+	}
+	embedded := int64(parsed[0])<<40 | int64(parsed[1])<<32 | int64(parsed[2])<<24 |
+		int64(parsed[3])<<16 | int64(parsed[4])<<8 | int64(parsed[5])
+	return embedded + officialCodexTurnStartGapMs(parsed.String()), true
+}
+
+// officialCodexTurnStartedAtMsOrNow 同 officialCodexTurnStartedAtMs，推不出时取当前时钟。
+func officialCodexTurnStartedAtMsOrNow(turnID string) int64 {
+	if startedAt, ok := officialCodexTurnStartedAtMs(turnID); ok {
+		return startedAt
+	}
+	return time.Now().UnixMilli()
 }

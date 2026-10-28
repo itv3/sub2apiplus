@@ -2,8 +2,6 @@ package service
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,18 +62,6 @@ func officialCodexImagesHeaderDeclarations(mode, endpointID string) (imageTurnID
 		}
 	}
 	return imageTurnID, turnMetadata, profile.Version()
-}
-
-// officialCodexGeneratedUUIDLikeValue 由 invocation seed 与用途后缀确定性派生 8-4-4-4-12 形态的标识，
-// 与 completeOfficialCodexGeneratedIdentityFacts 里 Responses 会话标识的派生口径一致。
-func officialCodexGeneratedUUIDLikeValue(identitySeed, suffix string) string {
-	sum := sha256.Sum256([]byte(identitySeed + "\x00" + suffix))
-	return fmt.Sprintf(
-		"%s-%s-%s-%s-%s",
-		hex.EncodeToString(sum[0:4]), hex.EncodeToString(sum[4:6]),
-		hex.EncodeToString(sum[6:8]), hex.EncodeToString(sum[8:10]),
-		hex.EncodeToString(sum[10:16]),
-	)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +293,12 @@ func officialImagesSynthesizedTurnMetadataValues(
 	base["auto_review_enabled"] = false
 	base["node_repl_auto_review_required"] = nodeReplAutoReviewRequired
 	base["node_repl_disabled"] = false
-	base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
+	// 回合开始时间与 Responses 同源：由 turn_id 内嵌毫秒加抽样间隔推出；turn_id 不是 UUIDv7 时才取当前时钟。
+	if startedAt, ok := officialCodexTurnStartedAtMs(facts.TurnID.Value); ok {
+		base["turn_started_at_unix_ms"] = startedAt
+	} else {
+		base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
+	}
 	values := make(map[string]json.RawMessage, len(base))
 	for key, value := range base {
 		raw, err := json.Marshal(value)
@@ -358,7 +349,7 @@ func completeOfficialCodexImagesTurnFacts(
 	}
 	if facts.TurnID.Value == "" {
 		turnID, err := officialegress.NewCodexIdentityValue(
-			officialCodexGeneratedUUIDLikeValue(identitySeed, "turn"),
+			officialCodexInvocationTurnID(identitySeed),
 			officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleTurn,
 		)
 		if err != nil {
@@ -376,7 +367,7 @@ func completeOfficialCodexImagesTurnFacts(
 	} else {
 		sessionID := facts.SessionID.Value
 		if sessionID == "" {
-			sessionID = officialCodexGeneratedUUIDLikeValue(identitySeed, "session")
+			sessionID = officialCodexInvocationSessionID(identitySeed)
 		}
 		var values map[string]json.RawMessage
 		values, err = officialImagesSynthesizedTurnMetadataValues(

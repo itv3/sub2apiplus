@@ -147,6 +147,7 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		} else if compression.WebSocketContextTakeover &&
 			compression.WebSocketCompressedTextRSV1 && compression.WebSocketRawDeflatePayload {
 			opts.CompressionMode = coderws.CompressionContextTakeover
+			opts.CompressionThreshold = officialOpenAIWSCompressionThresholdBytes
 		} else {
 			return nil, 0, nil, errors.New("compiled WebSocket 压缩执行组合非法")
 		}
@@ -156,6 +157,7 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return nil, 0, nil, err
 		}
 		opts.HTTPClient = officialClient
+		opts.CompressionThreshold = officialOpenAIWSCompressionThresholdBytes
 	} else if proxy := strings.TrimSpace(proxyURL); proxy != "" {
 		proxyClient, err := d.proxyHTTPClient(proxy)
 		if err != nil {
