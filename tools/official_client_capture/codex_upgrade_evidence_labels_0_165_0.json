@@ -1685,6 +1685,136 @@
       ]
     },
     {
+      "job_id": "official-relay-effort-update-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A18"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "effort_update",
+            "provider": "openai_oauth"
+          },
+          "rationale": "官方 TUI 经驱动 --step 在同一会话内两次改推理强度，主线程握手只有一次；标题线程另开独立连接，判据按线程区分。variant=effort_update 由采集参数推出，主线模型是 Lite 模型。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-effort-update-http",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A19"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "lite",
+            "variant": "effort_update_http",
+            "provider": "openai_oauth"
+          },
+          "rationale": "只走 HTTP 的 OAuth provider 由脚本自带的 http_probe_provider_config 展开成 --config；没有 WS 预热，所以首轮必带 configuration_update。variant=effort_update_http 由采集参数推出。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-model-switch-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A20"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "model_switch",
+            "provider": "openai_oauth"
+          },
+          "rationale": "第二个模型由 SWITCH_MODEL 注入（取 Lite 专项模型，目录里同样支持 effort update，须与主线模型不同）；variant=model_switch 由采集参数推出。整段重放帧由换模型认出，不依赖被判据验证的属性。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-compact-continue-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A21"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "compact_continue",
+            "provider": "openai_oauth"
+          },
+          "rationale": "TUI_HOLD 同时给提示词与压缩的保持时长；EXPECT_COMPACTION_REASON 让证据证明压缩确实由用户命令触发（与 compact-tui 作业同写法）。variant=compact_continue 由采集参数推出。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-effort-unsupported-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A22"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "lite",
+            "variant": "effort_unsupported_model",
+            "provider": "openai_oauth"
+          },
+          "rationale": "模型是目录里 update=false 的 gpt-5.6-sol（作业环境直接写死，不走 Campaign 的主线／Lite 变量）；variant=effort_unsupported_model 由采集参数推出，主线轨道标记沿用 Lite。"
+        }
+      ]
+    },
+    {
       "job_id": "candidate-core-direct",
       "side": "candidate",
       "rules": [

@@ -648,6 +648,99 @@
         "SPEC-HDR-005",
         "SPEC-EP-019"
       ]
+    },
+    {
+      "scenario_id": "A18",
+      "description": "会话内改推理强度（reasoning_effort_override 默认开启）的 WS 主线程：请求级 reasoning.effort 在上下文窗口内钉死，改动以追加在 input 末尾的 configuration_update 项表达",
+      "trigger": "官方 TUI 同一会话三轮提示词，第 1、2 轮之间 /model --reasoning=high，第 2、3 轮之间改回 low；首轮预热已钉死基线，所以首轮不带 configuration_update。主线程与每轮之后另开的标题线程分属不同连接，判据按线程区分",
+      "preconditions": [
+        "模型目录声明 supports_reasoning_effort_updates=true（主线模型），采集账号 config.toml 的 model_reasoning_effort=low（改回的取值以它为准）",
+        "TUI 带 --no-daemon，功能开关覆盖沿用 DISABLE_FEATURES；设置动作发生在回合之间，不与生成重叠",
+        "采集脚本按目标版本门限放行（更早版本没有该场景分支，在任何 docker 调用之前退出）"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-BODY-003",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ]
+    },
+    {
+      "scenario_id": "A19",
+      "description": "会话内改推理强度，HTTP 无 WS 预热 provider：名为 OpenAI、supports_websockets=false 的自定义 provider 首轮 input 末尾就带 configuration_update，改动逐轮累积",
+      "trigger": "与 A18 相同的三轮提示词与两次改档；provider 用只走 HTTP 的 OAuth provider 配置展开成 --config，请求是整段历史（HTTP 没有续链），所以第 2、3 个请求依次多出 update(high)、update(low)",
+      "preconditions": [
+        "模型目录声明 supports_reasoning_effort_updates=true（主线模型），采集账号 config.toml 的 model_reasoning_effort=low",
+        "provider 名恰为 OpenAI 且不支持 WS（没有预热，首轮才会带 update）",
+        "TUI 带 --no-daemon，设置动作发生在回合之间"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-BODY-003",
+        "SPEC-BODY-006"
+      ]
+    },
+    {
+      "scenario_id": "A20",
+      "description": "WS 中途换模型：换模型后的第一帧是同一连接上的整段重放（无 previous_response_id、无 generate、不重新握手、不补预热），握手头保持建连时的旧值",
+      "trigger": "官方 TUI 同一会话主线模型 → 目录里同样支持 update 的 Lite 专项模型 → 换回，每次换模型后各发一轮；握手头 x-codex-routing-hint 仍是首个模型，新模型只出现在每帧 client_metadata 的 turn metadata 里",
+      "preconditions": [
+        "两个模型都在模型目录里且声明 supports_reasoning_effort_updates=true，换模型的第二个模型须与主线模型不同",
+        "TUI 带 --no-daemon，设置动作发生在回合之间",
+        "判据按线程区分主线程与标题线程，重放帧由换模型认出"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-HDR-008",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ]
+    },
+    {
+      "scenario_id": "A21",
+      "description": "WS 压缩后续聊：压缩请求本身是增量帧（previous_response_id 加单项 compaction_trigger），压缩完成后的下一轮是同一连接上的整段重放，窗口号由 :0 变 :1，再下一轮恢复增量",
+      "trigger": "官方 TUI 两轮提示词（其间改一次推理强度）、/compact、再两轮（其间再改一次推理强度）；压缩后窗口内钉死的基线重建为压缩时的当前选择，压缩前的 configuration_update 随历史压缩消失",
+      "preconditions": [
+        "模型目录声明 supports_reasoning_effort_updates=true（主线模型），采集账号 config.toml 的 model_reasoning_effort=low",
+        "压缩由用户命令触发（证据中的压缩原因必须是 user_requested），压缩与每个提示词共用保持时长",
+        "真实压缩响应的内容形态以官方为准，判据只要求恰有 1 个 compaction 项且在新用户消息之前"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-EP-021",
+        "SPEC-EP-023",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ]
+    },
+    {
+      "scenario_id": "A22",
+      "description": "目录里 supports_reasoning_effort_updates=false 的模型改推理强度：不产生 configuration_update，请求级 reasoning.effort 直接变，客户端在同一连接发全量帧",
+      "trigger": "官方 TUI 使用目录里 update=false 的模型，一轮提示词后 /model --reasoning=high，再一轮提示词；第二业务帧的请求级 effort 跟随用户，无 previous_response_id，同连接",
+      "preconditions": [
+        "模型目录里该模型的 supports_reasoning_effort_updates=false，且采集账号可用",
+        "TUI 带 --no-daemon，设置动作发生在回合之间"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ]
     }
   ],
   "capture_jobs": [
@@ -5363,6 +5456,318 @@
       "covers": [
         "SPEC-CONN-001",
         "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-effort-update-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A18"
+      ],
+      "description": "会话内改推理强度（WS）：同一 PTY TUI 会话三轮提示词，中间 /model --reasoning=high、再改回 low；主线程业务帧请求级 effort 钉死，改动以 input 末尾的 configuration_update 追加，首轮不带（预热已钉死基线），后两轮是带 previous_response_id 的增量帧",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-effort-update-ws",
+            "SCENARIO": "effort-update-ws"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-effort-update-ws"
+      ],
+      "covers": [
+        "SPEC-BODY-003",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-effort-update-http",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A19"
+      ],
+      "description": "会话内改推理强度（HTTP，无 WS 预热 provider）：与 effort-update-ws 相同的三轮与两次改档，provider 为名叫 OpenAI、supports_websockets=false 的自定义 provider；首个请求 input 末尾就带 configuration_update，第 2、3 个请求是整段历史并依次累积 update(high)、update(low)",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-effort-update-http",
+            "SCENARIO": "effort-update-http"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-effort-update-http"
+      ],
+      "covers": [
+        "SPEC-BODY-003",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-model-switch-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A20"
+      ],
+      "description": "WS 中途换模型：主线模型 → Lite 专项模型 → 换回，每次换模型后发一轮；换模型后的第一帧是同一连接上的整段重放（无 previous_response_id、无 generate，不重新握手、不补预热），握手头 x-codex-routing-hint 仍是首个模型",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-model-switch-ws",
+            "SCENARIO": "model-switch-ws",
+            "SWITCH_MODEL": "{lite_model}"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-model-switch-ws"
+      ],
+      "covers": [
+        "SPEC-HDR-008",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-compact-continue-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A21"
+      ],
+      "description": "WS 压缩后续聊：两轮（其间改一次推理强度）、/compact、再两轮（其间再改一次）；压缩请求是增量帧，压缩完成后的下一轮是同一连接上的整段重放（窗口号 :0 变 :1），其后恢复增量。证据里的压缩原因必须是 user_requested",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-compact-continue-ws",
+            "SCENARIO": "compact-continue-ws",
+            "TUI_HOLD": "120",
+            "EXPECT_COMPACTION_REASON": "user_requested"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-compact-continue-ws"
+      ],
+      "covers": [
+        "SPEC-EP-021",
+        "SPEC-EP-023",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-effort-unsupported-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A22"
+      ],
+      "description": "目录里 supports_reasoning_effort_updates=false 的模型改推理强度（WS）：不产生 configuration_update，第二业务帧的请求级 effort 直接变成 high，无 previous_response_id，同一连接发全量帧。模型取目录里 update=false 的 gpt-5.6-sol，场景不受版本门限",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "gpt-5.6-sol",
+            "RUN_ID": "{campaign_id}-official-effort-unsupported-ws",
+            "SCENARIO": "effort-unsupported-ws"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-effort-unsupported-ws"
+      ],
+      "covers": [
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [

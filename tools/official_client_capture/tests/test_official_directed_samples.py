@@ -86,6 +86,15 @@ NEW_0163_JOBS = {
     "official-relay-server-overloaded-retry-after",
     "official-relay-server-overloaded",
 }
+# 0.165.0 清单在上一版的基础上（建 Campaign 之前）新增的官方定向样本：会话内改推理强度（WS／HTTP）、WS 换模型、压缩后续聊、
+# 目录不支持 effort update 的模型改推理强度。
+NEW_0165_JOBS = {
+    "official-relay-effort-update-ws",
+    "official-relay-effort-update-http",
+    "official-relay-model-switch-ws",
+    "official-relay-compact-continue-ws",
+    "official-relay-effort-unsupported-ws",
+}
 # 含中继合成应答的作业（证据标签必须标 upstream_response=relay_synthetic）。
 SYNTHETIC_JOBS = {
     "official-relay-stream-flex-unavailable",
@@ -1611,6 +1620,8 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
     TARGET_VERSION = "0.163.0"
     UNIT_CAMPAIGN_ID = "c01630-unit"
     DIRECTED_JOBS = NEW_OFFICIAL_JOBS | NEW_0163_JOBS
+    # 相对 0.160.0 清单新增的官方作业（0.163.0 起；其后各版在子类里叠加自己的新增）。
+    NEW_JOBS_SINCE_0160 = NEW_0163_JOBS
     SYNTHETIC = SYNTHETIC_JOBS | SYNTHETIC_0163_JOBS
     # 0.163.0 起的主线模型（Lite，gpt-5.5 已下线）。
     MAIN_MODEL = "gpt-6.1-sol"
@@ -1625,7 +1636,7 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
 
         base = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
         base_jobs = {job["id"]: job for job in base["capture_jobs"]}
-        self.assertEqual(set(self.jobs) - set(base_jobs), NEW_0163_JOBS)
+        self.assertEqual(set(self.jobs) - set(base_jobs), self.NEW_JOBS_SINCE_0160)
         self.assertEqual(set(base_jobs) - set(self.jobs), set())
         for job_id, previous in base_jobs.items():
             with self.subTest(job_id=job_id):
@@ -1672,11 +1683,11 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
         )
         phases = lambda jobs: [job["phase"] for job in jobs.values()]  # noqa: E731 - 局部小工具
         self.assertEqual(phases(self.jobs).count("candidate"), phases(base_jobs).count("candidate"))
-        self.assertEqual(phases(self.jobs).count("official"), phases(base_jobs).count("official") + len(NEW_0163_JOBS))
+        self.assertEqual(phases(self.jobs).count("official"), phases(base_jobs).count("official") + len(self.NEW_JOBS_SINCE_0160))
         # 新作业按序插在官方作业段末尾（候选作业之前），与 0.159.2 的先例一致。
         order = [job["id"] for job in self.manifest["capture_jobs"]]
         last_official = max(index for index, job in enumerate(self.manifest["capture_jobs"]) if job["phase"] == "official")
-        self.assertTrue(all(order.index(job_id) <= last_official for job_id in NEW_0163_JOBS))
+        self.assertTrue(all(order.index(job_id) <= last_official for job_id in self.NEW_JOBS_SINCE_0160))
 
     def test_0163_directed_jobs_bind_scenarios_models_and_request_assertions(self) -> None:
         expected = {
@@ -1867,6 +1878,90 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
     MANIFEST_SUFFIX = "0_165_0"
     TARGET_VERSION = "0.165.0"
     UNIT_CAMPAIGN_ID = "c01650-unit"
+    DIRECTED_JOBS = NEW_OFFICIAL_JOBS | NEW_0163_JOBS | NEW_0165_JOBS
+    NEW_JOBS_SINCE_0160 = NEW_0163_JOBS | NEW_0165_JOBS
+
+    EXPECTED_0165 = {
+        # 作业: (场景, SCENARIO, 额外环境, covers)
+        "official-relay-effort-update-ws": ("A18", "effort-update-ws", {}, ["SPEC-BODY-003", "SPEC-BODY-006", "SPEC-WS-005"]),
+        "official-relay-effort-update-http": ("A19", "effort-update-http", {}, ["SPEC-BODY-003", "SPEC-BODY-006"]),
+        "official-relay-model-switch-ws": (
+            "A20", "model-switch-ws", {"SWITCH_MODEL": "{lite_model}"}, ["SPEC-HDR-008", "SPEC-BODY-006", "SPEC-WS-005"]),
+        "official-relay-compact-continue-ws": (
+            "A21", "compact-continue-ws", {"TUI_HOLD": "120", "EXPECT_COMPACTION_REASON": "user_requested"},
+            ["SPEC-EP-021", "SPEC-EP-023", "SPEC-BODY-006", "SPEC-WS-005"]),
+        "official-relay-effort-unsupported-ws": (
+            "A22", "effort-unsupported-ws", {"MODEL": "gpt-5.6-sol"}, ["SPEC-BODY-006", "SPEC-WS-005"]),
+    }
+
+    def test_0165_effort_jobs_bind_scenarios_environment_and_covers(self) -> None:
+        """X 路 6.3／6.4 的 5 个官方场景：场景编号接 A18 起，环境按作业环境模板，covers 属于批准规则且被绑定的证据场景证明。"""
+
+        scenarios = {item["scenario_id"]: item for item in self.manifest["evidence_scenarios"]}
+        rules = set(json.loads((TOOL_ROOT / "codex_upgrade_rules_0_165_0.json").read_text(encoding="utf-8"))["required_rules"])
+        self.assertEqual(set(self.EXPECTED_0165), NEW_0165_JOBS)
+        for job_id, (scenario_id, scenario, extra, covers) in self.EXPECTED_0165.items():
+            with self.subTest(job_id=job_id):
+                job = self.jobs[job_id]
+                environment = self.environment(job_id)
+                self.assertEqual(job["scenario_ids"], [scenario_id])
+                self.assertEqual(job["covers"], covers)
+                self.assertLessEqual(set(covers), rules)
+                self.assertLessEqual(set(covers), set(scenarios[scenario_id]["covers"]))
+                self.assertEqual((job["phase"], job["suites"], job["required"]), ("official", ["full"], True))
+                self.assertEqual(job["required_scenario_receipts"], [])
+                self.assertEqual(job["steps"][0]["timeout_seconds"], 1800)
+                self.assertEqual(environment["SCENARIO"], scenario)
+                self.assertEqual(environment["RUN_ID"], "{campaign_id}-" + job_id.replace("official-relay-", "official-"))
+                self.assertEqual(job["evidence_roots"], ["{capture_root}/runs/" + environment["RUN_ID"]])
+                self.assertEqual(
+                    {key: value for key, value in environment.items() if key not in {"CAPTURE_CONTAINER", "CAPTURE_ROOT", "CODEX_VERSION", "CODEX_BIN", "MODEL", "RUN_ID", "SCENARIO"}},
+                    {key: value for key, value in extra.items() if key != "MODEL"},
+                )
+                self.assertEqual(environment["CODEX_VERSION"], "{target_version}")
+                self.assertEqual(environment["MODEL"], extra.get("MODEL", "{model}"))
+        # 场景编号接上一版清单的 A17，无缺号；新场景都是官方独有（没有候选作业）。
+        ids = [item["scenario_id"] for item in self.manifest["evidence_scenarios"]]
+        self.assertEqual(ids[-5:], ["A18", "A19", "A20", "A21", "A22"])
+        for scenario_id in ("A18", "A19", "A20", "A21", "A22"):
+            self.assertEqual([job["id"] for job in self.manifest["capture_jobs"] if scenario_id in job["scenario_ids"]], [
+                job_id for job_id, item in self.EXPECTED_0165.items() if item[0] == scenario_id])
+        # 没有把规则清单外的编号（如 SPEC-BODY-007）写进 covers。
+        for item in self.manifest["evidence_scenarios"]:
+            self.assertLessEqual(set(item["covers"]), rules, item["scenario_id"])
+
+    def test_0165_effort_jobs_use_the_models_the_catalog_supports_or_does_not(self) -> None:
+        """A18／A19／A20／A21 主线模型是目录里 update=true 的 Lite 模型；A20 换到 Lite 专项模型；只有 A22 用目录里 update=false 的 gpt-5.6-sol。"""
+
+        for job_id in NEW_0165_JOBS - {"official-relay-effort-unsupported-ws"}:
+            self.assertEqual(self.environment(job_id)["MODEL"], "{model}", job_id)
+        self.assertEqual(self.environment("official-relay-model-switch-ws")["SWITCH_MODEL"], "{lite_model}")
+        self.assertEqual(self.environment("official-relay-effort-unsupported-ws")["MODEL"], "gpt-5.6-sol")
+        # 压缩续聊作业用与 compact-tui 作业同写法的压缩原因核对，并给足保持时长。
+        self.assertEqual(self.environment("official-relay-compact-continue-ws")["EXPECT_COMPACTION_REASON"], "user_requested")
+        self.assertEqual(self.environment("official-relay-compact-continue-ws")["TUI_HOLD"], "120")
+        # 没有任何中继受控开关：改设置与重放都是客户端自己的行为，请求字节全部转发生产。
+        for job_id in NEW_0165_JOBS:
+            self.assertFalse([key for key in self.environment(job_id) if key.startswith("RELAY_")], job_id)
+
+    def test_0165_effort_jobs_have_official_label_entries(self) -> None:
+        """5 个作业各有一条官方证据标签：relay 原始字节经 h1_request_stream 派生（WS 用 websocket_trace，HTTP 用 process_trace），variant 各不相同。"""
+
+        entries = {job_id: self.labels[job_id] for job_id in NEW_0165_JOBS}
+        variants = {}
+        for job_id, entry in entries.items():
+            with self.subTest(job_id=job_id):
+                self.assertEqual(entry["side"], "official")
+                (rule,) = entry["rules"]
+                scenario_id = self.EXPECTED_0165[job_id][0]
+                self.assertEqual(rule["scenario_ids"], [scenario_id])
+                self.assertEqual(rule["glob"], "relay/*.client_to_upstream.bin")
+                self.assertEqual((rule["kind"], rule["parser"]), ("relay_binary", "opaque_bound_source"))
+                self.assertEqual(rule["derive"], {"parser": "h1_request_stream", "kind": "process_trace" if scenario_id == "A19" else "websocket_trace"})
+                self.assertEqual(rule["labels"]["transport"], "http" if scenario_id == "A19" else "websocket")
+                self.assertEqual((rule["labels"]["track"], rule["labels"]["mode"], rule["labels"]["provider"]), ("main", "lite", "openai_oauth"))
+                variants[job_id] = rule["labels"]["variant"]
+        self.assertEqual(len(set(variants.values())), 5)
 
 
 if __name__ == "__main__":
