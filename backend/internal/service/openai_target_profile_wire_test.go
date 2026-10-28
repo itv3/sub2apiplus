@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -222,4 +223,116 @@ func TestTargetProfileHTTPWireClientMetadataCarriesRootTurnID(t *testing.T) {
 			require.False(t, metadata.Get("ws_request_header_x_openai_internal_codex_responses_lite").Exists(), "Lite 在 HTTP 上是请求头")
 		})
 	}
+}
+
+// HTTP 回合请求 turn metadata 的窗口与根线程键（画像 WindowTracking／RootThreadKeys）。官方 HTTP 压缩续聊会话（c3）：
+// 回合请求的 turn metadata 带 agent_name（/root）、window_number、context_window_id、root_turn_id（等于 turn_id），
+// 压缩请求仍在窗口 0（同一上下文窗口 id），压缩后的请求窗口号 1 且上下文窗口 id 换新；窗口号就是 x-codex-window-id 的后缀。
+// 与官方实采相比只差四个取决于本地配置的键（沙箱模式、自动审阅开关、node REPL 两个开关，网关刻意不写）。
+func TestTargetProfileHTTPWireTurnMetadataWindowAndRootKeys(t *testing.T) {
+	mode := officialClientProfileModeActive
+	samples := loadCodex0165HTTPRequests(t)
+	// 官方样本：请求 1 是窗口 0 的主线程回合请求，请求 5 是压缩请求，请求 6 是压缩后窗口 1 的回合请求。
+	turnSample := replayHTTPSampleTurnMetadata(samples[0])
+	compactionSample := replayHTTPSampleTurnMetadata(samples[4])
+	afterSample := replayHTTPSampleTurnMetadata(samples[5])
+	require.Equal(t, "turn", turnSample.Get("request_kind").String())
+	require.Equal(t, "compaction", compactionSample.Get("request_kind").String())
+	require.EqualValues(t, 0, turnSample.Get("window_number").Int())
+	require.EqualValues(t, 0, compactionSample.Get("window_number").Int())
+	require.EqualValues(t, 1, afterSample.Get("window_number").Int())
+	require.Equal(t, turnSample.Get("context_window_id").String(), compactionSample.Get("context_window_id").String(), "官方：压缩请求仍在窗口 0")
+	require.NotEqual(t, turnSample.Get("context_window_id").String(), afterSample.Get("context_window_id").String(), "官方：压缩后上下文窗口 id 换新")
+	require.Equal(t, "/root", turnSample.Get("agent_name").String())
+	require.Equal(t, turnSample.Get("turn_id").String(), turnSample.Get("root_turn_id").String())
+
+	// forwardWire 经真实 Executor 发一次 HTTP 回合请求；windowSuffix 非空时把入站 x-codex-window-id 头的窗口号改成它。
+	forwardWire := func(t *testing.T, windowSuffix string, mutate func(payload map[string]any, metadata map[string]any, turnMetadata map[string]any)) (turnMetadata gjson.Result, wire codexGateWireRequest) {
+		t.Helper()
+		server := startCodexGateWireServer(t, nil)
+		body, ingress := codexGateRootIngress(t, mutate)
+		if windowSuffix != "" {
+			header := ingress.Request.Header.Get("x-codex-window-id")
+			ingress.Request.Header.Set("x-codex-window-id", header[:strings.LastIndex(header, ":")+1]+windowSuffix)
+		}
+		wire = codexGateForwardResponsesWire(t, mode, server, ingress, body, nil)
+		raw := gjson.GetBytes(wire.body, `client_metadata.x-codex-turn-metadata`).String()
+		require.NotEmpty(t, raw)
+		require.Equal(t, raw, wire.header.Get("x-codex-turn-metadata"), "头与 client_metadata 里的 turn metadata 一致")
+		return gjson.Parse(raw), wire
+	}
+	compaction := func(payload map[string]any, _ map[string]any, turnMetadata map[string]any) {
+		input, _ := payload["input"].([]any)
+		payload["input"] = append(input, map[string]any{"type": "compaction_trigger"})
+		turnMetadata["request_kind"] = "compaction"
+		turnMetadata["compaction"] = map[string]any{
+			"trigger": "manual", "reason": "user_requested", "implementation": "responses_compaction_v2",
+			"phase": "standalone_turn", "strategy": "memento",
+		}
+	}
+
+	// 对照：上一版画像（没有这些开关）——四个键都不写，窗口号恒为 0，哪怕入站头是窗口 1。
+	legacyTM, legacyWire := forwardWire(t, "1", nil)
+	for _, key := range []string{"agent_name", "root_turn_id", "window_number", "context_window_id"} {
+		require.False(t, legacyTM.Get(key).Exists(), "上一版画像不写 %s", key)
+	}
+	require.True(t, strings.HasSuffix(legacyTM.Get("window_id").String(), ":0"), "上一版画像窗口号恒为 0")
+	require.True(t, strings.HasSuffix(legacyWire.header.Get("x-codex-window-id"), ":0"))
+
+	withTargetProfileForWire(t, mode)
+
+	// 窗口 0 的回合请求：键集合与键序等于官方（除四个取决于本地配置的键）。
+	tm0, wire0 := forwardWire(t, "", nil)
+	wantKeys := replaySubtract(replayObjectKeys(turnSample), replayConfigDependentTurnMetadataKeys...)
+	require.Equal(t, wantKeys, replayObjectKeys(tm0), "turn metadata 的键集合与键序等于官方实采（除四个配置相关键）")
+	require.Equal(t, "/root", tm0.Get("agent_name").String())
+	require.Equal(t, tm0.Get("turn_id").String(), tm0.Get("root_turn_id").String(), "根线程上 root_turn_id 等于 turn_id")
+	require.EqualValues(t, 0, tm0.Get("window_number").Int())
+	require.True(t, strings.HasSuffix(tm0.Get("window_id").String(), ":0"))
+	require.Regexp(t, replayUUIDPattern, tm0.Get("context_window_id").String())
+	require.Equal(t, wire0.header.Get("x-codex-window-id"), tm0.Get("window_id").String(), "窗口头等于 turn metadata 的 window_id")
+	require.Equal(t, tm0.Get("window_id").String(), gjson.GetBytes(wire0.body, `client_metadata.x-codex-window-id`).String())
+
+	// 同一窗口内各请求上下文窗口 id 相同（含压缩请求），压缩请求带同样的四个键。
+	tmAgain, _ := forwardWire(t, "0", nil)
+	require.Equal(t, tm0.Get("context_window_id").String(), tmAgain.Get("context_window_id").String(), "同一窗口内上下文窗口 id 稳定")
+	tmCompaction, _ := forwardWire(t, "0", compaction)
+	require.Equal(t, "compaction", tmCompaction.Get("request_kind").String())
+	require.Equal(t, tm0.Get("context_window_id").String(), tmCompaction.Get("context_window_id").String(), "压缩请求仍在窗口 0")
+	require.EqualValues(t, 0, tmCompaction.Get("window_number").Int())
+	require.Equal(t, "/root", tmCompaction.Get("agent_name").String())
+	require.Equal(t, tmCompaction.Get("turn_id").String(), tmCompaction.Get("root_turn_id").String(), "压缩请求的 root_turn_id 同样等于 turn_id")
+	require.Equal(t, []string{"agent_name", "window_number", "context_window_id", "root_turn_id"},
+		replayKeysIn(replayObjectKeys(tmCompaction), "agent_name", "window_number", "context_window_id", "root_turn_id"),
+		"四个键在压缩请求里的相对顺序与官方一致")
+	require.Equal(t, replayKeysIn(replayObjectKeys(compactionSample), "agent_name", "window_number", "context_window_id", "root_turn_id"),
+		replayKeysIn(replayObjectKeys(tmCompaction), "agent_name", "window_number", "context_window_id", "root_turn_id"))
+
+	// 压缩之后（入站窗口头是窗口 1）：窗口号 1，窗口头、client_metadata、turn metadata 一致，上下文窗口 id 换新。
+	tm1, wire1 := forwardWire(t, "1", nil)
+	require.EqualValues(t, 1, tm1.Get("window_number").Int())
+	require.True(t, strings.HasSuffix(tm1.Get("window_id").String(), ":1"))
+	require.Equal(t, tm1.Get("window_id").String(), wire1.header.Get("x-codex-window-id"))
+	require.Equal(t, tm1.Get("window_id").String(), gjson.GetBytes(wire1.body, `client_metadata.x-codex-window-id`).String())
+	require.NotEqual(t, tm0.Get("context_window_id").String(), tm1.Get("context_window_id").String(), "压缩后上下文窗口 id 换新")
+	require.Equal(t, strings.TrimSuffix(tm0.Get("window_id").String(), ":0"), strings.TrimSuffix(tm1.Get("window_id").String(), ":1"),
+		"线程部分仍是网关派生的线程标识，只采窗口号")
+	// 窗口 1 的回合请求键集合与键序同样等于官方压缩后的回合请求。
+	require.Equal(t, replaySubtract(replayObjectKeys(afterSample), replayConfigDependentTurnMetadataKeys...), replayObjectKeys(tm1))
+}
+
+// replayHTTPSampleTurnMetadata 解析官方 HTTP 实采请求 client_metadata 里的 turn metadata。
+func replayHTTPSampleTurnMetadata(sample replay0165HTTPRequest) gjson.Result {
+	return gjson.Parse(sample.ClientMetadata["x-codex-turn-metadata"])
+}
+
+// replayKeysIn 按 keys 的出现先后顺序，返回 all 里属于 keys 的元素（保持 all 的顺序）。
+func replayKeysIn(all []string, keys ...string) []string {
+	var out []string
+	for _, key := range all {
+		if slices.Contains(keys, key) {
+			out = append(out, key)
+		}
+	}
+	return out
 }
