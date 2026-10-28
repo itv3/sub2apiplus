@@ -67,7 +67,7 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 
 起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署），
 之后又白跑过一次是环境与被验证提交不匹配（采集主机 Go 低于 ``backend/go.mod`` 的 ``go`` 指令）。
-``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 ``host-toolchain``），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
+``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 ``host-toolchain``）、本机完整测试收据与 TUI 预探收据（第六、七项，优化第 4、5 项），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
 报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 on（验收修正建议 12：Python 命令行与
 驱动入口 ``background-validate.sh start`` 同一缺省，直接调 Python 也不会悄悄绕过前置检查），``--preflight off``（驱动入口 ``--no-preflight``）显式跳过。
 
@@ -1006,9 +1006,60 @@ def _preflight_module() -> Any:
     return sys.modules[name]
 
 
+# ``--select-base last-passed``（Codex 升级工具优化第 2 项）：比对基点取“同一运行根（同一 Campaign 的这一轮）里上一个已通过的后台验证的提交”，
+# 而不是最近发版 tag。动机：``--gate-scope auto`` 的缺省基点固定是最近发版 tag，Campaign 内每修一次（哪怕只改三个文件）都要跑完整子集甚至因归属表
+# 自己在改动里而回退全集（上一轮两次 113 分钟）；以上一个通过的提交为基点，选择器只看这一小段改动。
+# 为什么允许：VC-5 统一准入（``vc5_admission.state`` → ``check``）本来就接受本客户端计划的子集结论（见 ``scope_problem`` 只拒“另一客户端”的子集、
+# ``scope_label`` 对非发版 tag 的基点写明“不是发版 tag 提交”），所以以通过的提交为基点得到的子集结论照样能过准入。
+# 为什么安全：基点的结论是 passed 且（子集的话）筛选印证无问题；基点提交必须是新提交的祖先（``_verify_ancestry``，与逐单元承接同一套核对，
+# 包含类型变化／符号链接／子模块的一票否决）；一串子集结论逐级以通过的提交为基点，链头仍是最初的发版基线，被跳过的模块在基线上通过且此后没被改动影响。
+LAST_PASSED_BASE = "last-passed"
+
+
+def _resolve_last_passed_base(args: argparse.Namespace, *, client: str) -> tuple[str, dict[str, Any]]:
+    """本运行根里上一个已通过的后台验证的提交（作比对基点）与登记用的来源说明；找不到可用的就抛 ``ValidationError``（不悄悄回退）。
+
+    候选：同客户端、状态 passed（进程已死的 running 不算）、提交不是本次要验证的提交、筛选印证无问题（``scope_problem``）；按完成时间新的在前，
+    逐个核对“是新提交的祖先”，第一个核对通过的就是基点，核对不过的原因攒起来，全部不行时一起写进错误。"""
+
+    candidates = []
+    for path, payload in results(args.runroot):
+        commit = payload.get("commit")
+        if (not isinstance(commit, str) or not _COMMIT_PATTERN.fullmatch(commit) or commit == args.commit
+                or (payload.get("client") or "codex") != client or effective_status(payload) != "passed"):
+            continue
+        try:
+            problem = scope_problem(payload, client)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            problem = f"筛选印证读不出来：{error!r}"
+        if problem is not None:
+            candidates.append((str(payload.get("completed_at_utc")), path, payload, f"不可信的通过结论：{problem}"))
+        else:
+            candidates.append((str(payload.get("completed_at_utc")), path, payload, None))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    rejected: list[str] = []
+    for _completed, path, payload, problem in candidates:
+        commit = str(payload["commit"])
+        if problem is not None:
+            rejected.append(f"{commit[:12]}（{path.name}）：{problem}")
+            continue
+        try:
+            ancestry = _verify_ancestry(commit, str(args.commit), bundle=Path(args.bundle), branch=str(args.branch),
+                                        work=Path(str(payload.get("work") or "")))
+        except ValidationError as error:
+            rejected.append(f"{commit[:12]}（{path.name}）：{error}")
+            continue
+        return commit, {"kind": LAST_PASSED_BASE, "commit": commit, "result": str(path), "result_sha256": _sha256_file(path),
+                        "status": "passed", "completed_at_utc": payload.get("completed_at_utc"), "ancestry": ancestry,
+                        "scope": scope_label(payload) or "全集"}
+    raise ValidationError("--select-base last-passed：本运行根（同一 Campaign 的这一轮）里没有可作比对基点的已通过后台验证结论。"
+                          + ("已排除：" + "；".join(rejected[:5]) + "。" if rejected else "（一个已通过的结论都没有。）")
+                          + "第一次验证请不带这个选项（缺省 auto 取最近发版 tag 作基点），通过之后再用 last-passed 压后面的修复轮")
+
+
 def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any],
                     deployments: Mapping[str, Mapping[str, Any]] | None) -> None:
-    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本；不通过抛 ``ValidationError``（拒绝起跑）。
+    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本、本机完整测试收据、TUI 预探收据；不通过抛 ``ValidationError``（拒绝起跑）。
     不是命令行解析出来的参数对象（没有 ``preflight`` 属性）什么都不做。"""
 
     if getattr(args, "preflight", "off") != "on":
@@ -1018,7 +1069,7 @@ def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mappin
     try:
         report = module.preflight_with_bundle(bundle=Path(args.bundle), branch=args.branch, commit=args.commit, data_root=Path(args.data_root),
                                               runroot=Path(args.runroot), client=client, deployment=deployment, deployments=deployments,
-                                              scratch_parent=scratch)
+                                              scratch_parent=scratch, vc_env=getattr(args, "vc_env", None))
     except module.PreflightError as error:
         raise ValidationError(f"起跑前置检查做不了，拒绝起跑后台验证：{error}") from error
     _write(scratch / f"{args.commit[:12]}-{time.strftime('%Y%m%dt%H%M%Sz', time.gmtime())}.json", report)
@@ -2067,6 +2118,12 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     # 按客户端筛选（优化第 9 项）：只有显式给 client-plan 才登记进输入合同与结论；缺省的合同、结论与命令行与改造前逐字相同。
     gate_scope = getattr(args, "gate_scope", None) or GATE_SCOPE_FULL
     select_base = getattr(args, "select_base", None)
+    # last-passed 先当“没给基点”走完下面的组合判定（auto 在起跑时就走全集的组合会清掉基点，那时不需要也不该去找上一个通过的提交），
+    # 确定还要筛选时才解析成具体的 40 位提交，之后与显式给出的基点完全同路（输入合同登记具体提交）。
+    want_last_passed = select_base == LAST_PASSED_BASE
+    select_base_origin: dict[str, Any] | None = None
+    if want_last_passed:
+        select_base = None
     include_claude = bool(getattr(args, "include_claude", False))
     if gate_scope not in (GATE_SCOPE_FULL, GATE_SCOPE_CLIENT_PLAN, GATE_SCOPE_AUTO):
         raise ValidationError(f"未知的门禁范围：{gate_scope}")
@@ -2084,10 +2141,12 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         if any(full_set_paths.values()):
             static.append("B-09 全集收据、读集合同走全集")
         if static:
-            gate_scope, select_base, include_claude = GATE_SCOPE_FULL, None, False
+            gate_scope, select_base, include_claude, want_last_passed = GATE_SCOPE_FULL, None, False, False
             scope_note_for_start = {"requested": GATE_SCOPE_AUTO, "applied": GATE_SCOPE_FULL, "reason": "；".join(static)}
+    if want_last_passed and gate_scope != GATE_SCOPE_FULL:
+        select_base, select_base_origin = _resolve_last_passed_base(args, client=client)
     if gate_scope == GATE_SCOPE_FULL:
-        if select_base or include_claude:
+        if select_base or include_claude or want_last_passed:
             raise ValidationError("--select-base、--include-claude 只在 --gate-scope client-plan／auto 下有意义")
     elif gate_scope == GATE_SCOPE_AUTO:
         # 基点只在显式给出时登记；没给就由入口门禁取测试树最近的发版 tag（实际基点与来源写进结论的 gate_scope_resolved）。
@@ -2233,6 +2292,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     if gate_scope in (GATE_SCOPE_CLIENT_PLAN, GATE_SCOPE_AUTO):
         payload.update(gate_scope=gate_scope, select_client=client, **({"select_base": select_base} if select_base else {}),
                        **({"include_claude": True} if include_claude else {}))
+        if select_base_origin is not None:
+            payload["select_base_origin"] = select_base_origin   # 基点取自哪个已通过的结论（last-passed）；输入合同里登记的是解析出的具体提交
     if inherit_reference is not None:
         payload.update(mode="unit-inherit", unit_inherit_request=inherit_reference)
     if existing is not None:
@@ -2277,6 +2338,9 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     elif gate_scope == GATE_SCOPE_AUTO:
         started["gate_scope"] = {"requested": GATE_SCOPE_AUTO, "applied": "由入口门禁决定（子集或回退全集，结论与日志里写明）",
                                  "base": select_base or "测试树最近的发版 tag"}
+    if select_base_origin is not None:
+        started["select_base_origin"] = {key: select_base_origin[key] for key in ("kind", "commit", "result", "scope")}
+        started["select_base_origin"]["ancestry"] = select_base_origin["ancestry"]["status"]
     if reuse_refused:
         started["reuse_refused"] = reuse_refused   # auto：沿用被拒绝的原因（已照常起了完整验证）
     if stop_notes:
@@ -2881,7 +2945,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                               "只给本客户端准入用，不接入口空跑，需配 --no-dryrun；必须给 --select-base）；auto（由入口门禁决定：基点缺省取测试树最近的发版 tag，"
                               "任何一步不行回退全集；驱动入口 background-validate.sh 对 Codex 缺省带；优化第 9 项）")
     p_start.add_argument("--select-base", default=None,
-                         help="client-plan 的基点（必给）／auto 的基点（可不给，缺省取测试树最近的发版 tag）：最近一次发版的 40 位提交（候选提交取测试树 HEAD）")
+                         help="client-plan 的基点（必给）／auto 的基点（可不给，缺省取测试树最近的发版 tag）：最近一次发版的 40 位提交（候选提交取测试树 HEAD）；"
+                              "或写 last-passed：取本运行根（同一 Campaign 这一轮）里上一个已通过的后台验证的提交（须是新提交的祖先；找不到可用的就拒绝），"
+                              "同一 Campaign 内修一次几个文件时用它把验证压到只看这一小段改动（Codex 升级工具优化第 2 项）")
     p_start.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
     p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
     p_pre.add_argument("--runroot", type=Path, required=True)
@@ -2890,7 +2956,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_pre.add_argument("--branch", required=True)
     p_pre.add_argument("--commit", required=True)
     p_pre.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
-    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain）")
+    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain、local-capture-receipt、tui-prelaunch-receipt）")
+    p_pre.add_argument("--vc-env", type=Path, default=None, help="本轮参数文件（TUI 预探收据检查读目标版本与登记的二进制摘要；驱动入口 background-validate.sh 自动带）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_reuse = sub.add_parser("reuse", help="同树重部署后沿用已通过的测试结论（退出码 0 沿用成功、3 被拒绝要求重验）")
@@ -2940,7 +3007,8 @@ def main(argv: list[str] | None = None) -> int:
                 report = module.preflight_with_bundle(
                     bundle=args.bundle, branch=args.branch, commit=args.commit, data_root=args.data_root, runroot=args.runroot, client=args.client,
                     deployment=client_deployment, deployments=deployment_set(args.data_root),
-                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in (args.only or "").split(",") if item] or None)
+                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in (args.only or "").split(",") if item] or None,
+                    vc_env=args.vc_env)
             except module.PreflightError as error:
                 raise ValidationError(f"起跑前置检查做不了：{error}") from error
             print(json.dumps(report, ensure_ascii=False, indent=2))

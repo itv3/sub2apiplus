@@ -113,10 +113,40 @@ next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # VC-5 入口只消费已批准准入；不再在只读预检、收尾或重跑入口隐式续签。
 vc5_require_admission() {
-  local parameters
-  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || return 3
+  local parameters rc=0
+  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # 不再静默退出（Codex 升级工具优化第 9 项）：上一轮 canonical 前准入消费失败，原因 JSON 只在标准错误、又被 vc5-all.sh 的 grep 过滤掉，
+    # 流水线约 20 分钟后才报“进程已消失”。这里先打一行带固定标记的原因（vc5-all.sh 的过滤保留 VC5_ADMISSION 开头的行）。
+    echo "VC5_ADMISSION_REQUIRED_FAILED rc=${rc}：准入消费没有通过（原因 JSON 见上一行标准错误）。排查：bash vc5-precheck.sh --dry-run 看 ttl（管理令牌剩余有效期）与 actions；" \
+         "令牌快过期用批准件 --apply，或 vc5-precheck.sh --renew --approver '批准人及依据'（vc5-all.sh 启动前设 VC5_RENEW_APPROVER 可在 canonical 前自动续签）" >&2
+    return 3
+  fi
   eval "$parameters"
   export ADMIN_BEARER_TOKEN_FILE="$D/state/$UP/admin-token"
+}
+# canonical 前的准入守卫（vc5-all.sh 在目标平台门禁之后、canonical 之前调用）：先只读核对准入消费；不通过且调用方设了 VC5_RENEW_APPROVER 时
+# 自动续签管理令牌（vc5-precheck.sh --renew，只续令牌、其余一律拒绝），没设就明确报错退出，不再让后面的 canonical 静默退出。
+# 用法：vc5_admission_guard <阶段名>；通过返回 0，否则打印 VC5_ADMISSION_GUARD_FAILED 开头的原因并返回 3。
+vc5_admission_guard() {
+  local stage=$1 rc=0 detail
+  detail=$(bash "$DRV/vc5-precheck.sh" --consume 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" -eq 0 ]; then echo "VC5_ADMISSION_GUARD stage=${stage} 准入消费通过"; return 0; fi
+  echo "VC5_ADMISSION_GUARD stage=${stage} 准入消费失败 rc=${rc}：$(printf '%s' "$detail" | tail -n 1 | cut -c1-300)"
+  if [ -z "${VC5_RENEW_APPROVER:-}" ]; then
+    echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：没有设置 VC5_RENEW_APPROVER，不自动续签。排查：bash vc5-precheck.sh --dry-run（看 ttl 与 actions）；" \
+         "令牌快过期时按批准件 --apply，或 bash vc5-precheck.sh --renew --approver '批准人及依据'，然后重起 vc5-all.sh（已完成的阶段会跳过）"
+    return 3
+  fi
+  echo "VC5_ADMISSION_GUARD stage=${stage} 自动续签管理令牌（批准人：${VC5_RENEW_APPROVER}）"
+  rc=0; detail=$(bash "$DRV/vc5-precheck.sh" --renew --approver "$VC5_RENEW_APPROVER" 2>&1 | tail -n 1 | cut -c1-300) || rc=$?
+  if [ "$rc" -ne 0 ] || ! printf '%s' "$detail" | grep -q '"renewed": true'; then
+    echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：自动续签没有成功：${detail}"
+    return 3
+  fi
+  rc=0; bash "$DRV/vc5-precheck.sh" --consume >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：续签后准入消费仍不通过 rc=${rc}"; return 3; fi
+  echo "VC5_ADMISSION_GUARD stage=${stage} 续签成功，准入消费通过"
 }
 # start/recover 共享同一文件描述符锁；后台批次继承描述符，直到批次退出才释放。
 # 锁文件已有权限或属主不合同时拒绝，绝不通过 chmod 修正陌生锁。

@@ -8,11 +8,32 @@
 #   逐字相同）；Claude 是 vc5-claude-start.sh／vc5-claude-seal.sh／vc5-claude-accept.sh，没有 canonical 交接（accept 写 VC-5
 #   checkpoint）。Claude 的 seal 链在客户端收据未就位、等待 seal 批准两处暂停：它写 $RUNROOT/vc5-pause.json，本脚本打印
 #   VC5_ALL_PAUSED reason=… next=… 后退出 0，审核人处置后重起本脚本续跑（Codex 的 seal 链不写这个文件）。
-# 用法：ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
+# 阶段失败不再静默（Codex 升级工具优化第 9 项）：seal 链、accept、canonical 三个阶段的输出经过过滤，上一轮 canonical 前准入消费失败时原因被过滤掉、
+#   脚本带着非零退出码静默结束，流水线约 20 分钟后才报“进程已消失”。现在每个阶段失败都会先打印 VC5_ALL_STAGE_FAILED（阶段名、退出码、未过滤的完整输出落盘路径与末 8 行），
+#   再以同一退出码退出；目标平台门禁结束后、canonical 前先做准入守卫（vc5_admission_guard，lib.sh）：准入消费不通过时，启动前设了 VC5_RENEW_APPROVER
+#   就自动续签管理令牌（只续令牌），没设就打印 VC5_ADMISSION_GUARD_FAILED 与处理办法后退出 3。
+# 用法：[VC5_RENEW_APPROVER='批准人及依据'] ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
 set -Eeuo pipefail
 PHASE_CONTEXT_ARGS=(--mode paths)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 vc5_require_admission
+# 运行一个过滤输出的阶段：<阶段名> <保留行的 grep -E 模式> <命令…>。输出边跑边过滤（进度仍实时进 vc5-all.out），同时原样落盘到
+# $RUNROOT/vc5-all-<阶段名>.raw；命令失败时打印 VC5_ALL_STAGE_FAILED 与末 8 行，并以命令自己的退出码返回。
+vc5_stage() {
+  local stage=$1 pattern=$2 rc=0 raw
+  shift 2
+  raw="$RUNROOT/vc5-all-${stage}.raw"
+  : > "$raw"; chmod 600 "$raw"
+  set +e
+  "$@" 2>&1 | tee "$raw" | { grep -E "${pattern}|VC5_ADMISSION|VC5_ALL_" || true; } | cut -c1-300
+  rc=${PIPESTATUS[0]}
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "VC5_ALL_STAGE_FAILED stage=${stage} rc=${rc} raw=${raw}（未过滤的完整输出）；末 8 行："
+    tail -n 8 "$raw" | cut -c1-300
+    return "$rc"
+  fi
+}
 G=$GATE_ROOT
 LOCAL_GATES=$RUNROOT/local-gates
 if [ ! -f "$G/local/full-regression.gate.json" ]; then
@@ -35,7 +56,7 @@ phase_require --mode attempt
 echo "ATT=$ATT status=$ATT_STATUS baseline=b$EVALUATION_BASELINE"
 if [ "$COMPARE_READY" != 1 ]; then
   rm -f "$RUNROOT/vc5-pause.json"
-  echo "=== seal 链 $(utc_now)"; bash "$DRV/$CT_VC5_SEAL_SCRIPT" "$ATT" 2>&1 | { grep -E "===|ATT=|batch ok|BATCH FAILED|REHEARSAL|预演:|CKPT=|SEAL_SHA=|candidate result|compare:|账本|SEAL_DONE|SEAL_ABORT|PERMISSION_CLOSEOUT|Error|Traceback|拒绝|失败|assert" || true; } | cut -c1-300
+  echo "=== seal 链 $(utc_now)"; vc5_stage seal "===|ATT=|batch ok|BATCH FAILED|REHEARSAL|预演:|CKPT=|SEAL_SHA=|candidate result|compare:|账本|SEAL_DONE|SEAL_ABORT|PERMISSION_CLOSEOUT|Error|Traceback|拒绝|失败|assert" bash "$DRV/$CT_VC5_SEAL_SCRIPT" "$ATT"
   if [ -f "$RUNROOT/vc5-pause.json" ]; then
     python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print('VC5_ALL_PAUSED reason=' + d['reason'] + ' next=' + d['next'])" "$RUNROOT/vc5-pause.json"; exit 0
   fi
@@ -45,7 +66,7 @@ fi
 phase_require --mode attempt --attempt-id "$ATT"
 test "$COMPARE_READY" = 1
 if [ "$ACCEPT_READY" != 1 ]; then
-  echo "=== accept $(utc_now)"; bash "$DRV/$CT_VC5_ACCEPT_SCRIPT" "$ATT" 2>&1 | { grep -E "===|assertions:|evaluation-run:|target-platform|归档|replay:|batch ok|BATCH FAILED|acceptance:|账本|ACCEPT_DONE|Error|Traceback|拒绝|失败|缺少" || true; } | cut -c1-300
+  echo "=== accept $(utc_now)"; vc5_stage accept "===|assertions:|evaluation-run:|target-platform|归档|replay:|batch ok|BATCH FAILED|acceptance:|账本|ACCEPT_DONE|Error|Traceback|拒绝|失败|缺少" bash "$DRV/$CT_VC5_ACCEPT_SCRIPT" "$ATT"
 else
   echo "=== accept 已完成（当前基线验收收据重放通过），跳过 $(utc_now)"
 fi
@@ -53,7 +74,9 @@ phase_require --mode attempt --attempt-id "$ATT"
 test "$ACCEPT_READY" = 1
 ls "$NEWDIR/control/vc/" | tr "\n" " "; echo
 if [ -n "$CT_VC5_CANONICAL_SCRIPT" ]; then
-  echo "=== canonical 交接 $(utc_now)"; bash "$DRV/$CT_VC5_CANONICAL_SCRIPT" "$ATT" 2>&1 | { grep -E "review_sha256|CLI preview|一致|plan ->|===|rc=|actions:|checkpoint|import-receipt|canonical latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败" || true; } | cut -c1-300
+  # 目标平台门禁（accept 内）刚结束：准入批准件与管理令牌可能已在这两个小时里过期，canonical 前先守一次（不通过就续签或明确报错，不再静默退出）。
+  vc5_admission_guard canonical
+  echo "=== canonical 交接 $(utc_now)"; vc5_stage canonical "review_sha256|CLI preview|一致|plan ->|===|rc=|actions:|checkpoint|import-receipt|canonical latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败" bash "$DRV/$CT_VC5_CANONICAL_SCRIPT" "$ATT"
 else
   echo "=== 本轮客户端（${CT_CLIENT}）没有 canonical 交接：VC-5 已在 accept 时完成 $(utc_now)"
 fi

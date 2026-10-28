@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""后台验证起跑前置检查（Codex 升级工具优化第 4 项）：起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本五项，不通过就拒绝起跑。
+"""后台验证起跑前置检查（Codex 升级工具优化第 4 项）：起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本、本机完整测试收据、TUI 预探收据七项，不通过就拒绝起跑。
 
 为什么要有：一次 Codex 升级里后台验证白跑过两次，原因都是“起跑顺序错”——先于冻结承接收据起跑（冻结测试在两个多小时后才红），先于重部署起跑
 （部署换了，结论作废）。后台验证一轮约 136 分钟，顺序错的代价是整轮；这些前提全都能在几秒到一两分钟内查清，所以起跑前先查，不通过就不起。
 之后又白跑过一次，原因是“环境与被验证提交不匹配”（第五项 host-toolchain，见下）。
 
-五项检查（互相独立，一项不过其余照查，最后一起汇总；任一项不过即拒绝起跑）：
+七项检查（互相独立，一项不过其余照查，最后一起汇总；任一项不过即拒绝起跑）：
 
 * ``freeze-receipts`` 冻结收据：被验证提交的树里，每个登记在冻结台账里的路径，当前内容的摘要都得是台账登记过的摘要（``tools.upstream_merge.freeze``
   的 ``load_frozen_edges``，与门禁里 Go／Python 冻结测试同一张承接图）。源码改了而承接收据还没单独提交，就是未承接——冻结测试必红。
@@ -34,6 +34,13 @@
   ``toolchain_note``（缺省 auto 的单元会尝试切到模块缓存或网络里的那个工具链，缓存里没有就会失败，值得知会，但那是另一类风险，硬拦会误杀本来能跑的起跑）。
   只核 ``backend/go.mod``：门禁命令编译的仓库内模块只有它（另一个 ``fingerprint_proxy`` 模块不被任何门禁命令引用，由抓包流程自己构建）。
 
+* ``local-capture-receipt`` 本机完整测试收据（第六项，Codex 升级工具优化第 4 项）：被验证提交必须已有“本机完整 ``make test-capture-tools`` 通过”的本地收据
+  （``local/local-capture-tools-receipt.sh`` 生成，放 ``<运行根>/local-receipts/``）：提交号一致、命令是完整目标、退出码 0、工作树干净、封口对得上。上一轮入口门禁第三轮
+  就红在只跑了定向测试的修复提交上（注释里写了版本号，``test_driver_client_table`` 红，白跑 1.8 小时并多部署一次）。核对逻辑在 ``opening_checks.py``（入口便宜检查共用）。
+* ``tui-prelaunch-receipt`` TUI 零请求启动预探收据（第七项，优化第 5 项）：新版二进制对各 TUI 场景（compact、ws-idle-close、daemon、guardian）做过零请求启动预探且全部通过
+  （``tui-prelaunch-receipt.sh`` 生成，同一收据目录）。参数文件（``--vc-env``）能读到 ``TARGET_VERSION``／``CODEX_BIN_SHA256`` 时，一并核对收据对的就是本轮目标版本与登记的二进制。
+* 第六、七项只对 Codex 做（Claude 轮次通过并在 detail 记 ``not_applicable``）。
+
 树的来源：``--tree`` 直接给一棵检出；或 ``--bundle/--branch/--commit``，由本模块从 bundle 克隆并检出到临时目录（用完即删）。
 子命令 ``check``：打印 JSON 报告（``background-preflight/v1``），退出码 0 全部通过、3 有检查没过、2 用法或环境错误。``background_validation.py start --preflight on``
 在起跑前调用同一套检查。
@@ -57,8 +64,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 SCHEMA = "background-preflight/v1"
 HERE = Path(__file__).resolve().parent
-# 检查项的固定顺序（报告里的 checks 数组、--only 的可选值都按它）；新增检查只追加在末尾，前四项的位置不变。
-CHECK_NAMES = ("freeze-receipts", "baseline-reseal", "redeploy", "admission-binding", "host-toolchain")
+# 检查项的固定顺序（报告里的 checks 数组、--only 的可选值都按它）；新增检查只追加在末尾，前面各项的位置不变。
+CHECK_NAMES = ("freeze-receipts", "baseline-reseal", "redeploy", "admission-binding", "host-toolchain", "local-capture-receipt", "tui-prelaunch-receipt")
 # 各客户端的基线重封检查：与门禁里同一份测试（改受管工具而没重封基线，这份测试必红）。
 BASELINE_TESTS = {
     "codex": "tools.official_client_capture.tests.test_codex_identity_conservation",
@@ -136,7 +143,7 @@ def _run(argv: Sequence[str], *, cwd: Path, timeout: float, env: Mapping[str, st
 
 
 # ---------------------------------------------------------------------------
-# 五项检查
+# 七项检查
 # ---------------------------------------------------------------------------
 
 
@@ -357,6 +364,47 @@ def check_host_toolchain(tree: Path, *, exec_path: str | None = None, environ: M
 
 
 # ---------------------------------------------------------------------------
+# 起跑前两张收据（第六、七项）
+# ---------------------------------------------------------------------------
+
+RECEIPT_DIR_NAME = "local-receipts"
+
+
+def _env_value(vc_env: Path | None, key: str) -> str | None:
+    """从本轮参数文件里读一个 ``KEY="值"`` 的字面赋值（只读文本，不 source、不执行）；读不到返回 ``None``。"""
+
+    if vc_env is None:
+        return None
+    try:
+        text = Path(vc_env).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(rf'(?m)^(?:export )?{re.escape(key)}=(?:"([^"\n]*)"|\'([^\'\n]*)\'|([^\s"\'#]*))\s*$', text)
+    if not match:
+        return None
+    value = next((group for group in match.groups() if group is not None), "")
+    return value or None
+
+
+def check_local_capture_receipt(runroot: Path, commit: str, client: str) -> dict[str, Any]:
+    if client != "codex":
+        return _result("local-capture-receipt", [], not_applicable=f"客户端 {client} 没有这条流程")
+    checks = _sibling("opening_checks")
+    directory = Path(runroot) / RECEIPT_DIR_NAME
+    return _result("local-capture-receipt", checks.check_capture_receipt(directory, commit), receipt_dir=str(directory), commit=commit)
+
+
+def check_tui_prelaunch_receipt(runroot: Path, client: str, vc_env: Path | None) -> dict[str, Any]:
+    if client != "codex":
+        return _result("tui-prelaunch-receipt", [], not_applicable=f"客户端 {client} 没有这条流程")
+    checks = _sibling("opening_checks")
+    directory = Path(runroot) / RECEIPT_DIR_NAME
+    version, binary_sha = _env_value(vc_env, "TARGET_VERSION"), _env_value(vc_env, "CODEX_BIN_SHA256")
+    return _result("tui-prelaunch-receipt", checks.check_tui_receipt(directory, target_version=version, binary_sha256=binary_sha),
+                   receipt_dir=str(directory), target_version=version, bound_to_registered_binary=binary_sha is not None)
+
+
+# ---------------------------------------------------------------------------
 # 编排
 # ---------------------------------------------------------------------------
 
@@ -383,10 +431,11 @@ def materialize_tree(bundle: Path, branch: str, commit: str, destination: Path) 
 def run_checks(*, tree: Path, commit: str, data_root: Path, runroot: Path, client: str, deployment: Mapping[str, Any],
                deployments: Mapping[str, Mapping[str, Any]] | None, only: Sequence[str] | None = None,
                runner: Callable[..., Any] = _run, steps: Any = None, background: Any = None,
-               exec_path: str | None = None, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """五项检查全部执行，汇总成一份报告；``only`` 只跑指定项（诊断用）。
+               exec_path: str | None = None, environ: Mapping[str, str] | None = None, vc_env: Path | None = None) -> dict[str, Any]:
+    """七项检查全部执行，汇总成一份报告；``only`` 只跑指定项（诊断用）。
 
-    ``exec_path``／``environ`` 只给主机工具链检查（host-toolchain）用，缺省取执行器固定 PATH 与当前进程环境，生产路径不传；测试用它们注入假 go。"""
+    ``exec_path``／``environ`` 只给主机工具链检查（host-toolchain）用，缺省取执行器固定 PATH 与当前进程环境，生产路径不传；测试用它们注入假 go。
+    ``vc_env`` 是本轮参数文件，TUI 预探收据检查用它读目标版本与登记的二进制摘要（读不到就只核收据自身）。"""
 
     wanted = tuple(only) if only else CHECK_NAMES
     unknown = [name for name in wanted if name not in CHECK_NAMES]
@@ -405,6 +454,10 @@ def run_checks(*, tree: Path, commit: str, data_root: Path, runroot: Path, clien
             result = check_redeploy(tree, data_root, clients, steps=steps)
         elif name == "host-toolchain":
             result = check_host_toolchain(tree, exec_path=exec_path, environ=environ)
+        elif name == "local-capture-receipt":
+            result = check_local_capture_receipt(runroot, commit, client)
+        elif name == "tui-prelaunch-receipt":
+            result = check_tui_prelaunch_receipt(runroot, client, vc_env)
         else:
             result = check_admission_binding(runroot, data_root, commit, client, deployment, deployments, background=background)
         result["seconds"] = round(time.monotonic() - began, 3)
@@ -423,7 +476,8 @@ def format_failures(report: Mapping[str, Any]) -> str:
 
 
 def preflight_with_bundle(*, bundle: Path, branch: str, commit: str, data_root: Path, runroot: Path, client: str, deployment: Mapping[str, Any],
-                          deployments: Mapping[str, Mapping[str, Any]] | None, scratch_parent: Path, only: Sequence[str] | None = None) -> dict[str, Any]:
+                          deployments: Mapping[str, Mapping[str, Any]] | None, scratch_parent: Path, only: Sequence[str] | None = None,
+                          vc_env: Path | None = None) -> dict[str, Any]:
     """从 bundle 检出临时树、跑检查、删掉临时树。临时树放在 ``scratch_parent`` 下（不碰后台工作目录，免得影响其来源快照绑定）。"""
 
     scratch_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -431,7 +485,7 @@ def preflight_with_bundle(*, bundle: Path, branch: str, commit: str, data_root: 
     try:
         tree = materialize_tree(bundle, branch, commit, destination / "tree")
         return run_checks(tree=tree, commit=commit, data_root=data_root, runroot=runroot, client=client, deployment=deployment,
-                          deployments=deployments, only=only)
+                          deployments=deployments, only=only, vc_env=vc_env)
     finally:
         shutil.rmtree(destination, ignore_errors=True)
 
@@ -439,7 +493,7 @@ def preflight_with_bundle(*, bundle: Path, branch: str, commit: str, data_root: 
 def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    check = sub.add_parser("check", help="跑五项起跑前置检查，打印 JSON 报告")
+    check = sub.add_parser("check", help="跑七项起跑前置检查，打印 JSON 报告")
     check.add_argument("--runroot", type=Path, required=True)
     check.add_argument("--data-root", type=Path, required=True)
     check.add_argument("--commit", required=True)
@@ -450,6 +504,7 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     check.add_argument("--branch", default=None)
     check.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（" + "、".join(CHECK_NAMES) + "）")
     check.add_argument("--scratch", type=Path, default=None, help="临时树的父目录（缺省 <runroot>/background-validation/preflight）")
+    check.add_argument("--vc-env", type=Path, default=None, help="本轮参数文件（TUI 预探收据检查读目标版本与登记的二进制摘要；缺省只核收据自身）")
     return parser.parse_args(list(argv))
 
 
@@ -463,14 +518,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         only = [item for item in (args.only or "").split(",") if item] or None
         if args.tree is not None:
             report = run_checks(tree=args.tree, commit=args.commit, data_root=args.data_root, runroot=args.runroot, client=args.client,
-                                deployment=deployment, deployments=deployments, only=only)
+                                deployment=deployment, deployments=deployments, only=only, vc_env=args.vc_env)
         else:
             if not args.branch:
                 raise PreflightError("--bundle 要同时给 --branch")
             scratch = args.scratch or (args.runroot / background.DIRECTORY / "preflight")
             report = preflight_with_bundle(bundle=args.bundle, branch=args.branch, commit=args.commit, data_root=args.data_root,
                                            runroot=args.runroot, client=args.client, deployment=deployment, deployments=deployments,
-                                           scratch_parent=scratch, only=only)
+                                           scratch_parent=scratch, only=only, vc_env=args.vc_env)
     except (PreflightError, getattr(_sibling("background_validation"), "ValidationError", PreflightError)) as error:
         print(f"起跑前置检查：{error}", file=sys.stderr)
         return 2

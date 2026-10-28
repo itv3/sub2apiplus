@@ -594,7 +594,7 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-precheck.sh", "vc5-canonical2.sh"], "先消费准入，再进入 canonical 交接")
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-precheck.sh", "vc5-canonical2.sh"], "先消费准入，canonical 前再守一次准入，再进入 canonical 交接")
             self.assertIn("seal 链已完成", result.stdout)
             self.assertIn("accept 已完成", result.stdout)
             self.assertIn("VC5_ALL_DONE", result.stdout)
@@ -611,9 +611,110 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-precheck.sh", "vc5-accept.sh", "vc5-canonical2.sh"])
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-accept.sh", "vc5-precheck.sh", "vc5-canonical2.sh"])
             self.assertNotIn("vc5-seal.sh", called)
             self.assertNotIn("vc5-start.sh", called)
+
+    # ---- Codex 升级工具优化第 9 项：canonical 前的准入守卫、自动续签与阶段失败不再静默 ----
+
+    def _guard_driver(self, root: Path, fixture: _DriverFixture, *, canonical_body: str = "") -> tuple[Path, Path]:
+        """在 _stub_driver 之上换一个“令牌过期”的准入替身：顶部的 --consume --export-parameters 通过，canonical 前的 --consume 在续签前失败。"""
+
+        drv, calls = self._stub_driver(root, fixture, accept_creates_result=False)
+        renewed = root / "renewed.marker"
+        (drv / "vc5-precheck.sh").write_text(
+            "#!/bin/bash\n"
+            f"echo \"vc5-precheck.sh $*\" >> '{calls}'\n"
+            'case "$*" in\n'
+            '  "--consume --export-parameters") exit 0 ;;\n'
+            f'  "--consume") if [ -f \'{renewed}\' ]; then exit 0; fi; echo \'{{"status": "blocked", "reason": "admission_not_ready"}}\' >&2; exit 3 ;;\n'
+            f'  --renew*) touch \'{renewed}\'; echo \'{{"status": "passed", "renewed": true}}\'; exit 0 ;;\n'
+            "esac\n", encoding="utf-8")
+        if canonical_body:
+            (drv / "vc5-canonical2.sh").write_text(f"#!/bin/bash\necho \"vc5-canonical2.sh $*\" >> '{calls}'\n{canonical_body}\n", encoding="utf-8")
+        for name in ("vc5-precheck.sh", "vc5-canonical2.sh"):
+            (drv / name).chmod(0o700)
+        return drv, calls
+
+    def test_expired_admission_before_canonical_is_an_explicit_error_not_a_silent_exit(self) -> None:
+        """目标平台门禁之后准入消费失败（令牌过期）：没设 VC5_RENEW_APPROVER 就明确报错并退出 3，canonical 不会被调起。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls = self._guard_driver(root, fixture)
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True)
+            result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("VC5_ADMISSION_GUARD_FAILED", result.stdout)
+            self.assertIn("VC5_RENEW_APPROVER", result.stdout, "提示里要说明怎么处理")
+            self.assertIn("admission_not_ready", result.stdout, "把准入消费失败的原因带出来")
+            self.assertNotIn("VC5_ALL_DONE", result.stdout)
+            called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
+            self.assertNotIn("vc5-canonical2.sh", called)
+
+    def test_expired_admission_before_canonical_is_renewed_when_the_approver_is_given(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls = self._guard_driver(root, fixture)
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True)
+            result = _run(drv / "vc5-all.sh", env={**fixture.env, "VC5_RENEW_APPROVER": "测试批准人及依据"}, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            lines = calls.read_text(encoding="utf-8").splitlines()
+            self.assertIn("vc5-precheck.sh --renew --approver 测试批准人及依据", lines, "只续令牌，批准人原样传给 --renew")
+            self.assertEqual([line.split()[0] for line in lines][-1], "vc5-canonical2.sh", "续签成功后才进 canonical")
+            self.assertIn("续签成功，准入消费通过", result.stdout)
+            self.assertIn("VC5_ALL_DONE", result.stdout)
+
+    def test_a_failing_canonical_stage_is_reported_with_its_exit_code_and_raw_tail(self) -> None:
+        """canonical 阶段带着非零退出码结束、又没有任何匹配过滤模式的输出：以前 vc5-all 静默退出，现在必须打印阶段、退出码与未过滤输出的末行。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, _calls = self._guard_driver(root, fixture, canonical_body='echo "some unmatched noise line" >&2\nexit 3')
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True)
+            # 令牌这一步是好的（没设过期替身）：先让 renewed 标记就位，只测阶段失败
+            (root / "renewed.marker").touch()
+            result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("VC5_ALL_STAGE_FAILED stage=canonical rc=3", result.stdout)
+            self.assertIn("some unmatched noise line", result.stdout, "过滤掉的原始输出末行要带出来")
+            self.assertTrue((fixture.runroot / "vc5-all-canonical.raw").is_file())
+            self.assertEqual(stat.S_IMODE((fixture.runroot / "vc5-all-canonical.raw").stat().st_mode), 0o600)
+            self.assertNotIn("VC5_ALL_DONE", result.stdout)
+
+    def test_admission_failure_marker_survives_the_stage_filter(self) -> None:
+        """lib.sh 的 vc5_require_admission 失败时打的标记行以 VC5_ADMISSION 开头，阶段过滤必须保留它。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, _calls = self._guard_driver(root, fixture, canonical_body='echo "VC5_ADMISSION_REQUIRED_FAILED rc=3：x" >&2\nexit 3')
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True)
+            (root / "renewed.marker").touch()
+            result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("VC5_ADMISSION_REQUIRED_FAILED", result.stdout)
+
+    def test_require_admission_failure_prints_a_marker_line_with_the_way_out(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, _calls = self._stub_driver(root, fixture, accept_creates_result=False)
+            (drv / "vc5-precheck.sh").write_text("#!/bin/bash\necho '{\"status\": \"blocked\", \"reason\": \"admission_not_ready\"}' >&2\nexit 3\n", encoding="utf-8")
+            (drv / "vc5-precheck.sh").chmod(0o700)
+            result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            output = result.stdout + result.stderr
+            self.assertIn("VC5_ADMISSION_REQUIRED_FAILED rc=3", output)
+            self.assertIn("--renew --approver", output)
 
     def test_lib_rejects_env_with_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

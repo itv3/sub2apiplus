@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,73 @@ class AdmissionError(ValueError):
 
 class TokenExpiry(AdmissionError):
     """签名及身份通过、但有效期不足；必须另持明确续签批准。"""
+
+
+# 采集账号／采集分组／采集 Key 的库表前置（Codex 升级工具优化第 8 项）：VC-5 候选作业对线上库有三条硬前置，库来自 DMIT 整库同步后
+# 三条天然不满足，上一轮 VC-5 在作业跑起来之后才逐个撞出（连败两次、每次还停一次采集容器并给同根因计数加 1）。
+# 这里在只读预览（--dry-run）里提前核对，失败提示写明“为什么要求、怎么临时改、VC-6 之后怎么恢复”。只读：只 SELECT，不改任何东西。
+_DIGITS = re.compile(r"[0-9]+")
+
+
+def evaluate_candidate_prerequisites(facts: dict[str, Any], *, account_id: str, key_id: str) -> list[dict[str, Any]]:
+    """把库里查到的事实（``ManagedFacts.candidate_database`` 的返回）判成检查项列表。纯函数，不碰任何外部状态。
+
+    每项 ``{"check", "status": passed|blocked, "reason": 静态码, "detail": 中文说明}``；阻断项的 ``detail`` 含三段：为什么要求、怎么临时改、
+    VC-6 之后怎么恢复。env 里的采集账号／Key 与库对不上（上一轮入口前就撞过一次）先判，对不上时其余三项不再往下查，免得误导。"""
+
+    rows: list[dict[str, Any]] = []
+
+    def add(check: str, ok: bool, reason: str, detail: str) -> None:
+        rows.append({"check": check, "status": "passed" if ok else "blocked", "reason": "ok" if ok else reason, "detail": detail})
+
+    identity_problems = []
+    if int(facts.get("account_found", 0)) != 1:
+        identity_problems.append(f"库里没有账号 #{account_id}（参数文件的 CODEX_ACCOUNT_ID 与库对不上；库若是整库同步来的，账号编号会变）")
+    if int(facts.get("key_found", 0)) != 1:
+        identity_problems.append(f"库里没有 API Key #{key_id}（参数文件的 API_KEY_ID 与库对不上）")
+    elif facts.get("group_id") is None:
+        identity_problems.append(f"API Key #{key_id} 没有绑定分组")
+    add("capture_identity", not identity_problems, "capture_identity_mismatch",
+        "；".join(identity_problems) + "。处理：用库里真实的采集账号与采集 Key 编号更新本轮参数文件（env.sh 的 CODEX_ACCOUNT_ID、API_KEY_ID），再重做只读预览。"
+        if identity_problems else f"参数文件的采集账号 #{account_id} 与 Key #{key_id} 在库里都存在，Key 绑定分组 #{facts.get('group_id')}")
+    if identity_problems:
+        for check in ("model_mapping_empty", "group_allow_live", "group_single_active_key"):
+            add(check, False, "capture_identity_mismatch", "采集账号／Key 与库对不上，这一项无法核对（先处理 capture_identity）")
+        return rows
+
+    group = facts["group_id"]
+    mapping_type, mapping_count = facts.get("model_mapping_type"), int(facts.get("model_mapping_count") or 0)
+    add("model_mapping_empty", mapping_type in ("missing", "object") and mapping_count == 0, "model_mapping_not_empty",
+        f"采集账号 #{account_id} 的 credentials.model_mapping 类型 {mapping_type}、{mapping_count} 条映射。"
+        f"为什么要求为空：候选就绪静态检查（codex_upgrade_candidate_readiness 的 _model_mapping_fact）要求它为空，否则 VC-5 候选作业零请求失败，"
+        f"监督器随后停 capture-cli 并给同根因计数加 1。"
+        f"怎么临时改：先备份（select credentials->'model_mapping' from accounts where id={account_id}，存成 0600 文件），"
+        f"再 update accounts set credentials = credentials - 'model_mapping' where id={account_id}"
+        f"（账号 active 且可调度时 Redis 调度投影约 2 分钟刷新；账号关着不刷新，无功能影响）。"
+        f"VC-6 之后怎么恢复：update accounts set credentials = jsonb_set(credentials, '{{model_mapping}}', '<备份值>'::jsonb) where id={account_id}，并写进收尾清单。"
+        if not (mapping_type in ("missing", "object") and mapping_count == 0) else f"采集账号 #{account_id} 的 model_mapping 为空（{mapping_type}）")
+    live = facts.get("allow_live")
+    add("group_allow_live", live is True, "group_allow_live_off",
+        f"采集 Key #{key_id} 所在分组 #{group} 的 allow_live={live}。"
+        f"为什么要求开：run_candidate_aux_capture.sh 的 A11 前置要求分组 allow_live=true，否则候选作业约 1 秒退出，同样触发停 capture-cli 与同根因计数。"
+        f"怎么临时改：先备份分组整行（select row_to_json(groups) from groups where id={group}），再用 SQL update groups set allow_live=true where id={group}；"
+        f"若改走管理接口 PUT /api/v1/admin/groups/{group}，它会把 codex_models_manifest_config、model_allowlist 从 {{}} 归一成 {{\"enabled\": false}}，要另用 SQL 写回备份值。"
+        f"VC-6 之后怎么恢复：update groups set allow_live=false where id={group}，并核对两个字段与备份一致，写进收尾清单。"
+        if live is not True else f"分组 #{group} 的 allow_live 已开")
+    active = [int(item) for item in (facts.get("active_keys") or [])]
+    others = [item for item in active if item != int(key_id)]
+    ok = int(key_id) in active and not others
+    add("group_single_active_key", ok, "group_has_other_active_keys" if others else "capture_key_not_active",
+        (f"分组 #{group} 里除采集 Key #{key_id} 外还有 {len(others)} 把活跃 Key：{others}"
+         + ("（采集 Key 自己此刻也不是活跃状态，要一并启用）。" if int(key_id) not in active else "。")
+         if others else f"采集 Key #{key_id} 在分组 #{group} 里不是活跃状态。")
+        + f"为什么要求只有采集 Key 一把活跃：run_images_wire_probe.sh 要求分组内 status=active 且未删除的 Key 恰为采集 Key 一把（单 Key 隔离分组），"
+        f"否则作业报“不是单 Key 隔离分组”直接退出 1，使候选作业必败。"
+        + (f"怎么临时改：先记下这些 Key 的原状态，再 update api_keys set status='inactive' where id in ({', '.join(map(str, others))})"
+           f"（若是真实用户的 Key，汇报里要点名）。VC-6 之后怎么恢复：把它们的 status 改回 'active'，写进收尾清单。" if others
+           else f"处理：先把采集 Key #{key_id} 启用（status='active'），VC-6 之后按原状态恢复。")
+        if not ok else f"分组 #{group} 里只有采集 Key #{key_id} 一把活跃")
+    return rows
 
 
 def canonical(value: Any) -> bytes:
@@ -152,8 +219,11 @@ def read_signing_config(path: Path) -> dict[str, str]:
     return values
 
 
-def verify_token(raw: bytes, secret: str, email: str, minimum: int, *, now: int | None = None) -> dict[str, Any]:
-    """验签、身份和生效时间先通过，再检查 TTL；只返回脱敏元数据。"""
+def verify_token(raw: bytes, secret: str, email: str, minimum: int, *, now: int | None = None, enforce_ttl: bool = True) -> dict[str, Any]:
+    """验签、身份和生效时间先通过，再检查 TTL；只返回脱敏元数据。
+
+    ``enforce_ttl=False`` 只给只读的剩余有效期报告用：签名、身份、生效时间照常核验，剩余有效期不足时不抛 ``TokenExpiry``，
+    而是把 ``remaining_seconds`` 如实写进返回值（剩余为负＝已过期）。准入判定一律走缺省的 ``True``。"""
     now = int(time.time()) if now is None else now
     if not 0 < len(raw) <= 8192:
         raise AdmissionError("token_size_invalid")
@@ -185,12 +255,15 @@ def verify_token(raw: bytes, secret: str, email: str, minimum: int, *, now: int 
         raise AdmissionError("jwt_admin_identity_invalid")
     if claims["nbf"] > now or claims["iat"] > now or claims["exp"] <= claims["iat"]:
         raise AdmissionError("jwt_time_contract_invalid")
-    if claims["exp"] - now < max(1800, minimum):
+    if enforce_ttl and claims["exp"] - now < max(1800, minimum):
         raise TokenExpiry("jwt_ttl_insufficient")
-    return {
+    result = {
         "credential_sha256": hashlib.sha256(raw).hexdigest(),
         "expires_at_utc": datetime.fromtimestamp(claims["exp"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if not enforce_ttl:
+        result["remaining_seconds"] = claims["exp"] - now
+    return result
 
 
 def _client_spec(config: dict[str, str]) -> Any:
@@ -361,6 +434,44 @@ class ManagedFacts:
             raise AdmissionError("capture_profile_check_failed")
         return json.loads(result.stdout)
 
+    def candidate_database(self, signing: dict[str, str], account_id: str, key_id: str) -> dict[str, Any]:
+        """采集账号／分组／Key 的库表事实（只读 SELECT）：经 ``docker exec`` 进 postgres 容器，密码只走环境变量名传递，不进命令行与日志。
+
+        编号只接受纯数字（来自本轮参数文件，仍再校验一次）；返回值交给 ``evaluate_candidate_prerequisites`` 判定。任何失败只抛静态错误码。"""
+
+        if not (_DIGITS.fullmatch(str(account_id)) and _DIGITS.fullmatch(str(key_id))):
+            raise AdmissionError("capture_identity_not_numeric")
+        sql = (
+            "with k as (select id, group_id from api_keys where id = " + str(int(key_id)) + "), "
+            "a as (select credentials from accounts where id = " + str(int(account_id)) + ") "
+            "select json_build_object("
+            "'account_found', (select count(*) from a), "
+            "'model_mapping_type', (select case when not (credentials ? 'model_mapping') then 'missing' "
+            "else coalesce(jsonb_typeof(credentials->'model_mapping'), 'null') end from a), "
+            "'model_mapping_count', (select case when jsonb_typeof(credentials->'model_mapping') = 'object' "
+            "then (select count(*) from jsonb_object_keys(credentials->'model_mapping')) else 0 end from a), "
+            "'key_found', (select count(*) from k), "
+            "'group_id', (select group_id from k), "
+            "'allow_live', (select g.allow_live from groups g join k on g.id = k.group_id), "
+            "'active_keys', (select coalesce(json_agg(ak.id order by ak.id), '[]'::json) from api_keys ak "
+            "join k on ak.group_id = k.group_id where ak.status = 'active' and ak.deleted_at is null))::text"
+        )
+        completed = subprocess.run(
+            ["docker", "exec", "-e", "PGPASSWORD", "sub2apiplus-postgres", "psql", "-X", "-At", "-U", signing["POSTGRES_USER"],
+             "-d", signing["POSTGRES_DB"], "-c", sql],
+            capture_output=True, text=True, timeout=30, env={**os.environ, "PGPASSWORD": signing["POSTGRES_PASSWORD"]},
+        )
+        if completed.returncode:
+            raise AdmissionError("candidate_database_query_failed")
+        lines = [line for line in completed.stdout.splitlines() if line.startswith("{")]
+        try:
+            value = json.loads(lines[-1])
+        except (IndexError, ValueError) as error:
+            raise AdmissionError("candidate_database_output_invalid") from error
+        if not isinstance(value, dict):
+            raise AdmissionError("candidate_database_output_invalid")
+        return value
+
     def issue_token(self, signing: dict[str, str]) -> bytes:
         c = self.config
         address = subprocess.run(
@@ -508,6 +619,148 @@ class Admission:
         self.values, self.report = values, report
         return report
 
+    def ttl_report(self, now: datetime | None = None) -> dict[str, Any]:
+        """准入相关的两个会过期的东西（Codex 升级工具优化第 9 项）：管理令牌的剩余有效期，与批准件的有效期。只读，不签发、不续签。
+
+        真正让 ``--consume``（``vc5_require_admission``）失败的是令牌：剩余有效期必须不少于 ``minimum_seconds``（缺省 12 小时），所以 24 小时的令牌
+        签发 12 小时后就会让 canonical 前的准入消费失败。批准件的 2 小时有效期只约束 ``--apply`` 的那一刻（apply 时核对 ``approved_at <= 现在 < expires``），
+        apply 完成之后不影响 consume；待用的批准件（参数 ``VC5_ADMISSION_APPROVAL``）要在它过期前用掉。"""
+
+        now = datetime.now(timezone.utc) if now is None else now
+        result: dict[str, Any] = {"checked_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "token": None, "approval": None, "warnings": []}
+        warnings: list[str] = result["warnings"]
+        signing = (getattr(self, "values", None) or {}).get("signing")
+        try:
+            plain_path(self.token)
+            if not self.token.exists():
+                result["token"] = {"status": "missing"}
+                warnings.append("管理令牌文件不存在：apply 会签发（需要批准件）")
+            elif signing is None:
+                result["token"] = {"status": "unverified", "reason": "signing_config_unavailable"}
+            else:
+                meta = verify_token(read_private(self.token, modes=(0o400, 0o600)), signing["JWT_SECRET"], signing["ADMIN_EMAIL"], self.minimum,
+                                    now=int(now.timestamp()), enforce_ttl=False)
+                remaining = int(meta["remaining_seconds"])
+                margin = remaining - self.minimum
+                valid_until = datetime.fromtimestamp(int(now.timestamp()) + margin, timezone.utc)
+                result["token"] = {"status": "ok" if margin >= 0 else "renew_required", "expires_at_utc": meta["expires_at_utc"],
+                                   "remaining_seconds": remaining, "minimum_seconds": self.minimum, "margin_seconds": margin,
+                                   "consume_valid_until_utc": valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")}
+                if margin < 0:
+                    warnings.append(f"管理令牌剩余 {remaining} 秒，已低于准入要求的 {self.minimum} 秒：现在 --consume 会失败（admission_not_ready），"
+                                    "需要 renew_token（带批准件 --apply，或 vc5-precheck.sh --renew --approver …）")
+                elif margin < 7200:
+                    warnings.append(f"管理令牌再过 {margin} 秒（{result['token']['consume_valid_until_utc']}）就会低于准入要求，之后 consume 失败；"
+                                    "VC-5 后半段（目标平台门禁之后、canonical 之前）撞上就会中断")
+        except Exception as error:   # noqa: BLE001 - 只读报告，任何失败只写静态原因
+            result["token"] = {"status": "unreadable", "reason": str(error) if isinstance(error, AdmissionError) else "admin_token_unreadable"}
+        approvals: dict[str, Any] = {}
+        try:
+            receipt = read_json(self.receipt, private=True) if self.receipt.exists() else None
+            if receipt is not None and re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("approval_sha256", ""))):
+                event = read_json(self.root / "vc5-admission-events" / f"{receipt['approval_sha256']}.json", private=True)
+                used = event.get("approval") or {}
+                approvals["applied"] = {"approval_id": used.get("approval_id"), "approved_by": used.get("approved_by"),
+                                        "approved_at_utc": used.get("approved_at_utc"), "expires_at_utc": used.get("expires_at_utc"),
+                                        "applied_at_utc": receipt.get("applied_at_utc"),
+                                        "note": "批准件有效期只约束 --apply 的那一刻，apply 之后不影响 consume；决定 consume 能否通过的是管理令牌的剩余有效期"}
+        except Exception:   # noqa: BLE001
+            approvals["applied"] = {"status": "unreadable"}
+        pending = self.config.get("VC5_ADMISSION_APPROVAL")
+        if pending:
+            try:
+                path = Path(pending)
+                if not path.exists():
+                    approvals["pending"] = {"path": pending, "status": "missing"}
+                else:
+                    value = json.loads(read_private(path))
+                    expires = datetime.fromisoformat(str(value["expires_at_utc"]).replace("Z", "+00:00"))
+                    remaining = int((expires - now).total_seconds())
+                    approvals["pending"] = {"path": pending, "approval_id": value.get("approval_id"), "expires_at_utc": value.get("expires_at_utc"),
+                                            "remaining_seconds": remaining, "status": "valid" if remaining > 0 else "expired"}
+                    if remaining <= 0:
+                        warnings.append(f"待用批准件 {pending} 已过期：重新生成批准件（绑定当前 admission_key 与 actions）后再 --apply")
+                    elif remaining < 1800:
+                        warnings.append(f"待用批准件 {pending} 只剩 {remaining} 秒，尽快 --apply")
+            except Exception:   # noqa: BLE001
+                approvals["pending"] = {"path": pending, "status": "unreadable"}
+        result["approval"] = approvals or None
+        return result
+
+    def database_prerequisites(self) -> list[dict[str, Any]]:
+        """采集账号／分组／Key 的库表前置（只读）。只对 Codex 有意义；事实取不到时记一条阻断项，不抛异常。"""
+
+        spec = _client_spec(self.config)
+        if str(spec["client"]) != "codex":
+            return [{"check": "candidate_database", "status": "skipped", "reason": "client_not_codex", "detail": "库表前置只针对 Codex 的候选采集脚本"}]
+        fetch = getattr(self.facts, "candidate_database", None)
+        signing = (getattr(self, "values", None) or {}).get("signing")
+        if fetch is None:
+            return [{"check": "candidate_database", "status": "skipped", "reason": "facts_without_database", "detail": "事实来源不带库表查询"}]
+        account_id, key_id = str(self.config.get("CODEX_ACCOUNT_ID", "")), str(self.config.get("API_KEY_ID", ""))
+        if signing is None:
+            return [{"check": "candidate_database", "status": "blocked", "reason": "signing_config_unavailable",
+                     "detail": "读不到数据库连接配置（compose 目录的 .env），库表前置无法核对"}]
+        try:
+            facts = fetch(signing, account_id, key_id)
+            return evaluate_candidate_prerequisites(facts, account_id=account_id, key_id=key_id)
+        except Exception as error:   # noqa: BLE001 - 只读预览：取不到事实就报阻断，原因只写静态码
+            reason = str(error) if isinstance(error, AdmissionError) else "candidate_database_unavailable"
+            return [{"check": "candidate_database", "status": "blocked", "reason": reason,
+                     "detail": "库表前置没能核对（postgres 容器、账号或 psql 不可用）；先让采集主机的数据库可查，再重做只读预览"}]
+
+    def dry_run_report(self, *, skip_database: bool = False) -> dict[str, Any]:
+        """``--dry-run`` 的完整只读报告：准入检查（原样）＋令牌／批准件剩余有效期＋库表前置。
+
+        库表前置有任一项阻断时顶层 ``status`` 记 ``blocked``（流水线据此在派发前停下并转述原因）；这只影响只读预览的输出，不影响 apply／consume
+        （它们走 ``inspect``），所以采集作业跑完之后环境变化不会让后面的 consume 误失败。"""
+
+        report = dict(self.inspect())
+        report["ttl"] = self.ttl_report()
+        prerequisites = [] if skip_database else self.database_prerequisites()
+        report["candidate_prerequisites"] = prerequisites
+        blocked = [row for row in prerequisites if row["status"] == "blocked"]
+        if blocked:
+            report["checks"] = [*report["checks"], *({"check": f"candidate_prerequisite.{row['check']}", "status": "blocked", "reason": row["reason"]}
+                                                     for row in blocked)]
+            report["status"] = "blocked"
+        return report
+
+    def renew(self, approver: str) -> dict[str, Any]:
+        """只续管理令牌，且必须由调用方明确给出批准人（Codex 升级工具优化第 9 项：canonical 前自动续签）。
+
+        边界（任何一条不满足都拒绝，不扩大授权）：准入没有阻断；待办动作恰是 ``renew_token``（不顺带装画像、不签发新令牌、不改模式）；已有的准入收据
+        绑定与当前完全一致（环境、候选、构建、画像摘要都没变，只是令牌快过期）；批准人文字非空。满足时就地写一份 2 小时有效、绑定当前
+        ``admission_key`` 与动作的批准件（0600、O_EXCL），再走与人工相同的 ``apply``（同一把派发锁、同一套补偿与事件记录）。"""
+
+        if not approver or not approver.strip():
+            raise AdmissionError("renew_requires_explicit_approver")
+        report = self.inspect()
+        if not self.receipt.exists():
+            raise AdmissionError("renew_requires_existing_receipt")   # 从没批准过的准入走正常的批准件 apply，不在这里自动签
+        if report["status"] == "ready":
+            return self.consume()   # 令牌仍够用：不重复签发（consume 自己会核对收据与有效参数）
+        if report["status"] == "blocked":
+            raise AdmissionError("admission_has_blockers")
+        if report["actions"] != ["renew_token"]:
+            raise AdmissionError("renew_refused_actions_beyond_token")
+        receipt = read_json(self.receipt, private=True)
+        if receipt.get("bindings") != report["bindings"] or receipt.get("schema_version") != self.schema:
+            raise AdmissionError("renew_refused_binding_drift")
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        stamp = now.strftime("%Y%m%dt%H%M%Sz")
+        approval = {"schema_version": self.approval_schema, "admission_key": report["admission_key"], "actions": report["actions"], "seal_admission": True,
+                    "approval_id": f"vc5-renew-{stamp}-{os.getpid()}", "approved_by": approver.strip(),
+                    "approved_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "expires_at_utc": (now + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self.root / f"vc5-admission-approval-renew-{stamp}-{os.getpid()}.json"
+        plain_path(path)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(canonical(approval) + b"\n")
+        return self.apply(path)
+
     def consume(self) -> dict[str, Any]:
         report = self.inspect()
         if report["status"] != "ready":
@@ -624,13 +877,38 @@ class Admission:
                 raise AdmissionError("apply_failed_compensated" if restored else "apply_failed_requires_manual_recovery") from error
 
 
+def dry_run_summary(report: dict[str, Any]) -> str:
+    """只读预览的人读摘要（写到标准错误；标准输出仍是原样的 JSON，流水线按 JSON 判定）：剩余有效期与库表前置的阻断项（含处理办法）。"""
+
+    lines = [f"VC-5 准入只读预览：status={report['status']} actions={report['actions']}"]
+    ttl = report.get("ttl") or {}
+    token = ttl.get("token") or {}
+    if token.get("remaining_seconds") is not None:
+        lines.append(f"  管理令牌：剩余 {token['remaining_seconds']} 秒，准入要求不少于 {token['minimum_seconds']} 秒，"
+                     f"富余 {token['margin_seconds']} 秒，consume 有效至 {token['consume_valid_until_utc']}")
+    elif token.get("status"):
+        lines.append(f"  管理令牌：{token['status']}")
+    approval = ttl.get("approval") or {}
+    if (approval.get("pending") or {}).get("remaining_seconds") is not None:
+        lines.append(f"  待用批准件：剩余 {approval['pending']['remaining_seconds']} 秒（{approval['pending']['status']}）")
+    lines.extend(f"  ! {warning}" for warning in ttl.get("warnings", []))
+    for row in report.get("candidate_prerequisites") or []:
+        lines.append(f"  库表前置 {row['check']}：{row['status']}" + (f"（{row['reason']}）" if row["status"] != "passed" else ""))
+        if row["status"] == "blocked":
+            lines.append(f"    {row['detail']}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--consume", action="store_true")
+    mode.add_argument("--renew", action="store_true", help="只续管理令牌（需 --approver）；准入已有收据且只剩令牌快过期时用")
     parser.add_argument("--approval", type=Path)
+    parser.add_argument("--approver", default=None, help="--renew 的批准人及依据（写进批准件 approved_by）")
+    parser.add_argument("--skip-db-prerequisites", action="store_true", help="--dry-run 不查库表前置（只看准入与剩余有效期）")
     parser.add_argument("--export-parameters", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -639,9 +917,15 @@ def main(argv: list[str] | None = None) -> int:
         _require_client_admission(config)
         admission = Admission(config, ManagedFacts(config))
         if args.dry_run:
-            report = admission.inspect()
+            report = admission.dry_run_report(skip_database=args.skip_db_prerequisites)
             print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+            print(dry_run_summary(report), file=sys.stderr)
             return 0 if report["status"] == "ready" else 3
+        if args.renew:
+            result = admission.renew(args.approver or "")
+            print(json.dumps({"status": "passed", "renewed": True, "receipt_sha256": result["receipt_sha256"],
+                              "receipt": str(admission.receipt)}, ensure_ascii=False))
+            return 0
         if args.apply:
             approval = args.approval or (Path(config["VC5_ADMISSION_APPROVAL"]) if config.get("VC5_ADMISSION_APPROVAL") else None)
             if approval is None:

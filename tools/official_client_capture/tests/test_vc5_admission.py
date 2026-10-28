@@ -362,6 +362,208 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(self.facts.issued, 0)
 
 
+    # ---- Codex 升级工具优化第 8、9 项：库表前置与剩余有效期的只读预览、只续令牌的明确批准续签 ----
+
+    GOOD_DB = {"account_found": 1, "key_found": 1, "group_id": 3, "model_mapping_type": "missing", "model_mapping_count": 0,
+               "allow_live": True, "active_keys": [130]}
+
+    def database(self, **changes):
+        """给事实替身装上库表查询（真实实现是 ManagedFacts.candidate_database）：返回好库加上给定的偏差。"""
+
+        self.config.update(CODEX_ACCOUNT_ID="90", API_KEY_ID="130")
+        value = {**self.GOOD_DB, **changes}
+        self.facts.candidate_database = lambda signing, account_id, key_id: value
+
+    def expiring_token(self, remaining):
+        now = int(time.time())
+        self.subject.token.write_bytes(token(claims={"user_id": 1, "email": "admin@fixture.invalid", "role": "admin", "token_version": 0,
+                                                     "iat": now - 60, "nbf": now - 60, "exp": now + remaining}))
+
+    def test_dry_run_states_the_token_margin_and_warns_before_consume_would_fail(self):
+        self.healthy()
+        report = self.subject.dry_run_report(skip_database=True)
+        token_ttl = report["ttl"]["token"]
+        self.assertEqual(token_ttl["status"], "ok")
+        self.assertEqual(token_ttl["minimum_seconds"], 43200)
+        self.assertGreater(token_ttl["margin_seconds"], 40000, "24 小时的令牌减去 12 小时的准入要求，富余约 12 小时")
+        self.assertEqual(report["ttl"]["warnings"], [])
+        self.expiring_token(43200 + 3600)   # 再过约 1 小时就会低于准入要求
+        report = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(report["ttl"]["token"]["status"], "ok")
+        self.assertTrue(any("就会低于准入要求" in text for text in report["ttl"]["warnings"]), report["ttl"])
+        self.expiring_token(3000)           # 已经低于：consume 会失败，报告写 renew_required 与需要 renew_token
+        report = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(report["ttl"]["token"]["status"], "renew_required")
+        self.assertLess(report["ttl"]["token"]["margin_seconds"], 0)
+        self.assertEqual(report["actions"], ["renew_token"])
+        self.assertTrue(any("renew_token" in text for text in report["ttl"]["warnings"]))
+        self.assertNotIn(self.subject.token.read_text(), json.dumps(report), "报告里不能出现令牌本体")
+
+    def test_ttl_report_tells_the_applied_and_the_pending_approval_apart(self):
+        self.subject.apply(self.approval())
+        report = self.subject.ttl_report()
+        applied = report["approval"]["applied"]
+        self.assertEqual(applied["approved_by"], "隔离验收操作者")
+        self.assertIn("apply 之后不影响 consume", applied["note"])
+        pending = self.root / "pending-approval.json"
+        now = datetime.now(timezone.utc)
+        admission.write_json(pending, {"approval_id": "p", "expires_at_utc": (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+        self.config["VC5_ADMISSION_APPROVAL"] = str(pending)
+        report = self.subject.ttl_report()
+        self.assertEqual(report["approval"]["pending"]["status"], "valid")
+        self.assertTrue(0 < report["approval"]["pending"]["remaining_seconds"] <= 600)
+        self.assertTrue(any("尽快 --apply" in text for text in report["warnings"]), "剩余不足 30 分钟要提醒")
+        admission.write_json(pending, {"approval_id": "p", "expires_at_utc": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+        report = self.subject.ttl_report()
+        self.assertEqual(report["approval"]["pending"]["status"], "expired")
+        self.assertTrue(any("已过期" in text for text in report["warnings"]))
+
+    def test_database_prerequisites_pass_on_a_good_database(self):
+        self.healthy()
+        self.database()
+        report = self.subject.dry_run_report()
+        self.assertEqual([(row["check"], row["status"]) for row in report["candidate_prerequisites"]],
+                         [("capture_identity", "passed"), ("model_mapping_empty", "passed"), ("group_allow_live", "passed"),
+                          ("group_single_active_key", "passed")])
+        self.assertEqual(report["status"], "ready", "库表前置全过时顶层状态沿用准入自己的判定（healthy 的环境就是 ready）")
+
+    def test_each_unmet_database_prerequisite_blocks_the_dry_run_and_explains_why_how_and_restore(self):
+        """三种不满足（上一轮 VC-5 连败两次、还差一个没撞上的就是它们）：各自在构造的库上被只读预览报出，提示写清为什么、怎么临时改、VC-6 之后怎么恢复。"""
+
+        cases = {
+            "model_mapping_empty": ({"model_mapping_type": "object", "model_mapping_count": 4}, "model_mapping_not_empty",
+                                    ("credentials - 'model_mapping'", "jsonb_set", "VC-6 之后")),
+            "group_allow_live": ({"allow_live": False}, "group_allow_live_off", ("update groups set allow_live=true", "allow_live=false", "VC-6 之后")),
+            "group_single_active_key": ({"active_keys": [3, 130]}, "group_has_other_active_keys", ("status='inactive'", "改回 'active'", "VC-6 之后")),
+        }
+        for check, (change, reason, words) in cases.items():
+            with self.subTest(check=check):
+                self.healthy()
+                self.database(**change)
+                before = self.snapshot()
+                report = self.subject.dry_run_report()
+                self.assertEqual(self.snapshot(), before, "只读预览不写任何文件")
+                self.assertEqual(self.facts.issued, 0)
+                self.assertEqual(report["status"], "blocked")
+                rows = {row["check"]: row for row in report["candidate_prerequisites"]}
+                self.assertEqual({name for name, row in rows.items() if row["status"] == "blocked"}, {check}, "只报不满足的那一项")
+                self.assertEqual(rows[check]["reason"], reason)
+                for word in ("为什么", "怎么临时改", *words):
+                    self.assertIn(word, rows[check]["detail"])
+                self.assertIn({"check": f"candidate_prerequisite.{check}", "status": "blocked", "reason": reason}, report["checks"])
+                self.assertIn("库表前置 " + check + "：blocked", admission.dry_run_summary(report))
+        # 三种同时不满足：一次预览全部报出，不用等到作业跑起来再一个个撞
+        self.healthy()
+        self.database(model_mapping_type="object", model_mapping_count=4, allow_live=False, active_keys=[3, 130])
+        blocked = [row["check"] for row in self.subject.dry_run_report()["candidate_prerequisites"] if row["status"] == "blocked"]
+        self.assertEqual(blocked, ["model_mapping_empty", "group_allow_live", "group_single_active_key"])
+
+    def test_capture_identity_that_does_not_match_the_database_stops_the_other_checks(self):
+        self.healthy()
+        self.database(account_found=0)
+        rows = {row["check"]: row for row in self.subject.dry_run_report()["candidate_prerequisites"]}
+        self.assertEqual(rows["capture_identity"]["reason"], "capture_identity_mismatch")
+        self.assertIn("CODEX_ACCOUNT_ID", rows["capture_identity"]["detail"])
+        self.assertEqual({row["status"] for name, row in rows.items() if name != "capture_identity"}, {"blocked"})
+        self.database(key_found=1, group_id=None)
+        self.assertIn("没有绑定分组", self.subject.dry_run_report()["candidate_prerequisites"][0]["detail"])
+
+    def test_unavailable_database_is_a_blocked_row_and_does_not_leak_details(self):
+        self.healthy()
+        self.config.update(CODEX_ACCOUNT_ID="90", API_KEY_ID="130")
+
+        def broken(signing, account_id, key_id):
+            raise RuntimeError(signing["POSTGRES_PASSWORD"] + " 连接失败")
+        self.facts.candidate_database = broken
+        report = self.subject.dry_run_report()
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["candidate_prerequisites"][0]["reason"], "candidate_database_unavailable")
+        self.assertNotIn("fixture 连接失败", json.dumps(report))
+
+    def test_database_prerequisites_are_not_part_of_apply_or_consume(self):
+        """库表前置只属于只读预览：采集作业跑完后环境（如恢复 Key）变化，不能让后面的 consume 误失败。"""
+
+        self.database(allow_live=False)
+        receipt = self.subject.apply(self.approval())
+        self.assertEqual(receipt["status"], "ready")
+        self.assertEqual(self.subject.consume()["receipt_sha256"], receipt["receipt_sha256"])
+
+    def test_candidate_database_runs_one_readonly_select_without_the_password_in_argv(self):
+        facts = admission.ManagedFacts.__new__(admission.ManagedFacts)
+        output = json.dumps({**self.GOOD_DB})
+        with mock.patch.object(admission.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="noise\n" + output + "\n", stderr="")) as run:
+            value = facts.candidate_database({"POSTGRES_USER": "u", "POSTGRES_DB": "d", "POSTGRES_PASSWORD": "秘密口令"}, "90", "130")
+        self.assertEqual(value, self.GOOD_DB)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:6], ["docker", "exec", "-e", "PGPASSWORD", "sub2apiplus-postgres", "psql"])
+        self.assertNotIn("秘密口令", " ".join(argv))
+        self.assertEqual(run.call_args.kwargs["env"]["PGPASSWORD"], "秘密口令")
+        sql = argv[argv.index("-c") + 1].lower()
+        self.assertTrue(sql.startswith("with "))
+        for forbidden in ("update ", "delete ", "insert ", "drop ", "alter "):
+            self.assertNotIn(forbidden, sql)
+        for bad in (("9;drop", "130"), ("90", "1 or 1=1")):
+            with self.assertRaisesRegex(admission.AdmissionError, "capture_identity_not_numeric"):
+                facts.candidate_database({"POSTGRES_USER": "u", "POSTGRES_DB": "d", "POSTGRES_PASSWORD": "p"}, *bad)
+        with mock.patch.object(admission.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="口令错误")):
+            with self.assertRaisesRegex(admission.AdmissionError, "candidate_database_query_failed"):
+                facts.candidate_database({"POSTGRES_USER": "u", "POSTGRES_DB": "d", "POSTGRES_PASSWORD": "p"}, "90", "130")
+
+    def test_renew_only_replaces_the_expiring_token_under_an_explicit_approver(self):
+        self.subject.apply(self.approval())
+        self.assertEqual(self.facts.issued, 1)
+        self.assertEqual(self.subject.renew("测试批准人：老板授权自动续签")["status"], "ready", "令牌仍够用时只读复核，不重复签发")
+        self.assertEqual(self.facts.issued, 1)
+        self.expiring_token(3000)
+        with self.assertRaises(admission.AdmissionError):
+            self.subject.consume()
+        with self.assertRaisesRegex(admission.AdmissionError, "renew_requires_explicit_approver"):
+            self.subject.renew("  ")
+        receipt = self.subject.renew("测试批准人：老板授权自动续签")
+        self.assertEqual(receipt["applied_actions"], ["renew_token"])
+        self.assertEqual(receipt["approved_by"], "测试批准人：老板授权自动续签")
+        self.assertEqual(self.facts.issued, 2)
+        self.assertEqual(self.subject.consume()["receipt_sha256"], receipt["receipt_sha256"])
+        approvals = list(self.subject.root.glob("vc5-admission-approval-renew-*.json"))
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(stat.S_IMODE(approvals[0].stat().st_mode), 0o600)
+        self.assertEqual(json.loads(approvals[0].read_text())["actions"], ["renew_token"])
+
+    def test_renew_refuses_everything_beyond_a_token_renewal(self):
+        # 从没批准过：不自动签（首次准入必须走人工批准件）
+        self.healthy()
+        with self.assertRaisesRegex(admission.AdmissionError, "renew_requires_existing_receipt"):
+            self.subject.renew("批准人")
+        self.assertEqual(self.facts.issued, 0)
+        # 令牌快过期的同时画像也要重装：动作超出令牌，拒绝
+        self.subject = admission.Admission(self.config, self.facts)
+        self.subject.apply(self.approval())
+        self.expiring_token(3000)
+        self.subject.profile.write_bytes(b"{}")
+        self.subject.profile.chmod(0o600)
+        with self.assertRaisesRegex(admission.AdmissionError, "renew_refused_actions_beyond_token"):
+            self.subject.renew("批准人")
+        self.assertEqual(self.facts.issued, 0, "healthy 环境本来就带令牌，拒绝路径更不会签发")
+
+    def test_renew_refuses_when_the_admission_binding_has_drifted(self):
+        self.subject.apply(self.approval())
+        self.expiring_token(3000)
+        self.facts.generation += 1   # 部署变了：环境指纹与收据里的不同，不能当作“只是令牌快过期”
+        with self.assertRaisesRegex(admission.AdmissionError, "renew_refused_binding_drift"):
+            self.subject.renew("批准人")
+        self.assertEqual(self.facts.issued, 1)
+
+    def test_renew_flag_is_wired_through_main_and_the_shell_entry(self):
+        script = (SCRIPTS / "vc5-precheck.sh").read_text()
+        self.assertIn("--dry-run|--apply|--consume|--renew)", script)
+        with mock.patch.object(admission, "load_config", create=True), mock.patch.dict(sys.modules, {"driver_config": mock.Mock(load_config=lambda: self.config)}), \
+                mock.patch.object(admission, "_require_client_admission"), mock.patch.object(admission, "ManagedFacts", return_value=self.facts):
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(admission.main(["--renew"]), 3, "没给 --approver 拒绝")
+            self.assertIn("renew_requires_explicit_approver", stderr.getvalue())
+
+
 class TokenContractTests(unittest.TestCase):
     def verify(self, raw, **kwargs):
         return admission.verify_token(raw, "隔离验收签名密钥", "admin@fixture.invalid", 1800, **kwargs)

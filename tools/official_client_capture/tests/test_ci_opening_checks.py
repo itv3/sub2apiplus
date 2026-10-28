@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -330,6 +332,273 @@ class AtomicReuseWindowEndToEndTests(unittest.TestCase):
             es.print_evaluation(self.fx.evaluate())
         line = next(line for line in buffer.getvalue().splitlines() if "atomic-double" in line and "（atomic-double 收据）" in line)
         self.assertIn("重做", line)
+
+
+class CaptureReceiptTests(unittest.TestCase):
+    """起跑前的本机完整测试收据（优化第 4 项）：收据的形状、封口与核对规则（后台验证与入口便宜检查共用）。"""
+
+    COMMIT = "a" * 40
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.dir = Path(directory.name).resolve() / "receipts"
+
+    def write(self, **changes) -> Path:
+        arguments = dict(commit=self.COMMIT, exit_code=0, started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:48:00Z", tree_clean=True)
+        arguments.update(changes)
+        return oc.write_capture_receipt(self.dir, **arguments)
+
+    def test_a_complete_green_run_passes_and_the_file_is_private_and_sealed(self) -> None:
+        path = self.write(host="mac", log_sha256="f" * 64, log_tail="OK")
+        self.assertEqual(oc.check_capture_receipt(self.dir, self.COMMIT), [])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        value = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual((value["command"], value["exit_code"], value["duration_seconds"]), (["make", "test-capture-tools"], 0, 2880))
+        self.assertTrue(oc.receipt_sealed(value))
+
+    def test_every_rule_refuses_with_a_reason_that_says_what_to_do(self) -> None:
+        self.assertIn("没有提交", oc.check_capture_receipt(self.dir, self.COMMIT)[0])
+        self.assertIn("40 位", oc.check_capture_receipt(self.dir, "abc")[0])
+        for label, change, expected in (("红", dict(exit_code=1, log_tail="FAIL: x\nFAILED (failures=1)"), "没有通过（退出码 1）"),
+                                        ("定向命令", dict(command=["make", "test-capture-tools-x"]), "不是完整目标"),
+                                        ("脏树", dict(tree_clean=False), "工作树不干净"),
+                                        ("太短", dict(finished_at_utc="2026-10-29T01:01:00Z"), "低于 120 秒")):
+            with self.subTest(label):
+                self.write(**change)
+                problems = oc.check_capture_receipt(self.dir, self.COMMIT)
+                self.assertTrue(any(expected in problem for problem in problems), problems)
+        self.write()
+        path = oc.capture_receipt_path(self.dir, self.COMMIT)
+        value = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**value, "host": "被改过"}), encoding="utf-8")
+        self.assertTrue(any("封口" in problem for problem in oc.check_capture_receipt(self.dir, self.COMMIT)))
+        path.unlink()
+        path.symlink_to(self.dir / "elsewhere.json")
+        self.assertIn("符号链接", oc.check_capture_receipt(self.dir, self.COMMIT)[0])
+
+    def test_writer_rejects_bad_commit_and_times(self) -> None:
+        with self.assertRaises(oc.CheckError):
+            self.write(commit="HEAD")
+        with self.assertRaises(oc.CheckError):
+            self.write(finished_at_utc="2026-10-29T00:00:00Z")
+        with self.assertRaises(oc.CheckError):
+            self.write(started_at_utc="昨天")
+
+    def test_command_line_round_trip_and_exit_codes(self) -> None:
+        log = self.dir.parent / "run.log"
+        log.write_text("a\nb\nOK\n", encoding="utf-8")
+        base = [sys.executable, "-B", str(REPO_ROOT / "tools" / "ci" / "opening_checks.py")]
+        wrote = subprocess.run([*base, "capture-receipt-write", "--dir", str(self.dir), "--commit", self.COMMIT, "--exit-code", "0", "--started", "2026-10-29T01:00:00Z",
+                                "--finished", "2026-10-29T01:48:00Z", "--tree-clean", "true", "--log", str(log)], capture_output=True, text=True)
+        self.assertEqual(wrote.returncode, 0, wrote.stderr)
+        value = json.loads(oc.capture_receipt_path(self.dir, self.COMMIT).read_text(encoding="utf-8"))
+        self.assertEqual(value["log_sha256"], hashlib.sha256(log.read_bytes()).hexdigest())
+        self.assertEqual(value["log_tail"], "a\nb\nOK")
+        self.assertEqual(oc.summarize_log("x\nFAIL: test_a (m.C.test_a)\n" + "y\n" * 20 + "ERROR: test_b\nRan 9 tests\n\nFAILED (failures=1)"),
+                         "FAIL: test_a (m.C.test_a)\nERROR: test_b\nRan 9 tests\n\nFAILED (failures=1)", "红的用例名与汇总行都进摘要")
+        ok = subprocess.run([*base, "capture-receipt-check", "--dir", str(self.dir), "--commit", self.COMMIT], capture_output=True, text=True)
+        self.assertEqual((ok.returncode, ok.stdout.strip()), (0, "通过"))
+        bad = subprocess.run([*base, "capture-receipt-check", "--dir", str(self.dir), "--commit", "b" * 40], capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("没有提交", bad.stdout)
+
+
+class TuiReceiptTests(unittest.TestCase):
+    """新版二进制 TUI 零请求启动预探收据（优化第 5 项）。"""
+
+    VERSION = "9.8.7"
+    SHA = "b" * 64
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.dir = Path(directory.name).resolve() / "receipts"
+
+    def write(self, rows=None, **changes) -> Path:
+        rows = [{"name": name, "status": "passed"} for name in oc.REQUIRED_TUI_SCENARIOS] if rows is None else rows
+        arguments = dict(client_version=self.VERSION, binary_path="/opt/c/bin", binary_sha256=self.SHA, scenarios=rows,
+                         started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:05:00Z", host="arm64")
+        arguments.update(changes)
+        return oc.write_tui_receipt(self.dir, **arguments)
+
+    def test_required_scenarios_are_real_scenarios_of_the_launch_probe(self) -> None:
+        spec = importlib.util.spec_from_file_location("launch_probe_for_receipt_test", REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "client_launch_probe.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(module)
+        self.assertEqual(oc.REQUIRED_TUI_SCENARIOS, ("compact-tui", "ws-idle-close-tui", "daemon-tui", "guardian-tui"))
+        for name in oc.REQUIRED_TUI_SCENARIOS:
+            self.assertIn(name, module.TUI_SCENARIOS)
+
+    def test_all_required_scenarios_passed_with_zero_requests_passes(self) -> None:
+        self.write()
+        self.assertEqual(oc.check_tui_receipt(self.dir, target_version=self.VERSION, binary_sha256=self.SHA), [])
+        self.write(rows=[{"name": name, "status": "passed"} for name in (*oc.REQUIRED_TUI_SCENARIOS, "review-tui")])
+        self.assertEqual(oc.check_tui_receipt(self.dir), [], "可选场景登记了也通过")
+
+    def test_missing_failed_optional_failed_and_unbound_receipts_are_refused(self) -> None:
+        self.assertIn("没有新版二进制", oc.check_tui_receipt(self.dir)[0])
+        rows = [{"name": name, "status": "passed"} for name in oc.REQUIRED_TUI_SCENARIOS]
+        self.write(rows=rows[:3])
+        self.assertIn("缺少必需场景：guardian-tui", "\n".join(oc.check_tui_receipt(self.dir)))
+        self.write(rows=[{**rows[0], "status": "failed", "exit_code": 1, "tail": "line1\nCannot use the shared background server"}, *rows[1:]])
+        text = "\n".join(oc.check_tui_receipt(self.dir))
+        self.assertIn("场景 compact-tui 预探没通过", text)
+        self.assertIn("Cannot use the shared background server", text)
+        self.write(rows=[*rows, {"name": "review-tui", "status": "failed", "exit_code": 2}])
+        self.assertIn("场景 review-tui 预探没通过", "\n".join(oc.check_tui_receipt(self.dir)))
+        self.write()
+        self.assertIn("不是本轮目标版本", "\n".join(oc.check_tui_receipt(self.dir, target_version="1.1.1")))
+        self.assertIn("二进制摘要", "\n".join(oc.check_tui_receipt(self.dir, binary_sha256="c" * 64)))
+        self.write(live_request_count=1)
+        self.assertIn("真实请求数是 1", "\n".join(oc.check_tui_receipt(self.dir)))
+        path = oc.tui_receipt_path(self.dir)
+        self.write()
+        value = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**value, "host": "被改过"}), encoding="utf-8")
+        self.assertTrue(any("封口" in problem for problem in oc.check_tui_receipt(self.dir)))
+
+    def test_scenario_spec_parser(self) -> None:
+        self.assertEqual(oc.parse_scenario_spec("compact-tui=passed"), {"name": "compact-tui", "status": "passed"})
+        self.assertEqual(oc.parse_scenario_spec("compact-tui=failed:1:Cannot: a:b"),
+                         {"name": "compact-tui", "status": "failed", "exit_code": 1, "tail": "Cannot: a:b"})
+        for bad in ("compact-tui", "=passed", "x=maybe", "x=failed:abc"):
+            with self.subTest(bad):
+                with self.assertRaises(oc.CheckError):
+                    oc.parse_scenario_spec(bad)
+        with self.assertRaises(oc.CheckError):
+            oc.write_tui_receipt(self.dir, client_version=self.VERSION, binary_path="/b", binary_sha256=self.SHA,
+                                 scenarios=[{"name": "a", "status": "passed"}, {"name": "a", "status": "passed"}],
+                                 started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:05:00Z")
+
+
+class LocalCaptureReceiptScriptTests(unittest.TestCase):
+    """``local/local-capture-tools-receipt.sh``：在真实临时 git 仓库里用假 make 跑，红绿都如实写收据。"""
+
+    SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "local" / "local-capture-tools-receipt.sh"
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.git("init", "-q")
+        (self.repo / "a.txt").write_text("a", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "x")
+        self.out = self.root / "receipts"
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(["git", *args], cwd=self.repo, capture_output=True, text=True, check=True).stdout.strip()
+
+    def fake_make(self, body: str) -> None:
+        (self.bin / "make").write_text("#!/bin/bash\n" + body, encoding="utf-8")
+        (self.bin / "make").chmod(0o755)
+
+    def run_script(self, *extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", str(self.SCRIPT), "--out-dir", str(self.out), "--repo", str(self.repo), *extra], capture_output=True, text=True, timeout=120,
+                              env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_a_green_run_writes_a_receipt_that_passes_except_for_the_duration_floor(self) -> None:
+        self.fake_make('echo "ran $*"\nexit 0\n')
+        completed = self.run_script()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        commit = self.git("rev-parse", "HEAD")
+        value = json.loads(oc.capture_receipt_path(self.out, commit).read_text(encoding="utf-8"))
+        self.assertEqual((value["commit"], value["exit_code"], value["tree_clean"], value["command"]), (commit, 0, True, ["make", "test-capture-tools"]))
+        self.assertIn("ran test-capture-tools", (self.out / f"capture-tools-{commit}.log").read_text(encoding="utf-8"))
+        self.assertEqual(oc.check_capture_receipt(self.out, commit, min_seconds=0), [], "假 make 瞬间结束：去掉耗时下限后收据本身合法")
+        self.assertTrue(any("低于" in problem for problem in oc.check_capture_receipt(self.out, commit)), "真实起跑检查的耗时下限拦得住瞬间结束的假收据")
+
+    def test_a_red_run_is_recorded_as_red_and_the_script_exits_with_make_code(self) -> None:
+        self.fake_make('echo "FAIL: test_driver_has_no_version_literals"\nexit 2\n')
+        completed = self.run_script()
+        self.assertEqual(completed.returncode, 2)
+        commit = self.git("rev-parse", "HEAD")
+        problems = oc.check_capture_receipt(self.out, commit, min_seconds=0)
+        self.assertTrue(any("没有通过（退出码 2）" in problem and "test_driver_has_no_version_literals" in problem for problem in problems), problems)
+
+    def test_a_dirty_tree_before_or_after_the_run_is_recorded(self) -> None:
+        self.fake_make("exit 0\n")
+        (self.repo / "untracked.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(self.run_script().returncode, 0)
+        commit = self.git("rev-parse", "HEAD")
+        self.assertTrue(any("工作树不干净" in problem for problem in oc.check_capture_receipt(self.out, commit, min_seconds=0)))
+        (self.repo / "untracked.txt").unlink()
+        self.fake_make('echo dirt > "$PWD/created-by-tests.txt"\nexit 0\n')
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertTrue(any("工作树不干净" in problem for problem in oc.check_capture_receipt(self.out, commit, min_seconds=0)), "测试过程中弄脏了树也记")
+
+    def test_usage_errors(self) -> None:
+        completed = subprocess.run(["bash", str(self.SCRIPT)], capture_output=True, text=True, env={**os.environ, "LOCAL_RECEIPT_DIR": ""})
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("收据目录", completed.stderr)
+
+
+class TuiReceiptScriptTests(unittest.TestCase):
+    """``tui-prelaunch-receipt.sh``（ARM64 侧接口）：核对宿主二进制摘要与版本后写收据，verify 用起跑检查同一规则。"""
+
+    SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "tui-prelaunch-receipt.sh"
+
+    def setUp(self) -> None:
+        from tools.official_client_capture.tests.test_arm64_capture_driver import _DriverFixture, _stub_phase_context
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.root.chmod(0o700)
+        self.fixture = _DriverFixture(self.root)
+        self.binary = self.root / "client"
+        self.binary.write_text("#!/bin/bash\necho 'client 9.8.7'\n", encoding="utf-8")
+        self.binary.chmod(0o755)
+        self.sha = hashlib.sha256(self.binary.read_bytes()).hexdigest()
+        text = self.fixture.env_file.read_text(encoding="utf-8")
+        text = re.sub(r'(?m)^CODEX_BIN=.*$', f'CODEX_BIN="{self.binary}"', text)
+        text = re.sub(r'(?m)^CODEX_BIN_SHA256=.*$', f'CODEX_BIN_SHA256="{self.sha}"', text)
+        text = re.sub(r'(?m)^TARGET_VERSION=.*$', 'TARGET_VERSION="9.8.7"', text)
+        self.fixture.env_file.write_text(text, encoding="utf-8")
+        self.drv = self.root / "drv"
+        self.drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "opening_checks.py", "tui-prelaunch-receipt.sh"):
+            (self.drv / name).write_bytes((self.SCRIPT.parent / name).read_bytes())
+        _stub_phase_context(self.drv)
+
+    def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", str(self.drv / "tui-prelaunch-receipt.sh"), *args], capture_output=True, text=True, timeout=120, cwd=self.root,
+                              env={**os.environ, **self.fixture.env})
+
+    def passing(self) -> list[str]:
+        return [item for name in oc.REQUIRED_TUI_SCENARIOS for item in ("--scenario", f"{name}=passed")]
+
+    def test_scenarios_lists_the_required_set(self) -> None:
+        completed = self.run_script("scenarios")
+        self.assertEqual(completed.stdout.split(), list(oc.REQUIRED_TUI_SCENARIOS), completed.stderr)
+
+    def test_write_then_verify_and_a_failed_scenario_is_recorded_but_refused(self) -> None:
+        wrote = self.run_script("write", *self.passing(), "--started", "2026-10-29T01:00:00Z", "--finished", "2026-10-29T01:05:00Z")
+        self.assertEqual(wrote.returncode, 0, wrote.stdout + wrote.stderr)
+        self.assertEqual(self.run_script("verify").returncode, 0)
+        path = self.fixture.runroot / "local-receipts" / oc.TUI_RECEIPT_NAME
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        value = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual((value["client_version"], value["binary_sha256"], value["live_request_count"]), ("9.8.7", self.sha, 0))
+        failed = [item for name in oc.REQUIRED_TUI_SCENARIOS[2:] for item in ("--scenario", f"{name}=passed")]
+        self.assertEqual(self.run_script("write", "--scenario", "compact-tui=failed:1:Cannot use the shared background server", "--scenario", "ws-idle-close-tui=failed:1:x",
+                                         *failed, "--started", "2026-10-29T01:00:00Z", "--finished", "2026-10-29T01:05:00Z").returncode, 0)
+        verified = self.run_script("verify")
+        self.assertEqual(verified.returncode, 1)
+        self.assertIn("场景 compact-tui 预探没通过", verified.stdout)
+
+    def test_a_binary_that_is_not_the_registered_one_or_a_wrong_version_is_refused_before_writing(self) -> None:
+        self.binary.write_text("#!/bin/bash\necho 'client 9.8.7'\n# 被换过\n", encoding="utf-8")
+        wrote = self.run_script("write", *self.passing(), "--started", "2026-10-29T01:00:00Z", "--finished", "2026-10-29T01:05:00Z")
+        self.assertEqual(wrote.returncode, 1)
+        self.assertIn("不等于登记的", wrote.stderr)
+        self.assertFalse((self.fixture.runroot / "local-receipts" / oc.TUI_RECEIPT_NAME).exists())
 
 
 class PreflightScriptTests(unittest.TestCase):

@@ -885,6 +885,23 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
                                        '"--mode", "re-execute", require,',
                                        '    except (OSError, ValidationError, KeyError, TypeError) as error:']}
 
+# >>> T2 预检登记常量（脚本生成，可重跑）
+T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
+T2_PRECHECK_DIGESTS = {'tools/ci/background_validation.py': '7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389'}
+T2_PRECHECK_REMOVED = {'tools/ci/background_validation.py': ['``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 '
+                                       '``host-toolchain``），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），',
+                                       '    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本；不通过抛 ``ValidationError``（拒绝起跑）。',
+                                       '                                              scratch_parent=scratch)',
+                                       '            gate_scope, select_base, include_claude = GATE_SCOPE_FULL, None, False',
+                                       '        if select_base or include_claude:',
+                                       '                         help="client-plan 的基点（必给）／auto 的基点（可不给，缺省取测试树最近的发版 tag）：最近一次发版的 40 位提交（候选提交取测试树 '
+                                       'HEAD）")',
+                                       '    p_pre.add_argument("--only", default=None, '
+                                       'help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain）")',
+                                       '                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in '
+                                       '(args.only or "").split(",") if item] or None)']}
+# <<< T2 预检登记常量
+
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
 CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '3bd46cc12de04661acd56b84973bf14fbe5e960bad73216af369aab719831138'}
@@ -1063,6 +1080,9 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      ENTRY_GATES_REQUEST_ONLY_SOURCE_DIGESTS, ENTRY_GATES_REQUEST_ONLY_SOURCE_REMOVED_LINES),
     ("入口不再以出口策略为输入", ENTRY_EGRESS_POLICY_BASELINE_COMMIT,
      ENTRY_EGRESS_POLICY_SOURCE_DIGESTS, ENTRY_EGRESS_POLICY_SOURCE_REMOVED_LINES),
+    # >>> T2 预检登记行
+    ("T2-预检收据与准入续签", T2_PRECHECK_BASELINE, T2_PRECHECK_DIGESTS, T2_PRECHECK_REMOVED),
+    # <<< T2 预检登记行
     # >>> 收尾登记行（自动生成，勿手改）
     ('收尾登记 background_validation.py', CLOSEOUT_PY_1_BASELINE, CLOSEOUT_PY_1_DIGESTS, CLOSEOUT_PY_1_REMOVED),
     ('收尾登记 entry_dryrun.py', CLOSEOUT_PY_2_BASELINE, CLOSEOUT_PY_2_DIGESTS, CLOSEOUT_PY_2_REMOVED),
