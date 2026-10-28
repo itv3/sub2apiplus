@@ -1182,6 +1182,16 @@ class CanonicalImportTests(unittest.TestCase):
         ("add", "/WebSocketContinuation/ReplayOnSameConnection", ("SPEC-WS-005",)),
         # W1：窗口内改推理强度以 input 里的 configuration_update 表达；声明后网关对第三方入站的 HTTP 出站（对应官方不带 WS 预热的 provider）首轮合成该项。
         ("add", "/ReasoningEffort/ConfigurationUpdate", ("SPEC-BODY-006",)),
+        # W3 第二批：turn-state 只在产生它的回合内回送；新用户轮次的第一个请求不回送上一回合的值。
+        ("add", "/TurnState/ResetOnNewTurn", ("SPEC-BODY-004",)),
+        # W3 第二批：WS 回合元数据按官方跟踪上下文窗口（window_number、context_window_id），压缩后窗口号加一，新连接握手同步。
+        ("add", "/TurnMetadata/WindowTracking", ("SPEC-BODY-009", "SPEC-HDR-007", "SPEC-WS-005")),
+        # W3 第二批：WS 上的压缩请求帧（compaction_trigger 增量帧）按官方写元数据与请求体。
+        ("add", "/TurnMetadata/WSCompactionRequests", ("SPEC-BODY-009", "SPEC-EP-021", "SPEC-WS-005")),
+        # W3 第二批：根线程回合写 agent_name 与 root_turn_id。
+        ("add", "/TurnMetadata/RootThreadKeys", ("SPEC-BODY-009",)),
+        # W3 第二批：WS 帧 client_metadata 的逐请求动态键（根回合 id、Lite 标记、发送时间戳）。
+        ("add", "/ClientMetadata/DynamicKeys", ("SPEC-BODY-008",)),
     )
 
     def test_0165_patch_manifest_binds_real_active_profile(self) -> None:
@@ -1229,6 +1239,30 @@ class CanonicalImportTests(unittest.TestCase):
                 self.assertNotIn(key, active_payload[section], patch["path"])
                 self.assertIsNone(patch["before"], patch["path"])
                 target_payload[section][key] = patch["after"]
+            # 目标画像的继承前提：W3 第二批的画像字段在画像契约里各有依赖，上一版画像必须已经满足，否则目标画像在 Go 侧解码校验会失败。
+            #   * WindowTracking 要求 TurnMetadata.Keys 含 window_id、window_number、context_window_id；
+            #   * RootThreadKeys 要求 Keys 含 agent_name、root_turn_id；
+            #   * WSCompactionRequests 要求 CompactionImplementations 含 responses_compaction_v2；
+            #   * DynamicKeys 必须排序、去重、取值落在已知闭集内，且不得与 Constants 重名。
+            turn_metadata = target_payload["TurnMetadata"]
+            for key in ("window_id", "window_number", "context_window_id", "agent_name", "root_turn_id"):
+                self.assertIn(key, turn_metadata["Keys"], key)
+            self.assertIn("responses_compaction_v2", turn_metadata["CompactionImplementations"])
+            dynamic_keys = target_payload["ClientMetadata"]["DynamicKeys"]
+            self.assertEqual(dynamic_keys, sorted(set(dynamic_keys)))
+            self.assertEqual(
+                set(dynamic_keys),
+                {"root_turn_id", "ws_request_header_x_openai_internal_codex_responses_lite", "x-codex-ws-stream-request-start-ms"},
+            )
+            self.assertFalse(set(dynamic_keys) & set(target_payload["ClientMetadata"]["Constants"]))
+            # 声明式字段在画像里只能写 true（显式 false 会让同一语义出现两种表示，解码阶段拒绝）。
+            for section, key in (
+                ("TurnState", "ResetOnNewTurn"),
+                ("TurnMetadata", "WindowTracking"),
+                ("TurnMetadata", "WSCompactionRequests"),
+                ("TurnMetadata", "RootThreadKeys"),
+            ):
+                self.assertIs(target_payload[section][key], True, f"{section}.{key}")
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"

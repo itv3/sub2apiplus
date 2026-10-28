@@ -21,6 +21,59 @@
       "path": "/ReasoningEffort/ConfigurationUpdate",
       "before": null,
       "after": "http_first_turn"
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-004"
+      ],
+      "op": "add",
+      "path": "/TurnState/ResetOnNewTurn",
+      "before": null,
+      "after": true
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-009",
+        "SPEC-HDR-007",
+        "SPEC-WS-005"
+      ],
+      "op": "add",
+      "path": "/TurnMetadata/WindowTracking",
+      "before": null,
+      "after": true
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-009",
+        "SPEC-EP-021",
+        "SPEC-WS-005"
+      ],
+      "op": "add",
+      "path": "/TurnMetadata/WSCompactionRequests",
+      "before": null,
+      "after": true
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-009"
+      ],
+      "op": "add",
+      "path": "/TurnMetadata/RootThreadKeys",
+      "before": null,
+      "after": true
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-008"
+      ],
+      "op": "add",
+      "path": "/ClientMetadata/DynamicKeys",
+      "before": null,
+      "after": [
+        "root_turn_id",
+        "ws_request_header_x_openai_internal_codex_responses_lite",
+        "x-codex-ws-stream-request-start-ms"
+      ]
     }
   ]
 }
