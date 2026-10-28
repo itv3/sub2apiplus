@@ -407,7 +407,7 @@ func deriveOfficialOpenAIHTTPHistoricalTurnID(input []any, segment []int, thread
 			found = true
 		}
 	}
-	return generateOfficialStableUUIDV7(
+	return generateOfficialStableTurnUUIDV7(
 		newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).WriteString(threadID).WriteUserAnchor(anchor, found).Key(),
 	)
 }

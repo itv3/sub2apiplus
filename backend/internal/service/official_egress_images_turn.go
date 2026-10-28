@@ -307,7 +307,12 @@ func officialImagesSynthesizedTurnMetadataValues(
 	base["auto_review_enabled"] = false
 	base["node_repl_auto_review_required"] = nodeReplAutoReviewRequired
 	base["node_repl_disabled"] = false
-	base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
+	// 回合开始时间与 Responses 同源：由 turn_id 内嵌毫秒加抽样间隔推出；turn_id 不是 UUIDv7 时才取当前时钟。
+	if startedAt, ok := officialCodexTurnStartedAtMs(facts.TurnID.Value); ok {
+		base["turn_started_at_unix_ms"] = startedAt
+	} else {
+		base["turn_started_at_unix_ms"] = officialCodexImagesTurnStartedAtMs()
+	}
 	values := make(map[string]json.RawMessage, len(base))
 	for key, value := range base {
 		raw, err := json.Marshal(value)
@@ -358,7 +363,7 @@ func completeOfficialCodexImagesTurnFacts(
 	}
 	if facts.TurnID.Value == "" {
 		turnID, err := officialegress.NewCodexIdentityValue(
-			officialCodexGeneratedUUIDLikeValue(identitySeed, "turn"),
+			officialCodexInvocationTurnID(identitySeed),
 			officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleTurn,
 		)
 		if err != nil {

@@ -1811,7 +1811,7 @@ func resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase(
 		}
 		seed.WriteString("segment_json").WriteDigest(digest)
 	}
-	return generateOfficialStableUUIDV7(seed.Key()), nil
+	return generateOfficialStableTurnUUIDV7(seed.Key()), nil
 }
 
 func buildDerivedOfficialOpenAIWSFrameMetadata(
@@ -1881,13 +1881,13 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		state.mu.Lock()
 		var seedErr error
 		if !preserveCurrentTurn && anchors.lastFound {
-			state.lastTurnID = generateOfficialStableUUIDV7(
+			state.lastTurnID = generateOfficialStableTurnUUIDV7(
 				newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
 					WriteString(sessionID).
 					WriteUserAnchor(anchors.last, true).
 					Key(),
 			)
-			state.lastTurnStartedAtMS = time.Now().UnixMilli()
+			state.lastTurnStartedAtMS = officialCodexTurnStartedAtMsOrNow(state.lastTurnID)
 		} else if state.lastTurnID == "" {
 			// 没有用户锚点时以整帧内容的 JSON 摘要做 seed。编码失败不能静默退化
 			// 成空 seed：那会让本会话此后所有帧共用同一个 Turn ID，而定型链路
@@ -1896,14 +1896,14 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 			if digestErr != nil {
 				seedErr = fmt.Errorf("构造 WebSocket Turn ID seed：%w", digestErr)
 			} else {
-				state.lastTurnID = generateOfficialStableUUIDV7(
+				state.lastTurnID = generateOfficialStableTurnUUIDV7(
 					newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
 						WriteString(sessionID).
 						WriteString("frame_json").
 						WriteDigest(digest).
 						Key(),
 				)
-				state.lastTurnStartedAtMS = time.Now().UnixMilli()
+				state.lastTurnStartedAtMS = officialCodexTurnStartedAtMsOrNow(state.lastTurnID)
 			}
 		}
 		turnID = state.lastTurnID

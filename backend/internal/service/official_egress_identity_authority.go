@@ -621,6 +621,10 @@ func completeOfficialCodexGeneratedIdentityFacts(
 			hex.EncodeToString(sum[6:8]), hex.EncodeToString(sum[8:10]),
 			hex.EncodeToString(sum[10:16]),
 		)
+		if suffix == "turn" {
+			// 回合 id 官方是 UUIDv7（内嵌提交时刻），不能是哈希排成的 8-4-4-4-12；同一次调用的多次 attempt 取同一个值。
+			value = officialCodexInvocationTurnID(identitySeed)
+		}
 		generated, err := officialegress.NewCodexIdentityValue(
 			value, officialegress.IdentitySourceInvocation, lifecycle,
 		)
