@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -23,7 +24,8 @@ import (
 // 补丁清单是 tools/official_client_capture/profile_rule_patches_0_165_0.json（登记产物，七条 add 补丁），用画像契约包
 // NewProfileSpec → CompileExecutableProfile 解码编译（与登记阶段验证补丁的方法相同）。合成后同时替换两处：
 //   - service 层读到的画像（withMutatedOfficialProfile，service 逻辑按画像门控的开关）；
-//   - Executor runtime 解析 Bundle 用的发布目录（officialEgressRuntimeReleaseCatalog），让真实 Executor/Compiler 按合成画像编译线上字节。
+//   - Executor runtime 的 BundleResolver（newTargetAwareGate 在建好测试网关后，用合成画像的发布目录副本重建它），让真实
+//     Executor/Compiler 按合成画像编译线上字节。不改任何生产文件：runtime 的 BundleResolver 是导出字段，测试直接替换。
 //
 // 画像入库、Active 已是目标版本之后，补丁里的值已在画像里，本文件的应用逻辑对“已存在且取值相同”的补丁幂等跳过，测试无需改动。
 
@@ -87,9 +89,9 @@ func withTargetProfileForWire(t *testing.T, mode string) {
 	doc := replayTestProfileDocs[normalizeOfficialClientProfileMode(mode)]
 	catalog, err := officialegress.DefaultReleaseCatalog().WithActiveProfileOverrideForTest(doc)
 	require.NoError(t, err)
-	previous := officialEgressRuntimeReleaseCatalog
-	officialEgressRuntimeReleaseCatalog = func() officialegress.ReleaseCatalog { return catalog }
-	t.Cleanup(func() { officialEgressRuntimeReleaseCatalog = previous })
+	previous := targetProfileWireCatalog
+	targetProfileWireCatalog = &catalog
+	t.Cleanup(func() { targetProfileWireCatalog = previous })
 
 	// 合成结果必须带齐目标版本的七个开关（service 层与 Executor 层各验一次）。
 	for label, optional := range map[string]profilecontract.OptionalSections{
@@ -109,6 +111,45 @@ func withTargetProfileForWire(t *testing.T, mode string) {
 		require.NotNil(t, optional.ReasoningEffort, label)
 		require.Equal(t, "http_first_turn", fmt.Sprint(optional.ReasoningEffort.ConfigurationUpdate), label)
 	}
+}
+
+// targetProfileWireCatalog 非空时，newTargetAwareGate 建出的测试网关用它解析 Executor 的 Bundle（withTargetProfileForWire 设置并在清理时还原）。
+var targetProfileWireCatalog *officialegress.ReleaseCatalog
+
+// newTargetAwareGate 同 newCodexGateService；已经合成目标画像时，把 runtime 的 BundleResolver 换成按合成画像目录构造的版本。
+// OfficialEgressTransitionRuntime.BundleResolver 是导出字段，Executor 的 Bundle 都经它解析（见 official_egress_*_invocation.go），
+// 所以不需要改任何生产文件（Executor 构造函数所在文件被历史台账冻结，改一行就红）。
+func newTargetAwareGate(t *testing.T, mode string, server *codexGateWireServer) *codexGateService {
+	t.Helper()
+	gate := newCodexGateService(t, mode, server)
+	if targetProfileWireCatalog == nil {
+		return gate
+	}
+	runtime := gate.service.officialEgress
+	require.NotNil(t, runtime)
+	resolver, err := officialegress.NewBundleResolver(*targetProfileWireCatalog, runtime.Guard.ProcessSinkCatalog())
+	require.NoError(t, err)
+	runtime.BundleResolver = resolver
+	return gate
+}
+
+// forwardTargetAwareHTTPWire 同 codexGateForwardResponsesWire，但经 newTargetAwareGate 建网关（已合成目标画像时按它编译）。
+func forwardTargetAwareHTTPWire(
+	t *testing.T,
+	mode string,
+	server *codexGateWireServer,
+	c *gin.Context,
+	body []byte,
+) codexGateWireRequest {
+	t.Helper()
+	before := len(server.httpRequestsForPath(codexGateResponsesPath))
+	gate := newTargetAwareGate(t, mode, server)
+	_, err := gate.forward(c, body)
+	require.NoError(t, err, "%s 槽位的 Responses Forward 失败（握手错误 %v，上游错误 %v）",
+		mode, server.handshakeErrors(), gate.upstream.failureList())
+	requests := server.httpRequestsForPath(codexGateResponsesPath)
+	require.Len(t, requests, before+1, "一次 Forward 应恰好产生一条 Responses 请求")
+	return requests[len(requests)-1]
 }
 
 func executorActiveOptional(t *testing.T, catalog officialegress.ReleaseCatalog) profilecontract.OptionalSections {
@@ -207,13 +248,13 @@ func TestTargetProfileHTTPWireClientMetadataCarriesRootTurnID(t *testing.T) {
 			// 对照：目标画像之前（上一版画像）HTTP 请求没有 root_turn_id。
 			legacyServer := startCodexGateWireServer(t, nil)
 			legacyBody, legacyIngress := codexGateRootIngress(t, mutate)
-			legacy := codexGateForwardResponsesWire(t, mode, legacyServer, legacyIngress, legacyBody, nil)
+			legacy := forwardTargetAwareHTTPWire(t, mode, legacyServer, legacyIngress, legacyBody)
 			require.False(t, gjson.GetBytes(legacy.body, "client_metadata.root_turn_id").Exists(), "上一版画像不带 root_turn_id")
 
 			withTargetProfileForWire(t, mode)
 			server := startCodexGateWireServer(t, nil)
 			body, ingress := codexGateRootIngress(t, mutate)
-			wire := codexGateForwardResponsesWire(t, mode, server, ingress, body, nil)
+			wire := forwardTargetAwareHTTPWire(t, mode, server, ingress, body)
 			metadata := gjson.GetBytes(wire.body, "client_metadata")
 			require.ElementsMatch(t, wantKeys, replayObjectKeys(metadata), "出站 client_metadata 键集合等于官方实采 HTTP 请求")
 			turnID := metadata.Get("turn_id").String()
@@ -255,7 +296,7 @@ func TestTargetProfileHTTPWireTurnMetadataWindowAndRootKeys(t *testing.T) {
 			header := ingress.Request.Header.Get("x-codex-window-id")
 			ingress.Request.Header.Set("x-codex-window-id", header[:strings.LastIndex(header, ":")+1]+windowSuffix)
 		}
-		wire = codexGateForwardResponsesWire(t, mode, server, ingress, body, nil)
+		wire = forwardTargetAwareHTTPWire(t, mode, server, ingress, body)
 		raw := gjson.GetBytes(wire.body, `client_metadata.x-codex-turn-metadata`).String()
 		require.NotEmpty(t, raw)
 		require.Equal(t, raw, wire.header.Get("x-codex-turn-metadata"), "头与 client_metadata 里的 turn metadata 一致")

@@ -270,10 +270,6 @@ func OfficialCodexProcessProfileMode() (string, error) {
 	return officialCodexProcessProfileMode()
 }
 
-// officialEgressRuntimeReleaseCatalog 返回 Executor runtime 解析 Bundle 所用的发布目录。生产恒为进程级默认目录；
-// 测试可替换它，用“上一版画像加规则补丁”合成的目标画像驱动真实 Executor（目标画像在版本登记完成前不在目录里）。
-var officialEgressRuntimeReleaseCatalog = officialegress.DefaultReleaseCatalog
-
 func newOfficialEgressTransitionRuntimeWithExecutor(
 	guard *officialegress.Guard,
 	httpUpstream HTTPUpstream,
@@ -289,7 +285,7 @@ func newOfficialEgressTransitionRuntimeWithExecutor(
 	}
 	processSinks := guard.ProcessSinkCatalog()
 	resolver, err := officialegress.NewBundleResolver(
-		officialEgressRuntimeReleaseCatalog(),
+		officialegress.DefaultReleaseCatalog(),
 		processSinks,
 	)
 	if err != nil {
