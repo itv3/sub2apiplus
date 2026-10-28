@@ -1388,17 +1388,21 @@ func (c codexClientMetadataConstants) apply(
 	return nil
 }
 
-// applyDynamicKeys 按画像 DynamicKeys 写入 WS 帧的逐请求动态键：root_turn_id 与 Lite 标记取自调用方提供的帧事实
+// applyDynamicKeys 按画像 DynamicKeys 写入逐请求动态键：root_turn_id 与 Lite 标记取自调用方提供的帧事实
 // （没有事实就不写，与官方“有值才写”一致），发送时间戳在编译该帧时取当前 Unix 毫秒（官方在发送前一刻盖章）。
-// 只对 responses_ws 端点生效；画像没有该字段时不做任何改动。
+//
+// 端点范围：responses_ws 三个键都生效；responses_http 只有 root_turn_id 生效——官方 HTTP 回合请求的 client_metadata 同样带
+// root_turn_id（实采根线程上等于 turn_id），而 Lite 在 HTTP 上是请求头、发送时间戳是 WS 专属，这两个键不属于 HTTP 请求体。
+// 其余端点（含 responses_compact，它的请求体没有 client_metadata）不生效。画像没有该字段时不做任何改动。
 func (c codexClientMetadataConstants) applyDynamicKeys(
 	metadata map[string]string,
 	endpointID string,
 	facts CodexIdentityFacts,
 ) {
-	if c.section == nil || endpointID != "responses_ws" {
+	if c.section == nil || (endpointID != "responses_ws" && endpointID != "responses_http") {
 		return
 	}
+	webSocket := endpointID == "responses_ws"
 	for _, key := range c.section.DynamicKeys {
 		switch key {
 		case "root_turn_id":
@@ -1406,11 +1410,13 @@ func (c codexClientMetadataConstants) applyDynamicKeys(
 				metadata[key] = facts.RootTurnID.Value
 			}
 		case "ws_request_header_x_openai_internal_codex_responses_lite":
-			if facts.ResponsesLiteWS {
+			if webSocket && facts.ResponsesLiteWS {
 				metadata[key] = "true"
 			}
 		case "x-codex-ws-stream-request-start-ms":
-			metadata[key] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+			if webSocket {
+				metadata[key] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+			}
 		}
 	}
 }
@@ -1491,7 +1497,7 @@ func injectCodexResponsesOwnedBodyFields(
 	if len(metadata) == 0 {
 		return errors.New("Responses compiler 缺少 client_metadata 身份事实")
 	}
-	// 画像 ClientMetadata 节声明的 WS 逐请求动态键（root_turn_id、Lite 标记、发送时间戳）；画像没有该字段时保持旧逻辑。
+	// 画像 ClientMetadata 节声明的逐请求动态键（WS：root_turn_id、Lite 标记、发送时间戳；HTTP：root_turn_id）；画像没有该字段时保持旧逻辑。
 	constants.applyDynamicKeys(metadata, endpoint.ID, facts)
 	// 画像 ClientMetadata 节声明的客户端固定常量（如 guardian_credits_requested、
 	// mcp_attribution）在身份事实之后按条件追加；画像没有该节时保持旧逻辑。

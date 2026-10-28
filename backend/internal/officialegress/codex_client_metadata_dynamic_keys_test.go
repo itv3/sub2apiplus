@@ -129,3 +129,65 @@ func TestWebSocketFrameClientMetadataDynamicKeysFollowProfile(t *testing.T) {
 		}
 	}
 }
+
+// HTTP 回合请求的 client_metadata：官方 0.165 的 HTTP /responses 请求同样带 root_turn_id，但 Lite 在 HTTP 上是请求头、
+// 发送时间戳是 WS 专属，所以画像声明的三个动态键里只有 root_turn_id 对 responses_http 生效；没有声明（旧画像）或没有帧事实时不写。
+func TestHTTPClientMetadataRootTurnIDFollowsProfile(t *testing.T) {
+	const (
+		rootKey  = "root_turn_id"
+		liteKey  = "ws_request_header_x_openai_internal_codex_responses_lite"
+		startKey = "x-codex-ws-stream-request-start-ms"
+		rootID   = "01a18395-e8ed-72f0-acf3-22d7c131055f"
+	)
+	base := syntheticLegacyBundleForEndpoint(t, "responses_http", "ClientMetadata 节",
+		codexProfileDeclaresClientMetadata, stripClientMetadataSection)
+	withFacts := func(facts *CodexIdentityFacts) {
+		root, err := NewCodexIdentityValue(rootID, IdentitySourceTurn, IdentityLifecycleTurn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts.RootTurnID = root
+		// 即使帧事实里带着 WS 的 Lite 标记，HTTP 请求体也不写。
+		facts.ResponsesLiteWS = true
+	}
+	compile := func(bundle ReleaseBundle, mutate func(*CodexIdentityFacts), invocation string) map[string]string {
+		t.Helper()
+		_, body := compilePromptCacheKeyTestRequest(t, bundle, mutate, invocation)
+		return decodeClientMetadata(t, body)
+	}
+
+	// 旧画像：没有该节，一律不写。
+	for _, key := range []string{rootKey, liteKey, startKey} {
+		if _, exists := compile(base, withFacts, "http-root-legacy")[key]; exists {
+			t.Fatalf("旧画像不得写入 %s", key)
+		}
+	}
+	// 有常量节但没有声明动态键：不写。
+	constantsOnly := syntheticCodexBundle(t, base, func(doc *profilecontract.SnapshotDoc) {
+		doc.ClientMetadata = syntheticRawSection(t, clientMetadataTargetSection())
+	})
+	if _, exists := compile(constantsOnly, withFacts, "http-root-constants")[rootKey]; exists {
+		t.Fatal("没有声明 DynamicKeys 时不得写入 root_turn_id")
+	}
+
+	// 声明三个键：HTTP 只写 root_turn_id。
+	declared := syntheticCodexBundle(t, base, func(doc *profilecontract.SnapshotDoc) {
+		doc.ClientMetadata = syntheticRawSection(t, clientMetadataDynamicSection(rootKey, liteKey, startKey))
+	})
+	got := compile(declared, withFacts, "http-root-declared")
+	if got[rootKey] != rootID {
+		t.Fatalf("root_turn_id 取自帧事实：%q", got[rootKey])
+	}
+	for _, key := range []string{liteKey, startKey} {
+		if _, exists := got[key]; exists {
+			t.Fatalf("%s 只属于 WS 帧，HTTP 请求体不得写", key)
+		}
+	}
+	if got["mcp_attribution"] != clientMetadataTestMCPAttribution || got["guardian_credits_requested"] != "true" {
+		t.Fatalf("常量不受影响：%v", got)
+	}
+	// 没有根回合事实（子代理线程等）：不写。
+	if _, exists := compile(declared, nil, "http-root-no-fact")[rootKey]; exists {
+		t.Fatal("没有根回合事实时不得写 root_turn_id")
+	}
+}

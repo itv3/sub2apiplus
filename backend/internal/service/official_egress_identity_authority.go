@@ -518,6 +518,20 @@ func buildOfficialCodexIdentityFacts(
 	); err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
+	// HTTP 回合请求的根回合 id（画像 ClientMetadata.DynamicKeys 声明 root_turn_id 时才有；见 official_egress_http_root_turn.go）。
+	if endpointID == officialCodexEndpointResponsesHTTP {
+		if rootTurnID := officialCodexHTTPRootTurnID(
+			runtimeState.ProfileMode, facts,
+			strings.EqualFold(conditionalField("x-openai-memgen-request"), "true"),
+		); rootTurnID != "" {
+			facts.RootTurnID, err = officialCodexIdentityValue(
+				rootTurnID, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn,
+			)
+			if err != nil {
+				return officialegress.CodexIdentityFacts{}, err
+			}
+		}
+	}
 	// prompt cache 亲和键只对 Responses 端点有意义，且只取本次调用已登记的派生值：
 	// 根会话等于 session_id，guardian 子代理为 guardian:<parent>，画像声明
 	// prompt_cache_key 来源时临时 fork 为源会话键。compiler 只在画像声明该来源的端点
