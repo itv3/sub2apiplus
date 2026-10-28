@@ -2,7 +2,7 @@
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
 >
-> **当前版本**：Active 为 `codex-cli 0.163.0`，Previous 为 `codex-cli 0.160.0`；`0.157.0`、`0.154.0`、`0.151.0` 与 `0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2，生产激活、回滚与 0.157.0 退休的机器事实见 [`0.163 终态收据`](egress/maintenance/CODEX_CLI_0160_TO_0163_TERMINAL_STATE_RECEIPT.json)。第二部分描述当前 Active 0.163.0 的规则：本轮 43 条目标规则中 39 条继承，`SPEC-BODY-001`、`SPEC-BODY-006`、`SPEC-BODY-009`、`SPEC-WS-005` 变化；0.163.0 起主线模型是 Lite（`gpt-6.1-sol`），`SPEC-BODY-002` 继承，但 VC-5 经 approval-revision 把压缩关闭样本的判据改为“不得出现 zstd 以外的编码”。
+> **当前版本**：Active 为 `codex-cli 0.164.0`，Previous 为 `codex-cli 0.163.0`；`0.160.0`、`0.157.0`、`0.154.0`、`0.151.0` 与 `0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2，生产激活、回滚与 0.160.0 退休的机器事实见 [`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json)。第二部分描述当前 Active 0.164.0 的规则：本轮 43 条目标规则中 38 条继承，`SPEC-BODY-003`、`SPEC-BODY-006`、`SPEC-EP-002`、`SPEC-EP-022`、`SPEC-WS-005` 变化；增量工具默认开启后 Lite 前缀的 id 是记录时随机的 UUIDv7、随历史重放，WS 预热帧的 `input` 为空，令牌刷新请求体多 `refresh_reason`，图像请求多两个回合头。
 >
 > **权威入口**：共享目标、证据生命周期、升级、发布与回滚以
 > [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 为准；依赖基线见
@@ -1213,7 +1213,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.163.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.164.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -1257,36 +1257,35 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.163.0 active 画像与发布执行契约
+## 3.2 Codex 0.164.0 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.163.0；`3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.160.0 相同）+ 1 个 ReturnedURL 动态端点；新增可选节 AccessPrograms（`access_programs` 出站值域，默认 `standard`）与 BaseInstructions（基础指令改由 input 最前的 developer 消息承载，Responses 顶层不再有 `instructions`）；TurnMetadata 键集合由 21 键增为 22 键（新增 `history_initialization`） | 生产默认 |
-| previous | 0.160.0；`d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`）+ 1 个 ReturnedURL 动态端点；可选节 ReasoningEffort 与 ImageGeneration | 受控回滚和历史复算 |
+| active | 0.164.0；`871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.163.0 相同）+ 1 个 ReturnedURL 动态端点；`BaseInstructions` 节新增 `IDScheme=uuidv7`（增量窗口方案：Lite 前缀的 id 是记录时随机的 UUIDv7，WS 预热帧 `input` 为空）；`oauth_refresh` 端点的 Body 闭集在 `grant_type` 与 `refresh_token` 之间增加必填 `refresh_reason`；`images_generations`、`images_edits` 两端点按槽位增加回合头 `x-codex-image-turn-id`（Slot 20）与 `x-codex-turn-metadata`（Slot 25）；`TurnMetadata` 节新增可选的 `SessionDefaults`（图像请求无同回合事实时补默认会话模型，凑齐 14 键） | 生产默认 |
+| previous | 0.163.0；`3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`）+ 1 个 ReturnedURL 动态端点；可选节 AccessPrograms、BaseInstructions 与 ReasoningEffort、ImageGeneration | 受控回滚和历史复算 |
 
-当前 Active 的官方目标身份为 tag `rust-v0.163.0`（commit
-`83086188ae0614bd882818ff1aa23f3194962012`）、`aarch64-unknown-linux-musl` 包
-SHA-256 `9d8ecf2d19d3e184877983902d6c85de48b3888dcb72c382a8a0c975845927fb` 和 ARM64 二进制
-SHA-256 `8a96f66d059d653e68bfd5f3c79337e6f1d7d170d80bf705eb7d0249b34c0ece`。原始证据源为 Campaign
-`c01630-formal-vc1-r2-20261020t131500z` 的 attempt `20261021T003916Z-24ff3483a4288709`；
-47 个官方 Job 全部 complete。官方证据由该 Campaign 的 VC-1 自采，后续分类、验收、生产激活与 0.157.0 退休由同一
-Campaign 的 canonical 链承接（候选 `c01630-candidate-r1`，attempt `20261022T085520Z-60fd5f255335c599`；
-43 项迁移为 inherit 39、change 4，目标规则 43 条；VC-5 经 approval-revision 在评估基线 b2 修订
-`SPEC-BODY-002/responses-plain` 后验收）。
+当前 Active 的官方目标身份为 tag `rust-v0.164.0`（commit
+`6aaac694803004a63c6f393d153c96d22521a6b9`）、`aarch64-unknown-linux-musl` 包
+SHA-256 `5918add6c7e9cf1e14a9af1b4c0f4bf1d24a43903faac26df5dc4c019ea91bd5` 和 ARM64 二进制
+SHA-256 `8813c8d8a4cea2eeba271b72ab22f49628b184b24ab18dbef06b4ce41e9a8d39`。原始证据源为 Campaign
+`c01640-formal-vc1-r1-20261027t000000z` 的 attempt `20261027T135446Z-d8a16a8e788de81e`；
+47 个官方 Job 全部 complete。官方证据由该 Campaign 的 VC-1 自采，后续分类、验收、生产激活与 0.160.0 退休由同一
+Campaign 的 canonical 链承接（候选 `c01640-candidate-r1`，attempt `20261027T232211Z-5290aafbe759fbdc`；
+43 项迁移为 inherit 38、change 5，目标规则 43 条；VC-5 候选断言经两次评估基线承接：b1 为工具演进（A06 候选首个业务帧标签的帧索引由 1 改为原始帧索引 7），b2 为 approval-revision（SPEC-BODY-003 main-messages-keep-passthrough 判据过严，A04 是第三方入站，按设计不合成逐项 passthrough，期望值由 0 改为 1）；b2 评估运行 43 条规则、201 条检查全部通过）。
 
 VC-6 在 ARM64 上完成：四阶段激活（canary → 切换 → 回滚 → 恢复，每阶段一次真实业务请求均 HTTP 200）所用镜像为
-`sha256:abe23ded6d95b437f8d68461bee62d93c765781d401f010dd92037ebdcbb3073`，退休 0.157.0 运行投影后重建的切换镜像
-ID 为 `sha256:d00443b863d90592c44606e629b6aa7bc98ff11dc224994192b744617b867d9e`，固定回滚镜像为 v0.2.17-2
-`ghcr.io/itv3/sub2apiplus@sha256:756643bd23978071fdc099c8dd6181cb424f81a84a050446ff82b5e3aa94e3dc`（0.160.0）；
-canonical checkpoint 为 `00000011`，执行集合为空。收尾时 ARM64 运行本地构建的退休后切换镜像；0.163.0 随下一次发版
+`sha256:38991d66c2e1a5b0e8c8e605816d44c2db8f76954adce1027de8afa45235f80c`，退休 0.160.0 运行投影后重建的切换镜像
+ID 为 `sha256:7e3eb0e354d12a910201e950d6a6fb2c8fc25f68343d35e19b92b7a2a8cea301`，固定回滚镜像为 v0.2.18-1
+`ghcr.io/itv3/sub2apiplus@sha256:c822ea06e231fa61ef9bdc3999c52e3e320423573962371e47779dab2ea9f591`（0.163.0）；
+canonical checkpoint 为 `00000012`，执行集合为空。收尾时 ARM64 运行本地构建的退休后切换镜像；0.164.0 随下一次发版
 进入 GHCR 发布镜像，DMIT 等生产机更新按发布流程另行批准。机器事实分别见
-[`0.157.0 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0160_TO_0163_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
-和 [`0.163 终态收据`](egress/maintenance/CODEX_CLI_0160_TO_0163_TERMINAL_STATE_RECEIPT.json)。
-0.157.0 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，画像字节 `3edd1c7b…`（0.157.0 期 Active）因被
-`0.154→0.157` 与 `0.157→0.160` 的晋升／激活／终态收据逐文件登记而原地保留。此前退休的 0.154.0 两份、0.151.0 一份
+[`0.160.0 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
+和 [`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json)。
+0.160.0 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，画像字节 `affe6f66…`（0.160.0 期 Active）因被
+此前各版本的晋升／激活／终态收据逐文件登记而原地保留。此前退休的 0.157.0、0.154.0 两份、0.151.0 一份
 与 0.149.1 两份画像同样原地保留，分别仍由既往终态收据批准。不得据此认为这些文件已删除。
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
@@ -1404,7 +1403,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.160.0／0.163.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.163.0／0.164.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |
@@ -1978,8 +1977,8 @@ GitHub 发版成功不等于生产已更新，也不能代替私有证据归档�
 先复核 Compose、静态 IP、两端出口保护和固定镜像，只替换应用容器，数据、依赖服务、挂载和网络不变。
 仅 registry 缺精确 digest 时定向 pull；前后都复核 image ID／RepoDigest。禁止 compose down 和无范围 prune。
 切换后复核 health、日志、依赖、出口、Active、activation fact 与业务结果。业务验证模型须是切换镜像与回滚镜像都实测
-走通过同一入站接口的模型（0.163 轮用 `gpt-6-astra` 经 `/v1/chat/completions`：主线 `gpt-6.1-sol` 从未经该接口验证，
-回滚镜像以 0.160.0 身份出站也未必能用）。
+走通过同一入站接口的模型（0.163／0.164.0 轮用 `gpt-6-astra` 经 `/v1/chat/completions`：主线 `gpt-6.1-sol` 从未经该接口验证，
+回滚镜像以 0.163.0 等旧身份出站也未必能用）。
 身份、安全、数据、恢复、旧画像兜底、跨 Bundle fallback 或连接池混用异常，立即按冻结回滚点完整回滚。
 
 ### 4.6.7 回滚、目标恢复与 canonical 终态
@@ -2081,7 +2080,7 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 | 父进程／owner 丢失 | 按预约分流对账 | 自动补收账，按 COMMIT 和正式许可续派，不手写账本事件 |
 | 完整性损坏或永久身份失效 | 对账终态 | 旧链只读，按 Framework 建新候选／后继或新 Campaign |
 
-失败矩阵补充（0.163.0 实测，复核时逐条对照）：
+失败矩阵补充（0.163.0／0.164.0 实测，复核时逐条对照）：
 
 - **VC-5 采集被截停留下无 `attempt.json` 的孤儿 attempt**：失败批次之后的零请求恢复预览改取该候选最新的已批准且已授权预览
   （只读，不代为授权）；先 `reconcile-supervisor-run` 登记失败的预览批次，再 `reconcile-attempt` 重新生成预览（账本头变了，
@@ -2103,6 +2102,62 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   `evaluation-epoch --candidate-id`、再 `reevaluate`（`--fix-commit` 加当前部署收据）开工具演进基线 → `approval-revision` 预览 → 批准。
   写草稿后先用已部署工具的 `_approval_revision_delta` 与平铺布局断言离线试跑；新基线有自己的门禁目录，目标平台门禁在新基线重跑。
 - **VC-6 交付登记批次**：两次 `deliver-candidate` 不含 canonical 项，驱动阶段解析按交付批次核对 Campaign、Candidate 与 attempt 绑定。
+- **目标版本清单从上一版复制**：描述文字里“<上一版> 起……”之类带版本号的说法，会在 VC-2 classify 被 `_validate_assertion_profile_manifest`
+  判为“残留 baseline 版本坐标”而拒（0.164 批次 6，修复 `f987a11cf`／`d715a3a9b`）。登记时就把描述写成不带版本号的说法，并在本机对新清单跑一次该校验函数。
+- **换版时源码根版本号散在三处**：`Makefile`、`tools/upstream_merge/gate_runner.py`、`request_template_v2.json`（0.164.0 的 `CODEX_SPEC_SOURCE_VERSION` 等），
+  同批改，漏一处门禁对错源码树。
+- **登记之后必须跑全量 capture-tools（含全部 `test_claude_rule_expectations_*`）**：登记改 Claude 场景清单时容易漏重生成旧版本期望
+  （0.163 的 `d4c60264a`、0.164 的 `389f22649` 同类），分组定向测试覆盖不到，只能靠全量或 CI 发现。
+- **候选态与晋升后正式目录两个槽位都声明新可选节**：旧画像发布槽位不存在，依赖旧画像槽位的用例整片红（0.164 候选态 `internal/service`
+  一度 134 个同根因、另有 4 条 0.163 判别式门禁与 2 条继承特征门禁）。VC-4 之前先在“Active 旧版／Previous 目标版”的候选态上预演整包
+  `internal/service`；夹具改取冻结底稿，依赖旧槽位的端到端用例按画像结构事实跳过（不放宽断言），判别式门禁在两槽位都具备时按继承特征取较旧槽位重放。
+- **晋升之后的形态要用模拟晋升树整包预演**：把候选链合并进收尾分支后，用 `egresscatalogpromote` 加 `retire-apply` 做出 Active／Previous 与正式晋升
+  一致的本机树，整包跑 `go test -tags=unit ./...`。0.164 靠这一步在收尾前提前查出 `internal/service` 九个红：两处生产缺陷（管理后台“测试 OAuth 生图”漏绑运行态快照，
+  晋升后会整条失败；WS→HTTP 桥接延迟正文分支漏置 additional_tools 官方键序）和七处写死 0.163 形态的测试（固定到 Active／Previous 里较旧的槽位，断言不放宽），
+  修正先行提交（`58ddc25a1`、`77dc885c2`、`7e98b3c4f`）。晋升前全绿、晋升后才红是这一类问题的共同特征。
+- **晋升后判别式门禁会失去判别力**：以 `codexGateDiscriminatingReleaseMode` 取“唯一具备该事实的槽位”的门禁，在下一版登记使两个槽位都具备该事实后会红，
+  届时改用 `codexGateTargetReleaseMode` 并另写新版本的判别式门禁。
+- **复杂度守卫用例满载噪声**：分配次数测量（`testing.AllocsPerRun`）被包内后台 goroutine 的突发分配撞红（ARM64 `"290" is not less than "200"`），
+  改取多轮最小值（`minAllocsPerRun`），上限与“与命中数无关”的断言不变；`make test` 无补跑，撞上会让 VC-4 停（约 2 小时白跑）。
+- **非 daemon 的 TUI 场景在 0.164 要显式 `--no-daemon`**：0.164 取消功能开关白名单，`--disable` 会触发 daemon 兼容检查致启动即退出（`94e344ec3`、`ab3c99909`）。
+- **入口门禁续跑**：Formal 建成前，入口编排器只在 `--full-set-request`、`--unit-inherit-request`、`--reexecute-gates` 三种请求模式下无条件重做入口门禁，
+  缺省按步骤记录判定沿用（沿用记录完成超过 24 小时一律重做；门禁本轮要重做时判了沿用的 atomic-double 连带重采）（`544e9c781`）。
+- **VC-5 候选作业的库表前置有三处天然不满足**：ARM64 库自 10-23 起是 DMIT 整库同步，线上配置不符合候选作业的硬前置，0.164 在 VC-5 连败两次才逐个撞出。
+  ① 采集账号 `credentials.model_mapping` 必须为空（`codex_upgrade_candidate_readiness._model_mapping_fact`，零请求即失败）；② 采集 Key 所在分组 `allow_live`
+  必须为 true（`run_candidate_aux_capture.sh` A11，作业失败会让监督器停采集容器、出口守护判暂停，同根因 `attempt.environment-contaminated` 计数顶向上限 2）；
+  ③ 分组里活跃 Key 只许采集 Key 一把（`run_images_wire_probe.sh`）。VC-4 跑门禁期间先在 ARM64 只读核实，不满足的按“记原值、只改一项、VC-6 后恢复”提前改好并把恢复项写进收尾清单；
+  管理接口改分组会把 `codex_models_manifest_config`、`model_allowlist` 从 `{}` 归一成 `{"enabled": false}`，要用 SQL 写回。恢复链派出的批次进程名是 `vc5-recover.sh`，
+  接续脚本不要按 `vc5-run-batch.sh` 判断“批次已消失”。两次失败加恢复用掉约 1.5 小时，要为 VC-5 阶段执行截止预留 `deadline-extend --scope stage --phase VC-5`。
+- **采集账号“平时关、用时开”不能在 VC-5 全部完成前关**：seal checkpoint 的“Kilo 后环境恢复门禁”要求 Kilo 后探针的账号 status／schedulable 与候选采集后探针一致，
+  流水线在 Kilo 一结束就关号会被判环境污染，同根因计数顶到上限；`vc-pipeline.sh` 改为 `VC5_ALL_DONE` 之后才关。
+- **证据标签的帧索引按原始帧序号声明会指到续帧上**：候选网关向上游发出的压缩 WS 消息会被拆成多个分片帧（coder/websocket 压缩写入，0.160 起就如此），官方是一条消息一帧。
+  0.164 登记的 A06 标签把首个业务帧写成帧索引 1，实际预热消息占原始帧 0～6，首个业务消息起始帧是 7，VC-5 seal 预演被 SPEC-WS-005 的 7 条
+  `first-business-frame-*` 检查拒收，靠工具演进（`reg0164/wsfix`，`c34cdb67e`）把索引改成 7 才过。登记测试里的观测是手造的，覆盖不到这一类问题；
+  下次登记在 VC-4 期间用非正式实采的候选证据先离线跑一遍 `_verify_selector_reachability` 与全部检查，并评估标签改按消息序号或事件类型命中，或让候选改单帧写入。
+- **VC-5 断言因判据过严失败走 approval-revision**：SPEC-BODY-003 `main-messages-keep-passthrough` 期望 0，而 A04 是第三方入站，按设计不合成逐项 passthrough，实际为 1，
+  封存后 assert-rules 必然红。登记时同样应在 VC-4 期间用真实候选证据离线试跑全部检查；恢复链为 `reconcile-supervisor-run` → 工具演进基线 b1（`reevaluate`）→ `approval-revision` b2，
+  b2 评估运行 43 条规则、201 条检查全部通过。
+- **seal 失败遗留的半成品会让后续预览失败（受管工具缺口，0.165 登记时修）**：seal 在 Kilo 后探针之后失败、attempt 被作废时，留下的 `client-after`（有 probe-manifest、无恢复收据）
+  仍是“最新 attempt”，`codex_upgrade status` 报“Kilo 后检查点材料不完整或不可信”；在证据根内改名会触发“权限收口后的证据元数据边界漂移”，0.164 的处置是整体移出证据根归档。
+  被隔离作废的旧 attempt 的 `attempt.json` 状态仍是 `awaiting_receipts`，监督器把它数成第二个等待收据的 attempt（`codex_upgrade_supervisor.py`），
+  于是 assert-rules 失败被归为 `execution-failure` 而不是 `post-run-tooling`。应修成：作废或隔离的 attempt 不参与最新摘要、不计入等待收据。
+- **VC-5 后半段有两个会过期的东西**：准入批准件只有 2 小时有效期，管理令牌（JWT）有最小剩余有效期要求；VC-5 每多拖一个缺陷，到 canonical 前这两个都可能过期，
+  `vc5-canonical2.sh` 开头的 `vc5_require_admission` 会静默退出，流水线只报“vc5-all 进程已消失”。排查用 `bash vc5-precheck.sh --dry-run` 看 `actions`（`renew_token`），
+  处理是重起 `vc-pipeline.sh start --from VC5`（带 `--approver`，它会重新准入）。
+- **VC-6 脚本集的 bundle 引用**：`vc6-local-commit.sh sync` 的远端复核、`vc6-build.sh`、`vc6-retire-build.sh`（共 4 处）写成 `git fetch <bundle> HEAD`，
+  但 `git bundle create "${DC}..${BRANCH}"` 的 bundle 里只有分支引用、没有 HEAD，会报 `couldn't find remote ref HEAD`（0.163 的 bundle 里恰好有 HEAD，0.164 改写时没发现）；
+  改成按 `refs/heads/${BUNDLE_BRANCH}` 取。
+- **收尾分支要并入已受监督部署的工具演进，基线冲突不手工拼接**：`reg0164/wsfix` 的三个提交（标签文件改绑、重封、承接收据）已部署到 ARM64，是正式 Campaign 的工具演进，
+  最终入库的标签文件必须与 ARM64 正式运行的一致。收尾分支自己也因第二章摘要连锁重封过基线，两边的基线文件和 `BASELINE_SHA256` 必然冲突：取一侧占位，
+  对合并后的树用 `--seal-baseline … --replace` 重封一次，只许标签文件条目的 sha 与 `source_commit`、`files_sha256`、`evidence_semantics_sha256` 变化，源码、重封、收据分开提交。
+- **热点文件里不要内联大段分支代码**：满载换号的入口接入代码内联在 `openai_gateway_handler.go`、`openai_chat_completions.go`，每次合并上游都要重做冲突处理；
+  优化一瘦身把它收进新文件 `openai_gateway_composite_entry.go`，热点文件只留接线（净改动 +13/-1、+5/-0），并配接线行为测试与语法树守卫（`reg0164/opt1-slim`）。
+- **线上缺陷的修复要在收尾全量门禁之前并入**：模型清单冷缓存并发缺陷（`TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups` 偶发红的根因，
+  线上并发冷读同一账号会多打一次上游）按“源码提交 → 冻结承接收据（`--before` 取并入前提交）”并入 reg0164/closeprep。
+- **VC-6 结束后恢复 VC-5 为采集所做的库表临时改动**：恢复 #90 的 `credentials.model_mapping`（备份在 `/root/codex-0164-prep/logs/account90-model-mapping-backup-*.json`，用 jsonb_set 原样写回，
+  再核对 Redis 调度投影 `sched:acc:90` 已含映射），连同分组 3 的 `allow_live`、多余的 Key 3 与采集账号的关号；改的若是真实用户的 Key 或分组，在汇报里点名。
+- **审计索引的私有归档路径**：0.164 的轮次目录没有 `vc6-private-archive.out`，`audit-index.sh` 默认取法落空；私有归档取 `/root/private-archives/codex-<版本>-<Campaign>-*.tar.gz` 里最新一个，
+  作为第三个参数显式传入，索引要登记归档坐标。
 
 #### 暂停种类与放行
 
