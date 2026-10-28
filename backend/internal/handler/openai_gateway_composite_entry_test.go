@@ -38,9 +38,6 @@ package handler
 
 import (
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -111,29 +108,8 @@ func TestCompositeSlotSessionHash(t *testing.T) {
 	require.Equal(t, compositeAcquireSessionHash("abc", false), compositeSlotSessionHash(c, "abc"))
 }
 
-// acquireResponsesAccountSlot 必须经 compositeSlotSessionHash 取会话哈希：这是"临时借用不改写粘性绑定"的唯一落点，
-// 合并上游时若这一行被冲突覆盖，行为测试看不出来，所以用语法树守住。
-func TestAcquireResponsesAccountSlotUsesCompositeSlotSessionHash(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "openai_gateway_handler.go", nil, 0)
-	require.NoError(t, err)
-	found := false
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "acquireResponsesAccountSlot" {
-			continue
-		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if call, ok := n.(*ast.CallExpr); ok {
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "compositeSlotSessionHash" {
-					found = true
-				}
-			}
-			return true
-		})
-	}
-	require.True(t, found, "acquireResponsesAccountSlot 必须用 compositeSlotSessionHash 取会话哈希")
-}
+// （acquireResponsesAccountSlot 必须把 compositeSlotSessionHash 的结果传给 acquireOpenAIAccountSlot 的守卫，
+// 见 openai_gateway_composite_entry_wiring_test.go 的 TestCompositeAcquireSlotPassesSlotSessionHashResult。）
 
 // 三个入口在"不换号"时：选号结果原样返回、临时借用标志被重置为 false、被改写的局部变量与请求上下文都不动。
 func TestSwitchCompositeEntriesNoSwitchKeepsState(t *testing.T) {
