@@ -55,6 +55,7 @@ import hashlib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 import signal  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
@@ -134,6 +135,12 @@ OK_ATTEMPT_STATUSES = frozenset({"complete", "awaiting_receipts"})
 RUNNING_ATTEMPT_STATUSES = frozenset({"running", "active", "in_progress", "reserved", "prepared"})
 PREVIEW_RE = re.compile(r"^recovery-preview-(\d{2,})\.json$")
 APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2,})\.json$")
+# 候选就绪静态检查收据（受管 ``write_static_receipt`` 写在 ``<Campaign>/control/candidate-readiness/<候选>/static-receipts/``）：
+# 文件名 ``static-<UTC 时间戳到微秒>Z-<摘要前 12 位>.json``，按名字升序就是时间升序；失败收据同样保留。
+READINESS_RECEIPT_RE = re.compile(r"^static-\d{8}T\d{12}Z-[0-9a-f]{12}\.json$")
+READINESS_SCHEMA = "codex-upgrade-candidate-readiness-static/v1"
+# 就绪失败后同批次重派要动的三个旧文件（候选批次后台脚本的 pid／日志，以及 vc5-all 的日志）：改名留档，不删除、不截断。
+REDISPATCH_ARCHIVE_FILES = ("vc5-run-batch.out", "vc5-run-batch.pid", "vc5-all.out")
 
 
 class RecoveryPlanError(RuntimeError):
@@ -376,6 +383,78 @@ def read_isolations(params: Mapping[str, str]) -> list[dict[str, Any]]:
             if isinstance(entry, dict) and entry.get("attempt_id") == params["ATTEMPT"]:
                 rows.append({"index": data.get("index"), "path": item.name})
     return rows
+
+
+def read_readiness(params: Mapping[str, str]) -> dict[str, Any]:
+    """候选就绪静态检查的现场（只在“找不到目标 attempt”时才会被用到）：最新一份静态收据是不是失败、失败在哪几项，以及同批次重派的现场。
+
+    背景：候选批次起跑前先做就绪静态检查，失败即零请求退出——此时**没有创建 attempt 目录**，也就没有恢复预览可批准、可续跑。
+    恢复链此前在这里只会报“找不到目标 attempt”然后停下，人工改走“对账 → 同批次重派”。本函数把这个情形认出来。
+    只认**最新一份**收据：它是失败才算“就绪失败待重派”；最新一份已通过说明已经重派过（或根本不是这个情形），保持原先的“找不到”阻塞，
+    不会把填错的 ATTEMPT 悄悄当成已处理。收据读不出来、形状不对、不是本 Campaign／候选的，记 ``error`` 并按“认不出”处理（失败关闭）。
+    """
+
+    directory = Path(params["C"]) / "control" / "candidate-readiness" / params["CANDIDATE"] / "static-receipts"
+    result: dict[str, Any] = {"directory": str(directory), "present": False, "failed": False, "error": None, "redispatch": redispatch_facts(params)}
+    if directory.is_symlink() or not directory.is_dir():
+        return result
+    names = sorted(item.name for item in directory.iterdir() if READINESS_RECEIPT_RE.fullmatch(item.name))
+    if not names:
+        return result
+    result.update(present=True, receipts=len(names), latest=names[-1])
+    try:
+        data = _load_json(directory / names[-1], "候选就绪静态收据")
+    except RecoveryPlanError as error:
+        result["error"] = str(error)
+        return result
+    if (not isinstance(data, dict) or data.get("schema_version") != READINESS_SCHEMA or data.get("campaign_id") != params["CAMPAIGN"]
+            or data.get("candidate_id") != params["CANDIDATE"] or data.get("status") not in {"passed", "failed"}):
+        result["error"] = f"最新静态收据 {names[-1]} 的形状不符（schema／Campaign／候选／状态）"
+        return result
+    observations = []
+    for item in data.get("failure_observations") or []:
+        if isinstance(item, dict) and isinstance(item.get("check_id"), str):
+            observations.append({"check_id": item["check_id"], "failure_code": str(item.get("failure_code") or "")})
+    result.update(status=data["status"], failed=data["status"] == "failed", observed_at_utc=data.get("observed_at_utc"),
+                  live_request_count=data.get("live_request_count"), observations=observations,
+                  receipt_path=str(directory / names[-1]))
+    return result
+
+
+def redispatch_facts(params: Mapping[str, str]) -> dict[str, Any]:
+    """同批次重派的现场：候选批次后台脚本（``vc5-start.sh`` 生成）在不在、有没有仍在跑的进程、日志有没有完成标记。"""
+
+    runroot = Path(params["RUNROOT"])
+    script = runroot / "vc5-run-batch.sh"
+    pid = FC._pid_from(runroot / "vc5-run-batch.pid")
+    out = runroot / "vc5-run-batch.out"
+    done = False
+    if out.is_file() and not out.is_symlink():
+        done = any(line.startswith("RUN_BATCH_DONE ") for line in _tail_lines(out, 5))
+    return {"script": str(script), "script_exists": script.is_file() and not script.is_symlink(),
+            "running_pid": pid if _process_alive(pid) else None, "out_done": done}
+
+
+def readiness_failure(facts: Mapping[str, Any]) -> dict[str, Any] | None:
+    """目标 attempt 找不到、且最新一份候选就绪静态收据是失败的，才返回那份就绪现场（否则 ``None``）。"""
+
+    readiness = facts.get("readiness")
+    if facts.get("phase") is None and isinstance(readiness, dict) and readiness.get("failed"):
+        return readiness
+    return None
+
+
+def redispatch_command(params: Mapping[str, str]) -> str:
+    """同批次重派的命令（打印给操作员，本计划不代办）：旧日志与 pid 改名留档，再用后台脚本原样重派同一批次。
+
+    不重新生成计划、不切候选网关、不换批次序号（脚本里取“当前最大批次序号 + 1”）——与此前两次人工重派一致；
+    若失败之后候选网关或镜像被动过，改用 ``vc5-start.sh`` 全套重新派发（它会重新生成计划、切网关、预检）。"""
+
+    runroot = shlex.quote(params["RUNROOT"])
+    script = shlex.quote(f"{params['RUNROOT']}/vc5-run-batch.sh")
+    archive = " ".join(REDISPATCH_ARCHIVE_FILES)
+    return (f"cd {runroot} && for f in {archive}; do if [ -e \"$f\" ]; then mv \"$f\" \"$f.failed-$(date -u +%Y%m%dt%H%M%Sz)\"; fi; done; "
+            f"setsid -f bash {script} > {runroot}/vc5-run-batch.out 2>&1 < /dev/null")
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +772,9 @@ def gather_facts(params: Mapping[str, str], backend: ManagedBackend, *, force_re
         "active_runs": backend.active_runs(),
         "force_reconcile": force_reconcile,
     }
+    # 找不到目标 attempt 时才去认“候选就绪静态检查失败、没有 attempt”这个情形；找得到时不读，其余场景的现场与计划摘要逐字不变。
+    if phase is None:
+        facts["readiness"] = read_readiness(params)
     siblings = sibling_attempts(params, phase) if phase else []
     facts["continuation"] = continuation_state(params, siblings, successor_rows(params, phase, siblings))
     facts["siblings"] = siblings
@@ -771,6 +853,36 @@ def _missing_inputs(params: Mapping[str, str], keys: tuple[str, ...]) -> list[st
     return [key for key in keys if not params.get(key)]
 
 
+def _readiness_checks(readiness: Mapping[str, Any]) -> str:
+    """就绪失败的检查项清单（``check_id=failure_code``，用顿号连接）；收据里没有观测项时写“未记录失败项”。"""
+
+    rows = [f"{item['check_id']}={item['failure_code']}" if item.get("failure_code") else str(item["check_id"]) for item in readiness.get("observations") or []]
+    return "、".join(rows) or "收据未记录失败项"
+
+
+def _readiness_redispatch_step(params: Mapping[str, str], readiness: Mapping[str, Any], reconcile_runs: Step) -> Step:
+    """就绪静态检查失败且没有 attempt 时的“同批次重派”步骤：永远停在人工（BLOCKED），把重派命令放在 ``command`` 里。
+
+    不由本计划代办的原因：①失败原因是环境前置（账号映射、分组、Key、镜像……），修复在本计划的授权范围之外，没修就重派只会再失败一次，
+    且同一根因的重试有上限；②重派靠候选批次后台脚本，它与续跑脚本（``vc5-recover.sh``，需要已授权的恢复预览）不是一回事。
+    仍在跑的批次进程、缺后台脚本、对账还没做，分别给出各自的阻塞原因。"""
+
+    redispatch = readiness.get("redispatch") or {}
+    evidence = {"readiness_receipt": readiness.get("receipt_path"), "failed_checks": _readiness_checks(readiness),
+                "observed_at_utc": readiness.get("observed_at_utc"), "live_request_count": readiness.get("live_request_count")}
+    if redispatch.get("running_pid"):
+        return Step("continue", BLOCKED, f"候选批次后台进程 {redispatch['running_pid']} 仍在运行：等它结束后再判定是否需要重派", evidence)
+    if not redispatch.get("script_exists"):
+        return Step("continue", BLOCKED,
+                    f"就绪静态检查失败且没有 attempt，需同批次重派，但找不到候选批次后台脚本 {redispatch.get('script')}（由 vc5-start.sh 生成）："
+                    "改用 vc5-start.sh 重新派发（先把 vc5-run-batch.out 改名留档）", evidence)
+    before = "先执行本计划（--apply）把失败的父 run 对账入账，再" if reconcile_runs.status != DONE else ""
+    return Step("continue", BLOCKED,
+                f"候选就绪静态检查失败（{_readiness_checks(readiness)}），零请求退出，没有 attempt、无恢复预览可续：{before}"
+                "修好上述前置（本计划不代办）后，同批次重派（不切网关、不换批次序号）；重派后新批次会重新做就绪检查，再次失败会累计同根因次数",
+                evidence, redispatch_command(params))
+
+
 def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[Step]:
     """从现场事实推出每一步的状态（纯函数：同一份事实得到同一份结果）。"""
 
@@ -847,8 +959,14 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
                                        {"tail": len(tail.get("tail") or []), "reconciled": len(tail.get("reconciled") or [])})
 
     # --- reconcile（目标 attempt）---------------------------------------------
-    if phase is None:
-        steps["reconcile"] = Step("reconcile", BLOCKED, f"找不到目标 attempt {params['ATTEMPT']}（官方与候选目录下都没有）")
+    readiness = readiness_failure(facts)
+    if phase is None and readiness is not None:
+        # 候选就绪静态检查失败、零请求退出：本来就没有创建 attempt，没有可对账的对象；失败本身由 reconcile-runs 步骤记账。
+        steps["reconcile"] = Step("reconcile", SKIPPED, f"候选就绪静态检查失败（{_readiness_checks(readiness)}），零请求退出，没有创建 attempt，无 attempt 可对账；"
+                                                        "失败由 reconcile-runs 步骤对账入账", {"readiness_receipt": readiness.get("latest")})
+    elif phase is None:
+        steps["reconcile"] = Step("reconcile", BLOCKED, f"找不到目标 attempt {params['ATTEMPT']}（官方与候选目录下都没有）"
+                                  + (f"；候选就绪静态收据读不出来：{facts['readiness']['error']}" if facts.get("readiness", {}).get("error") else ""))
     elif attempt.get("status") == "complete":
         steps["reconcile"] = Step("reconcile", SKIPPED, "目标 attempt 已 complete，无需恢复", {"attempt_status": "complete"})
     elif preview is None or facts["force_reconcile"]:
@@ -869,7 +987,11 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
 
     # --- approve / authorize / continue ----------------------------------------
     separate = bool(profile["separate_approve_authorize"])
-    if steps["reconcile"].status == SKIPPED:
+    if readiness is not None and phase is None:
+        for name in ("approve", "authorize"):
+            steps[name] = Step(name, SKIPPED, "就绪失败零请求退出，没有恢复预览，无需批准／授权")
+        steps["continue"] = _readiness_redispatch_step(params, readiness, steps["reconcile-runs"])
+    elif steps["reconcile"].status == SKIPPED:
         for name in ("approve", "authorize", "continue"):
             steps[name] = Step(name, SKIPPED, "目标 attempt 已 complete，无需恢复")
     else:
@@ -932,7 +1054,12 @@ def objects_view(params: Mapping[str, str], facts: Mapping[str, Any]) -> dict[st
     approval = approval_for(facts, preview)
     evolution, ledger = facts["evolution"], facts["ledger"]
     reverify: list[dict[str, Any]] = []
-    if preview is None:
+    readiness = readiness_failure(facts)
+    if readiness is not None:
+        # 就绪失败没有 attempt、不会有预览：要重验的是被检查挡住的环境前置，而不是“等预览”。
+        reverify.append({"object": "候选就绪静态检查", "state": "stale",
+                         "why": f"最新静态收据 {readiness.get('latest')} 失败：{_readiness_checks(readiness)}；修好前置后由重派的批次重新检查"})
+    elif preview is None:
         reverify.append({"object": "恢复预览", "state": "missing", "why": "尚无预览，执行 reconcile 步骤后产出"})
     else:
         if facts["continuation"]["state"] != "none":
@@ -1027,6 +1154,13 @@ def build_plan(params: Mapping[str, str], facts: Mapping[str, Any], *, followed_
         elif latest["class"] == "unknown":
             warnings.append(f"目标之后的最新后继 attempt {latest['id']} 没有 attempt.json（可能在跑或被截停），状态未知："
                             "核对后再决定是否改指它（--follow-latest 只跟到状态明确失败的 attempt）")
+    readiness = readiness_failure(facts)
+    if readiness is not None:
+        others = sibling_attempts(params, "candidate")
+        warnings.append(f"候选就绪静态检查失败（{_readiness_checks(readiness)}，收据 {readiness.get('receipt_path')}），批次零请求退出、没有创建 attempt："
+                        "没有可对账的 attempt，也没有恢复预览；失败的父 run 先对账入账，修好前置后按“续跑”步骤的命令同批次重派"
+                        + (f"。注意候选目录下另有 {len(others)} 个 attempt（{'、'.join(others[:3])}{'…' if len(others) > 3 else ''}），"
+                           "若你要恢复的是其中之一，说明参数文件的 ATTEMPT 填错了，请改成它" if others else ""))
     if facts["records"]["receipt"] is None and by_id["evolution"].status != DONE and facts["attempt"].get("exists"):
         warnings.append("目标 attempt 还没有对账收据，而受管工具已有未登记漂移（修复已部署）：同根因若已达上限，限额事件的时间以第一次对账为准，"
                         "晚于部署会让 campaign-resume 因“部署收据早于停线”被拒；以后失败后先执行本计划（先对账入账）再部署修复")
@@ -1041,6 +1175,9 @@ def build_plan(params: Mapping[str, str], facts: Mapping[str, Any], *, followed_
         "ledger_status": facts["ledger"].get("status"),
         "overall": overall,
         **({"followed_from": followed_from} if followed_from else {}),
+        **({"readiness": {"latest": readiness.get("latest"), "receipt_path": readiness.get("receipt_path"),
+                          "observed_at_utc": readiness.get("observed_at_utc"), "failed_checks": readiness.get("observations")}}
+           if readiness is not None else {}),
         "steps": [step.public() for step in steps],
         "objects": objects,
         "warnings": warnings,
@@ -1060,7 +1197,7 @@ def render_plan(plan: Mapping[str, Any], *, mode: str) -> str:
     marks = {DONE: "已完成", PENDING: "待执行", WAITING: "等前序", BLOCKED: "阻塞", SKIPPED: "不适用"}
     for index, step in enumerate(plan["steps"], 1):
         lines.append(f"  {index}. {step['id']:<15s}[{marks[step['status']]}] {step['detail']}")
-        if step["status"] in {PENDING, WAITING} and step["command"]:
+        if step["status"] in {PENDING, WAITING, BLOCKED} and step["command"]:
             lines.append(f"       命令：{step['command']}")
     objects = plan["objects"]
     source = {"preview": "恢复预览", "attempt": "attempt 当前状态（尚无预览，最终清单待对账）", "unknown": "尚无依据"}[objects["source"]]
@@ -1468,7 +1605,8 @@ class Runner:
             if current is None:
                 return self.finish(facts, steps)
             if current.status == BLOCKED:
-                return self.stop(current.id, Stop("needs-operator", current.detail, "排除阻塞后重新执行同一条命令"))
+                hint = (f"人工执行（本计划不代办）：{current.command}；之后重新执行同一条命令" if current.command else "排除阻塞后重新执行同一条命令")
+                return self.stop(current.id, Stop("needs-operator", current.detail, hint))
             progressed[current.id] = progressed.get(current.id, 0) + 1
             if progressed[current.id] > 3:
                 return self.stop(current.id, Stop("failed", f"{current.id} 连续 {progressed[current.id] - 1} 次执行后现场仍判待执行",

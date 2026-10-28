@@ -18,6 +18,13 @@
   ``.gitmodules`` 变更，或同名的文件↔目录翻转，整轮就不承接任何单元——门禁启动之前先拦（``run_gates``），门禁结果出来后 ``check_gate_result``
   再独立复核一次；来源提交解析不出来、变更集读不出来同样按失败关闭拒绝（要完整执行就去掉 ``gate.unit_inherit``）。
 
+承接请求后置（第 17 项正式启用）：承接请求的上下文绑定收尾候选提交，而候选提交由 ``prepare`` 生成（冻结收据带分钟级时间戳，不能靠预知提交号），
+所以请求不可能在 ``prepare`` 之前就位。``gate.unit_inherit`` 因此允许只写 ``{"stage": ...}``（请求后置）：``prepare`` 之后先 ``inherit-propose``
+（让执行器对候选提交写承接提案）、再 ``inherit-request``（提案＋两份批准＋校时与撤销凭证组装请求，并立刻对照方案复核），最后
+``gates --unit-inherit-request <请求>``。起跑前核对请求绑定的提交、客户端、阶段、记录库、门禁组合与批准都对得上本方案，对不上直接拒绝（不然执行器会静默
+回退成整轮重跑）；通过后把请求的路径与摘要写进 ``journal/gates-inherit-request.json``（不覆盖），后续的门禁结果校验、收据与恢复都以这个占位为准。
+执行器只让能证明的单元承接，其余（含收尾改动影响到的）回退重跑，并在运行清单里写明原因。原来的 ``{"request": ..., "stage": ...}`` 写法保持不变。
+
 Claude 升级共用这一份收尾编排（Claude 升级控制面设计 B5b-06）：配置合同名是 ``claude-upgrade-closeout/v1`` 时（客户端表
 ``closeout_schema``），随客户端变的三件事——指南材料的封存读侧、第二部分摘要连锁、终态收据的生成与校验——转给
 ``tools/claude_closeout.py``，指南文件与第二部分标题、候选分支名、终态收据文件名前缀按客户端表取值；候选隔离、人工批准、
@@ -530,10 +537,11 @@ def validate_gate_inherit(config, repo, work):
         if store is not None:
             raise CloseoutError("门禁记录库只与逐单元承接同用")
         return
-    if (not isinstance(inherit, dict) or set(inherit) != {"request", "stage"} or fixed is None or store is None
+    if (not isinstance(inherit, dict) or set(inherit) not in ({"request", "stage"}, {"stage"}) or fixed is None or store is None
             or not isinstance(inherit["stage"], str) or not INHERIT_STAGE.fullmatch(inherit["stage"])):
-        raise CloseoutError("收尾逐单元承接须同时给固定测试树坐标、记录库，以及只含请求和阶段的承接配置")
-    safety.file_binding(inherit["request"])
+        raise CloseoutError("收尾逐单元承接须同时给固定测试树坐标、记录库，以及只含阶段（请求后置）或请求加阶段的承接配置")
+    if "request" in inherit:
+        safety.file_binding(inherit["request"])
 
 
 def gate_inherit(config):
@@ -571,6 +579,159 @@ def _inherit_predict():
     return sys.modules[name]
 
 
+def _background_preflight():
+    """同仓库 tools/ci 的后台验证起跑前置检查（收尾复用其中的“冻结收据”一项，不另写一套冻结覆盖判定）。"""
+    name = "closeout_background_preflight_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "ci" / "background_preflight.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+# ---------------------------------------------------------------------------
+# 收尾两道预检（OPT-17 冻结覆盖、OPT-18 门禁环境注入）：都是秒级，必须赶在两小时的全量门禁起跑之前报出
+# ---------------------------------------------------------------------------
+
+# 拆提交的做法（上一次升级的先例）：候选链与收尾分支都改了同一个冻结文件时，git 自动合并出的内容没有任何承接收据登记，
+# 收尾候选因此带着未承接的冻结路径，全量门禁约两小时后才在冻结测试处变红。合并后树内容不变，只是把一个提交拆成三个。
+FREEZE_SPLIT_ADVICE = (
+    "处理办法（合并结果文件拆成三个提交，合并后树内容不变）：①把这些路径还原成收尾侧（合并前收尾分支那一侧）的版本，单独提交；"
+    "②再恢复合并结果，单独提交；③对②生成承接收据：python3 -B -m tools.upstream_merge freeze-successor-generate --before <①的提交> "
+    "--after <②的提交> --tag <标识> --reason <原因> --dry-run，结果须是 passed_local_evidence_successor 且人工待办为空，去掉 --dry-run 加 --output "
+    "docs/egress/maintenance/<标识>-freeze-successor.json 生成后单独提交（源码与收据不能同一提交）。"
+    "先例提交：ed4fca062（还原）、05c47bdc7（恢复合并结果）、9076cffe0（承接收据）。处理完在新工作根重新 prepare。"
+)
+
+
+def frozen_coverage(tree):
+    """某棵树里有没有“当前内容不在任何承接收据登记里”的冻结路径（秒级，只读）。
+
+    直接复用后台验证起跑前置检查的“冻结收据”一项（``background_preflight.check_freeze_receipts``，即 ``test_ci_background_preflight`` 里
+    “真实仓库头无未承接冻结路径”那一项的实现，与门禁里 Go／Python 冻结测试同一张承接图），不在收尾里另写判定。返回它的结果字典：
+    ``passed``、``problems``、``detail``（含 ``registered`` 登记路径数、``uncovered`` 未承接路径）。"""
+    return _background_preflight().check_freeze_receipts(Path(tree))
+
+
+def require_frozen_coverage(tree, *, subject):
+    """冻结覆盖预检；不通过就抛错并就地给出拆提交的办法，通过返回 ``{"registered": 登记路径数, "uncovered": []}``。"""
+    report = frozen_coverage(tree)
+    if not report["passed"]:
+        raise CloseoutError(f"{subject}没有通过冻结覆盖预检（不起跑，免得全量门禁两小时后才在冻结测试处变红）：" + "；".join(report["problems"])
+                            + "。" + FREEZE_SPLIT_ADVICE)
+    return {"registered": report["detail"].get("registered"), "uncovered": list(report["detail"].get("uncovered") or [])}
+
+
+# 收尾给门禁进程显式注入的环境变量白名单：名称 → (用途分类, 说明)。分类决定该变量会不会被测试嵌套执行器继承：
+#   driver：只给驱动脚本自己读，驱动的白名单环境不把它转发给单元（单元与嵌套执行器都看不到）；
+#   harmless：单元看得到，但不改变任何测试行为；
+#   units：驱动显式转发给执行器，单元继承它，测试里嵌套起的临时执行器（``{**os.environ, ...}``）也会继承——候选的测试包必须在导入时把它剔除
+#          （``tools/official_client_capture/tests/__init__.py`` 的 ``GATE_EXECUTOR_ENV_NAMES``），否则嵌套执行器会改用外层门禁的持久状态而改变行为。
+# 以后收尾要给门禁再加环境变量，必须先在这里登记并给出分类；没登记的注入一律在起跑前报错（上一次升级就是因为给执行器多设了一个变量、
+# 测试包没剔除，整轮全量门禁白跑约两小时，三个单元变红）。
+GATE_ENV_WHITELIST = {
+    "ARM64_VC_ENV": ("driver", "驱动参数文件路径，只给驱动脚本自己读，不转发给单元"),
+    "PYTHONDONTWRITEBYTECODE": ("harmless", "不写字节码缓存（树里不能留 __pycache__），不改变测试行为"),
+    "UNIT_EXECUTOR_RETRY_LEDGER": ("units", "补跑累计账本目录，驱动转发给执行器、单元继承；测试包须在导入时剔除"),
+}
+# 候选的测试包里登记“要剔除的门禁注入变量”的文件与常量名。
+GATE_SCRUB_FILE = "tools/official_client_capture/tests/__init__.py"
+GATE_SCRUB_NAME = "GATE_EXECUTOR_ENV_NAMES"
+
+
+def gate_injected_env(config, ledger):
+    """收尾显式注入门禁进程的环境变量（只列收尾自己加的，不含从操作员环境原样带过去的那些）。"""
+    return {
+        "ARM64_VC_ENV": config["gate"]["vc_env"],
+        "PYTHONDONTWRITEBYTECODE": "1",
+        # 补跑累计账本跨收尾共用（见 gate_retry_ledger）；驱动的白名单环境显式转发这一个变量。
+        "UNIT_EXECUTOR_RETRY_LEDGER": str(ledger),
+    }
+
+
+def gate_env(config, ledger):
+    """门禁进程的完整环境：操作员环境原样带过去，再叠加收尾显式注入的那几个。返回 ``(环境, 显式注入)``。"""
+    injected = gate_injected_env(config, ledger)
+    return {**os.environ, **injected}, injected
+
+
+def candidate_scrubbed_env_names(plan):
+    """候选提交的测试包登记的“导入时剔除的门禁注入变量”；读不到、解析不了返回 ``None``（调用方按失败关闭处理）。"""
+    shown = git(plan["candidate"], "show", f"{plan['candidate_commit']}:{GATE_SCRUB_FILE}", check=False)
+    if shown.returncode:
+        return None
+    try:
+        tree = ast.parse(shown.stdout)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == GATE_SCRUB_NAME for target in node.targets):
+            if isinstance(node.value, (ast.Tuple, ast.List)) and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in node.value.elts):
+                return {item.value for item in node.value.elts}
+            return None
+    return None
+
+
+def check_gate_env(plan, injected):
+    """起跑前核对门禁环境注入：每个注入变量都得在白名单里；会被单元继承的那类，候选测试包必须已登记剔除。
+
+    返回逐变量的核对行 ``[{name, value, role, note, ok, problem}]``；不会抛错，由调用方汇总 ``problem`` 后决定是否停下。"""
+    scrubbed = candidate_scrubbed_env_names(plan)
+    rows = []
+    for name in sorted(injected):
+        row = {"name": name, "value": injected[name], "role": None, "note": "", "ok": True, "problem": None}
+        entry = GATE_ENV_WHITELIST.get(name)
+        if entry is None:
+            row.update(ok=False, problem=f"{name} 不在收尾门禁环境注入的白名单里：多余的注入可能被单元与测试嵌套起的执行器继承而改变行为；"
+                                         "要注入请先在 GATE_ENV_WHITELIST 登记并分类，必要时让候选测试包在导入时剔除它")
+        else:
+            row.update(role=entry[0], note=entry[1])
+            if entry[0] == "units":
+                if scrubbed is None:
+                    row.update(ok=False, problem=f"{name} 会被单元继承，但候选提交里读不到测试包的剔除清单 {GATE_SCRUB_FILE}::{GATE_SCRUB_NAME}")
+                elif name not in scrubbed:
+                    row.update(ok=False, problem=f"{name} 会被单元继承，候选测试包的 {GATE_SCRUB_NAME} 没有登记它：测试里嵌套起的临时执行器会改用外层门禁的持久状态，"
+                                                 "相关单元只在收尾门禁里变红（整轮约两小时白跑）；把它加进该清单再重新 prepare")
+        rows.append(row)
+    return rows
+
+
+def render_gate_env(rows):
+    """把环境注入核对结果打印成人能读的几行（写到 stderr，stdout 留给 JSON 结果）。"""
+    lines = [f"收尾门禁环境变量注入核对（白名单 {len(GATE_ENV_WHITELIST)} 项，本次注入 {len(rows)} 项）："]
+    for row in rows:
+        lines.append(f"  [{'通过' if row['ok'] else '不通过'}] {row['name']}={row['value']}  分类 {row['role'] or '未登记'}"
+                     + (f"：{row['note']}" if row["note"] else ""))
+        if row["problem"]:
+            lines.append(f"      问题：{row['problem']}")
+    return "\n".join(lines)
+
+
+def gate_preflight(plan, ledger):
+    """全量门禁起跑前的两道秒级预检：①候选里没有未承接的冻结路径；②注入的环境变量都在白名单、会被继承的都已被测试包剔除。
+
+    两道都过才返回核对摘要；任一道不过就抛 ``CloseoutError``（把两道的问题一起报全），此时门禁还没起、没写任何“开始”占位。"""
+    config = plan["basis"]["config"]
+    problems, summary = [], {}
+    report = frozen_coverage(plan["candidate"])
+    summary["frozen_coverage"] = {"registered": report["detail"].get("registered"), "uncovered": list(report["detail"].get("uncovered") or []),
+                                  "passed": report["passed"]}
+    if not report["passed"]:
+        problems.append("冻结覆盖：" + "；".join(report["problems"]) + "。" + FREEZE_SPLIT_ADVICE)
+    rows = check_gate_env(plan, gate_injected_env(config, ledger))
+    summary["injected_env"] = rows
+    print(render_gate_env(rows), file=sys.stderr)
+    problems += [row["problem"] for row in rows if not row["ok"]]
+    if problems:
+        raise CloseoutError("收尾门禁起跑前预检不通过，全量门禁没有起：" + "；".join(f"（{index}）{text}" for index, text in enumerate(problems, 1)))
+    return summary
+
+
 def inherit_veto(plan, run_ids):
     """逐单元承接的类型变化一票否决（补承接视图发现不了的“同名文件变目录”，已知缺口 R2）：每个来源运行的提交到收尾候选提交之间有类型变化、
     符号链接、子模块或 ``.gitmodules`` 变更，或来源提交解析不出、变更集读不出，就拒绝承接（失败关闭；要完整执行就去掉 ``gate.unit_inherit``）。"""
@@ -579,6 +740,180 @@ def inherit_veto(plan, run_ids):
     reasons = _inherit_predict().veto_for_runs(safety.plain(config["gate"]["record_store"]), run_ids, plan["candidate"], plan["candidate_commit"])
     if reasons:
         raise CloseoutError("收尾逐单元承接被一票否决（来源提交到候选提交之间的类型变化无法被承接视图发现，本轮不承接任何单元）：" + "；".join(reasons[:3]))
+
+
+# ---------------------------------------------------------------------------
+# 收尾逐单元承接：请求后置（第 17 项正式启用）。请求绑定候选提交，所以只能在 prepare 之后生成，再由 gates 绑定进方案的占位
+# ---------------------------------------------------------------------------
+
+# 承接请求的绑定占位（``journal/gates-inherit-request.json``）的阶段名。
+INHERIT_REQUEST_PHASE = "inherit-request"
+
+
+def plan_inherit(plan):
+    """本方案实际生效的承接配置 ``{"request": 请求文件, "stage": 阶段}``；方案没配置承接时返回 ``None``。
+
+    原写法（``gate.unit_inherit`` 里带 ``request``）直接用配置；请求后置的写法（只有 ``stage``）以 ``gates`` 绑定时写下的占位为准，并复核请求文件
+    仍是绑定时的那份字节。要承接却还没绑定请求，一律失败关闭——不能退化成按“没配置承接”去校验一个重跑结果。"""
+    inherit = gate_inherit(plan["basis"]["config"])
+    if not inherit:
+        return None
+    if "request" in inherit:
+        return inherit
+    placeholder = journal_read(plan, "gates", INHERIT_REQUEST_PHASE)
+    if placeholder is None:
+        raise CloseoutError("方案要求逐单元承接，但还没有绑定承接请求：先 inherit-propose、inherit-request，再 gates --unit-inherit-request <请求>")
+    if safety.file_binding(placeholder["request"]["path"]) != placeholder["request"]:
+        raise CloseoutError("已绑定的承接请求文件被改动，拒绝继续")
+    return {"request": placeholder["request"]["path"], "stage": inherit["stage"]}
+
+
+def check_inherit_request(plan, request_path, *, now=None):
+    """起跑前对照本方案复核一份承接请求（只读，不写任何占位）；不一致直接抛错。
+
+    请求的上下文由执行器按“当时的候选提交、客户端、阶段、记录库、门禁组合”现算并签批；运行时执行器在三个复核点重新现算上下文，只要与请求里的
+    不逐字段相同就**静默回退成整轮重跑**——约两小时的全量门禁白白失去承接。所以这里先把请求绑定的提交、客户端、阶段、记录库、门禁组合与本方案
+    逐项对照（最常见的错：请求是针对别的提交生成的），再复核两份批准此刻仍在有效期内、请求引用的原文件没被改，并过一遍类型变化一票否决。"""
+    from tools.ci import entry_gates
+    config = plan["basis"]["config"]
+    inherit = gate_inherit(config)
+    if not inherit:
+        raise CloseoutError("方案没有配置 gate.unit_inherit，不接受承接请求（要逐单元承接须在 prepare 的配置里写 gate.unit_inherit.stage）")
+    module = _unit_inherit()
+    try:
+        reference, request = module._read_request(safety.plain(request_path))
+        context = module.context_check(module.fs.replay_ref(request["context"]))
+        sources = module.sources_check(request["sources"])
+        approvals = tuple(module.fs.replay_ref(item) for item in request["approvals"])
+        module.approvals_check(approvals, module.binding_sha256(context, sources), module.current_time() if now is None else now)
+    except (*module.ERRORS, safety.SafetyError) as error:
+        raise CloseoutError(f"承接请求不可用：{error}") from error
+    if context["commit"] != plan["candidate_commit"]:
+        raise CloseoutError(f"承接请求绑定的提交 {context['commit'][:12]} 不是本方案的收尾候选提交 {plan['candidate_commit'][:12]}：请求必须在 prepare 之后、"
+                            "针对候选提交生成（inherit-propose 再 inherit-request），否则执行器会静默回退成整轮重跑")
+    expected = {"client": client_of(config), "stage": inherit["stage"], "profile": "full-gates",
+                "record_store": str(safety.plain(config["gate"]["record_store"]).resolve()), "gates": sorted(entry_gates.profile_gates("full-gates"))}
+    mismatched = [f"{key}（请求 {context[key]!r}，本方案 {value!r}）" for key, value in expected.items() if context[key] != value]
+    if request["reuse_enabled"] is not True:
+        mismatched.append("reuse_enabled（请求没有开启承接）")
+    if mismatched:
+        raise CloseoutError("承接请求与本收尾方案不一致，拒绝：" + "；".join(mismatched))
+    inherit_veto(plan, set(sources["runs"]))
+    return {"request": reference, "commit": context["commit"], "stage": context["stage"], "context_sha256": module.fs.digest(context),
+            "sources_sha256": module.fs.digest(sources), "units": len(sources["units"]), "runs": len(sources["runs"])}
+
+
+def bind_inherit_request(plan, request_path, *, write=True):
+    """把 ``gates --unit-inherit-request`` 给的请求绑定进方案，返回生效的承接配置（没配置承接时返回 ``None``）。
+
+    * 方案没配置承接却给了请求：拒绝（要承接须在配置里写 ``gate.unit_inherit.stage``）；
+    * 原写法（配置里带 ``request``）：不给请求就用配置的，给了必须是同一个文件；
+    * 请求后置的写法：必须给请求（或此前已绑定过占位）；复核通过后把请求的路径与摘要写进 ``journal/gates-inherit-request.json``（不覆盖），
+      已有占位时给的请求必须是同一份字节。``write=False`` 只复核不落占位（``gates --preflight-only`` 用）。"""
+    config = plan["basis"]["config"]
+    inherit = gate_inherit(config)
+    if not inherit:
+        if request_path is not None:
+            raise CloseoutError("方案没有配置 gate.unit_inherit，不接受 --unit-inherit-request")
+        return None
+    if "request" in inherit:
+        if request_path is not None and safety.plain(request_path) != safety.plain(inherit["request"]):
+            raise CloseoutError("配置里已写死承接请求，与 --unit-inherit-request 给的不是同一个文件")
+        return inherit
+    existing = journal_read(plan, "gates", INHERIT_REQUEST_PHASE)
+    if request_path is None:
+        if existing is None:
+            raise CloseoutError("方案要求逐单元承接，但没有给承接请求：先 inherit-propose、inherit-request，再 gates --unit-inherit-request <请求>"
+                                "（要完整重跑请在新方案里去掉 gate.unit_inherit）")
+        return plan_inherit(plan)
+    checked = check_inherit_request(plan, request_path)
+    if existing is not None:
+        if existing["request"] != checked["request"]:
+            raise CloseoutError("本方案已绑定另一份承接请求，不能换：在新工作根里重来")
+    elif write:
+        journal(plan, "gates", INHERIT_REQUEST_PHASE, {**checked, "candidate_commit": plan["candidate_commit"]})
+    return {"request": checked["request"]["path"], "stage": inherit["stage"]}
+
+
+def inherit_propose(plan_path):
+    """对收尾候选提交写承接提案（执行器只判定、不跑单元，几分钟）：上下文绑定候选提交，来源集合是记录库里能证明可承接的单元。
+
+    提案目录在 ``<工作根>/inherit/proposal``（必须尚不存在，不覆盖）。提案里的 ``binding_sha256`` 交两类批准签字，之后用 ``inherit-request`` 组装请求。"""
+    plan = load_plan(plan_path)
+    config = plan["basis"]["config"]
+    inherit = gate_inherit(config)
+    if not inherit:
+        raise CloseoutError("方案没有配置 gate.unit_inherit，不需要承接提案")
+    work = Path(config["work_root"])
+    with run_lock(work):
+        ledger = gate_retry_ledger(config)
+        gate_preflight(plan, ledger)
+        root = work / "inherit"
+        proposal, out = root / "proposal", root / "propose-out"
+        if proposal.exists() or out.exists():
+            raise CloseoutError("承接提案目录已存在，不覆盖；要重新生成请在新工作根里重来")
+        root.mkdir(mode=0o700, exist_ok=True)
+        argv = ["bash", config["gate"]["driver"], "--profile", "full-gates", "--mode", "unit-inherit", "--unit-inherit-stage", inherit["stage"],
+                "--unit-inherit-propose", str(proposal), "--out", str(out), "--work", config["gate"]["work"],
+                "--record-store", config["gate"]["record_store"], plan["bundle"]["path"],
+                client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"], config["gate"]["node_modules"]]
+        env, _injected = gate_env(config, ledger)
+        with (root / "propose.log").open("xb") as log:
+            os.chmod(log.name, 0o600)
+            result = subprocess.run(argv, cwd=config["repo"], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        if result.returncode or not (proposal / "binding.json").is_file():
+            raise CloseoutError("承接提案没有生成（执行器失败，或记录库里没有任何可承接的单元：这种情况整轮都得重跑，不如去掉 gate.unit_inherit）；"
+                                f"日志 {root / 'propose.log'}")
+        binding, context = safety.read(proposal / "binding.json"), safety.read(proposal / "context.json")
+        if context.get("commit") != plan["candidate_commit"]:
+            raise CloseoutError(f"提案绑定的提交 {str(context.get('commit'))[:12]} 不是本方案的收尾候选提交，拒绝使用")
+        return {"status": "proposal_written", "proposal": str(proposal), "commit": context["commit"], "binding_sha256": binding["binding_sha256"],
+                "units": binding["units"], "runs": binding["runs"], "log": str(root / "propose.log")}
+
+
+def inherit_request(plan_path, *, proposal, approvals, output=None, clock=None, revocation=None, clock_source=None,
+                    campaign_status_source=None, max_age_hours=None):
+    """提案＋两份批准（对提案里的 ``binding_sha256`` 签字）＋校时与撤销查询凭证，组装成绑定候选提交的承接请求，并立刻对照方案复核。
+
+    校时与撤销查询凭证没给就当场取（校时来源缺省 chronyc；ARM64 没有 chronyc，要传 ``file:<绝对路径>``）。批准必须在提案之后签、有效期要盖住凭证采样时刻。
+    请求写到 ``output``（缺省 ``<工作根>/inherit/request.json``，不覆盖）；对不上本方案（提案是别的提交的、批准过期……）直接拒绝并报原因。"""
+    plan = load_plan(plan_path)
+    config = plan["basis"]["config"]
+    inherit = gate_inherit(config)
+    if not inherit:
+        raise CloseoutError("方案没有配置 gate.unit_inherit，不需要承接请求")
+    module = _unit_inherit()
+    proposal = safety.plain(proposal)
+    try:
+        committed = safety.read(proposal / "context.json").get("commit")
+    except safety.SafetyError as error:
+        raise CloseoutError(f"承接提案不可用：{error}") from error
+    if committed != plan["candidate_commit"]:
+        raise CloseoutError(f"提案绑定的提交 {str(committed)[:12]} 不是本方案的收尾候选提交 {plan['candidate_commit'][:12]}：用 inherit-propose 对候选提交重新生成")
+    work = Path(config["work_root"])
+    with run_lock(work):
+        root = work / "inherit"
+        root.mkdir(mode=0o700, exist_ok=True)
+        target = safety.plain(output) if output is not None else root / "request.json"
+        try:
+            sources = module.sources_check(safety.read(proposal / "sources.json"))
+            now = module.current_time()
+            if clock is None:
+                clock = root / "clock.json"
+                module._write_once(clock, module.sample_clock(clock_source or module.DEFAULT_CLOCK_SOURCE, now))
+            if revocation is None:
+                revocation = root / "revocation.json"
+                module._write_once(revocation, module.query_revocation(safety.plain(config["gate"]["record_store"]), sorted(sources["runs"]),
+                                                                       inherit["stage"], now, campaign_status_source))
+            module.assemble_request(proposal, clock=clock, revocation=revocation, approvals=list(approvals), reuse_enabled=True, output=target,
+                                    max_age_hours=max_age_hours, clock_source=clock_source, campaign_status_source=campaign_status_source)
+        except (*module.ERRORS, safety.SafetyError) as error:
+            raise CloseoutError(f"承接请求组装失败：{error}") from error
+    try:
+        checked = check_inherit_request(plan, target)
+    except CloseoutError as error:
+        raise CloseoutError(f"请求已写出但与本方案不符，不得使用（{target}）：{error}") from error
+    return {"status": "request_written", **checked}
 
 
 def validate_config(config):
@@ -644,7 +979,7 @@ def config_bindings(config):
     paths = [config[name] for name in ("guide", "material", "terminal_facts")]
     paths += [config["gate"][name] for name in ("driver", "vc_env")]
     paths += [str(Path(config["gate"]["node_modules"]) / "pnpm-lock.yaml")]
-    if gate_inherit(config):
+    if gate_inherit(config) and "request" in config["gate"]["unit_inherit"]:
         paths.append(config["gate"]["unit_inherit"]["request"])
     paths.append(str(Path(__file__).resolve()))
     if client_of(config) != "codex":
@@ -678,6 +1013,9 @@ def prepare(config, *, dry_run=False):
     branch = git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
     if git(repo, "status", "--porcelain").stdout.strip():
         raise CloseoutError("权威仓库必须先提交并保持干净，才能绑定收尾方案")
+    # 冻结覆盖预检第一道（OPT-17，秒级、只读，dry-run 也跑）：权威仓库头本身不能带未承接的冻结路径。合并候选链进收尾分支时两边都改了同一冻结文件，
+    # 自动合并出的内容没有承接收据，收尾候选就会带着它，全量门禁约两小时后才在冻结测试处变红；这里先拦，错误里直接给拆提交的办法。
+    head_coverage = require_frozen_coverage(repo, subject="权威仓库头")
     updates = source_updates(repo, Path(config["guide"]).read_text(), client=client)
     material = safety.read(config["material"])
     if not all(material.get(key) for key in ("campaign_id", "candidate_id", "target_version", "classification_sha256", "official_stage_sha256")):
@@ -705,7 +1043,8 @@ def prepare(config, *, dry_run=False):
     key = digest(basis)
     if dry_run:
         return {"status": "dry_run", "input_sha256": key, "changed_paths": sorted([*updates, config["terminal_relative"]]),
-                "manual_gates": ["guide-review", "cleanup-authorization", "release-publication"], "work_root": str(work)}
+                "manual_gates": ["guide-review", "cleanup-authorization", "release-publication"], "work_root": str(work),
+                "frozen_coverage": head_coverage}
     with run_lock(work):
         path = work / "plan.json"
         if path.exists():
@@ -742,6 +1081,9 @@ def prepare(config, *, dry_run=False):
         git(candidate, "add", "--", *outputs)
         git(candidate, "commit", "--no-gpg-sign", "-m", "收尾候选：" + config["tag"])
         commit = git(candidate, "rev-parse", "HEAD").stdout.strip()
+        # 冻结覆盖预检第二道（OPT-17）：出候选提交后立刻复查——全量门禁实际跑的就是这个提交；候选自己生成的冻结收据没盖住的路径也在这里拦下。
+        # 不通过时不写方案、不建 bundle，候选目录保留现场（要重来就用新工作根）。
+        require_frozen_coverage(candidate, subject="收尾候选提交 " + commit[:12])
         git(candidate, "branch", row["closeout_candidate_branch"], commit)
         bundle = work / "candidate.bundle"
         git(candidate, "bundle", "create", str(bundle), row["closeout_candidate_branch"])
@@ -835,7 +1177,7 @@ def check_gate_result(plan):
     ``unit_inherit.verify_published`` 重放证明，测试树坐标必须是固定坐标；没配置时一字不变地要求 ``re-execute`` 且没有承接单元。"""
     from tools.ci import entry_gates
     config = plan["basis"]["config"]
-    inherit = gate_inherit(config)
+    inherit = plan_inherit(plan)  # 请求后置的写法以 gates 绑定的占位为准；没绑定就失败关闭
     mode = "unit-inherit" if inherit else "re-execute"
     root = Path(config["work_root"]) / "gates"
     entry = safety.read(root / "entry-gates.json")
@@ -983,6 +1325,7 @@ def gate_inherit_summary(plan):
     if not gate_inherit(config):
         return None
     check_gate_result(plan)
+    bound = journal_read(plan, "gates", INHERIT_REQUEST_PHASE)
     root = Path(config["work_root"]) / "gates"
     entry = safety.read(root / "entry-gates.json")
     _path, manifest, _store = _inherit_manifest(plan, root, safety.read(safety.plain(entry["executor_summary"])))
@@ -995,7 +1338,9 @@ def gate_inherit_summary(plan):
                               "view_digest": check.get("inherit_inputs_sha256"), "repo_root": check.get("repo_root")})
         else:
             rerun.append({"unit_id": item["unit_id"], "reasons": list(item.get("reasons") or [])})
-    return {"inherited": inherited, "rerun": rerun, "decision": manifest.get("unit_inherit_decision")}
+    # 请求后置的写法在收据里多写一条“绑定的承接请求”（路径与摘要）；原写法的汇总与改造前逐字相同。
+    return {"inherited": inherited, "rerun": rerun, "decision": manifest.get("unit_inherit_decision"),
+            **({"request": bound["request"]} if bound is not None else {})}
 
 
 def consume_inherited(plan):
@@ -1033,8 +1378,21 @@ def gate_retry_ledger(config):
     return Path(config["work_root"]).parent / "gate-retry-ledger"
 
 
-def run_gates(plan_path):
-    """在独立进程会话中跑完整门禁；中断后只对账，绝不自动启动第二份全量作业。"""
+def gate_preflight_only(plan_path, unit_inherit_request=None):
+    """只做起跑前的预检（不起门禁、不写占位）：给操作员在起全量门禁之前随时自查，结果与 ``gates`` 起跑前的预检逐字相同；
+    配置了逐单元承接时同时对照本方案复核承接请求（``unit_inherit_request`` 或已绑定的占位）。"""
+    plan = load_plan(plan_path)
+    summary = gate_preflight(plan, gate_retry_ledger(plan["basis"]["config"]))
+    inherit = bind_inherit_request(plan, unit_inherit_request, write=False)
+    if inherit:
+        summary["unit_inherit_request"] = check_inherit_request(plan, inherit["request"])
+    return {"status": "preflight_passed", **summary}
+
+
+def run_gates(plan_path, unit_inherit_request=None):
+    """在独立进程会话中跑完整门禁；中断后只对账，绝不自动启动第二份全量作业。
+
+    ``unit_inherit_request``：请求后置写法下的承接请求（``inherit-request`` 的产出）；起跑前对照本方案复核并绑定进方案占位，对不上直接拒绝。"""
     plan = load_plan(plan_path)
     config = plan["basis"]["config"]
     work = Path(config["work_root"])
@@ -1051,7 +1409,11 @@ def run_gates(plan_path):
             # 输出完备则确认原运行；不完备保留现场，由新方案新工作根重跑。
             files = check_gate_result(plan)
         else:
-            inherit = gate_inherit(config)
+            # 起跑前两道秒级预检（OPT-17、OPT-18）：候选里没有未承接的冻结路径、注入门禁的环境变量都在白名单且会被继承的都已被测试包剔除。
+            # 放在写“开始”占位之前：不通过就一个门禁进程都不起，不留任何占位，修好后同一方案可以直接重跑。
+            ledger = gate_retry_ledger(config)
+            preflight = gate_preflight(plan, ledger)
+            inherit = bind_inherit_request(plan, unit_inherit_request)
             if inherit:
                 # 跑之前先过一票否决：来源提交到候选提交之间有类型变化就别白跑一轮承接（门禁结果出来后 check_gate_result 还会独立复核一次）。
                 module = _unit_inherit()
@@ -1062,12 +1424,9 @@ def run_gates(plan_path):
                     *(["--unit-inherit-request", inherit["request"], "--unit-inherit-stage", inherit["stage"]] if inherit else []),
                     plan["bundle"]["path"], client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
                     config["gate"]["node_modules"]]
-            ledger = gate_retry_ledger(config)
             journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat(),
-                                                 "retry_ledger": str(ledger)})
-            env = {**os.environ, "ARM64_VC_ENV": config["gate"]["vc_env"], "PYTHONDONTWRITEBYTECODE": "1",
-                   # 补跑累计账本跨收尾共用（见 gate_retry_ledger）；驱动的白名单环境显式转发这一个变量。
-                   "UNIT_EXECUTOR_RETRY_LEDGER": str(ledger)}
+                                                 "retry_ledger": str(ledger), "preflight": preflight})
+            env, _injected = gate_env(config, ledger)
             started = time.monotonic()
             with (work / "gates.log").open("xb") as log:
                 os.chmod(log.name, 0o600)
@@ -1083,7 +1442,7 @@ def run_gates(plan_path):
         retried = gate_retry_summary(plan)
         # 逐单元承接（第 17 项）：门禁刚跑完，做一次真消费，并把承接单元与被重跑单元逐项列进完成占位；没配置承接时占位与改造前逐字相同。
         extra = {}
-        if gate_inherit(config):
+        if plan_inherit(plan):
             consumed = consume_inherited(plan)
             extra = {"unit_inherit": {**gate_inherit_summary(plan), "consumption": consumed.get("consumption")}}
         return journal(plan, "gates", "done", {"status": "passed", "files": files, **({"retry_passed": retried} if retried else {}), **extra})
@@ -1276,6 +1635,21 @@ def main(argv=None):
     pre.add_argument("--dry-run", action="store_true")
     gate = sub.add_parser("gates", help="按标准 full-gates 合同重跑所有单元")
     gate.add_argument("--plan", required=True)
+    gate.add_argument("--preflight-only", action="store_true",
+                      help="只跑起跑前预检（冻结覆盖、门禁环境注入核对，配置了承接时再加承接请求复核）并打印，不起门禁、不写任何占位")
+    gate.add_argument("--unit-inherit-request", help="逐单元承接请求（请求后置的配置必须给；由 inherit-request 针对本方案候选提交生成）")
+    propose = sub.add_parser("inherit-propose", help="对收尾候选提交写逐单元承接提案（执行器只判定，不跑单元）")
+    propose.add_argument("--plan", required=True)
+    request = sub.add_parser("inherit-request", help="提案＋两份批准＋凭证组装绑定候选提交的承接请求，并对照方案复核")
+    request.add_argument("--plan", required=True)
+    request.add_argument("--proposal", required=True, help="inherit-propose 写出的提案目录")
+    request.add_argument("--approval", action="append", required=True, help="对提案 binding_sha256 的批准文件（两类角色各一份，可重复）")
+    request.add_argument("--output", help="请求写到哪里（缺省 <工作根>/inherit/request.json，不覆盖）")
+    request.add_argument("--clock", help="校时样本文件（缺省当场取）")
+    request.add_argument("--revocation", help="撤销查询文件（缺省当场取）")
+    request.add_argument("--clock-source", help="校时来源：chronyc（缺省）或 file:<绝对路径>（ARM64 没有 chronyc）")
+    request.add_argument("--campaign-status-source")
+    request.add_argument("--max-age-hours", type=float)
     release = sub.add_parser("publish", help="消费人工批准、核对门禁并恢复收尾")
     release.add_argument("--plan", required=True)
     release.add_argument("--guide-approval", required=True)
@@ -1300,7 +1674,14 @@ def main(argv=None):
         elif args.command == "prepare":
             result = prepare(safety.read(args.config), dry_run=args.dry_run)
         elif args.command == "gates":
-            result = run_gates(args.plan)
+            result = (gate_preflight_only(args.plan, args.unit_inherit_request) if args.preflight_only
+                      else run_gates(args.plan, args.unit_inherit_request))
+        elif args.command == "inherit-propose":
+            result = inherit_propose(args.plan)
+        elif args.command == "inherit-request":
+            result = inherit_request(args.plan, proposal=args.proposal, approvals=args.approval, output=args.output, clock=args.clock,
+                                     revocation=args.revocation, clock_source=args.clock_source,
+                                     campaign_status_source=args.campaign_status_source, max_age_hours=args.max_age_hours)
         else:
             result = publish(args.plan, {"guide-review": args.guide_approval, "release-publication": args.publication_approval,
                                         "cleanup": args.cleanup_approval})

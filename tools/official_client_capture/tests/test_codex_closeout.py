@@ -12,6 +12,7 @@ from unittest import mock
 
 from tools import codex_closeout as closeout
 from tools.ci import entry_gates
+from tools.official_client_capture.tests import closeout_preflight_fixture as preflight_fixture
 
 
 def write_json(path, value):
@@ -111,6 +112,7 @@ class CloseoutTests(unittest.TestCase):
         (self.repo / closeout.GUIDE).parent.mkdir(parents=True)
         (self.repo / closeout.GUIDE).write_text(guide)
         write_json(self.repo / "tools/official_client_capture/profile.json", {"source_spec": closeout.GUIDE + "#第二章", "source_spec_sha256": closeout.part2_sha(guide)})
+        preflight_fixture.write_scrub_file(self.repo)  # 候选测试包的剔除清单：环境注入核对要读它
         self.git("add", ".")
         self.git("commit", "-m", "隔离基线")
         self.base = self.git("rev-parse", "HEAD")
@@ -150,6 +152,8 @@ class CloseoutTests(unittest.TestCase):
             "SOURCE_ROOT": str(self.root / "candidate/source"), "EVALUATION_BASELINE": "2",
             "VC5_RECEIPT": str(self.root / "vc5.json"), "VC6_RECEIPT": str(self.root / "vc6.json")},
             "bindings": {"input": {**closeout.safety.file_binding(self.root / "decision.json"), "bytes": (self.root / "decision.json").stat().st_size}}}
+        # 隔离仓库没有冻结台账，真实的冻结覆盖检查在里面只会报“算不出来”；默认换成全部通过，专测预检的用例再显式换回真实实现。
+        self.addCleanup(preflight_fixture.patch_frozen_coverage().stop)
         for patcher in (
             mock.patch.object(closeout, "collect_guide_material", return_value=material),
             mock.patch.object(closeout, "terminal_candidate", side_effect=lambda _repo, facts, _path: json.dumps(facts) + "\n"),
@@ -283,6 +287,191 @@ class CloseoutTests(unittest.TestCase):
         self.assertEqual(ledger, self.work.parent / "gate-retry-ledger")
         self.assertFalse(ledger.is_relative_to(self.work), "账本不能放在随工作根清理的位置")
         self.assertEqual(closeout.journal_read(self.plan, "gates", "started")["retry_ledger"], str(ledger))
+
+    # ---- 收尾两道预检（OPT-17 冻结覆盖、OPT-18 门禁环境注入核对）：都必须赶在两小时的全量门禁起跑之前报出 ----
+
+    def failing_frozen(self, *paths):
+        """冻结覆盖检查的“不通过”结果（形状与 background_preflight.check_freeze_receipts 一致）。"""
+        shown = "、".join(paths)
+        return {"name": "freeze-receipts", "passed": False, "detail": {"registered": 7, "uncovered": list(paths)},
+                "problems": [f"{len(paths)} 个冻结路径的当前内容没有承接收据登记：{shown}。先按 freeze-successor-generate 生成承接收据并【另行提交】"]}
+
+    def arm_driver_marker(self):
+        """门禁驱动换成“起跑就留记号”的假脚本：预检若放过了，记号文件就会出现；返回记号路径。
+        驱动目录里的文件摘要会绑定进收尾方案，所以必须在 prepare **之前**调用。"""
+        marker = self.root / "driver-started.txt"
+        (self.root / "driver/entry-gates.sh").write_text("#!/bin/bash\necho started > " + str(marker) + "\nexit 1\n")
+        return marker
+
+    def assert_gate_never_started(self, marker):
+        self.assertFalse(marker.exists(), "预检应在门禁起跑前拦下，驱动脚本不该被执行")
+        self.assertFalse((self.work / "gates.log").exists())
+        self.assertIsNone(closeout.journal_read(self.plan, "gates", "started"), "预检不通过时不写“开始”占位，修好后同一方案可直接重跑")
+
+    def test_prepare_blocks_when_the_repository_head_has_an_uncovered_frozen_path(self):
+        """上一次升级的真实情形：合并候选链进收尾分支，两边都改了同一冻结文件，自动合并结果没有承接收据。prepare 就地拦下并给拆提交办法。"""
+        path = "backend/internal/service/official_egress_test_helpers_test.go"
+        with mock.patch.object(closeout, "frozen_coverage", return_value=self.failing_frozen(path)):
+            with self.assertRaises(closeout.CloseoutError) as caught:
+                self.prepare()
+        message = str(caught.exception)
+        self.assertIn("权威仓库头", message)
+        self.assertIn(path, message)
+        for hint in ("还原", "恢复合并结果", "承接收据", "freeze-successor-generate", "ed4fca062", "05c47bdc7", "9076cffe0"):
+            self.assertIn(hint, message)
+        self.assertFalse(self.work.exists(), "预检不通过不应留下任何工作根")
+
+    def test_dry_run_also_runs_the_frozen_coverage_precheck(self):
+        with mock.patch.object(closeout, "frozen_coverage", return_value=self.failing_frozen("frozen/data.txt")):
+            with self.assertRaisesRegex(closeout.CloseoutError, "冻结覆盖预检"):
+                closeout.prepare(self.config, dry_run=True)
+        passed = closeout.prepare(self.config, dry_run=True)
+        self.assertEqual(passed["frozen_coverage"], {"registered": 0, "uncovered": []})
+        self.assertFalse(self.work.exists())
+
+    def test_prepare_blocks_right_after_the_candidate_commit_when_only_the_candidate_is_uncovered(self):
+        """仓库头干净、候选提交自己带出未承接路径（候选生成的收据没盖住）：出候选后立刻拦，不写方案、不建 bundle。"""
+        def selective(tree):
+            return self.failing_frozen("frozen/data.txt") if Path(tree).name == "candidate" else preflight_fixture.PASSING_FROZEN_COVERAGE
+        with mock.patch.object(closeout, "frozen_coverage", side_effect=selective):
+            with self.assertRaisesRegex(closeout.CloseoutError, "收尾候选提交 [0-9a-f]{12}"):
+                self.prepare()
+        self.assertFalse(self.plan_path.exists())
+        self.assertFalse((self.work / "candidate.bundle").exists())
+
+    def test_gates_precheck_blocks_a_candidate_with_an_uncovered_frozen_path_before_the_driver_starts(self):
+        marker = self.arm_driver_marker()
+        self.prepare()
+        with mock.patch.object(closeout, "frozen_coverage", return_value=self.failing_frozen("frozen/data.txt")):
+            with self.assertRaisesRegex(closeout.CloseoutError, "起跑前预检不通过.*冻结覆盖.*frozen/data.txt"):
+                closeout.run_gates(self.plan_path)
+        self.assert_gate_never_started(marker)
+
+    def test_gates_precheck_blocks_an_extra_injected_variable_before_the_driver_starts(self):
+        """多余的注入变量（不在白名单）：门禁起跑前报错停下，驱动一个进程都不起。"""
+        marker = self.arm_driver_marker()
+        self.prepare()
+        original = closeout.gate_injected_env
+        with mock.patch.object(closeout, "gate_injected_env", side_effect=lambda config, ledger: {**original(config, ledger), "UNIT_EXECUTOR_EXTRA_FLAG": "1"}):
+            with self.assertRaisesRegex(closeout.CloseoutError, "起跑前预检不通过.*UNIT_EXECUTOR_EXTRA_FLAG 不在收尾门禁环境注入的白名单"):
+                closeout.run_gates(self.plan_path)
+        self.assert_gate_never_started(marker)
+
+    def commit_scrub_list(self, text):
+        """把隔离仓库里候选测试包的剔除清单改成 ``text`` 并提交（要在 prepare 之前调用，候选才带这份内容）。"""
+        if text is None:
+            (self.repo / preflight_fixture.SCRUB_FILE).unlink()
+        else:
+            (self.repo / preflight_fixture.SCRUB_FILE).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-m", "改测试包剔除清单")
+
+    def test_gates_precheck_reproduces_the_ledger_variable_not_scrubbed_by_the_test_package_case(self):
+        """上一次升级收尾的真实缺陷：收尾给执行器设了补跑账本变量，单元继承后被测试嵌套起的临时执行器沿用，三个单元只在收尾门禁里变红（整轮白跑约两小时）。
+        候选测试包没有登记剔除它时，预检在起跑前就报出。"""
+        self.commit_scrub_list('GATE_EXECUTOR_ENV_NAMES = ()\n')
+        marker = self.arm_driver_marker()
+        self.prepare()
+        with self.assertRaisesRegex(closeout.CloseoutError, "起跑前预检不通过.*UNIT_EXECUTOR_RETRY_LEDGER 会被单元继承.*GATE_EXECUTOR_ENV_NAMES"):
+            closeout.run_gates(self.plan_path)
+        self.assert_gate_never_started(marker)
+
+    def test_gates_precheck_fails_closed_when_the_scrub_list_is_missing_or_unreadable(self):
+        for text in (None, "GATE_EXECUTOR_ENV_NAMES = [name for name in ()]\n", "def broken(:\n", "OTHER = 1\n"):
+            with self.subTest(text=text):
+                self.reset_work()
+                self.commit_scrub_list(text)
+                marker = self.arm_driver_marker()
+                self.prepare()
+                with self.assertRaisesRegex(closeout.CloseoutError, "UNIT_EXECUTOR_RETRY_LEDGER 会被单元继承，但候选提交里读不到测试包的剔除清单"):
+                    closeout.run_gates(self.plan_path)
+                self.assertFalse(marker.exists())
+
+    def reset_work(self):
+        """子用例之间清掉上一轮的工作根与记号，让同一个仓库可以按新输入重新 prepare。"""
+        import shutil
+        for path in (self.work, self.root / "driver-started.txt"):
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+
+    def test_gates_precheck_reports_every_problem_at_once_and_prints_the_injection_list(self):
+        self.commit_scrub_list('GATE_EXECUTOR_ENV_NAMES = ()\n')
+        self.prepare()
+        original = closeout.gate_injected_env
+        with mock.patch.object(closeout, "frozen_coverage", return_value=self.failing_frozen("frozen/data.txt")), \
+                mock.patch.object(closeout, "gate_injected_env", side_effect=lambda config, ledger: {**original(config, ledger), "LEAKY": "1"}), \
+                mock.patch("sys.stderr") as stderr:
+            with self.assertRaises(closeout.CloseoutError) as caught:
+                closeout.run_gates(self.plan_path)
+        message = str(caught.exception)
+        for part in ("（1）冻结覆盖", "LEAKY 不在收尾门禁环境注入的白名单", "UNIT_EXECUTOR_RETRY_LEDGER 会被单元继承"):
+            self.assertIn(part, message)
+        printed = "".join(call.args[0] for call in stderr.write.call_args_list if call.args)
+        for name in ("ARM64_VC_ENV", "PYTHONDONTWRITEBYTECODE", "UNIT_EXECUTOR_RETRY_LEDGER", "LEAKY"):
+            self.assertIn(name, printed, "起跑前要把会注入的变量逐个打印出来")
+
+    def test_gates_preflight_only_checks_prints_and_writes_nothing(self):
+        marker = self.arm_driver_marker()
+        self.prepare()
+        result = closeout.gate_preflight_only(self.plan_path)
+        self.assertEqual(result["status"], "preflight_passed")
+        self.assertEqual([row["name"] for row in result["injected_env"]], ["ARM64_VC_ENV", "PYTHONDONTWRITEBYTECODE", "UNIT_EXECUTOR_RETRY_LEDGER"])
+        self.assertTrue(all(row["ok"] for row in result["injected_env"]))
+        self.assert_gate_never_started(marker)
+        self.assertEqual(closeout.main(["gates", "--plan", str(self.plan_path), "--preflight-only"]), 0)
+        self.assertFalse(marker.exists())
+
+    def test_a_passing_precheck_is_recorded_in_the_started_journal_and_the_gate_still_runs(self):
+        marker = self.arm_driver_marker()
+        self.prepare()
+        with self.assertRaisesRegex(closeout.CloseoutError, "全量门禁失败"):
+            closeout.run_gates(self.plan_path)
+        self.assertTrue(marker.exists(), "预检通过后门禁照常起跑")
+        started = closeout.journal_read(self.plan, "gates", "started")
+        self.assertTrue(started["preflight"]["frozen_coverage"]["passed"])
+        self.assertEqual({row["name"] for row in started["preflight"]["injected_env"]}, set(closeout.GATE_ENV_WHITELIST))
+
+    # ---- 冻结覆盖预检用真实实现跑在带冻结台账的仓库上（复用后台验证起跑前置检查的同一实现） ----
+
+    def add_frozen_ledger(self, *, receipted):
+        """给隔离仓库补上最小的“有冻结台账”结构并提交：frozen/data.txt 是冻结文件；``receipted`` 为假时内容已改而承接收据没登记。"""
+        import hashlib
+        import shutil
+
+        def sha(text):
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        upstream = Path(__file__).resolve().parents[2] / "upstream_merge"
+        shutil.copytree(upstream, self.repo / "tools/upstream_merge", ignore=shutil.ignore_patterns("__pycache__", "tests"))
+        (self.repo / "tools/__init__.py").write_text("", encoding="utf-8")
+        (self.repo / "frozen").mkdir()
+        (self.repo / "frozen/data.txt").write_text("v1\n" if receipted else "v2 合并结果，承接收据还没登记\n", encoding="utf-8")
+        receipt = {"schema_version": "official-egress-upstream-freeze-successor/v1",
+                   "transitions": [{"path": "frozen/data.txt", "reason": "示例承接", "predecessor_sha256": sha("v0\n"), "to_sha256": sha("v1\n")}]}
+        write_json(self.repo / "docs/egress/maintenance/demo-freeze-successor.json", receipt)
+        self.git("add", "-A")
+        self.git("commit", "-m", "冻结台账" + ("" if receipted else "（含未承接改动）"))
+
+    def test_real_frozen_coverage_blocks_prepare_on_an_unreceipted_merge_result_and_passes_once_receipted(self):
+        self.add_frozen_ledger(receipted=False)
+        with mock.patch.object(closeout, "frozen_coverage", preflight_fixture.REAL_FROZEN_COVERAGE):
+            with self.assertRaises(closeout.CloseoutError) as caught:
+                self.prepare()
+            self.assertIn("frozen/data.txt", str(caught.exception))
+            self.assertIn("权威仓库头", str(caught.exception))
+            self.assertFalse(self.work.exists())
+        self.git("reset", "--hard", "HEAD~1")
+        self.add_frozen_ledger(receipted=True)
+        with mock.patch.object(closeout, "frozen_coverage", preflight_fixture.REAL_FROZEN_COVERAGE):
+            marker = self.arm_driver_marker()
+            plan = self.prepare()
+            self.assertTrue(self.plan_path.exists())
+            self.assertEqual(plan["candidate_commit"], closeout.git(plan["candidate"], "rev-parse", "HEAD").stdout.strip())
+            with self.assertRaisesRegex(closeout.CloseoutError, "全量门禁失败"):  # 预检（真实冻结覆盖＋环境核对）通过，门禁才起跑
+                closeout.run_gates(self.plan_path)
+            self.assertTrue(marker.exists())
 
     def test_complete_local_publication_is_idempotent(self):
         self.prepare()
