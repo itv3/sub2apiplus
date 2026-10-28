@@ -28,6 +28,12 @@ FIXTURE_DIRECTORY = Path(__file__).resolve().parent / "fixtures" / "chain_rehear
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
+# 允许补丁改动的“测试基础设施”文件：注入器原则上只改非测试文件（测试文件是缺陷回来时必须失败的回归用例，不能一起改回去），
+# 但个别历史缺陷的现场就在测试包的初始化文件里——收尾门禁给执行器设的环境变量要在测试包导入时剔除，缺陷就是这段剔除没有
+# （见 closeout-env-nested-executor.patch）。``__init__.py`` 里没有任何用例，改回去不会改变探针本身。新增例外必须写明理由。
+ALLOWED_TEST_INFRASTRUCTURE = frozenset({"tools/official_client_capture/tests/__init__.py"})
+
+
 class InjectionError(RuntimeError):
     """补丁文本非法，或补丁上下文在目标文件里找不到（受管文件在修复之后又变了）。"""
 

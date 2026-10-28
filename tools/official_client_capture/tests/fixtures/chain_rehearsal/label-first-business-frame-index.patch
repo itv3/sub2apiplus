@@ -1,0 +1,19 @@
+diff --git a/tools/official_client_capture/codex_upgrade_evidence_labels_0_164_0.json b/tools/official_client_capture/codex_upgrade_evidence_labels_0_164_0.json
+index a60718165..d489a06e9 100644
+--- a/tools/official_client_capture/codex_upgrade_evidence_labels_0_164_0.json
++++ b/tools/official_client_capture/codex_upgrade_evidence_labels_0_164_0.json
+@@ -2364,12 +2364,12 @@
+             "variant": "default",
+             "provider": "openai_oauth"
+           },
+-          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）；同一断言也证明第 2 个 response.create 帧是首个业务帧（frame_role=first_business，绑定帧索引 1），0.164.0 起 additional_tools 前缀由它带出。",
++          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 条 response.create 消息是网关预热（frame_role=warmup 由此推出，绑定原始帧索引 0）；同一断言也证明第 2 条 response.create 消息是首个业务消息（frame_role=first_business），0.164.0 起 additional_tools 前缀由它带出。frame_index 是 WebSocket 原始帧序号，不是消息序号：官方一条消息正好一个帧，而候选网关向上游发出的压缩消息会被拆成多个分片帧（候选网关压缩消息分片），A06 预热消息占原始帧 0 至 6，所以候选首个业务消息的起始帧是原始帧索引 7，first_business 绑在 7 而不是 1（索引 1 是预热消息的续帧，没有 event_type，选择器会把它筛掉）。该索引取决于预热消息的分片数：同一份原始字节重新派生恒为 7；若以后重采使分片数变化，标签会落到续帧上，此时选择器命中 0 条、封存预检当场拒绝，失败即关闭，不会静默通过。",
+           "frame_labels": {
+             "0": {
+               "frame_role": "warmup"
+             },
+-            "1": {
++            "7": {
+               "frame_role": "first_business"
+             }
+           }
