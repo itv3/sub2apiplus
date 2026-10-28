@@ -201,6 +201,18 @@ type CodexIdentityFacts struct {
 	//
 	// omitzero：未登记该事实的调用（非 Responses 端点等）序列化形态与旧结构逐字节相同。
 	PromptCacheKey CodexIdentityValue `json:",omitzero"`
+	// WindowAdvances 表示窗口号会随上下文压缩推进（画像 TurnMetadata.WindowTracking）：此时 WindowID 不是跨 attempt 稳定的
+	// invocation 身份，invocationDigest 不再绑定它——压缩之后新建连接的握手要用推进后的窗口号，同一次入站调用内的各个
+	// attempt 因此允许窗口号不同。
+	//
+	// omitempty：取 false 时 JSON 形态与旧结构逐字节相同，旧版本画像下的身份事实摘要保持不变。
+	WindowAdvances bool `json:",omitempty"`
+	// RootTurnID 是本 WS 帧的根回合 id（根线程上等于 TurnID，预热帧没有）；ResponsesLiteWS 表示本帧的模型走 Lite。
+	// 二者只进入 WS 帧的 client_metadata，且只在画像 ClientMetadata.DynamicKeys 声明对应键时才写。
+	//
+	// omitzero／omitempty：未登记时序列化形态与旧结构逐字节相同，旧画像下的身份事实摘要保持不变。
+	RootTurnID      CodexIdentityValue `json:",omitzero"`
+	ResponsesLiteWS bool               `json:",omitempty"`
 }
 
 func (f CodexIdentityFacts) Validate() error {
@@ -251,6 +263,11 @@ func (f CodexIdentityFacts) Digest() string {
 // WS 当前 turn、turn-state、client request 与模型条件由每个受控帧/attempt 单独
 // 进入 FinalizationToken，不能反向污染 invocation 的稳定身份。
 func (f CodexIdentityFacts) invocationDigest() string {
+	windowID := f.WindowID
+	if f.WindowAdvances {
+		// 窗口号会随压缩推进，不属于跨 attempt 必须稳定的身份；留空即不绑定。
+		windowID = CodexIdentityValue{}
+	}
 	raw, err := json.Marshal(struct {
 		AccountIdentityProjection  CodexIdentityValue
 		ChatGPTAccountID           CodexIdentityValue
@@ -274,7 +291,7 @@ func (f CodexIdentityFacts) invocationDigest() string {
 		f.AccountIdentityProjection, f.ChatGPTAccountID, f.WorkspaceID,
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.UserAgentSuffixEnabled,
 		f.InstallationID, f.SessionID,
-		f.ConversationID, f.ThreadID, f.WindowID, f.ManagedResidency,
+		f.ConversationID, f.ThreadID, windowID, f.ManagedResidency,
 		f.ManagedConfigurationDigest, f.Conditions.FedRAMPAccount, f.PromptCacheKey,
 	})
 	if err != nil {

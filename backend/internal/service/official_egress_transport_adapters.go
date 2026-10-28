@@ -817,6 +817,15 @@ func prepareOfficialCodexExecutorWebSocketFrame(
 			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
 		}
 	}
+	// 画像 ClientMetadata.DynamicKeys 声明时由编译器写入 client_metadata 的两个逐帧事实（未声明时它们不进入出站字节）。
+	if rootTurnID := strings.TrimSpace(ownedFields.Metadata["root_turn_id"]); rootTurnID != "" {
+		fact, err := officialegress.NewCodexIdentityValue(rootTurnID, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn)
+		if err != nil {
+			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
+		}
+		facts.RootTurnID = fact
+	}
+	facts.ResponsesLiteWS = strings.TrimSpace(ownedFields.Metadata[responsesLiteWSMetadataKey]) == "true"
 	turnState := strings.TrimSpace(ownedFields.Metadata["x-codex-turn-state"])
 	if turnState != "" {
 		facts.TurnState, err = officialegress.NewCodexTurnStateValue(turnState)

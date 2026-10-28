@@ -360,7 +360,8 @@ func buildOfficialCodexIdentityFacts(
 		if !exists {
 			return ""
 		}
-		return strings.TrimSpace(field.Value())
+		// 画像声明跟踪上下文窗口时，窗口推进之后新建连接的握手用推进后的窗口号（其余字段原样）。
+		return officialCodexWSAdvancedRegisteredField(egressContext, name, strings.TrimSpace(field.Value()))
 	}
 	conditionalField := func(name string) string {
 		return strings.TrimSpace(runtimeState.ConditionalHeaders[strings.ToLower(name)])
@@ -504,6 +505,9 @@ func buildOfficialCodexIdentityFacts(
 			return officialegress.CodexIdentityFacts{}, err
 		}
 	}
+	// 画像声明跟踪上下文窗口：窗口号随压缩推进，不再作为跨 attempt 稳定的 invocation 身份绑定。
+	facts.WindowAdvances = hasEgressContext && egressContext.openAIWSDerived != nil &&
+		officialCodexTurnMetadataWindowTracking(egressContext.ProfileMode())
 	if err := completeOfficialCodexGeneratedIdentityFacts(
 		&facts, endpointID, identitySeed,
 		officialCodexFallbackTurnMetadataInput{
