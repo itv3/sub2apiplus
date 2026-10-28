@@ -1031,3 +1031,58 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 预约批准绑定完整请求摘要，同名 owner 的下一次请求不能复用旧批准。`reservation_grace_seconds` 默认 30、`reservation_stop_seconds` 默认 5；将前者设为 `null` 恢复等待自然结束。并行与独占段都在等待时观察预约；撤回的预约停止后续中止操作。
 
 中止尝试写为 `reservation-aborted`，不可承接，不计测试失败或诊断。每次重派独立命名日志、结果和收据，最终正式记录以 `resumed_from` 关联中止记录；汇总的 `reservation_interruptions` 单独列账。部分审计轨迹只作中止证据保留。Python 断言、错误和意外成功先即时留档再打印；已观察失败即使随后被预约中止、诊断重跑通过，仍保留正式失败。实际非零测试失败继续计失败，无法清空会话或重派前身份漂移均拒绝继续。
+
+## 流水线脚本集（`driver/pipeline/`，入库于 OPT-10）
+
+上一版升级的 VC-1～VC-6 无人值守流水线（`vc-pipeline.sh` 等）原来只存在于采集主机的临时目录和本机分析目录，每个版本现写、没回放过。
+现在随驱动入库、受清单保护，**轮次、版本、分支、账号、路径一律参数化**：脚本里没有任何写死的版本或 Campaign 名（`test_driver_has_no_version_literals`
+与 `test_arm64_pipeline_scripts.py` 守这一条），取值来源只有两处：本轮参数文件 `ARM64_VC_ENV`（`parse_env.py` 解析），以及可选的 `pipeline.env`
+（`pipeline.env.example`，白名单键、值只许安全字符、不执行；命令行/环境变量优先）。公共函数在 `pipeline/pipeline-lib.sh`。
+
+| 位置（`driver/pipeline/`） | 作用 |
+|---|---|
+| `vc-pipeline.sh` | VC1→VC2→VC3→VC4→BGV→VC5→VC6 无人值守编排；`--check` 只读自检，`start` 前台自检后 `setsid -f` 起运行体，状态写 `<PREP>/pipeline/vc-status.txt`，最后一行必为 `EXIT rc=N` |
+| `start-entry.sh`、`opening-env.example.sh` | 正式入口（`entry.sh`）的起跑自检与后台运行；开工检查环境变量模板（复制到 `<PREP>/opening-env.sh`） |
+| `deploy-commit.sh`、`history-tree-refresh.sh`、`sync-data-root-backend.sh`、`prepare-*.sh`、`set-env-keys.sh`、`post-bgv.sh` | 受监督部署、历史测试树跟进、数据根 backend 同步、输入目录与历史门禁源码准备、参数文件定点改键、后台验证取证 |
+| `preflight-refresh.sh` | 官方采集登录态（capture-cli 的 `auth.json`）访问令牌的剩余有效期检查与直连刷新：`--remaining` 只读，`--ensure [--min N]` 不足就用官方客户端自带 app-server 的 `account/read {refreshToken:true}` 无代理直连刷新一次，失败明确退出非零。`start-entry.sh` 起跑前（C9 自检＋真起跑时 `--ensure`）和 `vc-pipeline.sh` 的 VC1 阶段（首批没开始就刷新、已在跑则明确停下）自动调用；阈值 `PIPE_TOKEN_MIN_MINUTES`，缺省 150 分钟（VC-1 预计时长＋1 小时）。采集账号开关“剩余不足 60 分钟拒绝打开”的逻辑不变 |
+| `capture-account-on.sh`／`capture-account-off.sh`、`capture_admin.py` | 采集账号开关（只改 `status`／`schedulable`，幂等）与采集专用用户／Key 建立；账号号取 `CAPTURE_ACCOUNT_ID` 或参数文件的采集账号 |
+| `evolve-and-resume.sh`、`evo/` | VC-2 批准预览被拒后的“工具演进 → 对账 → 续跑”（只覆盖失败动作是 `classify-preview` 的情形） |
+| `vc2/` | VC-1 封存（`vc1-seal.sh`）、批次序号可变的 VC-2/VC-3（`vc23-seq.sh` 等，由 `gen_vc2_seq_scripts.py` 从驱动自带脚本机械生成，测试要求两者逐字一致）、人工审核标记 |
+| `vc6/` | VC-6 全套脚本、`ORDER.example.txt`（复制到 `<PREP>/vc6/ORDER.txt`）、`vc6-cleanup-execute.sh` |
+| `vc-chain.sh`、`vc-chain-vc5.sh` | 调度者串联：VC4 通过后自动续起 VC5→VC6；VC-5 恢复链批次跑完后接着起流水线 |
+| `local/` | **开发机**侧脚本（不在采集主机运行）：`vc4-handoff.sh`、`upload-and-deploy.sh`、`upload-entry-bundle.sh`、`sync-history-tree.sh`、`evo-local.sh`、`install-driver.sh`、`vc6-local-commit.sh`、`vc6-handoff-watch.sh`；轮次坐标一律 ssh 到采集主机向参数文件要，不在本机再抄一份 |
+| `round-env.template`、`render_round_env.py` | 本轮参数文件模板与渲染器：版本号推出全部名字，`REPLACE_` 开头的值由人填；没填的 `parse_env.py` 会拒绝 |
+| `pipeline.env.example` | 流水线覆盖文件模板 |
+
+注意：流水线脚本在驱动目录里，`deploy-commit.sh`（第 4 步重装驱动）和 `install-driver.sh` 都会替换它们。bash 边读边执行，所以**有流水线、`evolve-and-resume.sh`、入口在跑时不得部署或换驱动**
+（两个脚本都会先检查；`deploy-commit.sh` 还会先把自己复制到临时位置再运行）。一轮的第一次部署发生在驱动还是上一版时，`local/upload-and-deploy.sh` 把 `deploy-commit.sh` 与
+`pipeline-lib.sh` 传到 `<PREP>/bootstrap/`（驱动目录之外）运行。
+
+### 已修的流水线缺陷（都有测试复现）
+
+* 采集账号必须在 `vc5-all` 打出 `VC5_ALL_DONE` 之后才关：seal 的“Kilo 后环境恢复门禁”拿 Kilo 后探针对比候选采集后探针，Kilo 一结束就关会判环境污染。
+  监视循环里不碰账号，跳出循环后才 `capture_off`；`test_account_closed_only_after_vc5_all_done` 守顺序，`test_premature_close_is_caught_by_this_test_mutation` 把脚本改回过早关的写法，证明测试会红。
+* VC-4 的构建收据在 `$NEWDIR/candidates/$CAND/build-receipt.json`（Campaign 写的），不在构建目录 `$B`；按 `$B` 核对曾误停。
+* 取 bundle 一律 `refs/heads/<分支>`：`git bundle create "<基点>..<分支>"` 的 bundle 里没有 `HEAD`，`git fetch <bundle> HEAD` 会报 `couldn't find remote ref HEAD`。
+* `others_running` 不再把只读的 `background_validation.py preflight` 当成“别的编排”（操作员的 `--check` 曾让第一次起跑自己拦住自己）。
+
+### 重试清单（只对可证明幂等的步骤重试，上限 `PIPE_RETRY_MAX`，默认 2 次，间隔 `PIPE_RETRY_SLEEP` 秒，每次写 `RETRY` 行）
+
+| 步骤 | 是否重试 | 依据 |
+|---|---|---|
+| `round_context.py --mode campaign` 只读重放（各阶段收尾） | 重试 | 只读 |
+| `vc5-precheck.sh --dry-run`（准入预览） | 重试（退出码 3 表示 blocked 属确定性结论，不在重试范围） | 只读预览 |
+| `background-validate.sh preflight` | 重试 | 只读前置检查 |
+| 采集账号开 `capture-account-on.sh` | 仅退出码 3（另一实例）、5（管理接口失败）重试；2（身份对不上）、4（令牌快过期）不重试 | 脚本文档保证幂等，只改两个字段 |
+| 采集账号关 `capture-account-off.sh` | 退出码 3、5、6 重试；2、4 不重试 | 同上 |
+| VC-6 `ORDER.txt` 里带 `retry` 标志的 `run` 步骤 | 重试（缺省没有任何步骤带该标志；示例里只有 `clean-cache`） | 由调度者读脚本确认幂等后声明 |
+| `preflight-refresh.sh --ensure`（令牌不足时的直连刷新） | **不重试**，失败即明确停下 | 会改写 `auth.json` 并轮换 refresh_token，不是幂等；失败多半是服务端拒绝，重复请求只会白烧 |
+| `arm64-vc4-gates.sh`、`vc4-all.sh` | **默认不重试**；`PIPE_RETRY_VC4_GATES=1`／`PIPE_RETRY_VC4_ALL=1` 才各补跑一次 | 文档写明可重跑／重入，但一轮 2 小时以上，真缺陷会白烧；补跑前会复核计时账本与根盘 |
+| `vc23-seq.sh`（VC-2/VC-3 批次）、`vc1-seal.sh`、`vc5-all.sh`、`vc5-precheck.sh --apply`、构建网络批准、`set-env-keys.sh`、后台验证 `start`、`entry.sh`、受监督部署、VC-6 其余 `run` 步骤 | **不重试** | 占用批次序号、发真实请求、写批准件／账本／参数文件，或脚本拒绝覆盖已完成阶段；重跑要先对账（见恢复链） |
+
+### VC-6 清理（`vc6/vc6-cleanup-execute.sh`）的镜像放行规则
+
+运行中的生产容器镜像必须是“VC-6 最终镜像（退休后重建的那一个）”，或“其后的发布镜像”。先发版、生产换成 ghcr 发布镜像、之后才清理是常见顺序，所以：
+调度者在环境变量 `VC6_RELEASE_IMAGE` 写发布镜像引用，脚本核对“该引用在本机的镜像 ID＝容器正在跑的镜像 ID”且它不在待删清单里；没声明时运行镜像不是最终镜像就拒绝（不猜）。
+执行收据的 `reason` 与 `cleanup-execution.json` 的 `post_checks.running_image_kind`（`final`／`release`）、`running_image_ref`、`production_image_id` 如实写明当前运行的是哪个，
+不再一律写“仍是退休后最终镜像”。（`cleanup_decision` 收据的 assertions 字段集合由受管工具固定，不能加字段，所以种类写在 `reason` 文本和证据文件里。）

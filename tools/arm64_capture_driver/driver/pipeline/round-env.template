@@ -1,0 +1,72 @@
+# 本轮驱动参数文件模板（由 render_round_env.py 渲染成 <RUNROOT>/env.sh）。只允许变量赋值；parse_env.py 解析，不执行。
+# 用 at 符号括起来的大写名字是渲染时按版本自动推出的部分；REPLACE_ 开头的值是每轮必须由人填的真值（渲染时用 --set KEY=VALUE 给，
+# 没给的保持 REPLACE_ 原样，parse_env 会拒绝，提醒还没填）。键含义见 ../env.example.sh 与指南第四部分。
+# 变量来源总表与“何时由谁填”见 ../README.md 的“流水线脚本集”一节。
+ROUND=@ROUND@
+STAMP=@STAMP@
+BASELINE_VERSION=@BASELINE_VERSION@
+TARGET_VERSION=@TARGET_VERSION@
+# 目标画像 id 由 VC-2 批准结果给出；这里按惯例推一个，VC-3 后若不同，vc-pipeline.sh 的 VC3 阶段会提示并同步改
+TARGET_PROFILE_ID=codex-@TARGET_VERSION@-official-@PROFILE_SUFFIX@-@ROUND@
+D=/root/docker/capture-cli/data
+RUNROOT=/root/vc-rounds/@TAG@-$ROUND
+NEW=@TAG@-formal-vc1-$ROUND-$STAMP
+IN=@TAG@-$ROUND-inputs-$STAMP
+UP=codex-@BASELINE_SHORT@-to-@TARGET_COMPACT@-$ROUND-$STAMP
+CAND=@TAG@-candidate-$ROUND
+B=$D/candidates/$CAND
+PREV_CANDIDATE=$D/candidates/@BASELINE_TAG@-candidate-REPLACE_PREVIOUS_ROUND
+HISTORY_TEST_TREE=$D/candidates/REPLACE_HISTORY_CANDIDATE/test-tree
+# C／DC／RECEIPT／BUNDLE_BRANCH 在 VC-4 由流水线从候选链 bundle 推出后写入（set-env-keys.sh）；占位值只是格式合法
+C=0000000000000000000000000000000000000000
+DC=0000000000000000000000000000000000000000
+RECEIPT=docs/egress/maintenance/PENDING-VC4-freeze-successor.json
+BUNDLE=$D/staging/@TAG@-$ROUND.bundle
+BUNDLE_BRANCH=codex/codex-@TARGET_SHORT@-candidate-$ROUND
+EVIDENCE_DECISION=recapture
+# recapture 不读取前序坐标，只是必填占位：取上一版本的 Formal Campaign
+PREDECESSOR_CAMPAIGN=$D/evidence/campaigns/REPLACE_PREDECESSOR_CAMPAIGN
+OFFICIAL_CAMPAIGN=$D/evidence/campaigns/$NEW
+OFFICIAL_STOP_LEDGER=$D/control/REPLACE_OFFICIAL_STOP_LEDGER
+OFFICIAL_STOP_RECEIPT=REPLACE_OFFICIAL_STOP_RECEIPT
+INPUT_RULE_MIGRATION=$D/control/$IN/rule-migration-approved.json
+INPUT_TARGET_SNAPSHOT=$D/control/$IN/target-snapshot-approved.json
+# 项目总账有效绝对截止：起跑前核对总账现状；一整轮阶段预算合计 1110 分钟，装不下就先由调度者决定是否登记延期
+PROJECT_DEADLINE_UTC=REPLACE_PROJECT_DEADLINE_UTC
+STAGE_BUDGETS="VC-0=165 VC-1=120 VC-2=210 VC-3=75 VC-4=165 VC-5=210 VC-6=165"
+MIN_FREE_GIB=40
+FRONTEND_DEVIATION_APPROVED_BY="REPLACE_FRONTEND_DEVIATION_APPROVED_BY"
+PROFILE_ID=$TARGET_PROFILE_ID
+PROFILE_DIGEST=@ZERO64@
+KILO_BIN=$D/private-tools/REPLACE_KILO_DIR/bin/kilo
+KILO_VERSION=REPLACE_KILO_VERSION
+KILO_SHA256=REPLACE_KILO_SHA256
+COMPOSE_DIR=/root/docker/sub2apiplus/app
+COMPOSE_BACKUP=/root/backups/docker-compose.yml.pre-@TAG@-REPLACE_DATE
+PRODUCTION_IMAGE=REPLACE_PRODUCTION_IMAGE_WITH_DIGEST
+CODEX_BIN=/opt/codex-$TARGET_VERSION/bin/codex
+CODEX_BIN_SHA256=REPLACE_CODEX_BIN_SHA256
+OFFICIAL_ASSET_SHA256=REPLACE_OFFICIAL_ASSET_SHA256
+MAIN_MODEL=REPLACE_MAIN_MODEL
+LITE_MODEL=REPLACE_LITE_MODEL
+CODEX_ACCOUNT_ID=REPLACE_CODEX_ACCOUNT_ID
+API_KEY_ID=REPLACE_API_KEY_ID
+POLICY_COMPAT_RECEIPT=$D/control/policy-certification/REPLACE_POLICY_COMPAT_RECEIPT
+POLICY_ACTIVATION=$D/control/policy-certification/policy-activation-REPLACE_POLICY_VERSION-@TAG@-$ROUND-$STAMP.json
+RELEASE_CERTIFICATION=$D/control/policy-certification/tool-release-certification-REPLACE_POLICY_VERSION-@TAG@-$ROUND-$STAMP.json
+TARGET_CODE_MODE_HOST_SHA256=REPLACE_TARGET_CODE_MODE_HOST_SHA256
+CAPTURE_RUNTIME_IMAGE=REPLACE_CAPTURE_RUNTIME_IMAGE_WITH_DIGEST
+JWTGEN_BIN=$D/private-tools/REPLACE_JWTGEN_DIR/jwtgen
+# VC-6 退役版本：本轮晋升目标版本时退役哪个旧版本
+RETIRE_VERSION=REPLACE_RETIRE_VERSION
+P0_ROLLBACK_EVIDENCE=$RUNROOT/rollback-catalog-promotion-receipt.json
+HISTORICAL_SOURCE_ROOT=$D/official/historical-gate-source-$TARGET_VERSION
+# 入口编排器 entry.sh：入口门禁的源码坐标＝部署到数据根的那一份工具提交（集成分支定稿提交；upload-entry-bundle.sh 会打印这三行）
+ENTRY_BUNDLE=$RUNROOT/@TAG@-deploy-$ROUND-PENDING.bundle
+ENTRY_BRANCH=REPLACE_ENTRY_BRANCH
+ENTRY_COMMIT=0000000000000000000000000000000000000000
+PREVIOUS_POLICY=$D/control/policy-certification/REPLACE_PREVIOUS_POLICY
+ACTIVE_PROFILE=$D/control/$IN/baseline-profile.json
+# VC-4 构建网络：R15 不放行 BuildKit RUN 容器时需要 host 并要求绑定本轮的专项批准；vc-pipeline.sh 的 VC4 阶段在 --approver 下自动签并写入这两行
+# VC4_BUILD_NETWORK=host
+# VC4_BUILD_NETWORK_APPROVAL=$RUNROOT/REPLACE_BUILD_NETWORK_APPROVAL.json
