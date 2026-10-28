@@ -58,7 +58,10 @@ func codexGateWireKeys(t *testing.T, raw string) []string {
 //
 // 对照：另一槽位的画像没有该键，上述每个生成点都不出现 history_initialization，键序与取值与引入之前相同。
 func TestCodexTurnMetadataHistoryInitializationReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "TurnMetadata 节声明 history_initialization 键",
+	// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
+	// 改在较旧槽位（批准这些语义的 0.163 发布）上重放，作为既有批准语义的回归；0.164 对同一规则的新语义由本轮的
+	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_test.go）覆盖。
+	mode := codexGateTargetReleaseMode(t, "TurnMetadata 节声明 history_initialization 键",
 		codexGateTurnMetadataDeclaresHistoryInitialization)
 	section := codexGateExecutableProfile(t, mode).Optional().TurnMetadata
 	require.NotNil(t, section, "目标画像必须声明 TurnMetadata 节")
@@ -146,7 +149,10 @@ func TestCodexTurnMetadataHistoryInitializationReplaysApprovedSemanticsOnTargetR
 
 	// ---- 对照：另一槽位没有该键 ----
 	control, ok := codexGateControlReleaseMode(t, mode)
-	require.True(t, ok, "判别式门禁必有一个不具备该结构事实的对照槽位")
+	if !ok {
+		// 继承特征：两个槽位都具备该结构事实，没有“不具备”的对照槽位；上面已在较旧槽位完成重放，对照段随之省略。
+		return
+	}
 	controlServer := startCodexGateWireServer(t, nil)
 	controlBody, controlIngress := codexGateRootIngress(t, nil)
 	controlRequest := codexGateForwardResponsesWire(t, control, controlServer, controlIngress, controlBody, nil)

@@ -26,7 +26,10 @@ import (
 //
 // 对照：另一槽位的非 Lite 请求保留顶层 instructions、没有载体消息；Lite 把指令以不带 id 与标记的普通 developer 消息放进 input。
 func TestCodexBaseInstructionsCarrierReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "BaseInstructions 节声明 input 里 developer 消息形态的基础指令载体（HTTP 与 WS）",
+	// 画像侧该结构事实自 0.163 起存在：候选 0.164 进入 previous 之后两个槽位都具备（继承特征），本门禁不再承担判别职责，
+	// 改在较旧槽位（批准这些语义的 0.163 发布）上重放，作为既有批准语义的回归；0.164 对同一规则的新语义由本轮的
+	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_test.go）覆盖。
+	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 input 里 developer 消息形态的基础指令载体（HTTP 与 WS）",
 		codexGateBaseInstructionsCarrierDeclared)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
@@ -145,7 +148,10 @@ func TestCodexBaseInstructionsCarrierReplaysApprovedSemanticsOnTargetRelease(t *
 
 	// ---- 对照：另一槽位的最终形态不变 ----
 	control, ok := codexGateControlReleaseMode(t, mode)
-	require.True(t, ok, "判别式门禁必有一个不具备该结构事实的对照槽位")
+	if !ok {
+		// 继承特征：两个槽位都具备该结构事实，没有“不具备”的对照槽位；上面已在较旧槽位完成重放，对照段随之省略。
+		return
+	}
 	nonLite := forwardHTTP(control, cases[0])
 	require.Equal(t, codexGateBaseInstructionsText, gjson.GetBytes(nonLite.body, "instructions").String(),
 		"对照：另一槽位的非 Lite 请求保留顶层 instructions")

@@ -590,10 +590,13 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_RewriteCountIndependentOfHits
 	small := buildToolSchemaNullTypeBody(t, 4)
 	large := buildToolSchemaNullTypeBody(t, 2000)
 
-	smallAllocs := testing.AllocsPerRun(2, func() {
+	// minAllocsPerRun（同包助手）多轮取最小值：AllocsPerRun 读进程级 runtime.MemStats.Mallocs，
+	// 满载时包内其它 goroutine 的分配会落进测量窗口（ARM64 全量回归里实测过 290 > 200 的假红）。
+	// 突发噪声不会每一轮都撞上，取最小值即可滤掉；若实现退回线性重写，每一轮都是 2000 量级，最小值照样越界。
+	smallAllocs := minAllocsPerRun(5, 2, func() {
 		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(small)
 	})
-	largeAllocs := testing.AllocsPerRun(2, func() { // time-threshold: allow 分配次数上限 200 对应干净环境实测约 17 次，已留 10 倍余量，上限是为了锁住“与命中数无关”的复杂度，注释里写明了取值依据
+	largeAllocs := minAllocsPerRun(5, 2, func() { // time-threshold: allow 分配次数上限 200 对应干净环境实测约 17 次，已留 10 倍余量，上限是为了锁住“与命中数无关”的复杂度，注释里写明了取值依据
 		_, _, _ = sanitizeOpenAIResponsesToolParameterTypes(large)
 	})
 

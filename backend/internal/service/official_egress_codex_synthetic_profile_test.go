@@ -46,11 +46,86 @@ func officialCodexLegacyBaseProfileMode() (string, bool) {
 }
 
 // requireOfficialCodexLegacyBaseProfileMode 是测试用封装：找不到旧画像槽位时直接失败。
+//
+// 正式目录里没有旧画像槽位（Codex 0.164 候选态与晋升后：两个槽位都声明了这两个节）时，把冻结的 0.160.0 画像
+// （见 officialCodexLegacyBase）装进 service 层两个取画像入口的 active 位置，并返回 active：于是只经 service 层
+// 画像入口取节、字段序与身份的用例照常看到“旧画像”。正式 ReleaseCatalog 与 Executor 不受影响——需要真实旧画像
+// 发布节点（Executor／Compiler 逐槽位冻结）的端到端用例见 skipWithoutOfficialCodexLegacyReleaseSlot。
 func requireOfficialCodexLegacyBaseProfileMode(t *testing.T) string {
 	t.Helper()
+	if mode, found := officialCodexLegacyBaseProfileMode(); found {
+		return mode
+	}
+	_, legacy := officialCodexLegacyBase(t)
+	previousOptional := officialCodexExecutableProfileForMode
+	previousBodyOrder := officialCodexReleaseProfileForBodyOrder
+	officialCodexExecutableProfileForMode = func(mode string) (profilecontract.ExecutableProfile, error) {
+		if normalizeOfficialClientProfileMode(mode) == officialClientProfileModeActive {
+			return legacy, nil
+		}
+		return previousOptional(mode)
+	}
+	officialCodexReleaseProfileForBodyOrder = func(mode string) (profilecontract.ExecutableProfile, error) {
+		if normalizeOfficialClientProfileMode(mode) == officialClientProfileModeActive {
+			return legacy, nil
+		}
+		return previousBodyOrder(mode)
+	}
+	t.Cleanup(func() {
+		officialCodexExecutableProfileForMode = previousOptional
+		officialCodexReleaseProfileForBodyOrder = previousBodyOrder
+	})
+	return officialClientProfileModeActive
+}
+
+// skipWithoutOfficialCodexLegacyReleaseSlot 供必须在“正式目录里真实存在的旧画像发布槽位”上运行的端到端用例使用：
+// 这类用例让服务的发布指针配置与 Executor／Compiler 冻结在旧画像槽位，期望字节是旧画像的最终线上形态
+// （顶层 instructions 的位置、input 的固定下标等）。正式目录的两个槽位都已声明基础指令载体节与 access_programs
+// 值域节（Codex 0.164 候选态与晋升后，Active／Previous 是 0.163／0.164）时，该旧形态在线上已不可达，用例按原因跳过，
+// 与 legacy compact 随退役跳过同一做法（officialCodexLegacyCompactProfileMode）；“画像未声明某节时回到旧逻辑”的原意由
+// 合成旧画像用例覆盖（withOfficialCodexLegacySyntheticProfile、requireOfficialCodexLegacyBaseProfileMode 的冻结底稿）。
+// 有旧画像槽位时返回该槽位名，行为与引入本函数之前逐字一致。
+func skipWithoutOfficialCodexLegacyReleaseSlot(t *testing.T) string {
+	t.Helper()
 	mode, found := officialCodexLegacyBaseProfileMode()
-	require.True(t, found, "正式目录的两个槽位都已声明基础指令载体节与 access_programs 值域节，没有可作底稿与对照的旧画像")
+	if !found {
+		t.Skip("正式目录的 Active／Previous 都已声明基础指令载体节与 access_programs 值域节：旧画像发布槽位线上已不可达，" +
+			"本用例断言旧画像的最终线上形态并依赖 Executor 冻结在该槽位，跳过；节缺席时的旧逻辑由合成旧画像用例覆盖")
+	}
 	return mode
+}
+
+// officialCodexLegacyFrozenSnapshotVersion 是合成画像夹具在正式目录里找不到旧画像槽位时采用的冻结底稿版本：
+// 0.160.0 是最后一份既不声明 BaseInstructions 节也不声明 AccessPrograms 节的画像，其快照作为不可变测试数据
+// 永久保留在 profilecontract/testdata/snapshots 下（与运行目录的退休裁剪无关）。
+const officialCodexLegacyFrozenSnapshotVersion = "0.160.0"
+
+// officialCodexLegacyBase 返回合成画像夹具的旧画像底稿：快照与可执行画像。
+//   - 正式目录有旧画像槽位（尚未声明两个新节）：取该槽位 release，与改动前逐字一致；
+//   - 两个槽位都已声明这两个节（Codex 0.164 候选态与晋升后：Active／Previous 是 0.163／0.164）：改取冻结的
+//     0.160.0 快照现编可执行画像。
+func officialCodexLegacyBase(t *testing.T) (profilecontract.SnapshotDoc, profilecontract.ExecutableProfile) {
+	t.Helper()
+	if mode, found := officialCodexLegacyBaseProfileMode(); found {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
+		require.NoError(t, err)
+		return release.Profile().ToSnapshot(), release.ExecutableProfile()
+	}
+	directory := filepath.Join("..", "officialegress", "profilecontract", "testdata", "snapshots", officialCodexLegacyFrozenSnapshotVersion)
+	matches, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "冻结底稿目录 %s 应恰有一份快照", directory)
+	raw, err := os.ReadFile(matches[0])
+	require.NoError(t, err)
+	doc, err := profilecontract.ParseSnapshot(raw)
+	require.NoError(t, err)
+	spec, err := profilecontract.NewProfileSpec(doc)
+	require.NoError(t, err)
+	executable, err := profilecontract.CompileExecutableProfile(spec)
+	require.NoError(t, err)
+	require.Nil(t, executable.Optional().BaseInstructions, "冻结底稿必须不声明 BaseInstructions 节")
+	require.Nil(t, executable.Optional().AccessPrograms, "冻结底稿必须不声明 AccessPrograms 节")
+	return doc, executable
 }
 
 func withOfficialCodexSyntheticProfile(
@@ -58,11 +133,7 @@ func withOfficialCodexSyntheticProfile(
 	mutate func(*profilecontract.SnapshotDoc),
 ) profilecontract.ExecutableProfile {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(
-		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
-	)
-	require.NoError(t, err)
-	doc := release.Profile().ToSnapshot()
+	doc, _ := officialCodexLegacyBase(t)
 	if mutate != nil {
 		mutate(&doc)
 	}

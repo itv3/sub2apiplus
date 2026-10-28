@@ -1,0 +1,50 @@
+{
+  "base_commit": "a7ed1d5be885c249d6f852de7c0a7d49f45a807a",
+  "changed_path_count": 1,
+  "current_commit": "4365a2cc4cb076a66ed4b5f9ba43d99e27ecd90e",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7123,
+  "frozen_path_count": 2318,
+  "identity_sha256": "2213f33b9e85ed4613a9ae5c2557f84d444a55089143c54ec0d93036357cc559",
+  "issued_at_utc": "2026-10-27T18:27:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01640-candidate-alloc-r1-20261027-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_tool_schema_test.go",
+      "predecessor_sha256s": [
+        "4f6a424c090b0b3fd6b728f25607657e062c7a4a1f89422f13db68438e243a39"
+      ],
+      "reason": "登记 openai_responses_tool_schema_test.go 的满载稳定性修复（分配次数改取多轮最小值）的精确后继摘要；旧收据逐字保留。 path=backend/internal/service/openai_responses_tool_schema_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-tool-opt-20261026-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fa8fbcf7b05f85a99bf3c2df3fe671c10240d97f5fa9d85bc669bfbd26bcbce9"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
