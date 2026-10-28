@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -238,4 +239,52 @@ func TestDerivedHTTPIdentityIDsUseOfficialLayout(t *testing.T) {
 	turnID, err := uuid.Parse(identity.turnID)
 	require.NoError(t, err)
 	require.LessOrEqual(t, officialCodexEmbeddedMs(sessionID), officialCodexEmbeddedMs(turnID), "会话 id 不晚于它的第一个回合 id")
+}
+
+// 兜底路径生成的身份标识取官方形态：installation 是 UUIDv4；会话与线程是同一个 UUIDv7；window 是“线程 id:0”；
+// x-client-request-id 与线程 id 相同（官方实采 90 个请求全部如此）；同一次调用的多次 attempt 取值一致。
+func TestGeneratedFallbackIdentityFactsUseOfficialShapes(t *testing.T) {
+	complete := func(seed, endpointID string) officialegress.CodexIdentityFacts {
+		facts := officialegress.CodexIdentityFacts{}
+		require.NoError(t, completeOfficialCodexGeneratedIdentityFacts(
+			&facts, endpointID, seed, officialCodexFallbackTurnMetadataInput{},
+		))
+		return facts
+	}
+	for _, endpointID := range []string{officialCodexEndpointResponsesHTTP, officialCodexEndpointResponsesCompact, officialCodexEndpointResponsesWS} {
+		first := complete("fallback-seed-a", endpointID)
+		again := complete("fallback-seed-a", endpointID)
+		other := complete("fallback-seed-b", endpointID)
+		require.Equal(t, first, again, "同一次调用的多次 attempt 必须一致：%s", endpointID)
+		require.NotEqual(t, first.SessionID.Value, other.SessionID.Value)
+
+		installation, err := uuid.Parse(first.InstallationID.Value)
+		require.NoError(t, err)
+		require.EqualValues(t, 4, installation.Version())
+		require.Equal(t, uuid.RFC4122, installation.Variant())
+		for _, text := range []string{first.SessionID.Value, first.TurnID.Value} {
+			parsed, parseErr := uuid.Parse(text)
+			require.NoError(t, parseErr)
+			require.EqualValues(t, 7, parsed.Version())
+			require.Zero(t, (officialCodexRandA(parsed)>>2)&3, text)
+		}
+		require.Equal(t, first.SessionID.Value, first.ThreadID.Value, "根线程 session 与 thread 是同一个 id")
+		require.Equal(t, first.ThreadID.Value+":0", first.WindowID.Value)
+		require.Equal(t, first.ThreadID.Value, first.ClientRequestID.Value, "x-client-request-id 与线程 id 相同")
+		require.NotEqual(t, first.SessionID.Value, first.TurnID.Value)
+	}
+	// 已有的事实原样保留，缺的才补：入站带了线程 id 时 window 与 client request 跟随它。
+	facts := officialegress.CodexIdentityFacts{ThreadID: mustIdentityValue("01a17935-c8ae-7882-9b88-60f5c3ad6e5b")}
+	require.NoError(t, completeOfficialCodexGeneratedIdentityFacts(
+		&facts, officialCodexEndpointResponsesHTTP, "fallback-seed-c", officialCodexFallbackTurnMetadataInput{},
+	))
+	require.Equal(t, "01a17935-c8ae-7882-9b88-60f5c3ad6e5b:0", facts.WindowID.Value)
+	require.Equal(t, "01a17935-c8ae-7882-9b88-60f5c3ad6e5b", facts.ClientRequestID.Value)
+
+	// 文件上传没有会话：client request id 是确定性 UUIDv4。
+	upload := complete("fallback-seed-a", officialCodexEndpointFilesBlobUpload)
+	parsed, err := uuid.Parse(upload.ClientRequestID.Value)
+	require.NoError(t, err)
+	require.EqualValues(t, 4, parsed.Version())
+	require.Equal(t, upload, complete("fallback-seed-a", officialCodexEndpointFilesBlobUpload))
 }

@@ -2,8 +2,6 @@ package service
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,18 +62,6 @@ func officialCodexImagesHeaderDeclarations(mode, endpointID string) (imageTurnID
 		}
 	}
 	return imageTurnID, turnMetadata, profile.Version()
-}
-
-// officialCodexGeneratedUUIDLikeValue 由 invocation seed 与用途后缀确定性派生 8-4-4-4-12 形态的标识，
-// 与 completeOfficialCodexGeneratedIdentityFacts 里 Responses 会话标识的派生口径一致。
-func officialCodexGeneratedUUIDLikeValue(identitySeed, suffix string) string {
-	sum := sha256.Sum256([]byte(identitySeed + "\x00" + suffix))
-	return fmt.Sprintf(
-		"%s-%s-%s-%s-%s",
-		hex.EncodeToString(sum[0:4]), hex.EncodeToString(sum[4:6]),
-		hex.EncodeToString(sum[6:8]), hex.EncodeToString(sum[8:10]),
-		hex.EncodeToString(sum[10:16]),
-	)
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +367,7 @@ func completeOfficialCodexImagesTurnFacts(
 	} else {
 		sessionID := facts.SessionID.Value
 		if sessionID == "" {
-			sessionID = officialCodexGeneratedUUIDLikeValue(identitySeed, "session")
+			sessionID = officialCodexInvocationSessionID(identitySeed)
 		}
 		var values map[string]json.RawMessage
 		values, err = officialImagesSynthesizedTurnMetadataValues(

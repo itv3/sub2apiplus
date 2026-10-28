@@ -149,7 +149,7 @@ func TestImagesTurnFactsFollowDeclaredSlots(t *testing.T) {
 	turnID := officialCodexInvocationTurnID("images-seed")
 	startedAt, startedOK := officialCodexTurnStartedAtMs(turnID)
 	require.True(t, startedOK, "兜底回合 id 必须是 UUIDv7，开始时间由它推出")
-	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	sessionID := officialCodexInvocationSessionID("images-seed")
 	for _, endpointID := range []string{officialCodexEndpointImagesGenerations, officialCodexEndpointImagesEdits} {
 		facts := completeImagesTurnFactsForTest(t, endpointID, officialClientProfileModeActive, withExecSurface)
 		require.Equal(t, turnID, facts.TurnID.Value)
@@ -213,7 +213,7 @@ func TestImagesTurnFactsSynthesizedCarryDefaultSessionModel(t *testing.T) {
 	turnID := officialCodexInvocationTurnID("images-seed")
 	startedAt, startedOK := officialCodexTurnStartedAtMs(turnID)
 	require.True(t, startedOK, "兜底回合 id 必须是 UUIDv7，开始时间由它推出")
-	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	sessionID := officialCodexInvocationSessionID("images-seed")
 	for _, endpointID := range []string{officialCodexEndpointImagesGenerations, officialCodexEndpointImagesEdits} {
 		facts := completeImagesTurnFactsForTest(t, endpointID, officialClientProfileModeActive, withExecSurface)
 		require.Equal(t, officialImagesTurnDefaultPathExpectation(t, sessionID, turnID, startedAt, profile.Version()),
@@ -248,7 +248,7 @@ func TestImagesTurnFactsSynthesizedWithoutDefaultReasoningEffort(t *testing.T) {
 	turnID := officialCodexInvocationTurnID("images-seed")
 	startedAt, startedOK := officialCodexTurnStartedAtMs(turnID)
 	require.True(t, startedOK, "兜底回合 id 必须是 UUIDv7，开始时间由它推出")
-	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	sessionID := officialCodexInvocationSessionID("images-seed")
 	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive, withExecSurface)
 	require.Equal(t,
 		`{"session_id":"`+sessionID+`","thread_id":"`+sessionID+`","model":"gpt-5.5","turn_id":"`+turnID+`",`+
@@ -267,7 +267,7 @@ func TestImagesTurnFactsSynthesizedWithoutSessionDefaultsKeepsTwelveKeys(t *test
 	turnID := officialCodexInvocationTurnID("images-seed")
 	startedAt, startedOK := officialCodexTurnStartedAtMs(turnID)
 	require.True(t, startedOK, "兜底回合 id 必须是 UUIDv7，开始时间由它推出")
-	sessionID := officialCodexGeneratedUUIDLikeValue("images-seed", "session")
+	sessionID := officialCodexInvocationSessionID("images-seed")
 	facts := completeImagesTurnFactsForTest(t, officialCodexEndpointImagesGenerations, officialClientProfileModeActive, withExecSurface)
 	require.Equal(t,
 		`{"session_id":"`+sessionID+`","thread_id":"`+sessionID+`","turn_started_at_unix_ms":`+strconv.FormatInt(startedAt, 10)+`,`+

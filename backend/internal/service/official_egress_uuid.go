@@ -465,14 +465,35 @@ func generateOfficialStableTurnUUIDV7(key officialUUIDV7CacheKey) string {
 	return officialUUIDV7Cache.resolveWith(key, newOfficialCodexTurnUUIDV7)
 }
 
-// officialCodexInvocationTurnID 为没有任何回合来源的调用兜底生成回合 id：同一 invocationSeed 的多次调用得到
-// 同一个值。取代以前由 invocation seed 做 SHA-256 再按 8-4-4-4-12 排版的写法（那不是 UUID，也没有时间位）。
-func officialCodexInvocationTurnID(invocationSeed string) string {
-	key := newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
-		WriteString("invocation").
+// officialCodexInvocationID 为没有任何来源的调用兜底生成按调用稳定的 UUIDv7：同一 invocationSeed 与 purpose 的多次调用
+// 得到同一个值。取代以前由 invocation seed 做 SHA-256 再按 8-4-4-4-12 排版的写法（那不是 UUID，也没有时间位）。
+func officialCodexInvocationID(invocationSeed, purpose string, generate func() string) string {
+	key := newOfficialUUIDV7Seed("openai-official-egress-invocation").
+		WriteString(purpose).
 		WriteString(invocationSeed).
 		Key()
-	return officialCodexInvocationTurnCache.resolveWith(key, newOfficialCodexTurnUUIDV7)
+	return officialCodexInvocationTurnCache.resolveWith(key, generate)
+}
+
+// officialCodexInvocationTurnID 是兜底的回合 id。
+func officialCodexInvocationTurnID(invocationSeed string) string {
+	return officialCodexInvocationID(invocationSeed, "turn", newOfficialCodexTurnUUIDV7)
+}
+
+// officialCodexInvocationSessionID 是兜底的会话（根线程）id。
+func officialCodexInvocationSessionID(invocationSeed string) string {
+	return officialCodexInvocationID(invocationSeed, "session", newOfficialUUIDV7)
+}
+
+// officialCodexInvocationUUIDV4 由 invocation seed 与用途确定性派生一个 UUIDv4（版本位 4、变体 10）：
+// installation id 与文件上传的 client request id 官方都是随机 v4，兜底时取确定性值以保证同一调用各 attempt 一致。
+func officialCodexInvocationUUIDV4(invocationSeed, purpose string) string {
+	sum := sha256.Sum256([]byte("openai-official-egress-invocation-v4\x00" + purpose + "\x00" + invocationSeed))
+	var raw uuid.UUID
+	copy(raw[:], sum[:16])
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return raw.String()
 }
 
 // officialCodexTurnStartGapMs 以 turnID 为种子确定性地从实采差值分布里抽一个毫秒数。
