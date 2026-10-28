@@ -21,7 +21,7 @@ package handler
 //
 // Messages：
 //   selection = sw.Selection；requestPlatform = sw.Platform；
-//   effectiveMappedModel = messagesDispatchMappedModelForPlatform(apiKey, sw.Platform, reqModel)；
+//   effectiveMappedModel = 调度级映射（按 sw.Platform 取值；现直接调用上游函数 resolveOpenAIMessagesDispatchMappedModel，平台取自换号后的请求上下文）；
 //   channelMappingMsg = Resolve(换号后上下文)。
 //   Eligible = 无账号失败 && 未换过号；Model = currentRoutingModel；UseUpstreamTokenCost = true；能力恒为 ChatCompletions；
 //   ModelFor(platform) = 调度级映射非空则取之，否则 routingModel。
@@ -43,6 +43,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -325,7 +326,8 @@ func TestCompositeMessagesSwitchParamsAndApply(t *testing.T) {
 		Fresh: true, SessionHash: "sess", ReqModel: "claude-opus-4", RoutingModel: "routing", CurrentRoutingModel: "current",
 	}
 
-	p := st.params(apiKey)
+	c0 := newCompositeEntryTestContext()
+	p := st.params(c0, apiKey)
 	require.True(t, p.Eligible)
 	require.Equal(t, "sess", p.SessionHash)
 	require.Equal(t, "current", p.Model, "Model 取本轮的 currentRoutingModel")
@@ -334,11 +336,15 @@ func TestCompositeMessagesSwitchParamsAndApply(t *testing.T) {
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, p.CapabilityFor(service.PlatformOpenAI))
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, p.CapabilityFor(service.PlatformGrok))
 	// ModelFor：grok／多协议平台不适用调度映射 → 回退 routingModel；openai 取分组映射。
-	require.Equal(t, "routing", p.ModelFor(context.Background(), service.PlatformGrok))
-	require.Equal(t, "routing", p.ModelFor(context.Background(), service.PlatformDeepseek))
-	require.Equal(t, "gpt-5.5", p.ModelFor(context.Background(), service.PlatformOpenAI))
+	// ModelFor 的目标平台取自收到的上下文（与真实流程一致：换号时上下文已写入备选平台）。
+	inPlatform := func(platform string) context.Context {
+		return service.WithResolvedTargetPlatform(context.Background(), platform)
+	}
+	require.Equal(t, "routing", p.ModelFor(inPlatform(service.PlatformGrok), service.PlatformGrok))
+	require.Equal(t, "routing", p.ModelFor(inPlatform(service.PlatformDeepseek), service.PlatformDeepseek))
+	require.Equal(t, "gpt-5.5", p.ModelFor(inPlatform(service.PlatformOpenAI), service.PlatformOpenAI))
 	st.Fresh = false
-	require.False(t, st.params(apiKey).Eligible)
+	require.False(t, st.params(c0, apiKey).Eligible)
 
 	// apply：换到 deepseek（多协议）→ 调度映射为空串；换到 openai → 分组映射。
 	for _, tc := range []struct {
@@ -413,27 +419,62 @@ func TestCompositeChatSwitchParamsAndApply(t *testing.T) {
 	require.Equal(t, "", compositeSlotSessionHash(c, "sess"))
 }
 
-// 调度级模型映射的两份实现（上游原样的 resolveOpenAIMessagesDispatchMappedModel 与满载换号用的
-// messagesDispatchMappedModelForPlatform）必须在所有平台上口径一致。
+// 满载换号取调度级模型映射的两条新调用路径（ModelFor 闭包经 messagesDispatchMappedModelInCtx，
+// apply 直接调用上游函数）必须与"上游函数 resolveOpenAIMessagesDispatchMappedModel 在对应上下文下的结果"一致。
+// 平台清单从 domain 平台注册表派生（含以后新增的平台），分组覆盖 composite 与非 composite，
+// 模型覆盖空串、gpt-5.x、claude-*、带空白的自定义名；映射配置里带空白，用来覆盖上游函数的 TrimSpace。
 func TestMessagesDispatchMappedModelParity(t *testing.T) {
 	mappingCfg := service.OpenAIMessagesDispatchModelConfig{OpusMappedModel: " gpt-5.5 ", SonnetMappedModel: "gpt-5.4", HaikuMappedModel: "gpt-5.4-mini"}
 	groups := map[string]*service.Group{
-		"composite": {Platform: service.PlatformComposite, MessagesDispatchModelConfig: mappingCfg},
-		"openai":    {Platform: service.PlatformOpenAI, MessagesDispatchModelConfig: mappingCfg},
+		"composite":    {Platform: service.PlatformComposite, MessagesDispatchModelConfig: mappingCfg},
+		"openai":       {Platform: service.PlatformOpenAI, MessagesDispatchModelConfig: mappingCfg},
+		"grok":         {Platform: service.PlatformGrok, MessagesDispatchModelConfig: mappingCfg},
+		"composite空配置": {Platform: service.PlatformComposite},
 	}
-	platforms := []string{service.PlatformOpenAI, service.PlatformGrok, service.PlatformDeepseek, service.PlatformKimi, service.PlatformAnthropic}
-	models := []string{"claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "gpt-5.5", ""}
+	// 注册表里的全部平台，外加 composite 自身与一个未注册名，覆盖异常的目标平台取值。
+	platforms := append(domain.PlatformIDsWhere(func(domain.PlatformSpec) bool { return true }), service.PlatformComposite, "unregistered-platform")
+	require.Greater(t, len(platforms), 3)
+	models := []string{"claude-opus-4", "claude-sonnet-4", "claude-haiku-4", "gpt-5.5", "gpt-5.4-mini", "my-custom-model", " claude-opus-4 ", ""}
+
 	for gname, group := range groups {
 		apiKey := &service.APIKey{Group: group}
 		for _, platform := range platforms {
-			c := newCompositeEntryTestContext()
-			c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), platform))
+			ctx := service.WithResolvedTargetPlatform(context.Background(), platform)
+			// 上游函数在对应上下文下的结果（期望值）。
+			want := newCompositeEntryTestContext()
+			want.Request = want.Request.WithContext(ctx)
+			// 新调用路径一：ModelFor 闭包（c 是换号前的请求，ctx 是备选平台的上下文）。
+			pre := newCompositeEntryTestContext()
 			for _, model := range models {
-				require.Equal(t,
-					resolveOpenAIMessagesDispatchMappedModel(c, apiKey, model),
-					messagesDispatchMappedModelForPlatform(apiKey, platform, model),
-					"group=%s platform=%s model=%q", gname, platform, model)
+				expect := resolveOpenAIMessagesDispatchMappedModel(want, apiKey, model)
+				st := &compositeMessagesSwitch{ReqModel: model, RoutingModel: "ROUTING"}
+				viaModelFor := st.params(pre, apiKey).ModelFor(ctx, platform)
+				wantModelFor := expect
+				if wantModelFor == "" {
+					wantModelFor = "ROUTING" // ModelFor 在映射为空时回退到路由模型名
+				}
+				require.Equal(t, wantModelFor, viaModelFor, "ModelFor group=%s platform=%s model=%q", gname, platform, model)
+				require.Equal(t, expect, messagesDispatchMappedModelInCtx(pre, ctx, apiKey, model), "InCtx group=%s platform=%s model=%q", gname, platform, model)
+
+				// 新调用路径二：apply（换号后 c.Request 的上下文已带目标平台）。
+				applyCtx := newCompositeEntryTestContext()
+				sw := fakeCompositeSwitch(applyCtx, platform, false)
+				platformVar, mapped := "stale", "stale"
+				var mapping service.ChannelMappingResult
+				applySt := &compositeMessagesSwitch{ReqModel: model, Platform: &platformVar, EffectiveMappedModel: &mapped, Mapping: &mapping}
+				applySt.apply(applyCtx, apiKey, sw, (&recordingResolver{}).resolve)
+				require.Equal(t, expect, mapped, "apply group=%s platform=%s model=%q", gname, platform, model)
 			}
 		}
 	}
+}
+
+// ModelFor 与 apply 必须只依赖上下文里的目标平台：上下文没有目标平台时，按"不适用平台限制"处理（沿用分组配置）。
+func TestMessagesDispatchMappedModelInCtxWithoutTargetPlatform(t *testing.T) {
+	group := &service.Group{Platform: service.PlatformComposite, MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{OpusMappedModel: "gpt-5.5"}}
+	apiKey := &service.APIKey{Group: group}
+	c := newCompositeEntryTestContext()
+	require.Equal(t, "gpt-5.5", messagesDispatchMappedModelInCtx(c, context.Background(), apiKey, "claude-opus-4"))
+	require.Equal(t, "gpt-5.5", messagesDispatchMappedModelInCtx(nil, nil, apiKey, "claude-opus-4"), "c 与 ctx 都为空也不能崩")
+	require.Equal(t, "", messagesDispatchMappedModelInCtx(nil, nil, nil, "claude-opus-4"))
 }
