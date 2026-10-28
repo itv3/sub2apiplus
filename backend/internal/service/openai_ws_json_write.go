@@ -15,15 +15,20 @@ type openAIWSPreparedJSONWriter interface {
 	WritePreparedJSON(context.Context, []byte) error
 }
 
-// marshalOpenAIWSReadonlyJSON 与 json.Marshal 的字节及错误语义一致。正式帧已经
-// 是 JSON，常见的紧凑且无 HTML 字符形态只需校验，不再交给通用编码器重建整帧。
+// marshalOpenAIWSReadonlyJSON 与 SetEscapeHTML(false) 的 json 编码器的字节及错误语义一致。正式帧已经
+// 是 JSON，常见的紧凑形态只需校验，不再交给通用编码器重建整帧。
+//
+// 不做 HTML 转义：官方客户端用 serde_json 序列化，字符串里的 `<`、`>`、`&` 和 U+2028／U+2029 都按字面量写出
+// （实采的官方消息里有大量字面量 `<`，例如 `<environment_context>` 之类标签）；这里以前用 json.Marshal
+// 的语义把它们改成 \u003c 等，官方帧里不会有。本函数只用于官方出站的帧编译输入和最终写入，
+// 不参与响应解析、用量或计费读取。
 // 返回值可能引用输入，调用方必须保持正文只读，且不能将它存入跨轮可变缓存。
 func marshalOpenAIWSReadonlyJSON(value any) ([]byte, error) {
 	raw, ok := value.(json.RawMessage)
 	if !ok || len(raw) == 0 || !json.Valid(raw) {
-		return json.Marshal(value)
+		return marshalOpenAIUpstreamJSON(value)
 	}
-	compact, escape := false, false
+	compact := false
 	inString := false
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
@@ -35,10 +40,6 @@ func marshalOpenAIWSReadonlyJSON(value any) ([]byte, error) {
 			if c == '"' {
 				inString = false
 			}
-			if c == '<' || c == '>' || c == '&' ||
-				(c == 0xe2 && i+2 < len(raw) && raw[i+1] == 0x80 && raw[i+2]&^1 == 0xa8) {
-				escape = true
-			}
 		} else if c == '"' {
 			inString = true
 		} else if c == ' ' || c == '\n' || c == '\r' || c == '\t' {
@@ -49,13 +50,8 @@ func marshalOpenAIWSReadonlyJSON(value any) ([]byte, error) {
 	if compact {
 		var buffer bytes.Buffer
 		if err := json.Compact(&buffer, raw); err != nil {
-			return json.Marshal(value)
+			return marshalOpenAIUpstreamJSON(value)
 		}
-		result = buffer.Bytes()
-	}
-	if escape {
-		var buffer bytes.Buffer
-		json.HTMLEscape(&buffer, result)
 		result = buffer.Bytes()
 	}
 	return result[:len(result):len(result)], nil
