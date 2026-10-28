@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from tools import codex_closeout as closeout
 from tools.ci import retry_policy as rp
+from tools.official_client_capture import tests as test_package
 from tools.official_client_capture.tests import test_ci_unit_executor_retry as base
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -59,6 +61,37 @@ class DriverForwardsTheLedgerTests(unittest.TestCase):
     def test_other_custom_variables_stay_blocked(self) -> None:
         env = self.build_exec_env(UNIT_EXECUTOR_RETRY_LEDGER="/persist/x", UNIT_EXECUTOR_STATE_DIR="/nope", MY_SECRET="s")
         self.assertFalse([item for item in env if item.startswith(("MY_SECRET", "UNIT_EXECUTOR_STATE_DIR"))])
+
+
+class GateExecutorVariablesDoNotLeakIntoNestedExecutorsTests(unittest.TestCase):
+    """收尾门禁给执行器设的环境变量会被单元继承；测试包导入时必须统一剔除，否则测试里嵌套起的临时执行器会改用外层门禁的持久账本。"""
+
+    def test_importing_the_test_package_removes_the_gate_ledger_variable(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c",
+             "import os, tools.official_client_capture.tests; print(os.environ.get('UNIT_EXECUTOR_RETRY_LEDGER', '<unset>'))"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_RETRY_LEDGER": "/persist/gate-retry-ledger"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "<unset>")
+
+    def test_every_variable_the_closeout_sets_for_the_gates_is_scrubbed_by_the_test_package(self) -> None:
+        """守卫：以后 codex_closeout.run_gates 给门禁进程再加环境变量，却忘了加进测试包的剔除清单，这里就红。"""
+
+        tree = ast.parse(Path(closeout.__file__).read_text(encoding="utf-8"))
+        run_gates = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_gates")
+        names: set[str] = set()
+        for node in ast.walk(run_gates):
+            if isinstance(node, ast.Dict) and any(
+                key is None and isinstance(value, ast.Attribute) and value.attr == "environ"
+                for key, value in zip(node.keys, node.values)
+            ):  # 含 **os.environ 的那个环境字典
+                names |= {key.value for key in node.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+        self.assertIn("UNIT_EXECUTOR_RETRY_LEDGER", names, "没找到 run_gates 的环境字典，守卫失效")
+        # ARM64_VC_ENV 只给驱动自己用（驱动白名单不转发给单元），PYTHONDONTWRITEBYTECODE 无害；其余都会被单元继承，必须在剔除清单里。
+        passthrough = {"ARM64_VC_ENV", "PYTHONDONTWRITEBYTECODE"}
+        self.assertEqual(sorted(names - passthrough - set(test_package.GATE_EXECUTOR_ENV_NAMES)), [])
 
 
 class SharedLedgerAcrossCloseoutsTests(base.RetryRunBase):
