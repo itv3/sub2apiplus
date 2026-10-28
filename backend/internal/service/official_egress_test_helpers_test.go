@@ -17,7 +17,7 @@ var officialEgressTestRuntimes sync.Map
 func legacyProfileConfigForTest(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := &config.Config{}
-	cfg.Gateway.OfficialClientProfiles.Mode = skipWithoutOfficialCodexLegacyReleaseSlot(t)
+	cfg.Gateway.OfficialClientProfiles.Mode = requireOfficialCodexLegacyBaseProfileMode(t)
 	return cfg
 }
 
@@ -30,7 +30,7 @@ func legacyProfileConfigForTest(t *testing.T) *config.Config {
 // 对应语义由晋升后门禁与较新画像的单元用例覆盖。
 func useOfficialCodexLegacyProfile(t *testing.T, svc *OpenAIGatewayService) {
 	t.Helper()
-	mode := skipWithoutOfficialCodexLegacyReleaseSlot(t)
+	mode := requireOfficialCodexLegacyBaseProfileMode(t)
 	if svc.cfg == nil {
 		svc.cfg = &config.Config{}
 	}
