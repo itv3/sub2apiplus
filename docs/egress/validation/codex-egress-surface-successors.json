@@ -20,10 +20,28 @@
       "reason": "Codex 0.157.0 候选（VC-4）：service 读取当前 release 画像可选节／新条件／新来源的唯一入口，画像未声明时调用方保持旧逻辑，直接决定官方出站形态。"
     },
     {
+      "path": "backend/internal/service/official_egress_http_compaction.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W3）：画像 TurnMetadata 节 HTTPCompactionRequests 声明时，HTTP /responses 压缩请求（input 带 compaction_trigger）按官方写元数据与请求体——不生成 access_programs，turn metadata 的 request_kind 为 compaction 并带 compaction 对象（排在最后一个键）、不带 model／reasoning_effort／turn_trigger；画像不声明时按普通回合请求处理，直接决定官方出站 HTTP 压缩请求的请求体与 turn metadata 形态。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_root_turn.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W3）：HTTP 回合请求（含 HTTP 压缩请求）的 client_metadata 按画像 ClientMetadata.DynamicKeys 声明的 root_turn_id 写入官方形态的根回合 id——根线程上取本请求出站的 turn_id，子代理、guardian 与记忆合并线程不写；画像不声明时不产生事实，直接决定官方出站 HTTP 请求体 client_metadata 的键集合与取值。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_turn_metadata_keys.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W3）：画像 TurnMetadata 节 WindowTracking／RootThreadKeys 声明时，HTTP 回合请求（含 HTTP 压缩请求）的 turn metadata 带 window_number、context_window_id（窗口号跟随下游 x-codex-window-id 头的数字后缀，上下文窗口 id 由会话与窗口号稳定派生），根线程另带 agent_name 与 root_turn_id；画像不声明时恒等，直接决定官方出站 HTTP 请求 turn metadata 的键集合与取值。"
+    },
+    {
       "path": "backend/internal/service/official_egress_images_turn.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.164.0 登记（W2）：images 端点（独立 images 调用）按画像 TurnMetadata 节登记的槽位补回合头——x-codex-image-turn-id 与 x-codex-turn-metadata（按官方扩展请求规则装配 14 键默认路径，无同回合事实时按画像登记的默认会话模型补 model／reasoning_effort），直接决定官方出站 images 请求头的有无、线序与取值。"
+      "reason": "Codex 0.164.0 登记（W2）：images 端点（独立 images 调用）按画像 TurnMetadata 节登记的槽位补回合头——x-codex-image-turn-id 与 x-codex-turn-metadata（按官方扩展请求规则装配 14 键默认路径，无同回合事实时按画像登记的默认会话模型补 model／reasoning_effort），直接决定官方出站 images 请求头的有无、线序与取值；Codex 0.165.0 登记（W2）：图像回合 id 与兜底会话标识改为官方 UUIDv7 形态、回合开始时间由 turn_id 推出，直接决定 images 出站头 x-codex-image-turn-id 与 x-codex-turn-metadata 的取值形态。"
     },
     {
       "path": "backend/internal/service/official_egress_openai_access_programs.go",
@@ -38,22 +56,46 @@
       "reason": "Codex 0.163.0 候选（C2a）：按画像 BaseInstructions 节把基础指令以官方形态（稳定 id、passthrough 标记、官方键序）安装进 input 前缀，识别并去重旧副本，直接决定官方出站请求体形态；Codex 0.164.0 登记（W1）：渲染函数拆出按 id／passthrough 参数化的版本，画像 IDScheme=uuidv7 时承载增量窗口前缀的基础指令消息（入站官方形态整项原样保留，第三方入站合成 msg_＋稳定 UUIDv7、passthrough 含 turn_id／create_time／content_item_kinds／content_item_metadata），旧方案（UUIDv5、仅 content_item_kinds）字节不变，直接决定官方出站请求体与 WS 帧形态。"
     },
     {
+      "path": "backend/internal/service/official_egress_openai_configuration_update.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W1）：画像 ReasoningEffort 节 ConfigurationUpdate=http_first_turn 时，第三方入站的 HTTP 出站按官方形态在首个用户轮次之后合成 configuration_update 输入项（模型目录声明支持 effort 更新且请求 effort 为已知档位才合成，官方入站原样透传、WS 出站不合成）；画像不声明时恒为否、出站字节不变，直接决定官方出站请求体 input 的项集合与位置。"
+    },
+    {
       "path": "backend/internal/service/official_egress_openai_incremental_prefix.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.164.0 登记（W1）：画像 BaseInstructions 节 IDScheme=uuidv7 且本请求走 Lite 时的增量窗口前缀——判定入站 additional_tools／基础指令消息是否已是官方形态并原样保留，第三方入站才合成 at_／msg_＋进程内按种子稳定复用的 UUIDv7，WS 预热帧 input 为空、首个业务帧保留前缀，HTTP 与 WS 的安装入口；画像不声明 uuidv7 时不被调用，直接决定官方出站请求体与 WS 帧形态。"
+      "reason": "Codex 0.164.0 登记（W1）：画像 BaseInstructions 节 IDScheme=uuidv7 且本请求走 Lite 时的增量窗口前缀——判定入站 additional_tools／基础指令消息是否已是官方形态并原样保留，第三方入站才合成 at_／msg_＋进程内按种子稳定复用的 UUIDv7，WS 预热帧 input 为空、首个业务帧保留前缀，HTTP 与 WS 的安装入口；画像不声明 uuidv7 时不被调用，直接决定官方出站请求体与 WS 帧形态；Codex 0.165.0 登记（W2）：预热基础指令消息的回合 id 改用官方 UUIDv7 生成器，形态与官方一致。"
     },
     {
       "path": "backend/internal/service/official_egress_openai_input_passthrough.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.164.0 登记（W1b）：入站 input 逐项 internal_chat_message_metadata_passthrough 的保真判定——官方出站账号、画像 BaseInstructions 节 IDScheme=uuidv7、按项官方形态（Lite 可带 content_item_metadata，非 Lite 是 turn_id／create_time／content_item_kinds 三键）三条同时满足才原样保留，否则仍整体剥离；WS 入站的客户端 turn_id 校验后清空、由定型回填网关值，HTTP 定型里把当前回合与历史各段 turn_id 改写成网关本轮值与网关按线程和段锚点派生的稳定值；画像不声明 uuidv7（含 0.163.0）时判定恒为否、行为不变，直接决定官方出站请求体与 WS 帧里逐项 passthrough 的形态。"
+      "reason": "Codex 0.164.0 登记（W1b）：入站 input 逐项 internal_chat_message_metadata_passthrough 的保真判定——官方出站账号、画像 BaseInstructions 节 IDScheme=uuidv7、按项官方形态（Lite 可带 content_item_metadata，非 Lite 是 turn_id／create_time／content_item_kinds 三键）三条同时满足才原样保留，否则仍整体剥离；WS 入站的客户端 turn_id 校验后清空、由定型回填网关值，HTTP 定型里把当前回合与历史各段 turn_id 改写成网关本轮值与网关按线程和段锚点派生的稳定值；画像不声明 uuidv7（含 0.163.0）时判定恒为否、行为不变，直接决定官方出站请求体与 WS 帧里逐项 passthrough 的形态；Codex 0.165.0 登记（W2）：历史回合 id 同样改用官方 UUIDv7 生成器。"
     },
     {
       "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnMetadata 节追加 x-codex-turn-metadata 新键并校验压缩元数据闭集，参与官方出站头定型。"
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnMetadata 节追加 x-codex-turn-metadata 新键并校验压缩元数据闭集，参与官方出站头定型；Codex 0.165.0 登记（W1）：turn metadata 的 reasoning_effort 取窗口内生效 effort（configuration_update 优先于请求级字段），直接决定官方出站 turn metadata 的取值。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_compaction.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W3）：画像 TurnMetadata 节 WSCompactionRequests 声明时，WS 压缩请求（previous_response_id 加单项 compaction_trigger 的增量帧）按官方写元数据与请求体——不带 access_programs，turn metadata 的 request_kind 为 compaction 并带 compaction 对象、不带 model／reasoning_effort／turn_trigger，压缩帧使用自己的新回合 id；画像不声明时按普通业务帧处理，直接决定官方出站 WS 帧的请求体与 turn metadata 形态。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_window.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W3）：画像 TurnMetadata 节 WindowTracking 声明时，WS 上下文窗口号随下游客户端的压缩推进（x-codex-window-id 数字后缀变大即推进）、上下文窗口 id 由会话与窗口号稳定派生，帧内窗口头与 turn metadata 的 window_id／window_number／context_window_id、以及新建连接握手里的窗口头都取推进后的值；画像不声明时恒等，直接决定官方出站 WS 帧与握手头的窗口标识。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_uuid.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.165.0 登记（W2）：官方 Uuid::now_v7 位布局的 UUIDv7 生成器（共享单调上下文）与按调用兜底的回合 id、由 turn_id 无状态推出 turn_started_at_unix_ms，session／thread／turn／item 等出站身份标识一律改用官方形态，直接决定官方出站请求头与请求体里各身份字段的形态与回合开始时间。"
     },
     {
       "path": "backend/internal/service/official_egress_ws_body.go",
@@ -65,7 +107,7 @@
       "path": "backend/internal/service/openai_codex_turn_state_owner.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnState 节在账号 owner 变化时丢弃 turn-state，决定下一请求是否回送 x-codex-turn-state。"
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnState 节在账号 owner 变化时丢弃 turn-state，决定下一请求是否回送 x-codex-turn-state；Codex 0.165.0 登记（W3）：画像 TurnState 节 ResetOnNewTurn 声明时，turn-state 只在产生它的回合内回送，新用户轮次的第一个请求先清空已保存值，决定下一请求是否回送 x-codex-turn-state。"
     },
     {
       "path": "backend/internal/service/openai_cookie_jar.go",
@@ -79,7 +121,7 @@
       "file_type": "regular",
       "kind": "scope_addition",
       "scope": "strict_surface",
-      "reason": "Codex 0.164.0 登记（W1b）：OAuth 兼容层按画像 BaseInstructions 节（IDScheme=uuidv7）与官方形态判定决定是否原样保留 Codex 入站逐项 internal_chat_message_metadata_passthrough（官方出站＋Lite＋画像 uuidv7＋官方形态四条件，非 Lite 保留三键形态），直接决定官方出站请求体 input 项的形态，由此新命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准。"
+      "reason": "Codex 0.164.0 登记（W1b）：OAuth 兼容层按画像 BaseInstructions 节（IDScheme=uuidv7）与官方形态判定决定是否原样保留 Codex 入站逐项 internal_chat_message_metadata_passthrough（官方出站＋Lite＋画像 uuidv7＋官方形态四条件，非 Lite 保留三键形态），直接决定官方出站请求体 input 项的形态，由此新命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准；Codex 0.165.0 登记（W1）：请求 effort 与用量 effort 改读窗口内生效 effort（configuration_update 优先于请求级字段），由此影响官方出站请求体与用量记账。"
     },
     {
       "path": "backend/internal/service/openai_legacy_compact_release_gate.go",
@@ -103,7 +145,7 @@
       "path": "backend/internal/service/openai_ws_continuation_reset.go",
       "file_type": "regular",
       "kind": "surface_addition",
-      "reason": "Codex 0.157.0 候选（VC-4）：按画像 WebSocketContinuation 节在 base_url、路由 override、认证代次、账号 owner 变化时让 WS 增量续接失效。"
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 WebSocketContinuation 节在 base_url、路由 override、认证代次、账号 owner 变化时让 WS 增量续接失效；Codex 0.165.0 登记（W3）：画像 WebSocketContinuation 节 ReplayOnSameConnection 声明时，自管续链客户端（自己发过 generate=false 预热帧）的整段重放帧在原上游连接上原样转发，不新建连接、不补预热、不链 previous_response_id，决定官方出站 WS 连接与帧序。"
     },
     {
       "path": "backend/internal/service/openai_ws_retry_policy.go",

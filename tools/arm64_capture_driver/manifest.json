@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 126,
+  "file_count": 193,
   "files": [
     {
       "path": "README.md",
-      "sha256": "bca5670ef4d4f7e9014ea7d308422430a70e40f5d7bafdd43e0611fded78373b",
+      "sha256": "4d3fa12d566662c2c438952d175094a2d86b7df73964041642a8da46becd8d3d",
       "mode": "0600",
-      "bytes": 136251
+      "bytes": 154310
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -28,21 +28,21 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "1cd6a4235f4ae040a36499384fa3da80206f8c851e319e8d59ff034f02348410",
+      "sha256": "c2467553326dc8216bf6946759e5eaaec0ddef8901a9620a94890bc5f60bf34e",
       "mode": "0700",
-      "bytes": 9761
+      "bytes": 11781
     },
     {
       "path": "driver/background_preflight.py",
-      "sha256": "80c4f77db7be486d987cd04b3f2d0774f5760bac12b790e48ca039d972e97e04",
+      "sha256": "ce3b2e14ae96882bde9884222e4ae9cd134883c1924f57c6af68f5567f615016",
       "mode": "0700",
-      "bytes": 34548
+      "bytes": 38543
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "3bd46cc12de04661acd56b84973bf14fbe5e960bad73216af369aab719831138",
+      "sha256": "7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389",
       "mode": "0700",
-      "bytes": 220604
+      "bytes": 226855
     },
     {
       "path": "driver/build.sh",
@@ -76,9 +76,9 @@
     },
     {
       "path": "driver/chain-rehearsal.sh",
-      "sha256": "34178d92593dfa7d8d805cf9e242360c27ac2b4f21594367d73fdae2f35696ea",
+      "sha256": "0989500a0de772706d850402775918af351d215399dce88971208faa10ae3a35",
       "mode": "0700",
-      "bytes": 3135
+      "bytes": 4287
     },
     {
       "path": "driver/claude_catalog_chain.py",
@@ -130,9 +130,9 @@
     },
     {
       "path": "driver/client_launch_probe.py",
-      "sha256": "175076b7abe6acb237ccac3aeab39ed51a0828861f50ef5e764af620aaf1ee5f",
+      "sha256": "38f34dc13432c9fe1576f3cecb61d4e51de0990ee8af6eddc9d5013c1de05cd8",
       "mode": "0700",
-      "bytes": 43340
+      "bytes": 46341
     },
     {
       "path": "driver/client_launch_probe_runner.py",
@@ -190,9 +190,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "525fdbb5516ad6d95149b9c6c6255068d15f22b4dc30c788ab5964848a57b451",
+      "sha256": "9f4417a012a9bb5e4d572f7018e6f8cbca88d640dba2dd130fbba87a647f22b3",
       "mode": "0700",
-      "bytes": 17373
+      "bytes": 19867
     },
     {
       "path": "driver/entry.sh",
@@ -226,15 +226,15 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "8ea7896217fb3d68b419a013cc90b8f38cb969daed476e84ae41c8d245bd46b0",
+      "sha256": "4c57d915784ab2c3873a9be72464b0d7b947daceafa6c1681b396f8519181e4e",
       "mode": "0700",
-      "bytes": 96659
+      "bytes": 97184
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "9fb656a16f20b283f5b430517a96d1c84f71b6f9b428b3f61bda27eeb32e36f4",
+      "sha256": "9b14a35fe251cd604dcafd4ba5fa75e19bf141b65512a5f782a261b9efad61f3",
       "mode": "0700",
-      "bytes": 13457
+      "bytes": 13505
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -334,15 +334,21 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "6cd7928a180ed4149921673f7470ae72e1f6ad4f4bf9b7a8215a747628bd7df8",
+      "sha256": "8f09b91ddd30375da4fd0c50e438a8c33ddf06b27be3b58db2a3510a8bf26fd3",
       "mode": "0700",
-      "bytes": 20583
+      "bytes": 23358
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
       "sha256": "f64a500c37bcbf143487a7df8db39fd8028fa33f49e9a359d8862a8b3958db62",
       "mode": "0700",
       "bytes": 3954
+    },
+    {
+      "path": "driver/local/local-capture-tools-receipt.sh",
+      "sha256": "a8973b9f7348982d54d0ba27dd4a31fd8efec4b053bb7d2c2368b8c2c69ed065",
+      "mode": "0700",
+      "bytes": 4020
     },
     {
       "path": "driver/local/local-claude-candidate-chain.sh",
@@ -376,9 +382,9 @@
     },
     {
       "path": "driver/opening_checks.py",
-      "sha256": "077391c30e5670ead83eaeee57f5b6ea92c63a1501e01df33e3b17a1a70de2d4",
+      "sha256": "57d89321d1e1efaa90dbfe339aabd17740182280e9104b746efccd096749d4f5",
       "mode": "0700",
-      "bytes": 14658
+      "bytes": 33401
     },
     {
       "path": "driver/parse_env.py",
@@ -391,6 +397,396 @@
       "sha256": "a6e63f46cf601f63316790af6c8943e2eda5d3d906f89311b51edf812c0cfe06",
       "mode": "0700",
       "bytes": 40040
+    },
+    {
+      "path": "driver/pipeline/capture-account-off.sh",
+      "sha256": "a2ddd77a1b98cd1bd6ac1c7f3f9c91f2d0341f80ffa7c78f079dbd3f0464d952",
+      "mode": "0700",
+      "bytes": 1204
+    },
+    {
+      "path": "driver/pipeline/capture-account-on.sh",
+      "sha256": "b309ba863727d5ad715478030deaa27669a045674c067e1f406ad0c00d4d738a",
+      "mode": "0700",
+      "bytes": 1132
+    },
+    {
+      "path": "driver/pipeline/capture_admin.py",
+      "sha256": "154bc77cfe5db059a2668a6fb3931f461dbac2b2c19fb60a4b94bea1c80406be",
+      "mode": "0700",
+      "bytes": 16992
+    },
+    {
+      "path": "driver/pipeline/deploy-commit.sh",
+      "sha256": "52b7cd51f784ff09102fcbe16a447a3c187923de4c0bba3a9b17b0bd50066b5b",
+      "mode": "0700",
+      "bytes": 14917
+    },
+    {
+      "path": "driver/pipeline/evo/evo_inputs_check.py",
+      "sha256": "ac82c96c7c66555ed6caaa2d05de99aaa504a5b705732b4d3dbe0dd8f0d7a73c",
+      "mode": "0700",
+      "bytes": 6914
+    },
+    {
+      "path": "driver/pipeline/evo/evo_predict.py",
+      "sha256": "8f856b0d3ee150a508b23cf8cd84d7bf02b0a5c2b5cbeaff7141c478667d3233",
+      "mode": "0700",
+      "bytes": 7231
+    },
+    {
+      "path": "driver/pipeline/evo/evo_state.py",
+      "sha256": "65fe9bb543e36953a91dd6e2acb442316fe3c35d29426949b49ba31e3ba6fdba",
+      "mode": "0700",
+      "bytes": 3936
+    },
+    {
+      "path": "driver/pipeline/evolve-and-resume.sh",
+      "sha256": "65e66e1afbccd7726ff0befbefdd8daf31732e282a09f0f66abd57c558df5940",
+      "mode": "0700",
+      "bytes": 34681
+    },
+    {
+      "path": "driver/pipeline/history-tree-refresh.sh",
+      "sha256": "90251618d01ebe52749daecb79298f78b06e174bd8632bba8bf71e0f4eadf7bd",
+      "mode": "0700",
+      "bytes": 3755
+    },
+    {
+      "path": "driver/pipeline/local/evo-local.sh",
+      "sha256": "91b3059f487fc5e9f04226ffba7dc272e1707c4a448cd6d6c57a3ab523f8b70c",
+      "mode": "0700",
+      "bytes": 5314
+    },
+    {
+      "path": "driver/pipeline/local/install-driver.sh",
+      "sha256": "d10c0347212cac78ac9a62c027bba2c010ca375271fea21136ea788a6919e58c",
+      "mode": "0700",
+      "bytes": 2856
+    },
+    {
+      "path": "driver/pipeline/local/retire-apply.py",
+      "sha256": "d5800845849f7d201028e9132fbf29e7922226765530fefc5fdf7094992f66d6",
+      "mode": "0700",
+      "bytes": 2671
+    },
+    {
+      "path": "driver/pipeline/local/sync-history-tree.sh",
+      "sha256": "69bca9e1edd20f6c6ee069e644f185c0660b31736db5e8c1284bbedd544365aa",
+      "mode": "0700",
+      "bytes": 2159
+    },
+    {
+      "path": "driver/pipeline/local/upload-and-deploy.sh",
+      "sha256": "60051bc1c87dc557cdaa28003859b815b18558a9df29615503c358cd11b2677f",
+      "mode": "0700",
+      "bytes": 3602
+    },
+    {
+      "path": "driver/pipeline/local/upload-entry-bundle.sh",
+      "sha256": "1da97002081ae7953a8e68f5b99a8bede26ea33f1cf7bae1c451557c4dbba2f6",
+      "mode": "0700",
+      "bytes": 1891
+    },
+    {
+      "path": "driver/pipeline/local/vc4-handoff.sh",
+      "sha256": "cfd883d56f185b2254c9fc57a3197aa0ee49e375fa46b051e3d961acc52c9150",
+      "mode": "0700",
+      "bytes": 1715
+    },
+    {
+      "path": "driver/pipeline/local/vc6-handoff-watch.sh",
+      "sha256": "5d2f3861cb1e317010dee0a4fee9df4ebf703d428c10a5e41fcd73830cf8312e",
+      "mode": "0700",
+      "bytes": 2906
+    },
+    {
+      "path": "driver/pipeline/local/vc6-local-commit.sh",
+      "sha256": "cebe83d907dc7bf3d86b86823fd96ffd1c25cfd4fc8b8797472dc9ea049cd904",
+      "mode": "0700",
+      "bytes": 8799
+    },
+    {
+      "path": "driver/pipeline/opening-env.example.sh",
+      "sha256": "d9bad59c0d2a39f6ada0d1ad1649999f305d9a3607ce70ebf0633453ae61327c",
+      "mode": "0700",
+      "bytes": 2142
+    },
+    {
+      "path": "driver/pipeline/pipeline-lib.sh",
+      "sha256": "19aaf68ce99feafa3ce185a35cd61577d1c52ea76961428ee8c6093329db1f72",
+      "mode": "0700",
+      "bytes": 9087
+    },
+    {
+      "path": "driver/pipeline/pipeline.env.example",
+      "sha256": "4ecc6ee49157955f46ceba31df26555ab90f00e070bef4b4e1e974fab1dbaf7f",
+      "mode": "0600",
+      "bytes": 2865
+    },
+    {
+      "path": "driver/pipeline/post-bgv.sh",
+      "sha256": "1cda6a956a483ce44a3c95088488bde93ee4e8e080c80cb75f8d9dbc4b928d08",
+      "mode": "0700",
+      "bytes": 2120
+    },
+    {
+      "path": "driver/pipeline/preflight-refresh.sh",
+      "sha256": "b7123ed4ae0b24ec9337ac29f557a7cbaedcd1715ef10697a2f1fb1d9bf52579",
+      "mode": "0700",
+      "bytes": 6453
+    },
+    {
+      "path": "driver/pipeline/prepare-historical-source.sh",
+      "sha256": "6f7381f7b04d15f45b9234fc7d82f337fa86f3498d1c857857f57533f4aab43a",
+      "mode": "0700",
+      "bytes": 1965
+    },
+    {
+      "path": "driver/pipeline/prepare-round-inputs.sh",
+      "sha256": "98578599b7822363b3ecde23bd3a7fbdf2db0e6a56180d898dc8609c92b18ec7",
+      "mode": "0700",
+      "bytes": 3247
+    },
+    {
+      "path": "driver/pipeline/render_round_env.py",
+      "sha256": "ce62d1b0ae3a2f6ae9701f6def1252f89d75ca70f1638b39b2e4526e71ec3b10",
+      "mode": "0700",
+      "bytes": 4350
+    },
+    {
+      "path": "driver/pipeline/round-env.template",
+      "sha256": "4ea5203b808c3096af4e33d402e2c780e759a8a18f85e60885403e9ae655de6e",
+      "mode": "0600",
+      "bytes": 4620
+    },
+    {
+      "path": "driver/pipeline/set-env-keys.sh",
+      "sha256": "629e65be4f1038ee2ebaefe1d148fe9d0b071aa30809b2e597fc2627234ad9d1",
+      "mode": "0700",
+      "bytes": 2329
+    },
+    {
+      "path": "driver/pipeline/start-entry.sh",
+      "sha256": "6cfa5c1d5588bb3301ba563bf5012d4b537466d7d6a088573c9813a3b37d45c7",
+      "mode": "0700",
+      "bytes": 18956
+    },
+    {
+      "path": "driver/pipeline/sync-data-root-backend.sh",
+      "sha256": "f6d00a12ca25de2fdbafdc91ff8c70286ad8354d92b8098864ece6a4953f5422",
+      "mode": "0700",
+      "bytes": 13982
+    },
+    {
+      "path": "driver/pipeline/vc-chain-vc5.sh",
+      "sha256": "417ccb21ff1aab8fbd7b1bd8d33856c8c8de61df416b40cc6e854bd85add4ed4",
+      "mode": "0700",
+      "bytes": 1868
+    },
+    {
+      "path": "driver/pipeline/vc-chain.sh",
+      "sha256": "9ad5e7316f8c66396745493d6eebabd88c69e8e2f9b6794ed178fa5dfdfa85df",
+      "mode": "0700",
+      "bytes": 1752
+    },
+    {
+      "path": "driver/pipeline/vc-pipeline.sh",
+      "sha256": "0f3950998b6e80e60bee6079efae5d48bcacef2c4cc3c992c34e095427819dd2",
+      "mode": "0700",
+      "bytes": 59424
+    },
+    {
+      "path": "driver/pipeline/vc2/gen_vc1_seal_plans.py",
+      "sha256": "aa82674f1e28fe22a9741bcaf90eacd040ee12d5415aa4b118a89de817afb75c",
+      "mode": "0700",
+      "bytes": 3730
+    },
+    {
+      "path": "driver/pipeline/vc2/gen_vc2_seq_scripts.py",
+      "sha256": "76894a1e898ac2c81a9d593c0f54d25c5b7d725b84f8159eed4ba8b91c696d3d",
+      "mode": "0700",
+      "bytes": 8322
+    },
+    {
+      "path": "driver/pipeline/vc2/vc1-seal.sh",
+      "sha256": "9832df0bd4fca126e7bdf32ab72ab13f62d4be60b112b8d6aadb4c439d6fefd3",
+      "mode": "0700",
+      "bytes": 3847
+    },
+    {
+      "path": "driver/pipeline/vc2/vc2-approve-and-stage-seq.sh",
+      "sha256": "4b6d3c9e048ebb227dbc3e45cbab5f697d1bccd39304217d1bb67f351a7d8e54",
+      "mode": "0700",
+      "bytes": 1661
+    },
+    {
+      "path": "driver/pipeline/vc2/vc2-mark-reviewed.sh",
+      "sha256": "e0c655e773e5dc8d5181c2e58aee92de73c601c47d1f9ff6d02f6c3d9caab996",
+      "mode": "0700",
+      "bytes": 3830
+    },
+    {
+      "path": "driver/pipeline/vc2/vc23-seq.sh",
+      "sha256": "8ff175f10332078b9e2582ad7ea94bdaccdab073795e2ee1666b2bc74562c590",
+      "mode": "0700",
+      "bytes": 7756
+    },
+    {
+      "path": "driver/pipeline/vc6/ORDER.example.txt",
+      "sha256": "e1414c5d5b4425a61eaba7828c02975ef908b9a6385363115018b9f5524ca22b",
+      "mode": "0600",
+      "bytes": 3083
+    },
+    {
+      "path": "driver/pipeline/vc6/build_activation_facts.py",
+      "sha256": "547911d9a9e3b1b9a5a77cc4481fa1538c2e90b731c925d37a8050c6ab2c64ad",
+      "mode": "0700",
+      "bytes": 4651
+    },
+    {
+      "path": "driver/pipeline/vc6/build_gate_facts_vc6.py",
+      "sha256": "9784cb6d5e1e877f3016805070d4c13b4e715acf5b14c480793f97f263816ef0",
+      "mode": "0700",
+      "bytes": 3889
+    },
+    {
+      "path": "driver/pipeline/vc6/pre-vc6-prep.sh",
+      "sha256": "1102cab9d1caf495d6de0b8b921d956d904c546141cce50e6a01e734e2480d41",
+      "mode": "0700",
+      "bytes": 2788
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-activation-receipt.sh",
+      "sha256": "fb81747afa196819b787bab9b3be547fa0561ef34d154aa718b1b33d4cad3716",
+      "mode": "0700",
+      "bytes": 1250
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-build.sh",
+      "sha256": "a0e02df4f63b82c36b848502917ae159da2105c15fa28c09006c527e6f866e2f",
+      "mode": "0700",
+      "bytes": 6086
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-canary.sh",
+      "sha256": "bc5ad051bff2867169bfd3dd70f74cac025900c79600f061dcaea8f4a3da8664",
+      "mode": "0700",
+      "bytes": 8552
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-canonical-activation.sh",
+      "sha256": "78b49a10f9a02d165085aa6ff15627f56a67d6e19b399944f58c32a0e8701ff9",
+      "mode": "0700",
+      "bytes": 2508
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-clean-cache.sh",
+      "sha256": "1f05fe18c6e29050a18ca1400b68dc373abd5a623086a5ae284ab338b0afca20",
+      "mode": "0700",
+      "bytes": 1267
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-cleanup-decision.sh",
+      "sha256": "726ec604670403ba8cb614828e2126d0f0791a06305d8447e641e4a2f4d4c509",
+      "mode": "0700",
+      "bytes": 8273
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-cleanup-execute.sh",
+      "sha256": "69475f5c6e5240882e408f4f11a823e988a7923b52deeeeb5daecf9d6568c170",
+      "mode": "0700",
+      "bytes": 14222
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-deliver-1.sh",
+      "sha256": "1fd65908748f07b5a14bf9366b465b14d60b892a532dda1e6793b9e6e6d44869",
+      "mode": "0700",
+      "bytes": 167
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-deliver-2.sh",
+      "sha256": "24241a9f27a57be26e1abbf049b443aa191cd38702293c169ab110581ae31bd1",
+      "mode": "0700",
+      "bytes": 167
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-deliver.sh",
+      "sha256": "bc3c66c8ef7c19a4a822f5ba9eb3ccb8c0b77e6d19fac3f5852548a67a838a22",
+      "mode": "0700",
+      "bytes": 2996
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-env.sh",
+      "sha256": "409b45c952c658b009142eed066fed1b3559d55438fd66fb13bd03321b9d92fd",
+      "mode": "0700",
+      "bytes": 4767
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-gate-receipt.sh",
+      "sha256": "8ff57dbcbe6bc39a3cbf32f3bc2da6826215be65eccd21760bc815bdbb1b78e5",
+      "mode": "0700",
+      "bytes": 1355
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-gates.sh",
+      "sha256": "4c7a93adb04da517ac25cae13b105382d64eb8dadffc3d7851462cd2974bc15c",
+      "mode": "0700",
+      "bytes": 5070
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-private-archive.sh",
+      "sha256": "b37e5f9e9f3a6052ede90d6efd5861dda779392dce13362c8378b5c810d0c6e5",
+      "mode": "0700",
+      "bytes": 8807
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-promote.sh",
+      "sha256": "052f6b061146df6bbcb71ea85719b889a120921cbf87369497e507d39277df08",
+      "mode": "0700",
+      "bytes": 5472
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-retire-build.sh",
+      "sha256": "16b1dea3e054392f65ec5c0437595c789a58bf7920b81eb3895971ba57985433",
+      "mode": "0700",
+      "bytes": 6136
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-retire-canonical.sh",
+      "sha256": "bf0ccbdbdd14d86266eb0a2006c0aec4700a7f10de21113d66f601d9da0cbdf8",
+      "mode": "0700",
+      "bytes": 11494
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-retire-switch.sh",
+      "sha256": "dc3aefd87e625aabefa434a362733198e7109d4f4878166ec789019bbfab3941",
+      "mode": "0700",
+      "bytes": 10120
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-switch-production.sh",
+      "sha256": "194ea66aaa9955ad23c592f36508057bc2217758af2374d6eed92312720a7aa9",
+      "mode": "0700",
+      "bytes": 183
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-switch-restore.sh",
+      "sha256": "f19ba08b704e7dd4c38f4e6fae1d7b515ef4cd6feeb53e1039fed294c0968f88",
+      "mode": "0700",
+      "bytes": 177
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-switch-rollback.sh",
+      "sha256": "baa7a50f2ffd29ee78f7c26ba7df1ccf1e6233a66017500c36910480dc51e1fd",
+      "mode": "0700",
+      "bytes": 179
+    },
+    {
+      "path": "driver/pipeline/vc6/vc6-switch.sh",
+      "sha256": "bc94c216dfd714698cd0ac68101f5cb9022d3379e92f1e9f75c1c4e37bdcfb40",
+      "mode": "0700",
+      "bytes": 9493
     },
     {
       "path": "driver/pre-a3.sh",
@@ -436,9 +832,9 @@
     },
     {
       "path": "driver/recovery_plan.py",
-      "sha256": "387a37ffdabfcbc47d6c044274b37f7483fce65b832d156b0591ede3dc1a46bf",
+      "sha256": "9071902a41f55ba2191310e84004e50236a33a653ff1a6a9f6a0868569e1130d",
       "mode": "0700",
-      "bytes": 99779
+      "bytes": 110924
     },
     {
       "path": "driver/retry_policy.py",
@@ -493,6 +889,12 @@
       "sha256": "8f5bdab0b53d9d103d5998791fe31058be1fbddb31eeeffd27dbacee0f45e68c",
       "mode": "0700",
       "bytes": 2890
+    },
+    {
+      "path": "driver/tui-prelaunch-receipt.sh",
+      "sha256": "c5d21e7df239a3becacf1979154c338ce2dcc3da26f8e36827a7c425be02c33c",
+      "mode": "0700",
+      "bytes": 3503
     },
     {
       "path": "driver/unit_executor.json",
@@ -646,9 +1048,9 @@
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "2b0254512cdb81d608c62bf531fef15dcace0532c809e15427cfe71e6bbeea28",
+      "sha256": "e8f7bacc6ef5c55fc4eced0019db85fdaae6eb1ef17cbf8b5765e387e96e1b24",
       "mode": "0700",
-      "bytes": 4945
+      "bytes": 6692
     },
     {
       "path": "driver/vc5-canonical2.sh",
@@ -706,9 +1108,9 @@
     },
     {
       "path": "driver/vc5-precheck.sh",
-      "sha256": "5d45a95529b20428d98d496cc36c5d13846e180aaf452ff5fe917a22bba8937d",
+      "sha256": "7f50098622a6652f1366ebfc009ad2e80cf5ca846ecee010340c4ab275e19b79",
       "mode": "0700",
-      "bytes": 3418
+      "bytes": 4303
     },
     {
       "path": "driver/vc5-recover.sh",
@@ -742,9 +1144,9 @@
     },
     {
       "path": "driver/vc5_admission.py",
-      "sha256": "ede6cb468443c8235feb76c6ae8143f4bf8ccf444e90f4f2968aed4392d6b9fa",
+      "sha256": "1e09a6feabd0e91453e2adbdb32a4409749970a5bd86c96c313e145cfab011aa",
       "mode": "0700",
-      "bytes": 37898
+      "bytes": 60962
     },
     {
       "path": "driver/wait_state.py",
@@ -759,5 +1161,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "9aea0f04038379a17d61299788960ea51e305ebb41f2411cecf641fd2742cec2"
+  "manifest_sha256": "91b5d0dec5ccb44252f350669a301075b2dea0b036c94893ca49401029b2d243"
 }

@@ -1315,7 +1315,7 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+  exit 0',
         '+fi']}
 CLOSEOUT_SH_2_BASELINE = '6d8e73b95d06bc66cd7fcf74e9d03297bb25b5df'
-CLOSEOUT_SH_2_DIGESTS = {'entry-preflight.sh': '525fdbb5516ad6d95149b9c6c6255068d15f22b4dc30c788ab5964848a57b451'}
+CLOSEOUT_SH_2_DIGESTS = {'entry-preflight.sh': '9f4417a012a9bb5e4d572f7018e6f8cbca88d640dba2dd130fbba87a647f22b3'}
 CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"',
         '-  printf \'%s %s\\n\' "$name" "$([ "$rc" = 0 ] && echo passed || echo failed)" >> "$OUT/results.txt"',
         '-  if [ "$rc" = 0 ]; then',
@@ -1352,10 +1352,35 @@ CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"
         '+  if [ "$rc" = 3 ]; then echo "Security Scan 核对未配置：设 SECURITY_SCAN_REPO=owner/name（并保证 gh 已登录）后重跑；确需跳过请显式 OPENING_CHECKS_SKIP=main-security-scan 并同时写 OPENING_CHECKS_SKIP_REASON"; fi',
         '+  return "$rc"',
         '+}',
+        '+receipt_not_applicable() {',
+        '+  if [ codex = codex ]; then return 1; fi',
+        '+  printf \'%s\\n\' "本轮客户端 codex 没有这条流程，未做检查" > "$OUT/$1.skipped"',
+        '+  echo "跳过 $1：本轮客户端 codex 不适用（未做检查，不是通过）"',
+        '+  return 0',
+        '+}',
+        '+local_capture_receipt() {',
+        '+  local rc=0 skip=0',
+        '+  opening_skipped local-capture-receipt || skip=$?',
+        '+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi',
+        '+  if receipt_not_applicable local-capture-receipt; then return 0; fi',
+        '+  if [ -z "${ENTRY_COMMIT:-}" ]; then echo "参数文件没有 ENTRY_COMMIT（要进入入口门禁的提交），无法核对本地收据"; return 1; fi',
+        '+  python3 -B "$DRV/opening_checks.py" capture-receipt-check --dir "$RUNROOT/local-receipts" --commit "$ENTRY_COMMIT" || rc=$?',
+        '+  return "$rc"',
+        '+}',
+        '+tui_prelaunch_receipt() {',
+        '+  local rc=0 skip=0',
+        '+  opening_skipped tui-prelaunch-receipt || skip=$?',
+        '+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi',
+        '+  if receipt_not_applicable tui-prelaunch-receipt; then return 0; fi',
+        '+  python3 -B "$DRV/opening_checks.py" tui-receipt-check --dir "$RUNROOT/local-receipts" --version "$TARGET_VERSION" --binary-sha256 "${!CT_BINARY_SHA256_KEY}" || rc=$?',
+        '+  return "$rc"',
+        '+}',
         '-python3 -B - "$OUT/results.txt" "$OUT/summary.json" <<\'PY\'',
         '-import json, sys',
         '+check model-availability model_availability',
         '+check main-security-scan main_security_scan',
+        '+check local-capture-receipt local_capture_receipt',
+        '+check tui-prelaunch-receipt tui_prelaunch_receipt',
         '+python3 -B - "$OUT/results.txt" "$OUT/summary.json" "$OUT" <<\'PY\'',
         '+import json, os, sys',
         '-failed = [name for name, status in checks.items() if status != "passed"]',
@@ -1369,7 +1394,7 @@ CLOSEOUT_SH_2_RESIDUALS = {'entry-preflight.sh': ['+  rm -f "$OUT/$name.skipped"
         '+           "checks": checks, "failed": failed, "skipped": skipped}',
         '+  if grep -q \' skipped$\' "$OUT/results.txt"; then echo "注意：有被显式跳过的检查项（未做检查，不是通过）：$(grep \' skipped$\' "$OUT/results.txt" | cut -d\' \' -f1 | tr \'\\n\' \' \')"; fi']}
 CLOSEOUT_SH_3_BASELINE = 'c14cba3cd62d7ea6bcd02b4abf43e0b19f460ad7'
-CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '9fb656a16f20b283f5b430517a96d1c84f71b6f9b428b3f61bda27eeb32e36f4'}
+CLOSEOUT_SH_3_DIGESTS = {'env.example.sh': '9b14a35fe251cd604dcafd4ba5fa75e19bf141b65512a5f782a261b9efad61f3'}
 CLOSEOUT_SH_3_RESIDUALS = {'env.example.sh': []}
 CLOSEOUT_SH_4_BASELINE = '3ab5afea9da94d68efdeebafbd7a6542e21ea3e4'
 CLOSEOUT_SH_4_DIGESTS = {'vc0-gate-target.sh': 'b1d173a477b03009cfa6abde600bc81953817ebf1d72a7038b2fe1675a2fb94d'}
@@ -1377,8 +1402,37 @@ CLOSEOUT_SH_4_RESIDUALS = {'vc0-gate-target.sh': ['-bash "$DRV/entry-gates.sh" -
         '+GATE_SCOPE_ARGS=(); if [ codex = codex ]; then GATE_SCOPE_ARGS=(--gate-scope auto); fi',
         '+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"} "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?']}
 CLOSEOUT_SH_5_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
-CLOSEOUT_SH_5_DIGESTS = {'lib.sh': '6cd7928a180ed4149921673f7470ae72e1f6ad4f4bf9b7a8215a747628bd7df8'}
-CLOSEOUT_SH_5_RESIDUALS = {'lib.sh': ['-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\',
+CLOSEOUT_SH_5_DIGESTS = {'lib.sh': '8f09b91ddd30375da4fd0c50e438a8c33ddf06b27be3b58db2a3510a8bf26fd3'}
+CLOSEOUT_SH_5_RESIDUALS = {'lib.sh': ['-  local parameters',
+        '-  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || return 3',
+        '+  local parameters rc=0',
+        '+  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || rc=$?',
+        '+  if [ "$rc" -ne 0 ]; then',
+        '+    echo "VC5_ADMISSION_REQUIRED_FAILED rc=${rc}：准入消费没有通过（原因 JSON 见上一行标准错误）。排查：bash vc5-precheck.sh --dry-run 看 ttl（管理令牌剩余有效期）与 actions；" \\',
+        '+         "令牌快过期用批准件 --apply，或 vc5-precheck.sh --renew --approver \'批准人及依据\'（vc5-all.sh 启动前设 VC5_RENEW_APPROVER 可在 canonical 前自动续签）" >&2',
+        '+    return 3',
+        '+  fi',
+        '+}',
+        '+vc5_admission_guard() {',
+        '+  local stage=$1 rc=0 detail',
+        '+  detail=$(bash "$DRV/vc5-precheck.sh" --consume 2>&1 >/dev/null) || rc=$?',
+        '+  if [ "$rc" -eq 0 ]; then echo "VC5_ADMISSION_GUARD stage=${stage} 准入消费通过"; return 0; fi',
+        '+  echo "VC5_ADMISSION_GUARD stage=${stage} 准入消费失败 rc=${rc}：$(printf \'%s\' "$detail" | tail -n 1 | cut -c1-300)"',
+        '+  if [ -z "${VC5_RENEW_APPROVER:-}" ]; then',
+        '+    echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：没有设置 VC5_RENEW_APPROVER，不自动续签。排查：bash vc5-precheck.sh --dry-run（看 ttl 与 actions）；" \\',
+        '+         "令牌快过期时按批准件 --apply，或 bash vc5-precheck.sh --renew --approver \'批准人及依据\'，然后重起 vc5-all.sh（已完成的阶段会跳过）"',
+        '+    return 3',
+        '+  fi',
+        '+  echo "VC5_ADMISSION_GUARD stage=${stage} 自动续签管理令牌（批准人：${VC5_RENEW_APPROVER}）"',
+        '+  rc=0; detail=$(bash "$DRV/vc5-precheck.sh" --renew --approver "$VC5_RENEW_APPROVER" 2>&1 | tail -n 1 | cut -c1-300) || rc=$?',
+        '+  if [ "$rc" -ne 0 ] || ! printf \'%s\' "$detail" | grep -q \'"renewed": true\'; then',
+        '+    echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：自动续签没有成功：${detail}"',
+        '+    return 3',
+        '+  fi',
+        '+  rc=0; bash "$DRV/vc5-precheck.sh" --consume >/dev/null 2>&1 || rc=$?',
+        '+  if [ "$rc" -ne 0 ]; then echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：续签后准入消费仍不通过 rc=${rc}"; return 3; fi',
+        '+  echo "VC5_ADMISSION_GUARD stage=${stage} 续签成功，准入消费通过"',
+        '-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\',
         '+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\']}
 CLOSEOUT_SH_6_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
 CLOSEOUT_SH_6_DIGESTS = {'vc5-gate-target.sh': '310387f836cfded54248f851ba4b8d423efff11d32fddaa2b3db9d792e83ce94'}

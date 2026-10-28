@@ -367,8 +367,11 @@ FROZEN_MAPPING_SHA256 = (
 # 顶层字段（schema_version、codex_version、source_spec、source_spec_sha256、scenarios）逐字不变。画像文件摘要 3c077732… 变为 c53ed9ef…。
 # 窗口与压缩帧判据读 turn metadata 的结构摘要（relay_extract 的 shape._turn_metadata），并已用官方 0.165 客户端的真实采样帧逐条核对：官方样本全部通过，
 # 反例（窗口号不推进、压缩帧按普通回合处理、动态键缺失等）由单测的官方形态会话变形覆盖。
+# 2026-10-29（0.165.0 集成重冻）：上次冻结（摘要 c53ed9ef…，提交 8227760d7）之后，登记路与 W3 又直接在 0.165.0 期望清单上补了 HTTP 回合请求
+# root_turn_id／turn metadata 四键／HTTP 压缩请求等判据，清单字节变了而本常量未跟着重冻。载荷逐项审核（上次冻结点清单对当前清单）：规则 43 条不变；每条规则
+# 除 checks、scenario_ids 外的字段逐字不变；已有 check 0 个被删或被改；新增 check 11 个（SPEC-BODY-008 1、SPEC-BODY-009 4、SPEC-EP-021 6）；场景增量 SPEC-BODY-009 加 A03。摘要 c53ed9ef… 变为 016faf50…。
 FROZEN_PROFILE_SHA256 = (
-    "c53ed9efb37b689a130c1e99ac741dbe07f12988da4288a048efdb7ba3407671"
+    "502e7010f6824a694b46303986682a5975f72822a4e28253609e1c99c3f6d00f"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

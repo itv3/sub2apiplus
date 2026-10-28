@@ -904,7 +904,7 @@ T2_PRECHECK_REMOVED = {'tools/ci/background_validation.py': ['``start --prefligh
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '3bd46cc12de04661acd56b84973bf14fbe5e960bad73216af369aab719831138'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',
@@ -952,20 +952,26 @@ CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '5c0d689da6b67ede2674041bd00
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""',
         '            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': 'f6a7d2172f360eaa14fbb74f33828ccd7b4b8449727b2cfdc52410ace34c2f20'}
+CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': 'b46d06f0f0d9825bb92b00e9f683aa41b2c04e033d296038690f93326da7f680'}
 CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
         '  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。',
+        '记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。``--audit-reads``：入口门禁检查实际读集；',
         '                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:',
         '    def _recorded_reuse_products(self, out: Path, certification: Path) -> dict[str, str]:',
         '        result = json.loads((out / "pre-a3-reuse.json").read_text(encoding="utf-8"))',
         '        refresh_reuse = gates_run and self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))',
         '            external_present = bridge and pre_a3_run and Path(self.p("PRE_A3_CERTIFICATION")).exists()',
         '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:',
+        '        force = None if is_formal else {"entry-gates": "B-09：每次开工重新核对全集承接身份、时效与撤销；不得沿用旧步骤缓存"}',
+        '        evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal, force=force)',
+        '        decisions = {step["step_id"]: step for step in evaluation["steps"]}',
         '                        help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")',
         '                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)']}
 CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '8ea7896217fb3d68b419a013cc90b8f38cb969daed476e84ae41c8d245bd46b0'}
-CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
+CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '4c57d915784ab2c3873a9be72464b0d7b947daceafa6c1681b396f8519181e4e'}
+CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': ['其他前序产物）、环境（内核、Python、Go、node、容器镜像、二进制、录制数据、出口策略）。输入范围拿不准的一律从宽',
+        '        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。',
+        '            Input("environment", "file", "/etc/sub2api-egress/policy.json"),']}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
 CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'c6ac694ea1870b6dd3c5e48e8bc1566e941cd4276949cc81c42ae38716b6441e'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',

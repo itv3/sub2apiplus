@@ -217,6 +217,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_arm64_pipeline_scripts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_arm64_round_context": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -354,8 +361,8 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 0.6,
-   "owner": "shared",
-   "rule": "default-shared"
+   "owner": "codex",
+   "rule": "evidence:codex-only"
   },
   "test_candidate_relay_extension": {
    "claude_plan": "run",
@@ -2797,6 +2804,13 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 0.8,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
+  "test_keeper_optional_scripts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "shared",
    "rule": "default-shared"
   },
