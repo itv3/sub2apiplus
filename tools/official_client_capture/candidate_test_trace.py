@@ -180,8 +180,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 同时按本分支已合入各后端分支后的源码现状重绑映射已登记的源码快照与验收测试文件摘要（只改 sha256 叶子，测试名、事实宇宙与规则语义不动）。
 # 载荷逐项审核：旧映射 383 个叶子里变化的 25 处全是 sha256／test_file_sha256 叶子，非摘要叶子 0 处变化；新增条目 17 个叶子（含 3 个摘要叶子）；
 # 总叶子 400。映射文件摘要 f50b8c72… 变为 cd7e0a18…。
+# 2026-10-29（0.165.0 集成重绑）：集成分支并入 WS 压缩请求帧新回合 id 与 HTTP 回合请求 root_turn_id 两处改动，动到映射已登记的 official_egress_openai_ws.go、
+# official_egress_identity_authority.go、officialegress/compiler.go；映射只重绑这三份源码快照共 4 个叶子（ws.go 2、identity_authority.go 1、compiler.go 1），
+# 不改变测试、事实宇宙或规则语义。载荷逐项审核：400 个叶子里变化的 4 处全是 sha256 叶子，非摘要叶子 0 处变化；映射文件摘要 cd7e0a18… 变为 0cd678af…。
 FROZEN_MAPPING_SHA256 = (
-    "cd7e0a18cb42612c010d8fa3c50d0c12316a7d2860f38b89fe1a1cc47f8786b4"
+    "0cd678af2760968784508aee14bf34342711d72a3e89ef5962620b533e0792e7"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
