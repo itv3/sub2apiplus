@@ -36,6 +36,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
+	// 上游只有 Chat Completions：不认识 configuration_update，把会话内改的 effort 折进请求级 effort 再转换。
+	foldConfigurationUpdateEffortIntoResponsesRequest(&responsesReq)
 	originalModel := strings.TrimSpace(responsesReq.Model)
 	if originalModel == "" {
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", "model is required")

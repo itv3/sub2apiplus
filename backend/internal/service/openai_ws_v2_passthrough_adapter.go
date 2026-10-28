@@ -142,6 +142,10 @@ type openAIWSPassthroughUsageMeta struct {
 
 	// 仅在 client->upstream filter goroutine 中读写；Load 侧通过上方原子指针同步。
 	sessionRequestModel string
+	// 窗口内最近一次 configuration_update 的 effort：官方客户端用 previous_response_id 续链的增量帧只含新增项，
+	// 之前帧里的 update 不在本帧 input 里，要靠这里沿用（策略之后的生效 effort 与策略之前的请求 effort 各一个）。
+	effortCarrier          openAIWindowEffortCarrier
+	requestedEffortCarrier openAIWindowEffortCarrier
 }
 
 func newOpenAIWSPassthroughUsageMeta(initialRequestModel string, firstFrame []byte) *openAIWSPassthroughUsageMeta {
@@ -159,7 +163,10 @@ func (m *openAIWSPassthroughUsageMeta) initFromFirstFrame(policyOutput []byte, m
 		return
 	}
 	m.serviceTier.Store(extractOpenAIServiceTierFromBody(policyOutput))
-	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, m.sessionRequestModel))
+	carried := m.effortCarrier.advance(policyOutput)
+	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromRaw(
+		effectiveReasoningEffortRawWithCarry(policyOutput, carried), mappedModel, m.sessionRequestModel,
+	))
 	m.storeTurnModels(m.sessionRequestModel, policyOutput)
 }
 
@@ -168,7 +175,10 @@ func (m *openAIWSPassthroughUsageMeta) captureRequestedReasoningEffort(originalB
 		return
 	}
 	candidates := append([]string{m.sessionRequestModel}, modelCandidates...)
-	m.requestedReasoningEffort.Store(CanonicalRequestedReasoningEffort(originalBody, candidates...))
+	carried := m.requestedEffortCarrier.advance(originalBody)
+	m.requestedReasoningEffort.Store(canonicalRequestedReasoningEffortFromRaw(
+		requestedReasoningEffortRawWithCarry(originalBody, carried), originalBody, candidates...,
+	))
 }
 
 func (m *openAIWSPassthroughUsageMeta) updateSessionRequestModel(payload []byte) {
@@ -191,11 +201,20 @@ func (m *openAIWSPassthroughUsageMeta) requestModelForFrame(payload []byte) stri
 }
 
 func (m *openAIWSPassthroughUsageMeta) updateFromResponseCreate(policyOutput []byte, mappedModel string, requestModelForFrame string) {
+	m.updateFromResponseCreateFrame(policyOutput, policyOutput, mappedModel, requestModelForFrame)
+}
+
+// updateFromResponseCreateFrame 同 updateFromResponseCreate，另给出客户端发来的帧（策略之后、官方出站定型之前）：
+// “是否增量续链”要按它判断，出站帧上的 previous_response_id 可能是网关为整段重放补预热后链出来的。
+func (m *openAIWSPassthroughUsageMeta) updateFromResponseCreateFrame(policyOutput []byte, clientFrame []byte, mappedModel string, requestModelForFrame string) {
 	if m == nil {
 		return
 	}
 	m.serviceTier.Store(extractOpenAIServiceTierFromBody(policyOutput))
-	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, requestModelForFrame))
+	carried := m.effortCarrier.advance(clientFrame)
+	m.reasoningEffort.Store(extractOpenAIReasoningEffortFromRaw(
+		effectiveReasoningEffortRawWithCarry(policyOutput, carried), mappedModel, requestModelForFrame,
+	))
 	m.storeTurnModels(requestModelForFrame, policyOutput)
 }
 
@@ -1339,7 +1358,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
-				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
+				usageMeta.updateFromResponseCreateFrame(out, payload, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
 				SetOpsUpstreamModel(c, actualModel)
 				responseCreateAtCopy := responseCreateAt

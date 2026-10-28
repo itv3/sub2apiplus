@@ -1056,6 +1056,12 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel 
 		return "", false
 	}
 
+	// 生效 effort：input 里最后一条 configuration_update 优先于请求级 reasoning.effort
+	// （较新官方客户端会话内改 effort 时请求级取值被钉在窗口基线上）。
+	if effort, ok := lastConfigurationUpdateEffortFromReqBody(reqBody); ok {
+		return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
+	}
+
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
@@ -1857,11 +1863,16 @@ func isOpenAICodexModel(model string) bool {
 // billingModel, originalModel）：显式 effort 的模型归一化（max 保留判定）用第一个
 // 非空候选；body 未携带 effort 时的模型后缀推导依次尝试每个候选——OAuth 的
 // normalizeCodexModel 会剥掉 upstreamModel 的 effort 后缀，只有原始模型名还留着。
+//
+// 读的是生效 effort（见 effectiveReasoningEffortRaw）：input 里最后一条 configuration_update 优先于请求级 reasoning.effort。
+// WS 增量帧要用 openAIWindowEffortCarrier 取原文后调 extractOpenAIReasoningEffortFromRaw。
 func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
-	reasoningEffort := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
-	if reasoningEffort == "" {
-		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
-	}
+	return extractOpenAIReasoningEffortFromRaw(effectiveReasoningEffortRaw(body), modelCandidates...)
+}
+
+// extractOpenAIReasoningEffortFromRaw 对已取得的 effort 原文做档位归一化；原文为空时按模型候选的后缀推导。
+func extractOpenAIReasoningEffortFromRaw(reasoningEffort string, modelCandidates ...string) *string {
+	reasoningEffort = strings.TrimSpace(reasoningEffort)
 	if reasoningEffort != "" {
 		normalized := normalizeOpenAIReasoningEffortForModel(reasoningEffort, firstNonEmpty(modelCandidates...))
 		if normalized == "" {
@@ -1877,7 +1888,8 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 	return &value
 }
 
-func explicitRequestedReasoningEffortFromBody(body []byte) string {
+// requestLevelRequestedReasoningEffortRaw 是请求级“客户端请求的 effort”原文：reasoning.effort、reasoning_effort、output_config.effort。
+func requestLevelRequestedReasoningEffortRaw(body []byte) string {
 	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
@@ -1888,12 +1900,27 @@ func explicitRequestedReasoningEffortFromBody(body []byte) string {
 	return raw
 }
 
+// explicitRequestedReasoningEffortFromBody 返回客户端请求的 effort 原文：input 里最后一条 configuration_update 优先
+// （较新官方客户端会话内改 effort 的唯一载体），其次请求级字段。
+func explicitRequestedReasoningEffortFromBody(body []byte) string {
+	if effort, ok := lastConfigurationUpdateEffort(body); ok {
+		return effort
+	}
+	return requestLevelRequestedReasoningEffortRaw(body)
+}
+
 // CanonicalRequestedReasoningEffort extracts the client-requested effort before
 // group policy rewriting and before model-family remapping (max -> xhigh).
 // Empty or unknown values return nil. "max" is preserved even for models that
 // later persist "xhigh".
 func CanonicalRequestedReasoningEffort(body []byte, modelCandidates ...string) *string {
-	if raw := explicitRequestedReasoningEffortFromBody(body); raw != "" {
+	return canonicalRequestedReasoningEffortFromRaw(explicitRequestedReasoningEffortFromBody(body), body, modelCandidates...)
+}
+
+// canonicalRequestedReasoningEffortFromRaw 对已取得的“请求 effort”原文做归一化（WS 增量帧用 openAIWindowEffortCarrier 取原文）。
+// 原文为空时依次按模型候选与 body.model 的后缀推导。
+func canonicalRequestedReasoningEffortFromRaw(raw string, body []byte, modelCandidates ...string) *string {
+	if raw = strings.TrimSpace(raw); raw != "" {
 		canonical := NormalizeMaxReasoningEffort(raw)
 		if canonical == "" {
 			return nil
@@ -2670,10 +2697,13 @@ func CanonicalRequestedReasoningEffortFromReqBody(reqBody map[string]any, modelC
 	if reqBody == nil {
 		return CanonicalRequestedReasoningEffort(nil, modelCandidates...)
 	}
-	raw := ""
-	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
-		if effort, ok := reasoning["effort"].(string); ok {
-			raw = strings.TrimSpace(effort)
+	// 生效 effort：最后一条 configuration_update 优先于请求级字段。
+	raw, _ := lastConfigurationUpdateEffortFromReqBody(reqBody)
+	if raw == "" {
+		if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
+			if effort, ok := reasoning["effort"].(string); ok {
+				raw = strings.TrimSpace(effort)
+			}
 		}
 	}
 	if raw == "" {

@@ -117,6 +117,8 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 	if strings.TrimSpace(request.Model) == "" {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 	}
+	// 上游不认识 configuration_update：把会话内改的 effort 折进请求级 effort 再转换。
+	foldConfigurationUpdateEffortIntoResponsesRequest(&request)
 
 	claudeRequest, err := apicompat.ResponsesToAnthropicRequest(&request)
 	if err != nil {

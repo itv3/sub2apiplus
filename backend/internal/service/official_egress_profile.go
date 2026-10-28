@@ -178,6 +178,8 @@ type OfficialEgressContextInput struct {
 	DefaultReasoningSummary           string
 	SupportsReasoningSummaryParameter bool
 	ReasoningDefaultsKnown            bool
+	// SupportsReasoningEffortUpdates 是同一份清单里的 supports_reasoning_effort_updates，同样是冻结快照。
+	SupportsReasoningEffortUpdates bool
 	// CodexEndpointID 仅用于已经由当前 Release 画像解析的辅助端点。
 	// 主 Responses 入口留空，由公共 Resolver 根据传输与入口映射。
 	CodexEndpointID string
@@ -222,6 +224,7 @@ type OfficialEgressContext struct {
 	defaultReasoningSummary   string
 	supportsReasoningSummary  bool
 	reasoningDefaultsKnown    bool
+	supportsEffortUpdates     bool
 	invocationID              string
 	codexRuntimeState         officialCodexRuntimeState
 	cookieJar                 http.CookieJar
@@ -254,6 +257,7 @@ func NewOfficialEgressContext(input OfficialEgressContextInput) *OfficialEgressC
 		defaultReasoningSummary:  strings.ToLower(strings.TrimSpace(input.DefaultReasoningSummary)),
 		supportsReasoningSummary: input.SupportsReasoningSummaryParameter,
 		reasoningDefaultsKnown:   input.ReasoningDefaultsKnown,
+		supportsEffortUpdates:    input.SupportsReasoningEffortUpdates,
 		codexRequestedEndpointID: strings.TrimSpace(input.CodexEndpointID),
 		invocationID:             strings.TrimSpace(input.InvocationID),
 		codexRuntimeState:        runtimeState,

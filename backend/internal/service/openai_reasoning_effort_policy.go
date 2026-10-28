@@ -510,7 +510,10 @@ func ApplyReasoningEffortPolicy(body []byte, maxEffort string, mappings []Reason
 	requestModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	result := body
 	changed := false
-	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
+	// 请求级字段之外，较新官方客户端会话内改 effort 时在 input 里追加的 configuration_update 项同样携带 effort，
+	// 上游按它执行；不一并过上限／映射／拒绝策略，用户就能在窗口中途改档绕过分组上限。
+	paths := append([]string{"reasoning.effort", "reasoning_effort", "output_config.effort"}, configurationUpdateEffortPaths(body)...)
+	for _, path := range paths {
 		field := gjson.GetBytes(result, path)
 		if !field.Exists() || field.Type != gjson.String {
 			continue

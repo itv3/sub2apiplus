@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/gin-gonic/gin"
@@ -677,6 +678,10 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			ProfileMode:           egressContext.ProfileMode(),
 			ThreadID:              identity.threadID,
 			TurnID:                identity.turnID,
+			// 官方 reasoning_effort_override 不作用于 guardian 审阅会话与记忆合并会话（core/src/client.rs 里的
+			// reasoning_effort_override_enabled）；其余线程（含普通子代理）照常。
+			AllowConfigurationUpdate: strings.TrimSpace(identity.subagent) != officialCodexGuardianSubagentValue &&
+				strings.TrimSpace(identity.subagent) != "memory_consolidation" && !identity.memoryGenerate,
 		},
 	)
 	if err != nil {
@@ -806,6 +811,9 @@ type officialOpenAIHTTPBodyOptions struct {
 	// TurnID 是本次请求派生出的官方 turn_id（identity.turnID）。画像声明 uuidv7 方案时，入站官方形态的逐项 passthrough.turn_id
 	// 据此改写（见 rewriteOfficialOpenAIHTTPInputTurnIDs）；为空（例如 WS 到 HTTP 的桥接，输入已是网关定型过的帧）时不改写。
 	TurnID string
+	// AllowConfigurationUpdate 为真才允许为第三方入站合成 configuration_update（见 official_egress_openai_configuration_update.go）：
+	// 调用方在会话不是 guardian 审阅或记忆合并时置位（官方对这两类会话不启用 effort 覆盖）。零值为假，其余调用点保持原行为。
+	AllowConfigurationUpdate bool
 }
 
 func finalizeOfficialOpenAIHTTPBody(
@@ -1122,6 +1130,12 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	if !reflect.DeepEqual(contract.callIDs, collectOfficialOpenAICallIDs(payload)) {
 		return false, errors.New("OpenAI official egress call_id was modified")
 	}
+	// 第三方入站的 HTTP 出站：为支持 effort 更新的模型合成 configuration_update（官方不带 WS 预热的 provider 的形态）。
+	// 放在最后一步，使上面所有回合／前缀派生都用不含该项的结构。
+	if !isCompact && options.AllowConfigurationUpdate && carrierActive &&
+		synthesizeOfficialCodexConfigurationUpdate(payload, contract, carrier, reasoningDefaults) {
+		modified = true
+	}
 	return modified, nil
 }
 
@@ -1155,6 +1169,11 @@ type officialOpenAIReasoningDefaults struct {
 	// NumericEffortAsInteger：当前 release 画像声明 ReasoningEffort 节（CustomNumericSerialization=u64_integer）时为
 	// true，能按 u64 解析的自定义档位以 JSON 整数发出；为 false 时一律发字符串（节缺省的旧版本行为）。
 	NumericEffortAsInteger bool
+	// SupportsEffortUpdates：模型清单声明 supports_reasoning_effort_updates（官方客户端会话内改 effort 时用
+	// configuration_update 项承载）。ConfigurationUpdateHTTPFirstTurn：当前 release 画像的 ReasoningEffort 节声明
+	// ConfigurationUpdate=http_first_turn。两者同时成立才会为第三方入站的 HTTP 出站合成该项。
+	SupportsEffortUpdates            bool
+	ConfigurationUpdateHTTPFirstTurn bool
 }
 
 func officialOpenAIReasoningDefaultsFromContext(
@@ -1170,6 +1189,9 @@ func officialOpenAIReasoningDefaultsFromContext(
 		SupportsSummary:        egressContext.supportsReasoningSummary,
 		Known:                  egressContext.reasoningDefaultsKnown,
 		NumericEffortAsInteger: section != nil && section.CustomNumericSerialization == "u64_integer",
+		SupportsEffortUpdates:  egressContext.supportsEffortUpdates,
+		ConfigurationUpdateHTTPFirstTurn: section != nil &&
+			section.ConfigurationUpdate == profilecontract.ReasoningEffortConfigurationUpdateHTTPFirstTurn,
 	}
 }
 

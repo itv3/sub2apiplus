@@ -91,13 +91,21 @@ func officialCodexTurnTrigger(surfaceID string, subagent string, memoryGeneratio
 	}
 }
 
-// officialOpenAIEffectiveReasoningEffort 返回请求体最终会携带的 reasoning.effort：显式值
-// 优先（ultra 映射为 max，与 normalizeDerivedOfficialOpenAIReasoning 一致），缺席时取
-// 模型默认值；两者都没有时返回空串。
+// officialOpenAIEffectiveReasoningEffort 返回本次请求的生效 effort，写入 turn metadata 的 reasoning_effort：
+// input 里最后一条 configuration_update 优先（较新官方客户端会话内改 effort 的载体；官方 ExecutionMetadata 记的是
+// 用户当前选择，而请求级 reasoning.effort 此时被钉在窗口基线上），其次请求体显式值（ultra 映射为 max，与
+// normalizeDerivedOfficialOpenAIReasoning 一致），缺席时取模型默认值；都没有时返回空串。
+// WS 增量帧只含新增项，之前帧里的 update 由调用方经 officialOpenAIWSDerivedState.windowReasoningEffortForFrame 带入。
 func officialOpenAIEffectiveReasoningEffort(
 	payload map[string]any,
 	defaults officialOpenAIReasoningDefaults,
 ) string {
+	if effort, ok := lastConfigurationUpdateEffortFromReqBody(payload); ok {
+		if strings.EqualFold(effort, "ultra") {
+			return "max"
+		}
+		return effort
+	}
 	if reasoning, ok := payload["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok && strings.TrimSpace(effort) != "" {
 			if strings.EqualFold(strings.TrimSpace(effort), "ultra") {
