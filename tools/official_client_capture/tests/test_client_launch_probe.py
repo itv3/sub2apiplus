@@ -104,6 +104,15 @@ def _marker_blocks(text: str) -> dict[str, list[str]]:
     return blocks
 
 
+def _http_probe_array_lines(text: str) -> list[str]:
+    """脚本里 ``http_probe_provider_config=( … )`` 数组的定义行（含首尾）。"""
+
+    lines = text.splitlines()
+    start = lines.index("http_probe_provider_config=(")
+    end = next(index for index in range(start + 1, len(lines)) if lines[index] == ")")
+    return lines[start:end + 1]
+
+
 def _drive_call(body: list[str]) -> tuple[list[str], list[str]]:
     """分支里调用 drive_codex_tui.py 的完整命令行（含续行）与其前面的简单赋值行。"""
 
@@ -126,6 +135,10 @@ def _expand_call_site(marker: str, environment: dict[str, str]) -> list[str]:
     text = _relay_text()
     prelude, command = _drive_call(_marker_blocks(text)[marker])
     default_line = next(line for line in text.splitlines() if line.startswith("DISABLE_FEATURES="))
+    # 0.165 起部分调用点还用到脚本顶部的版本、第二个模型与只走 HTTP 的 provider 配置数组：原样取脚本里的定义行。
+    version_line = next(line for line in text.splitlines() if line.startswith("codex_version="))
+    switch_line = next(line for line in text.splitlines() if line.startswith("switch_model="))
+    provider_array = _http_probe_array_lines(text)
     # daemon 分支以 -e CODEX_HOME=... 指定独立 home（探测用运行器自己的 daemon home 复刻，另有用例核对）。
     command[0] = re.sub(r'docker exec (?:-e \S+ )*"\$capture_container" python3', "__probe_capture", command[0], count=1)
     self_check = "__probe_capture" in command[0]
@@ -140,6 +153,9 @@ def _expand_call_site(marker: str, environment: dict[str, str]) -> list[str]:
         "run_id=probe-run",
         "guardian_probe_path=/var/tmp/probe.txt",
         default_line,
+        version_line,
+        switch_line,
+        *provider_array,
         *prelude,
         *command,
     ])
@@ -184,6 +200,8 @@ class CallSiteCoverageTests(unittest.TestCase):
             {"DISABLE_FEATURES": "plugins"},
             {"TUI_ENABLE": "token_budget runtime_metrics", "TUI_DISABLE": "remote_compaction_v2", "CONTEXT_WINDOW": "120000"},
             {"TUI_DISABLE": "alpha beta", "TUI_HOLD": "9", "TUI_WARMUP": "hello world", "GUARDIAN_PROBE_PATH": "/tmp/x"},
+            {"CODEX_VERSION": "0.165.0"},
+            {"CODEX_VERSION": "0.165.0", "SWITCH_MODEL": "gpt-6-astra", "DISABLE_FEATURES": "plugins"},
         ]
         for scenario, spec in probe.TUI_SCENARIOS.items():
             for environment in cases:
@@ -207,6 +225,73 @@ class CallSiteCoverageTests(unittest.TestCase):
             derived = {"ctx_opt", "work", "daemon_home"}
             with self.subTest(scenario=scenario):
                 self.assertLessEqual(names, allowed_common | interactive_only | derived | set(spec["variables"]))
+
+    def test_http_probe_provider_config_matches_script_array(self) -> None:
+        """探测表里的 HTTP provider 配置与脚本数组逐项一致（脚本里的 $codex_version 对应探测的 {codex_version}）。"""
+
+        script_items = []
+        for line in _http_probe_array_lines(_relay_text())[1:-1]:
+            item = line.strip().strip('"')
+            self.assertTrue(line.strip().startswith('"') and line.strip().endswith('"'), line)
+            script_items.append(item.replace("$codex_version", "{codex_version}"))
+        self.assertEqual(list(probe.HTTP_PROBE_PROVIDER_CONFIG), script_items)
+        self.assertEqual(
+            [item for item in probe.drive_options("effort-update-http", {"CODEX_VERSION": "0.165.0"}) if item != "--config"][:2],
+            ["--no-daemon", "model_provider=openai-http-probe"],
+        )
+        self.assertIn("model_providers.openai-http-probe.http_headers.version=0.145.0", probe.drive_options("effort-update-http", {}))
+        with self.assertRaises(probe.ProbeConfigError):
+            probe.drive_options("effort-update-http", {"CODEX_VERSION": "0.165"})
+        # 其它场景不带 provider 配置。
+        for scenario in probe.TUI_SCENARIOS:
+            if scenario != "effort-update-http":
+                with self.subTest(scenario=scenario):
+                    self.assertNotIn("model_provider=openai-http-probe", probe.drive_options(scenario, {}))
+
+    def test_effort_scenario_steps_are_valid_for_driver(self) -> None:
+        """0.165 新场景调用点展开出的每个 --step 都能被受管驱动解析；步骤与场景的意图一致（真实 bash 展开，不是静态字符串匹配）。"""
+
+        sys.path.insert(0, str(TOOL_ROOT))
+        try:
+            spec = importlib.util.spec_from_file_location("drive_codex_tui_for_steps_test", DRIVE_SCRIPT)
+            drive = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(drive)
+        finally:
+            sys.path.remove(str(TOOL_ROOT))
+        expectations = {
+            "effort-update-ws": ["prompt", "effort", "prompt", "effort", "prompt"],
+            "effort-update-http": ["prompt", "effort", "prompt", "effort", "prompt"],
+            "model-switch-ws": ["prompt", "model", "prompt", "model", "prompt"],
+            "compact-continue-ws": ["prompt", "effort", "prompt", "compact", "prompt", "effort", "prompt"],
+            "effort-unsupported-ws": ["prompt", "effort", "prompt"],
+        }
+        for scenario, kinds in expectations.items():
+            marker = probe.TUI_SCENARIOS[scenario]["marker"]
+            with self.subTest(scenario=scenario):
+                arguments = _expand_call_site(marker, {})
+                steps = [arguments[index + 1] for index, item in enumerate(arguments) if item == "--step"]
+                parsed = drive.parse_steps(steps)
+                self.assertEqual([step.kind for step in parsed], kinds)
+                self.assertNotIn("--prompt", arguments, "步骤场景不能再带 --prompt（与 --step 互斥）")
+        # 具体取值：改 effort 先 high 后 low（采集环境初始是 low，两次都是真实变化）；换模型的第二个模型来自 SWITCH_MODEL。
+        for scenario in ("effort-update-ws", "effort-update-http"):
+            arguments = _expand_call_site(probe.TUI_SCENARIOS[scenario]["marker"], {})
+            steps = drive.parse_steps([arguments[i + 1] for i, item in enumerate(arguments) if item == "--step"])
+            self.assertEqual([step.arg for step in steps if step.kind == "effort"], ["high", "low"])
+        arguments = _expand_call_site("__MODEL_SWITCH_TUI__", {})
+        steps = drive.parse_steps([arguments[i + 1] for i, item in enumerate(arguments) if item == "--step"])
+        self.assertEqual([step.arg for step in steps if step.kind == "model"], ["gpt-6-astra", "probe-model"])
+        arguments = _expand_call_site("__MODEL_SWITCH_TUI__", {"SWITCH_MODEL": "gpt-6-luna"})
+        steps = drive.parse_steps([arguments[i + 1] for i, item in enumerate(arguments) if item == "--step"])
+        self.assertEqual([step.arg for step in steps if step.kind == "model"], ["gpt-6-luna", "probe-model"])
+        # 保持时长：TUI_HOLD 同时作为 prompt 与 slash 的保持，缺省 60／120。
+        arguments = _expand_call_site("__COMPACT_CONTINUE_TUI__", {})
+        self.assertEqual(arguments[arguments.index("--prompt-hold") + 1], "60")
+        self.assertEqual(arguments[arguments.index("--slash-hold") + 1], "120")
+        arguments = _expand_call_site("__COMPACT_CONTINUE_TUI__", {"TUI_HOLD": "90"})
+        self.assertEqual(arguments[arguments.index("--prompt-hold") + 1], "90")
+        self.assertEqual(arguments[arguments.index("--slash-hold") + 1], "90")
 
     def test_daemon_call_site_uses_independent_home_without_overrides(self) -> None:
         """daemon 调用点经 -e CODEX_HOME 指向独立 home、命令行零覆盖；功能开关与探测的 daemon_features 同源。"""
@@ -264,6 +349,7 @@ class CallSiteCoverageTests(unittest.TestCase):
             "CODEX_BIN": f"codex_bin=${{CODEX_BIN:-{probe.RELAY_DEFAULTS['CODEX_BIN']}}}",
             "MODEL": f"model=${{MODEL:-{probe.RELAY_DEFAULTS['MODEL']}}}",
             "DISABLE_FEATURES": f'DISABLE_FEATURES=${{DISABLE_FEATURES:-"{probe.RELAY_DEFAULTS["DISABLE_FEATURES"]}"}}',
+            "CODEX_VERSION": f"codex_version=${{CODEX_VERSION:-{probe.RELAY_DEFAULTS['CODEX_VERSION']}}}",
         }
         lines = set(text.splitlines())
         for key, line in expected_lines.items():

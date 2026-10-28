@@ -139,6 +139,27 @@ if [[ $scenario == "ws-retry-after" ]] && (( codex_major == 0 && codex_minor < 1
   echo "ws-retry-after 需要 Codex >=0.163.0（WS 握手 4xx 的 Retry-After 与降级前等待）。" >&2
   exit 2
 fi
+# 0.165 起 reasoning_effort_override 默认开启（窗口内改推理强度会在 input 里追加 configuration_update、请求级 effort 钉死）。
+# 下面四个场景都靠它出现的 update 项做判据，更早的版本跑下去得不到该项，白耗配额，在任何请求之前拒绝。
+# effort-unsupported-ws 断言“不出现 update”，与版本无关，不在此列。
+if [[ $scenario == "effort-update-ws" || $scenario == "effort-update-http" || $scenario == "model-switch-ws" || $scenario == "compact-continue-ws" ]] \
+  && (( codex_major == 0 && codex_minor < 165 )); then
+  echo "$scenario 需要 Codex >=0.165.0（reasoning_effort_override 默认开启，configuration_update 项）。" >&2
+  exit 2
+fi
+# model-switch-ws 的第二个模型：变量 SWITCH_MODEL，缺省 gpt-6-astra（目录里的 Lite 模型）。必须与主线模型不同；
+# 取值在任何 docker 调用之前校验，驱动的 model 步骤也会再核对一次名字。
+switch_model=${SWITCH_MODEL:-gpt-6-astra}
+if [[ $scenario == "model-switch-ws" ]]; then
+  if [[ ! $switch_model =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "SWITCH_MODEL 只能包含字母、数字、点、下划线和连字符。" >&2
+    exit 2
+  fi
+  if [[ $switch_model == "$model" ]]; then
+    echo "model-switch-ws 的 SWITCH_MODEL 必须与 MODEL 不同。" >&2
+    exit 2
+  fi
+fi
 # 定向样本场景与中继受控开关必须成对出现：场景只决定客户端怎么发，受控应答由中继开关决定。
 # 用 if 链而非 case 语句：启动探测测试把脚本里第一个按场景分支的 case 语句当作提示词表，解析 TUI 场景标记。
 if [[ $scenario == stream-fault ]]; then
@@ -1342,6 +1363,32 @@ case "$scenario" in
     # （codex-api/src/endpoint/responses_websocket.rs 第 225-231 行）。同一 TUI 会话两轮：第一轮完成后首条 WS
     # 空闲达到 RELAY_CLOSE_IDLE_WS_AFTER 秒由中继以服务端身份关闭，第二轮必须新建连接。
     prompt='__WS_IDLE_CLOSE_TUI__' ;;
+  effort-update-ws)
+    # SPEC-BODY-006／SPEC-WS-005（0.165 起）：reasoning_effort_override 默认开启。内置 OpenAI provider 有 WS 预热，预热时已把
+    # 请求级 effort 钉死，所以首轮 input 不带 configuration_update；之后会话中途用 `/model --reasoning=<档>` 改推理强度，
+    # 下一轮 WS 增量帧的 input 末尾追加 {"type":"configuration_update","reasoning":{"effort":"<档>"}}，请求级 effort 仍是钉死值。
+    # 初始 effort 取采集环境 config.toml 的 model_reasoning_effort（low）：先改 high、再改回 low，两次都是真实变化。
+    # （core/src/session/reasoning_effort.rs、core/src/session/startup_prewarm.rs [0.165.0]）
+    prompt='__EFFORT_UPDATE_TUI__' ;;
+  effort-update-http)
+    # 同上，但用只走 HTTP 的 OAuth provider（名字仍是 OpenAI、supports_websockets=false，与 http-response 同一组覆盖）：没有 WS 预热，
+    # 钉子在首轮才建立，首轮 input 在首个用户消息之后就带 update(当前 effort)；HTTP 无续链，每个请求都是全历史，
+    # 历史里累积各次 update。
+    prompt='__EFFORT_UPDATE_HTTP_TUI__' ;;
+  model-switch-ws)
+    # SPEC-WS-005（0.165 起复核）：会话中途 `/model <模型>` 换模型，下一帧在**原 WS 连接**上发全量帧（无 previous_response_id、
+    # 无 generate，model 为新模型，input 为全历史加 <model_instructions>／<collaboration_mode> developer 消息、用户消息和新模型的
+    # update），不重新握手、不补预热；握手头里的 routing hint 保持旧值（core/src/client.rs 的 model_changed 分支 [0.165.0]）。
+    prompt='__MODEL_SWITCH_TUI__' ;;
+  compact-continue-ws)
+    # SPEC-EP-021／SPEC-EP-023／SPEC-WS-005（0.165 起复核）：压缩请求是增量帧（previous_response_id＋compaction_trigger），压缩后的
+    # 下一轮在**原连接**上发全量帧（含 compaction 项、窗口号 :0→:1），再下一轮恢复增量。压缩前后各改一次 effort，核对压缩后
+    # 基线重建（旧 update 随历史消失、请求级 effort 取压缩时的当前选择）。
+    prompt='__COMPACT_CONTINUE_TUI__' ;;
+  effort-unsupported-ws)
+    # SPEC-BODY-006（0.165 起）：模型目录里 supports_reasoning_effort_updates=false 的模型（采集账号的 gpt-5.6-*，由 MODEL 给出）
+    # 改 effort 不产生 configuration_update，请求级 effort 直接跟随用户，同连接发全量帧（reasoning_changed）。
+    prompt='__EFFORT_UNSUPPORTED_TUI__' ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 # comp-hash-changed／model-downshift 自带压缩原因；清单只能重申同一原因，不能改判。
@@ -1638,6 +1685,82 @@ elif [[ $prompt == "__WS_IDLE_CLOSE_TUI__" ]]; then
     --prompt '请只回复 FIRST-OK，不要做任何其他事。' \
     --prompt '请只回复 SECOND-OK，不要做任何其他事。' \
     --prompt-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__EFFORT_UPDATE_TUI__" ]]; then
+  # 设置类步骤固定保持 8 秒；每个 prompt 保持 TUI_HOLD（缺省 60）秒，要覆盖真实上游的生成时间。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --step 'prompt:请只回复 OK，不要做任何其他事。' \
+    --step 'effort@8:high' \
+    --step 'prompt:请只回复 OK2，不要做任何其他事。' \
+    --step 'effort@8:low' \
+    --step 'prompt:请只回复 OK3，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-60}" --slash-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__EFFORT_UPDATE_HTTP_TUI__" ]]; then
+  # 与 __EFFORT_UPDATE_TUI__ 同一组步骤；只走 HTTP 的 OAuth provider 配置由 http_probe_provider_config 展开成 --config。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --step 'prompt:请只回复 OK，不要做任何其他事。' \
+    --step 'effort@8:high' \
+    --step 'prompt:请只回复 OK2，不要做任何其他事。' \
+    --step 'effort@8:low' \
+    --step 'prompt:请只回复 OK3，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-60}" --slash-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
+    $(for item in "${http_probe_provider_config[@]}"; do printf -- '--config %s ' "$item"; done) \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__MODEL_SWITCH_TUI__" ]]; then
+  # 第二个模型是 switch_model（SWITCH_MODEL，缺省 gpt-6-astra），第二次换回主线模型 $model。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --step 'prompt:请只回复 OK，不要做任何其他事。' \
+    --step "model@8:${switch_model}" \
+    --step 'prompt:请只回复 OK2，不要做任何其他事。' \
+    --step "model@8:${model}" \
+    --step 'prompt:请只回复 OK3，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-60}" --slash-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__COMPACT_CONTINUE_TUI__" ]]; then
+  # compact 步骤保持 --slash-hold（TUI_HOLD，缺省 120 秒）；真实压缩要跑一个完整模型往返。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --step 'prompt:请只回复 OK，不要做任何其他事。' \
+    --step 'effort@8:high' \
+    --step 'prompt:请只回复 OK2，不要做任何其他事。' \
+    --step 'compact' \
+    --step 'prompt:请只回复 OK3，不要做任何其他事。' \
+    --step 'effort@8:medium' \
+    --step 'prompt:请只回复 OK4，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-60}" --slash-hold "${TUI_HOLD:-120}" \
+    --no-daemon \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__EFFORT_UNSUPPORTED_TUI__" ]]; then
+  # MODEL 须是目录里 supports_reasoning_effort_updates=false 的模型（如 gpt-5.6-sol）。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --step 'prompt:请只回复 OK，不要做任何其他事。' \
+    --step 'effort@8:high' \
+    --step 'prompt:请只回复 OK2，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-60}" --slash-hold "${TUI_HOLD:-120}" \
     --no-daemon \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true

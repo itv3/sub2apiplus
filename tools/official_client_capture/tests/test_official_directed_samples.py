@@ -889,6 +889,32 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
                 self.assertIn(f"{scenario} 需要 Codex >=0.158.0", result.stderr)
                 self.assert_passes_validation(self.run_until_validation(scenario, **environment))
 
+    def test_effort_scenarios_require_0165_and_validate_switch_model(self) -> None:
+        """0.165 起 reasoning_effort_override 默认开启：四个靠 configuration_update 做判据的场景在更早版本直接拒绝；
+        effort-unsupported-ws 断言“不出现 update”，与版本无关。SWITCH_MODEL 在任何 docker 调用之前校验。"""
+
+        for scenario in ("effort-update-ws", "effort-update-http", "model-switch-ws", "compact-continue-ws"):
+            with self.subTest(scenario=scenario):
+                old = self.run_until_validation(scenario, CODEX_VERSION="0.164.0")
+                self.assertEqual(old.returncode, 2, old.stderr)
+                self.assertIn(f"{scenario} 需要 Codex >=0.165.0", old.stderr)
+                self.assert_passes_validation(self.run_until_validation(scenario, CODEX_VERSION="0.165.0", MODEL="gpt-6.1-sol"))
+        self.assert_passes_validation(self.run_until_validation("effort-unsupported-ws", CODEX_VERSION="0.163.0", MODEL="gpt-5.6-sol"))
+        self.assert_passes_validation(self.run_until_validation("effort-unsupported-ws", CODEX_VERSION="0.165.0", MODEL="gpt-5.6-sol"))
+        cases = [
+            ({"SWITCH_MODEL": "bad model"}, "SWITCH_MODEL 只能包含字母、数字、点、下划线和连字符"),
+            ({"SWITCH_MODEL": "-x"}, "SWITCH_MODEL 只能包含字母、数字、点、下划线和连字符"),
+            ({"SWITCH_MODEL": "gpt-6.1-sol"}, "SWITCH_MODEL 必须与 MODEL 不同"),
+        ]
+        for environment, message in cases:
+            with self.subTest(environment=environment):
+                result = self.run_until_validation("model-switch-ws", CODEX_VERSION="0.165.0", MODEL="gpt-6.1-sol", **environment)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+        # 缺省第二个模型 gpt-6-astra 通过校验；SWITCH_MODEL 只对 model-switch-ws 校验，其它场景不受影响。
+        self.assert_passes_validation(self.run_until_validation("model-switch-ws", CODEX_VERSION="0.165.0", MODEL="gpt-6.1-sol", SWITCH_MODEL="gpt-6-astra"))
+        self.assert_passes_validation(self.run_until_validation("effort-update-ws", CODEX_VERSION="0.165.0", MODEL="gpt-6.1-sol", SWITCH_MODEL="bad model"))
+
     def test_incomplete_terminal_requires_0163_and_passes_on_both_transports(self) -> None:
         for transport in ("http", "ws"):
             environment = {"RELAY_STREAM_FAULT": "incomplete-terminal", "RELAY_STREAM_FAULT_TRANSPORT": transport}
