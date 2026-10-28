@@ -444,8 +444,9 @@ class CandidateTestTraceTest(unittest.TestCase):
         # 0.157.0：legacy compact 端点删除，去掉 a09 的 legacy compact 回送通道与 legacy
         # 压缩决策两条事实；新增 guardian 审阅条件头、turn metadata 序列化键集与 turn-state
         # 账号 owner 重置三条目标画像事实（各一个测试）。
-        self.assertEqual(len(tests), 15)
-        self.assertEqual(len(fact_ids), 32)
+        # 0.165.0：新增 turn-state 新回合重置一条目标画像事实（一个测试，a05.turn-state-new-turn-reset）。
+        self.assertEqual(len(tests), 16)
+        self.assertEqual(len(fact_ids), 33)
         self.assertIn("a07.oauth-fallback", fact_ids)
         self.assertIn("a08.connection-lifecycle", fact_ids)
         self.assertIn("a14.file-upload-url-chain", fact_ids)
@@ -455,6 +456,14 @@ class CandidateTestTraceTest(unittest.TestCase):
         self.assertIn("a04.conditional-guardian", fact_ids)
         self.assertIn("a04.turn-metadata", fact_ids)
         self.assertIn("a05.turn-state-owner-reset", fact_ids)
+        self.assertIn("a05.turn-state-new-turn-reset", fact_ids)
+        # 新回合重置事实与 owner 重置事实同为 turn_state_chain 记录、同一组数据键，由各自的测试产出。
+        by_fact = {fact.fact_id: (test.name, fact) for test in tests for fact in test.facts}
+        new_turn_test, new_turn_fact = by_fact["a05.turn-state-new-turn-reset"]
+        self.assertEqual(new_turn_test, "TestCandidateTraceCodexTurnStateNewTurnReset")
+        self.assertEqual(new_turn_fact.record_type, "turn_state_chain")
+        self.assertEqual(new_turn_fact.scenario_id, "A05")
+        self.assertEqual(new_turn_fact.data_keys, by_fact["a05.turn-state-owner-reset"][1].data_keys)
         self.assertNotIn("a09.turn-state-compact", fact_ids)
         self.assertNotIn("a09.explicit-legacy", fact_ids)
         record_types = {

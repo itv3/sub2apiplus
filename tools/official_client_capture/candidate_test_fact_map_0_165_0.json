@@ -12,7 +12,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145RuntimeAndBoundaryFacts",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -141,11 +141,11 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145LiteAndPrefixFacts",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
+          "sha256": "8b22865e81ad2c4996a5ba6a94ff9e05ceb3a944bfdce8d89ee6b4f862994eca"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
@@ -189,15 +189,15 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145TurnStateFacts",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
+          "sha256": "8b22865e81ad2c4996a5ba6a94ff9e05ceb3a944bfdce8d89ee6b4f862994eca"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "3fc27e4d8d127ee6d3f5d8dd497ceb21efb55d4965dbd4068d4a9159674e164a"
+          "sha256": "832b5c0b0b954e75780489b585b0fd49ce6e82f3c41a58fcae6d0a6b63a4f628"
         }
       ],
       "facts": [
@@ -235,11 +235,11 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145WSCompressionAndDefaultTransport",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/openai_ws_client.go",
-          "sha256": "483cd96dcf5b089d16b42c9de465a4ae4c009a305570799027878052a0b96579"
+          "sha256": "71ffec78a86ef6d68216907060643b277692d10f0fa24fdaee406c0d28bd50e0"
         }
       ],
       "facts": [
@@ -273,7 +273,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145OAuthFallbackSameInvocation",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
@@ -281,7 +281,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
-          "sha256": "4d6ec645f62afe1cd2ce051e9c3ac44b22992177ba550633100750397ab1208b"
+          "sha256": "547c68ddb6b38ea330b72cc9a3a58493ef1e88fb04e422d98d4ecc28f371916d"
         }
       ],
       "facts": [
@@ -305,7 +305,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145HeaderAssembly",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -336,7 +336,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145AlphaSearchPhases",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/openai_alpha_search.go",
@@ -362,7 +362,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145RealtimeChain",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/openai_live.go",
@@ -405,11 +405,11 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodex0145CompactionDecisions",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
+          "sha256": "8b22865e81ad2c4996a5ba6a94ff9e05ceb3a944bfdce8d89ee6b4f862994eca"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -508,7 +508,7 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodexGuardianReviewConditionalHeader",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_codex_integration.go",
@@ -516,15 +516,15 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
+          "sha256": "8b22865e81ad2c4996a5ba6a94ff9e05ceb3a944bfdce8d89ee6b4f862994eca"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
-          "sha256": "acb194d06b5b1c018a005609deec60116cccb79089685c500a9871933d123384"
+          "sha256": "d2cfb87b50ece68f5666392541a36a16a163ac7f66c58eafe3ae582f65443cdd"
         },
         {
           "path": "backend/internal/officialegress/compiler.go",
-          "sha256": "594c53e6303e6b407430a26c17bfc611256f1af64847396e05a7d2765b59d287"
+          "sha256": "c54e42a3bfdd724d25cfff9b3e63504fe6f5b5753e674bc2b94a89beb4034904"
         }
       ],
       "facts": [
@@ -548,15 +548,15 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodexTurnMetadataSerialization",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "ce9e5d6f2471f7ccd266b17e20cae3fab78c20b9ef70e612ac42ce9c56d5ce57"
+          "sha256": "8b22865e81ad2c4996a5ba6a94ff9e05ceb3a944bfdce8d89ee6b4f862994eca"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
-          "sha256": "2043bb22b58b93fa868fb3c33bfc896ebd1af476cd44f7154659e7317a134f55"
+          "sha256": "c7c95fb93b813402876b425067fb2bbdf091d3102113f15ff43b0768f1dd40a6"
         }
       ],
       "facts": [
@@ -580,11 +580,11 @@
       "package": "github.com/Wei-Shaw/sub2api/internal/service",
       "name": "TestCandidateTraceCodexTurnStateOwnerReset",
       "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
-      "test_file_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
       "source_files": [
         {
           "path": "backend/internal/service/openai_codex_turn_state_owner.go",
-          "sha256": "714b97ed8df121672efc84f9f7273811217fee9974f42a403891d35cd4605287"
+          "sha256": "c6fd897332e44054a7bbb79cffd9e78939594faf105c1d2e022b5bb75f005f64"
         },
         {
           "path": "backend/internal/service/openai_codex_turn_state.go",
@@ -592,12 +592,45 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "3fc27e4d8d127ee6d3f5d8dd497ceb21efb55d4965dbd4068d4a9159674e164a"
+          "sha256": "832b5c0b0b954e75780489b585b0fd49ce6e82f3c41a58fcae6d0a6b63a4f628"
         }
       ],
       "facts": [
         {
           "fact_id": "a05.turn-state-owner-reset",
+          "scenario_id": "A05",
+          "record_type": "turn_state_chain",
+          "trace_kind": "websocket_trace",
+          "data_keys": [
+            "received_sha256",
+            "reset_reason",
+            "return_channel",
+            "returned_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodexTurnStateNewTurnReset",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "ab832b2759f803d72e6b7e92a10ccacfc2c5610628e0782f6ed38c85499f1733",
+      "source_files": [
+        {
+          "path": "backend/internal/service/openai_codex_turn_state_owner.go",
+          "sha256": "c6fd897332e44054a7bbb79cffd9e78939594faf105c1d2e022b5bb75f005f64"
+        },
+        {
+          "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+          "sha256": "c2cdffccf88a76196ab07a784fc2945e9f82d80d0c5501cbb01c20d0683506ab"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a05.turn-state-new-turn-reset",
           "scenario_id": "A05",
           "record_type": "turn_state_chain",
           "trace_kind": "websocket_trace",

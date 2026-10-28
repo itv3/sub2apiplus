@@ -1085,6 +1085,55 @@ func TestCandidateTraceCodexTurnStateOwnerReset(t *testing.T) {
 	})
 }
 
+// TestCandidateTraceCodexTurnStateNewTurnReset 在目标画像下产出 A05 的 turn-state 新回合重置事实。
+//
+// 官方客户端每个回合新建模型客户端会话，turn-state 只在产生它的回合内回送：同一回合内的工具结果续轮回送本回合
+// 已收到的值，新用户轮次的第一个请求不回送上一回合的值（预热帧响应里收到的值随预热过的会话交给第一个回合，
+// 所以紧跟预热帧的业务帧仍回送）。本测试走 WS 入口的真实转发链路：假上游对每个响应（含预热帧的响应）下发
+// turn-state，会话依次是预热、回合一首帧（响应带工具调用）、同一回合内的工具结果续轮、回合二首帧；回合二首帧的
+// client_metadata 不得带 x-codex-turn-state（return_channel=none）。开关由目标画像 TurnState 节的 ResetOnNewTurn
+// 决定，未声明该行为的画像按设计跳过。
+func TestCandidateTraceCodexTurnStateNewTurnReset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	profile := candidateTraceTargetProfile(t)
+	executable, err := officialCodexExecutableProfileForMode(officialClientProfileModePrevious)
+	require.NoError(t, err)
+	require.Equal(t, profile.Digest, executable.Digest())
+	turnStateSection := executable.Optional().TurnState
+	candidateTraceSkipUnlessTargetDeclares(
+		t,
+		turnStateSection != nil && turnStateSection.ResetOnNewTurn,
+		" TurnState 节的新回合重置（ResetOnNewTurn）",
+	)
+	require.True(t, officialCodexTurnStateResetOnNewTurn(officialClientProfileModePrevious))
+	candidateTraceLogTurnStateNewTurnFact(t, officialClientProfileModePrevious)
+}
+
+// candidateTraceLogTurnStateNewTurnFact 在 mode 槽位画像已声明 ResetOnNewTurn 的前提下驱动一次 WS 会话并记录
+// 新回合重置事实。拆成独立函数，是为了测试可以在不声明该行为的画像上临时改写后驱动同一段链路，核对本事实的产出。
+func candidateTraceLogTurnStateNewTurnFact(t *testing.T, mode string) {
+	t.Helper()
+	echoed := replayRunTurnStateSession(t, mode)
+	require.Len(t, echoed, 4)
+	// 同回合内的续轮回送本回合已收到的值（证明不是“一律不回送”）。
+	require.Equal(t, replayTurnStateValue(1, 1), echoed[1], "紧跟预热帧的首个业务帧回送预热响应里收到的值")
+	require.Equal(t, replayTurnStateValue(1, 2), echoed[2], "同一回合内的工具结果续轮回送本回合已收到的值")
+	// 新用户轮次的第一个请求不回送上一回合的值。
+	returnChannel := "none"
+	if echoed[3] != "" {
+		returnChannel = "websocket_client_metadata"
+	}
+	require.Equal(t, "none", returnChannel, "新用户轮次的第一个请求不得回送上一回合的 turn-state")
+
+	candidateTraceLogFact(t, "a05.turn-state-new-turn-reset", "A05", "turn_state_chain", map[string]any{
+		// 上一回合最后一个响应里收到的值；新回合首帧不得回送它。
+		"received_sha256": candidateTraceSHA256(replayTurnStateValue(1, 3)),
+		"reset_reason":    "new_turn",
+		"return_channel":  returnChannel,
+		"returned_sha256": candidateTraceSHA256(echoed[3]),
+	})
+}
+
 // 旧 Header 定型器只供历史画像对照及候选事实夹具使用，生产源码没有调用。
 // 当前正式出站的 Header 由 Executor/compiler 根据冻结画像生成；历史 compact
 // 夹具仍需保留原有输出，因此仅将该实现和专用常量移入测试，不改变其行为。

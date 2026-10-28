@@ -173,8 +173,15 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-29（0.165.0 版本登记）：目标版本升到 0.165.0，默认映射改指 candidate_test_fact_map_0_165_0.json；该文件由上一版映射（含上面历次源码快照重绑后的
 # 现状，摘要 6e1cedb0…）原样复制并替换版本号。载荷逐项审核：383 个叶子里唯一差异是 codex_version 一处，把新文件里的版本号换回后与上一版逐字节相同；
 # 测试、事实宇宙与源码快照不变（快照是否需要重绑，等 0.165.0 变更集改动映射已登记的生产源码后再逐个重绑）。映射文件摘要 6e1cedb0… 变为 f50b8c72…。
+# 2026-10-29（0.165.0 登记：turn-state 新回合重置事实）：官方客户端每个回合新建模型客户端会话，turn-state 只在产生它的回合内回送；网关按画像
+# TurnState.ResetOnNewTurn 与之对齐。映射新增 1 个测试条目 TestCandidateTraceCodexTurnStateNewTurnReset（走 WS 入口真实转发链路：预热、回合一首帧与
+# 同回合内工具结果续轮、回合二首帧，回合二首帧不得回送上一回合的值）与 1 条事实 a05.turn-state-new-turn-reset（turn_state_chain，reset_reason=new_turn，
+# 数据键与 owner 重置事实相同），供 SPEC-BODY-004 的 turn-state-new-turn-reset 判据选用；该测试在目标画像未声明 ResetOnNewTurn 时按设计跳过。
+# 同时按本分支已合入各后端分支后的源码现状重绑映射已登记的源码快照与验收测试文件摘要（只改 sha256 叶子，测试名、事实宇宙与规则语义不动）。
+# 载荷逐项审核：旧映射 383 个叶子里变化的 25 处全是 sha256／test_file_sha256 叶子，非摘要叶子 0 处变化；新增条目 17 个叶子（含 3 个摘要叶子）；
+# 总叶子 400。映射文件摘要 f50b8c72… 变为 cd7e0a18…。
 FROZEN_MAPPING_SHA256 = (
-    "f50b8c7254d05269c7487c3014aae8fd6c6203204ca080d339267e081efd3843"
+    "cd7e0a18cb42612c010d8fa3c50d0c12316a7d2860f38b89fe1a1cc47f8786b4"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
