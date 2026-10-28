@@ -1960,6 +1960,12 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		if seedErr != nil {
 			return nil, "", seedErr
 		}
+		// WS 压缩请求是官方的一次独立提交，有自己的新回合 id（见 official_egress_openai_ws_compaction.go）；不改连接状态。
+		if compactionTurnID, compactionStartedAtMS, ok, err := officialCodexWSCompactionTurnID(egressContext, sessionID, payload); err != nil {
+			return nil, "", err
+		} else if ok {
+			turnID, turnStartedAtMS = compactionTurnID, compactionStartedAtMS
+		}
 	}
 
 	turnMetadata := map[string]any{

@@ -1176,6 +1176,29 @@ func TestOpenAIWSCompactionRequestFrameMatchesOfficial(t *testing.T) {
 		require.False(t, tm.Get(key).Exists(), "压缩请求的 turn metadata 不带 %s：%s", key, tm.Raw)
 	}
 	require.True(t, tm.Get("turn_started_at_unix_ms").Exists())
+	// 压缩请求有自己的新回合 id：官方实采里压缩帧与它前一个、后一个业务帧是三个不同的 UUIDv7；
+	// client_metadata 的 turn_id 与 turn metadata 的 turn_id 一致；开始时间由该 id 推出（不早于 id 内嵌毫秒）。
+	officialIDs := []string{
+		replayFrameTurnMetadata(session.frames[3]).Get("turn_id").String(),
+		officialTM.Get("turn_id").String(),
+		replayFrameTurnMetadata(session.frames[5]).Get("turn_id").String(),
+	}
+	require.Len(t, map[string]struct{}{officialIDs[0]: {}, officialIDs[1]: {}, officialIDs[2]: {}}, 3, "官方压缩帧的回合 id 与前后业务帧都不同")
+	beforeID := replayFrameTurnMetadata(frames[2]).Get("turn_id").String()
+	afterID := replayFrameTurnMetadata(frames[4]).Get("turn_id").String()
+	compactionID := tm.Get("turn_id").String()
+	require.Regexp(t, replayUUIDPattern, compactionID)
+	require.Equal(t, byte('7'), compactionID[14], "压缩回合 id 是 UUIDv7")
+	require.NotEqual(t, beforeID, compactionID, "压缩帧不再沿用前一个业务回合的 id")
+	require.NotEqual(t, afterID, compactionID, "压缩帧与压缩之后的业务回合 id 不同")
+	require.NotEqual(t, beforeID, afterID)
+	require.Equal(t, compactionID, gjson.GetBytes(compaction, "client_metadata.turn_id").String(), "client_metadata 与 turn metadata 的 turn_id 一致")
+	startedAt, ok := officialCodexTurnStartedAtMs(compactionID)
+	require.True(t, ok)
+	require.Equal(t, startedAt, tm.Get("turn_started_at_unix_ms").Int(), "开始时间由压缩回合 id 推出")
+	// 压缩帧之后的业务帧仍按各自的用户锚点取回合（官方第 5、6 帧也是两个不同的回合），压缩回合 id 不污染后续帧。
+	require.NotEqual(t, compactionID, replayFrameTurnMetadata(frames[5]).Get("turn_id").String())
+	require.NotEqual(t, replayFrameTurnMetadata(frames[4]).Get("turn_id").String(), replayFrameTurnMetadata(frames[5]).Get("turn_id").String())
 	// 压缩之前与之后的普通业务帧不受影响：照常带 access_programs、model、reasoning_effort、turn_trigger。
 	for _, index := range []int{1, 2, 4, 5} {
 		label := fmt.Sprintf("第 %d 帧", index+1)
@@ -1192,6 +1215,66 @@ func TestOpenAIWSCompactionRequestFrameMatchesOfficial(t *testing.T) {
 	legacy := codexGateResponseCreateFrames(legacyHandshakes[0])[3]
 	require.True(t, gjson.GetBytes(legacy, "access_programs").Exists(), "旧行为：压缩帧按普通业务帧补 access_programs")
 	require.Equal(t, "turn", replayFrameTurnMetadata(legacy).Get("request_kind").String())
+	require.Equal(t, replayFrameTurnMetadata(codexGateResponseCreateFrames(legacyHandshakes[0])[2]).Get("turn_id").String(),
+		replayFrameTurnMetadata(legacy).Get("turn_id").String(), "旧行为：压缩帧没有用户锚点，沿用前一个业务回合的 id")
+}
+
+// 压缩回合 id 的稳定性：同一帧重试（seed 不变）得到同一个 id，下一次压缩（previous_response_id 不同）得到新 id；
+// 画像不声明、或压缩帧里带有已盖原回合 turn_id 的历史项时不生成，沿用原回合 id。
+func TestOfficialCodexWSCompactionTurnIDIsStablePerRequest(t *testing.T) {
+	mode := officialClientProfileModeActive
+	session := loadCodex0165Session(t, "c1_ws_compact_continue")
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WSCompactionRequests = true })
+	prewarmFrame := session.frames[1]
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	applyOfficialOpenAIWSIngressHeadersForTest(c, prewarmFrame)
+	ctx, err := attachOfficialEgressWebSocketContext(
+		context.Background(), c, newOfficialOpenAIHTTPTestAccount(95),
+		"wss://chatgpt.com/backend-api/codex/responses", prewarmFrame, wsLegacyConfigForMode(mode),
+	)
+	require.NoError(t, err)
+	egressContext, ok := OfficialEgressContextFromContext(ctx)
+	require.True(t, ok)
+	require.NotNil(t, egressContext.openAIWSDerived)
+	sessionID := "0198a7b0-0000-7000-8000-000000000001"
+
+	frame := func(previous string, input ...any) map[string]any {
+		return map[string]any{"previous_response_id": previous, "input": input}
+	}
+	trigger := map[string]any{"type": "compaction_trigger"}
+	first, startedAt, ok, err := officialCodexWSCompactionTurnID(egressContext, sessionID, frame("resp_a", trigger))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Regexp(t, replayUUIDPattern, first)
+	require.Equal(t, officialCodexTurnStartedAtMsOrNow(first), startedAt)
+	again, _, ok, err := officialCodexWSCompactionTurnID(egressContext, sessionID, frame("resp_a", trigger))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, first, again, "同一帧重试得到同一个压缩回合 id")
+	next, _, ok, err := officialCodexWSCompactionTurnID(egressContext, sessionID, frame("resp_b", trigger))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotEqual(t, first, next, "下一次压缩（previous_response_id 不同）是新回合")
+	other, _, _, err := officialCodexWSCompactionTurnID(egressContext, "0198a7b0-0000-7000-8000-000000000002", frame("resp_a", trigger))
+	require.NoError(t, err)
+	require.NotEqual(t, first, other, "不同会话互不影响")
+
+	// 带历史项（已盖原回合 turn_id）的压缩帧、没有 compaction_trigger 的帧：不生成。
+	history := map[string]any{"type": "message", "role": "user", "content": "x"}
+	_, _, ok, err = officialCodexWSCompactionTurnID(egressContext, sessionID, frame("", history, trigger))
+	require.NoError(t, err)
+	require.False(t, ok, "完整历史压缩帧沿用原回合 id")
+	_, _, ok, err = officialCodexWSCompactionTurnID(egressContext, sessionID, frame("resp_a", history))
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// 画像不声明：不生成。
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WSCompactionRequests = false })
+	_, _, ok, err = officialCodexWSCompactionTurnID(egressContext, sessionID, frame("resp_a", trigger))
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 // WS 压缩请求的 compaction 对象与 HTTP 压缩（resolveDerivedOfficialOpenAICompactionMetadata）按同一规则取值。
