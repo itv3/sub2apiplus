@@ -102,7 +102,9 @@ def evaluate_candidate_prerequisites(facts: dict[str, Any], *, account_id: str, 
     others = [item for item in active if item != int(key_id)]
     ok = int(key_id) in active and not others
     add("group_single_active_key", ok, "group_has_other_active_keys" if others else "capture_key_not_active",
-        (f"分组 #{group} 里除采集 Key #{key_id} 外还有 {len(others)} 把活跃 Key：{others}。" if others else f"采集 Key #{key_id} 在分组 #{group} 里不是活跃状态。")
+        (f"分组 #{group} 里除采集 Key #{key_id} 外还有 {len(others)} 把活跃 Key：{others}"
+         + ("（采集 Key 自己此刻也不是活跃状态，要一并启用）。" if int(key_id) not in active else "。")
+         if others else f"采集 Key #{key_id} 在分组 #{group} 里不是活跃状态。")
         + f"为什么要求只有采集 Key 一把活跃：run_images_wire_probe.sh 要求分组内 status=active 且未删除的 Key 恰为采集 Key 一把（单 Key 隔离分组），"
         f"否则作业报“不是单 Key 隔离分组”直接退出 1，使候选作业必败。"
         + (f"怎么临时改：先记下这些 Key 的原状态，再 update api_keys set status='inactive' where id in ({', '.join(map(str, others))})"
