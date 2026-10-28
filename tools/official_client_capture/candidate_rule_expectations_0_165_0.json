@@ -4118,6 +4118,43 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.client_metadata.root_turn_id",
+            "value": "str:<len=36>"
+          },
+          "description": "HTTP Responses 回合请求（含 HTTP 压缩请求）body 的 client_metadata 带 root_turn_id（36 位 UUID；根线程上等于 turn_id，与 WS 回合帧一致）；只选根线程（turn metadata 的 thread_source 为 user），子代理、guardian、记忆合并线程没有官方样本不入判据",
+          "id": "http-turn-request-root-turn-id",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
         }
       ],
       "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；另带常量 mcp_attribution（guardian 审阅请求同样写入）",
@@ -4294,6 +4331,154 @@
                 "operator": "equal",
                 "path": "data.shape.generate",
                 "value": "bool:false"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "agent_name"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 agent_name 键（根线程为 /root）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-agent-name-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "root_turn_id"
+          },
+          "description": "HTTP 回合请求（含压缩请求）turn metadata 含 root_turn_id 键（根线程上等于 turn_id）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-root-turn-id-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "window_number"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 window_number 键（窗口号即 x-codex-window-id 的后缀，压缩后加一）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-window-number-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "context_window_id"
+          },
+          "description": "HTTP 回合请求 turn metadata 含 context_window_id 键（每个上下文窗口一个 id，窗口内各请求相同，压缩后换新）；只选根线程（thread_source 为 user），与 WS 帧判据对应",
+          "id": "http-turn-request-context-window-id-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
               }
             ]
           }
@@ -5531,6 +5716,251 @@
                 "operator": "equal",
                 "path": "data.shape.input._first.type",
                 "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape._turn_metadata.request_kind",
+            "value": "compaction"
+          },
+          "description": "HTTP 上的压缩请求（input 带 compaction_trigger）turn metadata 的 request_kind 是 compaction",
+          "id": "http-compaction-request-kind",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "model"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 model 键（官方实采：压缩请求元数据没有会话模型，与 WS 压缩帧一致）",
+          "id": "http-compaction-request-no-model-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "reasoning_effort"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 reasoning_effort 键",
+          "id": "http-compaction-request-no-reasoning-effort-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "turn_trigger"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 turn_trigger 键（压缩不是用户回合的触发）",
+          "id": "http-compaction-request-no-turn-trigger-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape._turn_metadata.compaction_keys",
+            "value": [
+              "trigger",
+              "reason",
+              "implementation",
+              "phase",
+              "strategy"
+            ]
+          },
+          "description": "HTTP 压缩请求的 turn metadata 带 compaction 对象，子键按官方顺序 trigger、reason、implementation、phase、strategy（只比键名与顺序，取值不入摘要）",
+          "id": "http-compaction-request-compaction-object",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.body.shape.access_programs"
+          },
+          "description": "HTTP 压缩请求体不带 access_programs（官方实采：主线程回合请求带、压缩请求不带，与 WS 压缩帧一致）",
+          "id": "http-compaction-request-no-access-programs",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
               }
             ]
           }

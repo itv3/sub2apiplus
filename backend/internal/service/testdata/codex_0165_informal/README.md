@@ -15,3 +15,6 @@
 - `c3_http_compact_continue`（HTTP，非 WS 帧）：官方 HTTP 压缩续聊会话里 7 个 `/backend-api/codex/responses` 请求的 `client_metadata`（含压缩请求）。只留身份与回合元数据，
   请求正文已略去；原始记录里已打码的安装 id 换成固定的合成 UUID（turn metadata 内的 installation_id 同步替换）。每行 `{"kind":"http_request","index":n,"request_kind":…,"input_types":[…],"client_metadata":{…}}`。
   官方事实：9 个键（含 `root_turn_id`、`guardian_credits_requested`、`mcp_attribution`），根线程上 `root_turn_id` 等于 `turn_id`。生成脚本在 local-analysis/opt-0165/scratch/W3/make_http_fixture.py。
+- `h2_http_probe_effort_compaction`（HTTP）：同样格式，来自“名叫 OpenAI、不支持 WS 预热”的自定义 provider 的 HTTP 会话（第 5 个请求是压缩请求，第 6 个是压缩后窗口 1 的回合请求）。该 provider 的回合请求体不带 access_programs，
+  所以 access_programs 的有无只用 c3 对照；压缩请求的 turn metadata 形态两份实采一致。
+- 两份 HTTP 夹具另有 `top_level_keys`（请求体顶层键序）与 `input_types`（input 末三项类型）两个字段，供压缩请求判据使用；生成脚本同上，参数是场景目录名与输出路径。

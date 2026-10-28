@@ -144,7 +144,7 @@ func replayRunIngress(
 ) []codexGateWireRequest {
 	t.Helper()
 	server := startCodexGateWireServer(t, nil)
-	gate := newCodexGateService(t, mode, server)
+	gate := newTargetAwareGate(t, mode, server)
 	codexGateUseRecorderManifest(gate.service, gate.account)
 	gate.enableWebSocket(t, server)
 	header := http.Header{"User-Agent": []string{userAgent}}
@@ -431,7 +431,7 @@ func TestOpenAIWSReplayOnSameConnectionClosedUpstreamReplaysOnNewConnectionWitho
 	mode := officialClientProfileModeActive
 	withReplayOnSameConnectionProfile(t, mode, true)
 	server := startCodexGateWireServer(t, nil)
-	gate := newCodexGateService(t, mode, server)
+	gate := newTargetAwareGate(t, mode, server)
 	codexGateUseRecorderManifest(gate.service, gate.account)
 	gate.enableWebSocket(t, server)
 	header := http.Header{"User-Agent": []string{replayOfficialUserAgent}}
@@ -614,7 +614,7 @@ func replayRunStepsHooked(
 ) ([]codexGateWireRequest, [][]byte) {
 	t.Helper()
 	server := startCodexGateWireServer(t, nil)
-	gate := newCodexGateService(t, mode, server)
+	gate := newTargetAwareGate(t, mode, server)
 	gate.service.openaiModelCapabilities.replaceFromManifest(gate.account.ID, []byte(manifest))
 	gate.enableWebSocket(t, server)
 	header := http.Header{"User-Agent": []string{replayOfficialUserAgent}}
@@ -846,7 +846,7 @@ func replayRunWithUpstreamClose(
 ) []codexGateWireRequest {
 	t.Helper()
 	server := startCodexGateWireServer(t, nil)
-	gate := newCodexGateService(t, mode, server)
+	gate := newTargetAwareGate(t, mode, server)
 	codexGateUseRecorderManifest(gate.service, gate.account)
 	gate.enableWebSocket(t, server)
 	var fired atomic.Bool
@@ -949,7 +949,7 @@ func replayRunTurnStateSession(t *testing.T, mode string) []string {
 				`,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
 		return events
 	})
-	gate := newCodexGateService(t, mode, server)
+	gate := newTargetAwareGate(t, mode, server)
 	codexGateUseRecorderManifest(gate.service, gate.account)
 	gate.enableWebSocket(t, server)
 	header := http.Header{"User-Agent": []string{replayOfficialUserAgent}}

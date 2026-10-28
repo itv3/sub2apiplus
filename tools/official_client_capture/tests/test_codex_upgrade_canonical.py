@@ -1192,6 +1192,8 @@ class CanonicalImportTests(unittest.TestCase):
         ("add", "/TurnMetadata/RootThreadKeys", ("SPEC-BODY-009",)),
         # W3 第二批：WS 帧 client_metadata 的逐请求动态键（根回合 id、Lite 标记、发送时间戳）。
         ("add", "/ClientMetadata/DynamicKeys", ("SPEC-BODY-008",)),
+        # W3 第五轮：HTTP 压缩请求的元数据与请求体按官方（与 WSCompactionRequests 各自独立）。
+        ("add", "/TurnMetadata/HTTPCompactionRequests", ("SPEC-BODY-009", "SPEC-EP-021")),
     )
 
     def test_0165_patch_manifest_binds_real_active_profile(self) -> None:
@@ -1242,7 +1244,7 @@ class CanonicalImportTests(unittest.TestCase):
             # 目标画像的继承前提：W3 第二批的画像字段在画像契约里各有依赖，上一版画像必须已经满足，否则目标画像在 Go 侧解码校验会失败。
             #   * WindowTracking 要求 TurnMetadata.Keys 含 window_id、window_number、context_window_id；
             #   * RootThreadKeys 要求 Keys 含 agent_name、root_turn_id；
-            #   * WSCompactionRequests 要求 CompactionImplementations 含 responses_compaction_v2；
+            #   * WSCompactionRequests、HTTPCompactionRequests 要求 CompactionImplementations 含 responses_compaction_v2；
             #   * DynamicKeys 必须排序、去重、取值落在已知闭集内，且不得与 Constants 重名。
             turn_metadata = target_payload["TurnMetadata"]
             for key in ("window_id", "window_number", "context_window_id", "agent_name", "root_turn_id"):
@@ -1260,6 +1262,7 @@ class CanonicalImportTests(unittest.TestCase):
                 ("TurnState", "ResetOnNewTurn"),
                 ("TurnMetadata", "WindowTracking"),
                 ("TurnMetadata", "WSCompactionRequests"),
+                ("TurnMetadata", "HTTPCompactionRequests"),
                 ("TurnMetadata", "RootThreadKeys"),
             ):
                 self.assertIs(target_payload[section][key], True, f"{section}.{key}")

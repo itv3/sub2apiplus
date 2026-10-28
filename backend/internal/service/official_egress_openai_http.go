@@ -706,16 +706,23 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	}
 	// turn metadata 新键取自定型后的请求体（payload 已被就地改写为最终形态），保证
 	// model、reasoning_effort 与实际出站请求体一致；画像没有 TurnMetadata 节时原样保留。
+	httpExtension := officialCodexTurnMetadataExtension{
+		Model:           officialOpenAIString(payload, "model"),
+		ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+		TurnTrigger: officialCodexTurnTrigger(
+			egressContext.codexRuntimeState.SurfaceID, identity.subagent, identity.memoryGenerate,
+		),
+	}
+	// 窗口号、上下文窗口 id 与根线程键（画像 WindowTracking／RootThreadKeys 声明时才写入）。
+	fillOfficialCodexHTTPTurnMetadataIdentityKeys(&httpExtension, identity)
+	// 压缩请求不写 model、reasoning_effort、turn_trigger（画像 HTTPCompactionRequests 声明时，见 official_egress_http_compaction.go）。
+	if officialCodexHTTPCompactionTurnMetadata(egressContext.ProfileMode(), identity.turnMetadata) {
+		httpExtension.Model, httpExtension.ReasoningEffort, httpExtension.TurnTrigger = "", "", ""
+	}
 	identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
 		identity.turnMetadata,
 		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata,
-		officialCodexTurnMetadataExtension{
-			Model:           officialOpenAIString(payload, "model"),
-			ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
-			TurnTrigger: officialCodexTurnTrigger(
-				egressContext.codexRuntimeState.SurfaceID, identity.subagent, identity.memoryGenerate,
-			),
-		},
+		httpExtension,
 	)
 	if err != nil {
 		return nil, result, err
@@ -1093,7 +1100,9 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	if normalizeOfficialCodexAccessPrograms(
 		payload,
 		officialCodexAccessProgramsSection(options.ProfileMode),
-		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+		// 压缩请求（画像 HTTPCompactionRequests 声明、input 带 compaction_trigger）官方不带 access_programs，不生成。
+		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel) &&
+			!officialCodexHTTPCompactionRequestBody(options.ProfileMode, payload),
 	) {
 		modified = true
 	}
@@ -2027,7 +2036,8 @@ func deriveOfficialOpenAIHTTPIdentity(
 		sessionProvenance = officialOpenAIProvenanceExplicitIngress
 		turnProvenance = officialOpenAIProvenanceExplicitSessionDerivedTurn
 	}
-	windowID := threadID + ":0"
+	// 窗口号：画像声明 WindowTracking 时跟随下游 x-codex-window-id 头的数字后缀，否则恒为 0（见 official_egress_http_turn_metadata_keys.go）。
+	windowID := threadID + ":" + strconv.Itoa(officialCodexHTTPClientWindowNumber(c, profileMode))
 
 	// 回合开始时间由 turn_id 无状态推出（内嵌毫秒加官方实采分布里的间隔），同一回合的重试与续轮自然一致。
 	// 只有 turn_id 推不出内嵌时间时才退回按回合登记的真实开始时间。

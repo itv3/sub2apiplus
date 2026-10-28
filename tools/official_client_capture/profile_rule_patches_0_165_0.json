@@ -74,6 +74,16 @@
         "ws_request_header_x_openai_internal_codex_responses_lite",
         "x-codex-ws-stream-request-start-ms"
       ]
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-009",
+        "SPEC-EP-021"
+      ],
+      "op": "add",
+      "path": "/TurnMetadata/HTTPCompactionRequests",
+      "before": null,
+      "after": true
     }
   ]
 }

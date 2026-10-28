@@ -22,13 +22,21 @@ import (
 type replay0165HTTPRequest struct {
 	Index          int               `json:"index"`
 	RequestKind    string            `json:"request_kind"`
+	TopLevelKeys   []string          `json:"top_level_keys"`
+	InputTypes     []string          `json:"input_types"`
 	ClientMetadata map[string]string `json:"client_metadata"`
 }
 
 // loadCodex0165HTTPRequests 读取官方 HTTP 实采会话（c3）的请求 client_metadata（正文已略去，只留身份与回合元数据）。
 func loadCodex0165HTTPRequests(t *testing.T) []replay0165HTTPRequest {
 	t.Helper()
-	file, err := os.Open(filepath.Join("testdata", "codex_0165_informal", "c3_http_compact_continue.jsonl.gz"))
+	return loadCodex0165HTTPSession(t, "c3_http_compact_continue")
+}
+
+// loadCodex0165HTTPSession 读取指定的官方 HTTP 实采夹具（c3_http_compact_continue、h2_http_probe_effort_compaction）。
+func loadCodex0165HTTPSession(t *testing.T, name string) []replay0165HTTPRequest {
+	t.Helper()
+	file, err := os.Open(filepath.Join("testdata", "codex_0165_informal", name+".jsonl.gz"))
 	require.NoError(t, err)
 	defer func() { _ = file.Close() }()
 	reader, err := gzip.NewReader(file)
