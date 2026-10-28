@@ -47,7 +47,7 @@
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 阶段合同与完成条件见[指南第四部分](../../docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-driver-entries)。
-目标是“哪里坏修哪里，修好接着跑、整体约 6 小时”；耗时口径与未开放的承接边界以指南为准。
+执行目标是“哪里坏修哪里，修好接着跑”；“整体约 6 小时”的旧目标依赖逐单元承接真正可用，该前提尚未成立，已撤回，不作验收口径；耗时口径与未开放的承接边界以[指南第四部分](../../docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-driver-entries)开头为准。
 本机材料统一放 `/Users/czs/Developer/sub2apiplus-evidence/codex-cli/`，服务器活动数据保持冻结数据根。
 
 1. 填写本轮参数，准备干净工具提交与 bundle，受监督部署工具／文档并安装、复验驱动。
@@ -90,6 +90,18 @@ bash driver/vc5-precheck.sh --consume
 
 * `--dry-run` 在公共前导前执行，零写入、零续签、零请求；输出 `blocked/needs_apply/ready`，前两者退出 3。
   `blocked` 先修阻塞；`needs_apply` 列出精确补齐动作。即使 ready，尚无合法准入收据仍须批准封存。
+* `--dry-run` 另输出两块只读信息（Codex 升级工具优化第 8、9 项，`--skip-db-prerequisites` 可只看准入与有效期）：
+  * `ttl`：管理令牌的剩余有效期、准入要求的最小值、富余秒数与 consume 有效至何时（富余不足 2 小时或已为负都会警告），
+    以及批准件的有效期（已用批准件只在 apply 那一刻检查，apply 之后不影响 consume；待用批准件 `VC5_ADMISSION_APPROVAL` 过期或不足 30 分钟会警告）。
+    真正让 canonical 前的 consume 失败的是令牌：24 小时的令牌签发 12 小时后就低于要求，VC-5 被缺陷拖长时要提前续。
+  * `candidate_prerequisites`：采集账号 `credentials.model_mapping` 须空、采集分组 `allow_live` 须开、分组内只许采集 Key 一把活跃，外加参数文件的
+    `CODEX_ACCOUNT_ID`／`API_KEY_ID` 与库对得上。库来自 DMIT 整库同步时这几条天然不满足；任一不满足顶层 `status=blocked`，每项写明为什么要求、
+    怎么临时改（先备份）、VC-6 之后怎么恢复。只读 `SELECT`（经 `docker exec` 进 postgres 容器，密码不进命令行），不进 apply／consume，所以采集作业跑完后环境变化不会让 consume 误失败。
+    建议在 VC-4 跑门禁期间就预览一遍并提前改好，恢复项写进收尾清单。人读摘要写标准错误，标准输出仍是 JSON。
+* `--renew --approver '批准人及依据'`：只续管理令牌。要求准入已有收据、绑定未变、待办动作恰是 `renew_token`，其余一律拒绝；就地写一份 2 小时有效、
+  绑定当前 `admission_key` 的批准件后走与人工相同的 apply。`vc5-all.sh` 在目标平台门禁之后、canonical 之前先守一次准入（`vc5_admission_guard`）：消费不通过时，
+  启动前设了 `VC5_RENEW_APPROVER` 就自动续签，没设就打印 `VC5_ADMISSION_GUARD_FAILED` 与处理办法后退出 3；seal、accept、canonical 各阶段失败也都会打印
+  `VC5_ALL_STAGE_FAILED stage=… rc=…` 和未过滤输出的末 8 行（完整输出在 `$RUNROOT/vc5-all-<阶段>.raw`），不再静默结束。
 * 批准文件使用 `codex-vc5-admission-approval/v1`，绑定报告的 `admission_key`、完整 `actions`、
   `seal_admission=true`、`approval_id`、`approved_by`、`approved_at_utc` 与 `expires_at_utc`。
   使用当前执行账号所有、0600 的普通文件，可由 `VC5_ADMISSION_APPROVAL` 指定；工具不代签。
@@ -157,6 +169,13 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   入口空跑在干净环境里起编排器（只有 `HOME`、`LANG`、`PATH`、`ARM64_VC_ENV`），对这**六个变量做显式白名单透传**：只在启动时的环境里有非空值才带，别的变量一律不带；
   值经子进程环境交给编排器，不进命令行，日志里不打印取值。跳过逐次显式、只对当次启动生效，不写进空跑结论或任何持久配置，下一次启动不导出就没有。
   例：`export MODEL_PROBE_URL=… MODEL_PROBE_KEY_FILE=/root/secrets/relay-key SECURITY_SCAN_REPO=itv3/sub2apiplus` 之后再 `bash driver/entry-dryrun.sh start <bundle> <分支> <完整提交>`。
+* 起跑前两张收据（优化第 4、5 项，只对 Codex 做，Claude 记为 `skipped`；收据目录 `$RUNROOT/local-receipts/`）：`local-capture-receipt`（要进入入口门禁的修复提交 `ENTRY_COMMIT`
+  必须已有“本机完整 `make test-capture-tools` 通过”的本地收据：本机 `bash driver/local/local-capture-tools-receipt.sh --out-dir <目录>` 生成——完整提交号、命令、退出码、起止时间、
+  工作树是否干净、日志摘要，自带封口，红的也如实写；上传到 ARM64 的收据目录）与 `tui-prelaunch-receipt`（新版二进制对 compact、ws-idle-close、daemon、guardian
+  各 TUI 场景做过零请求启动预探且全部通过，`bash driver/tui-prelaunch-receipt.sh scenarios|write|verify` 生成与核对，绑定目标版本与登记的二进制摘要）。
+  上一轮这两处各白跑一次：修复提交只跑了定向测试、注释里写了版本号致 `test_driver_client_table` 红（入口门禁白跑 1.8 小时），新版客户端取消 daemon 功能白名单致带
+  `--disable` 的 TUI 启动即退出（在 2 小时门禁之后才暴露）。后台验证起跑前置检查（`background-validate.sh preflight`）同样核对这两张收据（第六、七项）。
+  跳过办法同上两项（`OPENING_CHECKS_SKIP` 加理由，项目名 `local-capture-receipt`、`tui-prelaunch-receipt`）。
 * 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
   由 stage1 建预检 Campaign 时的 plan 照旧校验。
 * Claude（B5a-09，`CLIENT=claude`，取值见客户端表）：`required-parameters` 另要 `UPSTREAM_IP`（场景清单的必需 Campaign
@@ -718,6 +737,13 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   命令须显式声明 `reservation_restartable: true`；pre-A3 与一次性预热保持排空等待。申请上限仍为
   `VC_ACQUIRE_TIMEOUT` 秒（默认 3600）。批次结束（含失败退出）`release`，后台核验输入、环境和工具身份后重派被中止单元。VC-0 收口同步派发 VC-1 首批，编排器在
   调收口模块前后同样申请与归还整机。
+* 起跑前置检查（`start` 缺省先做，`preflight` 子命令只查不起）共七项：冻结收据、基线重封、重部署、准入绑定、主机 Go 版本、本机完整测试收据
+  （`local-capture-receipt`）、TUI 预探收据（`tui-prelaunch-receipt`，后两项只对 Codex，收据在 `$RUNROOT/local-receipts/`，见“入口便宜检查”一节）。
+* 比对基点取上一个通过的提交（优化第 2 项）：`start … --select-base last-passed`（缺省 `--gate-scope auto` 下可直接带）。缺省 auto 的基点固定是最近发版 tag，
+  同一 Campaign 内每修一次，哪怕只改几个文件也要重跑整个子集，归属表自己在改动里时更是回退全集（上一轮两次 113 分钟）。`last-passed` 取本运行根（同一 Campaign 这一轮）里
+  上一个 `passed` 结论的提交作基点，选择器只看这一小段改动。**VC-5 准入接受这种子集结论**：`vc5_admission.state` 走 `check(require_passed=True, client=…)`，子集结论只拒另一客户端用，
+  基点不是发版 tag 也只是在提示里写“不是发版 tag 提交”。保护：基点结论须 passed 且筛选印证无问题，基点提交必须是新提交的祖先（与逐单元承接同一套核对，含类型变化／符号链接／子模块的否决），
+  找不到可用的就拒绝、不悄悄回退（第一次验证先不带它）；解析出的具体提交登记进输入合同，来源写进结论的 `select_base_origin`。归属表或选择器自己在这段改动里时入口门禁照旧回退全集。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。

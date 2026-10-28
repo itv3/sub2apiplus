@@ -27,7 +27,8 @@ from tools.official_client_capture.tests import test_ci_opening_checks as base
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
 SCRIPT = DRIVER / "entry-preflight.sh"
-OTHER_CHECKS = "required-parameters|guard-pre-plan|deployment-identity|target-client|official-package|plan-audit|environment-probe"
+OTHER_CHECKS = ("required-parameters|guard-pre-plan|deployment-identity|target-client|official-package|plan-audit|environment-probe"
+                "|local-capture-receipt|tui-prelaunch-receipt")
 
 FAKE_GH = """#!/usr/bin/env python3
 import json, sys, time
@@ -179,6 +180,96 @@ class ParameterTemplateTests(unittest.TestCase):
             self.assertIn("只对当次启动生效", document)
         # 这几项是调用环境变量，不是参数文件键：模板里只能以注释出现，参数文件解析不应接受它们当赋值。
         self.assertFalse([line for line in text.splitlines() if re.match(r"(MODEL_PROBE|SECURITY_SCAN|OPENING_CHECKS)\w*=", line)])
+
+
+class ReceiptCheckBehaviourTests(unittest.TestCase):
+    """入口便宜检查的两张起跑前收据（Codex 升级工具优化第 4、5 项）：真实执行 ``entry-preflight.sh`` 里的检查框架与这两项检查函数。
+
+    没有收据（或收据如实记录了红、预探有场景启动即退出）→ 这一项未通过、整个便宜检查退出 1；收据齐全 → passed；显式跳过要写理由并记为 skipped；Claude 记为 skipped。"""
+
+    COMMIT = "a" * 40
+    TARGET = "9.8.7"
+    SHA = "b" * 64
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.out = self.root / "out"
+        self.out.mkdir()
+        self.runroot = self.root / "run"
+        self.receipts = self.runroot / "local-receipts"
+        text = SCRIPT.read_text(encoding="utf-8")
+        body = text[text.index("check() {"):]
+        keep = ("local-capture-receipt", "tui-prelaunch-receipt")
+        body = re.sub(rf"(?m)^check (?!(?:{'|'.join(keep)}) )\S+ .*\n", "", body)
+        self.prelude = ("set -Euo pipefail; umask 077\nutc_now() { date -u +%FT%TZ; }\n"
+                        f"OUT={self.out}\nFAILED=()\nDRV={DRIVER}\nROUND=r1\nSTAMP=s1\nRUNROOT={self.runroot}\nTARGET_VERSION={self.TARGET}\n"
+                        f"CODEX_BIN_SHA256={self.SHA}\nCT_BINARY_SHA256_KEY=CODEX_BIN_SHA256\n")
+        self.body = body
+
+    def run_checks(self, *, client: str = "codex", commit: str | None = COMMIT, **environment: str) -> tuple[int, dict, dict[str, str]]:
+        harness = self.root / "harness.sh"
+        extra = f"CT_CLIENT={client}\n" + (f"ENTRY_COMMIT={commit}\n" if commit else "")
+        harness.write_text(self.prelude + extra + self.body, encoding="utf-8")
+        clean = {key: value for key, value in os.environ.items() if not key.startswith("OPENING_CHECKS")}
+        completed = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=120,
+                                   env={**clean, "PYTHONDONTWRITEBYTECODE": "1", **environment})
+        self.completed = completed
+        summary = json.loads((self.out / "summary.json").read_text(encoding="utf-8"))
+        results = dict(line.split() for line in (self.out / "results.txt").read_text(encoding="utf-8").splitlines() if line.strip())
+        return completed.returncode, summary, results
+
+    def seed(self, *, capture_exit: int = 0, failed: tuple[str, ...] = ()) -> None:
+        sys_path = str(DRIVER)
+        import sys
+        sys.path.insert(0, sys_path)
+        try:
+            import opening_checks as oc
+        finally:
+            sys.path.remove(sys_path)
+        oc.write_capture_receipt(self.receipts, commit=self.COMMIT, exit_code=capture_exit, started_at_utc="2026-10-29T01:00:00Z",
+                                 finished_at_utc="2026-10-29T01:48:00Z", tree_clean=True)
+        rows = [{"name": name, "status": "failed" if name in failed else "passed", **({"exit_code": 1, "tail": "Cannot use the shared background server"} if name in failed else {})}
+                for name in oc.REQUIRED_TUI_SCENARIOS]
+        oc.write_tui_receipt(self.receipts, client_version=self.TARGET, binary_path="/b", binary_sha256=self.SHA, scenarios=rows,
+                             started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:05:00Z")
+
+    def test_without_receipts_both_checks_fail_before_any_gate(self) -> None:
+        code, summary, results = self.run_checks()
+        self.assertEqual(code, 1, self.completed.stdout)
+        self.assertEqual(results, {"local-capture-receipt": "failed", "tui-prelaunch-receipt": "failed"})
+        self.assertIn("没有提交", (self.out / "local-capture-receipt.log").read_text(encoding="utf-8"))
+        self.assertIn("没有新版二进制 TUI 零请求启动预探收据", (self.out / "tui-prelaunch-receipt.log").read_text(encoding="utf-8"))
+
+    def test_the_two_reproductions_are_each_caught_on_their_own(self) -> None:
+        self.seed(capture_exit=2, failed=("compact-tui", "ws-idle-close-tui"))
+        code, summary, results = self.run_checks()
+        self.assertEqual((code, results), (1, {"local-capture-receipt": "failed", "tui-prelaunch-receipt": "failed"}))
+        self.assertIn("退出码 2", (self.out / "local-capture-receipt.log").read_text(encoding="utf-8"))
+        self.assertIn("Cannot use the shared background server", (self.out / "tui-prelaunch-receipt.log").read_text(encoding="utf-8"))
+
+    def test_good_receipts_pass_and_a_wrong_commit_or_version_does_not(self) -> None:
+        self.seed()
+        code, summary, results = self.run_checks()
+        self.assertEqual((code, results), (0, {"local-capture-receipt": "passed", "tui-prelaunch-receipt": "passed"}), self.completed.stdout)
+        code, _summary, results = self.run_checks(commit="c" * 40)
+        self.assertEqual((code, results["local-capture-receipt"], results["tui-prelaunch-receipt"]), (1, "failed", "passed"))
+        code, _summary, results = self.run_checks(commit=None)
+        self.assertEqual((code, results["local-capture-receipt"]), (1, "failed"), "没有 ENTRY_COMMIT 也不能放行")
+        self.assertIn("ENTRY_COMMIT", (self.out / "local-capture-receipt.log").read_text(encoding="utf-8"))
+
+    def test_skip_needs_a_reason_and_is_recorded_as_skipped(self) -> None:
+        code, summary, results = self.run_checks(OPENING_CHECKS_SKIP="local-capture-receipt,tui-prelaunch-receipt", OPENING_CHECKS_SKIP_REASON="演练：不带收据")
+        self.assertEqual((code, results), (0, {"local-capture-receipt": "skipped", "tui-prelaunch-receipt": "skipped"}), self.completed.stdout)
+        self.assertEqual(summary["skipped"]["local-capture-receipt"], "演练：不带收据")
+        code, _summary, results = self.run_checks(OPENING_CHECKS_SKIP="tui-prelaunch-receipt")
+        self.assertEqual((code, results["tui-prelaunch-receipt"]), (1, "failed"), "列了跳过却没写理由：按未通过处理")
+
+    def test_claude_rounds_record_both_as_skipped_not_passed(self) -> None:
+        code, summary, results = self.run_checks(client="claude")
+        self.assertEqual((code, results), (0, {"local-capture-receipt": "skipped", "tui-prelaunch-receipt": "skipped"}), self.completed.stdout)
+        self.assertIn("没有这条流程", summary["skipped"]["tui-prelaunch-receipt"])
 
 
 if __name__ == "__main__":

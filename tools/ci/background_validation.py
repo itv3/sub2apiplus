@@ -67,7 +67,7 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 
 起跑前置检查（Codex 升级工具优化第 4 项，``background_preflight.py``）：后台验证一轮约 136 分钟，一次 Codex 升级里白跑过两次都是起跑顺序错（先于冻结承接收据、先于重部署），
 之后又白跑过一次是环境与被验证提交不匹配（采集主机 Go 低于 ``backend/go.mod`` 的 ``go`` 指令）。
-``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 ``host-toolchain``），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
+``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 ``host-toolchain``）、本机完整测试收据与 TUI 预探收据（第六、七项，优化第 4、5 项），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），
 报告留档在 ``<运行根>/background-validation/preflight/``；``preflight`` 子命令只查不起（退出码 0 通过、3 不通过）。``--preflight`` 缺省 on（验收修正建议 12：Python 命令行与
 驱动入口 ``background-validate.sh start`` 同一缺省，直接调 Python 也不会悄悄绕过前置检查），``--preflight off``（驱动入口 ``--no-preflight``）显式跳过。
 
@@ -1059,7 +1059,7 @@ def _resolve_last_passed_base(args: argparse.Namespace, *, client: str) -> tuple
 
 def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mapping[str, Any],
                     deployments: Mapping[str, Mapping[str, Any]] | None) -> None:
-    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本；不通过抛 ``ValidationError``（拒绝起跑）。
+    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本、本机完整测试收据、TUI 预探收据；不通过抛 ``ValidationError``（拒绝起跑）。
     不是命令行解析出来的参数对象（没有 ``preflight`` 属性）什么都不做。"""
 
     if getattr(args, "preflight", "off") != "on":
@@ -1069,7 +1069,7 @@ def _preflight_gate(args: argparse.Namespace, *, client: str, deployment: Mappin
     try:
         report = module.preflight_with_bundle(bundle=Path(args.bundle), branch=args.branch, commit=args.commit, data_root=Path(args.data_root),
                                               runroot=Path(args.runroot), client=client, deployment=deployment, deployments=deployments,
-                                              scratch_parent=scratch)
+                                              scratch_parent=scratch, vc_env=getattr(args, "vc_env", None))
     except module.PreflightError as error:
         raise ValidationError(f"起跑前置检查做不了，拒绝起跑后台验证：{error}") from error
     _write(scratch / f"{args.commit[:12]}-{time.strftime('%Y%m%dt%H%M%Sz', time.gmtime())}.json", report)
@@ -2956,7 +2956,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_pre.add_argument("--branch", required=True)
     p_pre.add_argument("--commit", required=True)
     p_pre.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex")
-    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain）")
+    p_pre.add_argument("--only", default=None, help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain、local-capture-receipt、tui-prelaunch-receipt）")
+    p_pre.add_argument("--vc-env", type=Path, default=None, help="本轮参数文件（TUI 预探收据检查读目标版本与登记的二进制摘要；驱动入口 background-validate.sh 自动带）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_reuse = sub.add_parser("reuse", help="同树重部署后沿用已通过的测试结论（退出码 0 沿用成功、3 被拒绝要求重验）")
@@ -3006,7 +3007,8 @@ def main(argv: list[str] | None = None) -> int:
                 report = module.preflight_with_bundle(
                     bundle=args.bundle, branch=args.branch, commit=args.commit, data_root=args.data_root, runroot=args.runroot, client=args.client,
                     deployment=client_deployment, deployments=deployment_set(args.data_root),
-                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in (args.only or "").split(",") if item] or None)
+                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in (args.only or "").split(",") if item] or None,
+                    vc_env=args.vc_env)
             except module.PreflightError as error:
                 raise ValidationError(f"起跑前置检查做不了：{error}") from error
             print(json.dumps(report, ensure_ascii=False, indent=2))

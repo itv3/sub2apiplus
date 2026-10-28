@@ -34,7 +34,11 @@
 #       才沿用，写一份绑定新部署的通过结论；任一项变了就拒绝（退出码 3）并写明哪项，要求重验。start 缺省先试沿用（--reuse auto），--no-reuse 跳过。
 #       沿用成功之后仍接部署后空跑（与 start 同一语义，缺省带 --then-dryrun，--no-dryrun 才关）：沿用只省掉测试，新部署上的入口空跑不省。
 #   preflight <bundle 绝对路径> <分支> <40 位提交> [--only <检查项,…>]
-#       只做起跑前置检查（优化第 4 项）：冻结收据、基线重封、重部署、准入绑定、主机 Go 版本五项逐项核对，退出码 0 通过、3 不通过（打印哪一项为什么）；不起后台验证。
+#       只做起跑前置检查（优化第 4 项）：冻结收据、基线重封、重部署、准入绑定、主机 Go 版本、本机完整测试收据、TUI 预探收据七项逐项核对，退出码 0 通过、3 不通过（打印哪一项为什么）；不起后台验证。
+#       本机完整测试收据（local-capture-receipt，Codex 升级工具优化第 4 项）：被验证提交必须已有“本机完整 make test-capture-tools 通过”的本地收据（local/local-capture-tools-receipt.sh 生成，
+#       上传到 $RUNROOT/local-receipts/）：提交号一致、命令是完整目标、退出码 0、工作树干净；上一轮入口门禁第三轮红在只跑了定向测试的修复提交上，白跑 1.8 小时。
+#       TUI 预探收据（tui-prelaunch-receipt，第 5 项）：新版二进制对 compact、ws-idle-close、daemon、guardian 各 TUI 场景做过零请求启动预探且全部通过（tui-prelaunch-receipt.sh 生成），
+#       并绑定本轮目标版本与登记的客户端二进制摘要。这两项只对 Codex 做。
 #       主机 Go 版本（host-toolchain）：执行器固定 PATH 里的 go 不得低于被验证提交 backend/go.mod 的 go 指令，否则 GOTOOLCHAIN=local 的 make 单元退出 2、整轮白跑；
 #       升级主机 Go 必须在没有后台验证运行时进行。
 #       start 缺省先做同一套检查（--preflight on；Python 命令行缺省也是 on），不通过拒绝起跑；--no-preflight（即 --preflight off）显式跳过。
@@ -81,7 +85,7 @@ case "$command" in
   preflight)
     if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh preflight <bundle 绝对路径> <分支> <40 位提交> [--only …]" >&2; exit 2; fi
     bundle=$1; branch=$2; commit=$3; shift 3
-    exec "${BV[@]}" preflight --runroot "$RUNROOT" --data-root "$D" --bundle "$bundle" --branch "$branch" --commit "$commit" "$@" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
+    exec "${BV[@]}" preflight --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" --bundle "$bundle" --branch "$branch" --commit "$commit" "$@" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   stop) exec "${BV[@]}" stop --runroot "$RUNROOT" "$@" ;;
   check-boundary|require-passed) exec "${BV[@]}" "$command" --runroot "$RUNROOT" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   status) exec "${BV[@]}" status --runroot "$RUNROOT" ;;

@@ -1,6 +1,7 @@
 """后台验证起跑前置检查（优化第 4 项，``tools/ci/background_preflight.py``）。
 
-五项检查：冻结收据、基线重封、重部署、准入绑定、主机工具链（host-toolchain）。用三次真实发生过的“起跑条件不对”复现并确认被拦下：
+七项检查：冻结收据、基线重封、重部署、准入绑定、主机工具链（host-toolchain）、本机完整测试收据（local-capture-receipt）、TUI 预探收据（tui-prelaunch-receipt）。
+用三次真实发生过的“起跑条件不对”复现并确认被拦下，另有第六、七项针对上一轮入口门禁两次白跑的复现（见 ``ReceiptChecksTests``）：
 
 * 顺序错一（先于冻结收据）：源码改了冻结文件，承接收据还没单独提交就起后台验证——冻结覆盖检查报出未承接的路径；
 * 顺序错二（先于重部署）：数据根部署的受管树还是旧的，就起后台验证——部署与测试树不一致；
@@ -33,9 +34,29 @@ from unittest import mock
 from tools.ci import background_preflight as pre
 from tools.ci import background_validation as bv
 from tools.ci import entry_gates as eg
+from tools.ci import opening_checks as oc
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMIT_PLACEHOLDER = "d" * 40
+TARGET = "9.8.7"   # 测试用的假目标版本（驱动与测试夹具里不写真实版本字面量）
+BINARY_SHA = "b" * 64
+
+
+def seed_receipts(runroot: Path, commit: str = COMMIT_PLACEHOLDER, *, capture: bool = True, tui: bool = True, capture_exit: int = 0,
+                  tui_failed: tuple[str, ...] = (), skip_scenarios: tuple[str, ...] = ()) -> Path:
+    """往运行根的收据目录放一对合法的收据（可按需做坏）：本机完整测试收据与 TUI 预探收据。"""
+
+    directory = runroot / oc.RECEIPT_DIR_NAME
+    if capture:
+        oc.write_capture_receipt(directory, commit=commit, exit_code=capture_exit, started_at_utc="2026-10-29T01:00:00Z",
+                                 finished_at_utc="2026-10-29T01:48:00Z", host="mac", tree_clean=True, log_tail="OK")
+    if tui:
+        scenarios = [{"name": name, "status": "failed" if name in tui_failed else "passed", **({"exit_code": 1, "tail": "Cannot use the shared background server"}
+                                                                                             if name in tui_failed else {})}
+                     for name in oc.REQUIRED_TUI_SCENARIOS if name not in skip_scenarios]
+        oc.write_tui_receipt(directory, client_version=TARGET, binary_path="/opt/client/bin", binary_sha256=BINARY_SHA, scenarios=scenarios,
+                             started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:05:00Z", host="arm64")
+    return directory
 # 假 go 探测时记下的环境变量名（见 write_fake_go）：用来核对探测环境里放行了什么、强制了什么、挡掉了什么。
 FAKE_GO_LOGGED_NAMES = ("PATH", "LANG", "HOME", "GOTOOLCHAIN", "GOPROXY", "GOFLAGS", "GOCACHE", "CGO_ENABLED", "STRAY", "PYTHONPATH")
 
@@ -532,6 +553,7 @@ class RunChecksTests(unittest.TestCase):
         self.go_bin = self.root / "go-bin"
         self.go_bin.mkdir()
         write_fake_go(self.go_bin, "go version go1.27.3 linux/arm64")
+        seed_receipts(self.runroot)   # 第六、七项缺省放行：运行根里有合法的本机完整测试收据与 TUI 预探收据
 
     def run_all(self, tree: Path, steps: FakeSteps, **extra) -> dict:
         return pre.run_checks(tree=tree, commit=COMMIT_PLACEHOLDER, data_root=self.data, runroot=self.runroot, client="codex",
@@ -543,8 +565,9 @@ class RunChecksTests(unittest.TestCase):
         report = self.run_all(self.root / "tree", FakeSteps(recorded="a" * 64, actual="a" * 64))
         self.assertTrue(report["passed"], report)
         self.assertEqual([item["name"] for item in report["checks"]], list(pre.CHECK_NAMES))
-        self.assertEqual(list(pre.CHECK_NAMES), ["freeze-receipts", "baseline-reseal", "redeploy", "admission-binding", "host-toolchain"],
-                         "第五项追加在末尾，前四项的名字与顺序不变")
+        self.assertEqual(list(pre.CHECK_NAMES), ["freeze-receipts", "baseline-reseal", "redeploy", "admission-binding", "host-toolchain",
+                                                 "local-capture-receipt", "tui-prelaunch-receipt"],
+                         "新增检查追加在末尾，前五项的名字与顺序不变")
 
     def test_reproduces_and_blocks_the_two_historical_wrong_orders(self) -> None:
         make_frozen_repo(self.root / "late-receipt", receipted=False)
@@ -772,6 +795,152 @@ class StartIntegrationTests(unittest.TestCase):
         self.assertNotIn("--no-reuse", skipped)
 
 
+class ReceiptChecksTests(unittest.TestCase):
+    """第六、七项（Codex 升级工具优化第 4、5 项）：用上一轮入口门禁两次白跑的失败复现，确认都在起跑前被拦下。
+
+    * 失败一（第三轮入口门禁红在 ``test_driver_client_table``）：探测修复提交在注释里写了版本号，``make test-capture-tools`` 完整跑会红，但修复提交只跑了定向测试就部署起跑，
+      白跑 1.8 小时并多部署一次。对应：没有本机完整测试收据，或收据如实记录了红，或收据是别的提交的，都拒绝起跑；
+    * 失败二（入口第 13 步客户端启动探测 5 个组合 3 个失败）：新版客户端取消 daemon 功能白名单，带 ``--disable`` 的 TUI 报 ``--no-daemon`` 退出，在两小时门禁之后才暴露。
+      对应：没有新版二进制的 TUI 零请求预探收据，或收据里有场景启动即退出，都拒绝起跑。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.runroot = self.root / "run"
+        self.runroot.mkdir()
+        self.env = self.root / "env.sh"
+        self.env.write_text(f'ROUND="r1"\nTARGET_VERSION="{TARGET}"\nexport CODEX_BIN_SHA256="{BINARY_SHA}"\n', encoding="utf-8")
+
+    def capture(self, commit: str = COMMIT_PLACEHOLDER, client: str = "codex") -> dict:
+        return pre.check_local_capture_receipt(self.runroot, commit, client)
+
+    def tui(self, client: str = "codex", env=True) -> dict:
+        return pre.check_tui_prelaunch_receipt(self.runroot, client, self.env if env else None)
+
+    def test_failure_one_a_fix_commit_without_a_full_local_run_is_stopped_before_the_gate(self) -> None:
+        result = self.capture()
+        self.assertFalse(result["passed"])
+        self.assertIn("没有提交", result["problems"][0])
+        self.assertIn("local-capture-tools-receipt.sh", result["problems"][0], "写明怎么生成收据")
+        self.assertIn("test_driver_client_table", result["problems"][0], "点出上一轮的教训")
+
+    def test_failure_one_a_recorded_red_run_is_stopped_and_shows_where_it_failed(self) -> None:
+        directory = self.runroot / oc.RECEIPT_DIR_NAME
+        oc.write_capture_receipt(directory, commit=COMMIT_PLACEHOLDER, exit_code=2, started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:50:00Z",
+                                 tree_clean=True, log_tail="FAIL: test_driver_has_no_version_literals (client_launch_probe.py 含版本字面量)")
+        result = self.capture()
+        self.assertFalse(result["passed"])
+        self.assertIn("没有通过（退出码 2）", result["problems"][0])
+        self.assertIn("test_driver_has_no_version_literals", result["problems"][0], "红在哪个用例带进提示")
+
+    def test_a_receipt_for_another_commit_a_targeted_command_a_dirty_tree_or_a_tiny_duration_is_refused(self) -> None:
+        directory = seed_receipts(self.runroot, tui=False)
+        self.assertTrue(self.capture()["passed"])
+        other = "e" * 40
+        self.assertIn("没有提交", self.capture(other)["problems"][0], "收据按完整提交号命名：别的提交没有收据")
+        # 收据文件被复制成另一个提交的名字：内容里的提交号对不上
+        (directory / f"capture-tools-{other}.json").write_bytes((directory / f"capture-tools-{COMMIT_PLACEHOLDER}.json").read_bytes())
+        self.assertTrue(any("不是要起跑的" in problem for problem in self.capture(other)["problems"]))
+        cases = {
+            "定向命令": dict(command=["make", "test-capture-tools-targeted"]),
+            "工作树不干净": dict(tree_clean=False),
+            "耗时太短": dict(finished_at_utc="2026-10-29T01:00:30Z"),
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                arguments = dict(commit=COMMIT_PLACEHOLDER, exit_code=0, started_at_utc="2026-10-29T01:00:00Z", finished_at_utc="2026-10-29T01:48:00Z",
+                                 tree_clean=True)
+                arguments.update(change)
+                oc.write_capture_receipt(directory, **arguments)
+                self.assertFalse(self.capture()["passed"], label)
+        seed_receipts(self.runroot, tui=False)
+        self.assertTrue(self.capture()["passed"])
+
+    def test_a_tampered_receipt_fails_its_seal(self) -> None:
+        seed_receipts(self.runroot, tui=False)
+        path = self.runroot / oc.RECEIPT_DIR_NAME / f"capture-tools-{COMMIT_PLACEHOLDER}.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["exit_code"] = 0
+        value["duration_seconds"] = 99999
+        path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        self.assertFalse(self.capture()["passed"])
+        self.assertTrue(any("封口" in problem for problem in self.capture()["problems"]))
+
+    def test_failure_two_without_the_new_binary_prelaunch_receipt_the_run_is_stopped(self) -> None:
+        result = self.tui()
+        self.assertFalse(result["passed"])
+        self.assertIn("没有新版二进制 TUI 零请求启动预探收据", result["problems"][0])
+        self.assertIn("tui-prelaunch-receipt.sh write", result["problems"][0])
+
+    def test_failure_two_a_scenario_that_exits_at_launch_is_stopped_with_its_exit_code_and_screen_tail(self) -> None:
+        """复现：compact、ws-idle-close 带 --disable 的 TUI 启动即退出（Cannot use the shared background server），daemon、guardian 通过。"""
+
+        seed_receipts(self.runroot, capture=False, tui_failed=("compact-tui", "ws-idle-close-tui"))
+        result = self.tui()
+        self.assertFalse(result["passed"])
+        text = "\n".join(result["problems"])
+        for name in ("compact-tui", "ws-idle-close-tui"):
+            self.assertIn(f"场景 {name} 预探没通过", text)
+        self.assertNotIn("场景 daemon-tui", text)
+        self.assertNotIn("场景 guardian-tui", text)
+        self.assertIn("Cannot use the shared background server", text, "屏幕尾部带进提示")
+        self.assertIn("退出码 1", text)
+
+    def test_the_receipt_must_cover_every_required_scenario_and_bind_the_target_version_and_binary(self) -> None:
+        seed_receipts(self.runroot, capture=False, skip_scenarios=("guardian-tui",))
+        self.assertIn("缺少必需场景：guardian-tui", "\n".join(self.tui()["problems"]))
+        seed_receipts(self.runroot, capture=False)
+        self.assertTrue(self.tui()["passed"])
+        self.env.write_text(f'TARGET_VERSION="{TARGET}1"\nCODEX_BIN_SHA256="{BINARY_SHA}"\n', encoding="utf-8")
+        self.assertIn("不是本轮目标版本", "\n".join(self.tui()["problems"]))
+        self.env.write_text(f'TARGET_VERSION="{TARGET}"\nCODEX_BIN_SHA256="{"c" * 64}"\n', encoding="utf-8")
+        self.assertIn("二进制摘要与本轮登记的客户端二进制摘要不一致", "\n".join(self.tui()["problems"]))
+        self.assertTrue(self.tui(env=False)["passed"], "拿不到参数文件时只核收据自身")
+
+    def test_a_probe_that_sent_real_requests_is_not_a_zero_request_probe(self) -> None:
+        directory = self.runroot / oc.RECEIPT_DIR_NAME
+        rows = [{"name": name, "status": "passed"} for name in oc.REQUIRED_TUI_SCENARIOS]
+        oc.write_tui_receipt(directory, client_version=TARGET, binary_path="/b", binary_sha256=BINARY_SHA, scenarios=rows, started_at_utc="2026-10-29T01:00:00Z",
+                             finished_at_utc="2026-10-29T01:05:00Z", live_request_count=3)
+        self.assertIn("真实请求数是 3", "\n".join(self.tui()["problems"]))
+
+    def test_claude_rounds_are_not_subject_to_the_two_codex_flows(self) -> None:
+        for result in (self.capture(client="claude"), self.tui(client="claude")):
+            self.assertTrue(result["passed"], result)
+            self.assertIn("not_applicable", result["detail"])
+
+    def test_the_whole_preflight_reports_both_reproductions_at_once(self) -> None:
+        make_frozen_repo(self.root / "tree", receipted=True)
+        data = self.root / "data"
+        (data / "control").mkdir(parents=True)
+        (data / "control" / "codex-01630-supervisor-enable-20261025t000000z.json").write_text(json.dumps({"status": "passed", "tool_files_sha256": "f" * 64}), encoding="utf-8")
+        go_bin = self.root / "go-bin"
+        go_bin.mkdir()
+        write_fake_go(go_bin, "go version go1.27.3 linux/arm64")
+        runner = lambda argv, **kw: (pre._run(argv, **kw) if "-c" in argv else SimpleNamespace(returncode=0, stdout="OK", stderr=""))  # noqa: E731
+        report = pre.run_checks(tree=self.root / "tree", commit=COMMIT_PLACEHOLDER, data_root=data, runroot=self.runroot, client="codex",
+                                deployment=bv.latest_deployment(data), deployments=None, runner=runner, steps=FakeSteps(recorded="a" * 64, actual="a" * 64),
+                                exec_path=str(go_bin), environ={}, vc_env=self.env)
+        self.assertEqual(report["failed_checks"], ["local-capture-receipt", "tui-prelaunch-receipt"], "前五项照常通过，新增两项一次报全")
+        text = pre.format_failures(report)
+        self.assertIn("[local-capture-receipt]", text)
+        self.assertIn("[tui-prelaunch-receipt]", text)
+        seed_receipts(self.runroot)
+        report = pre.run_checks(tree=self.root / "tree", commit=COMMIT_PLACEHOLDER, data_root=data, runroot=self.runroot, client="codex",
+                                deployment=bv.latest_deployment(data), deployments=None, runner=runner, steps=FakeSteps(recorded="a" * 64, actual="a" * 64),
+                                exec_path=str(go_bin), environ={}, vc_env=self.env)
+        self.assertTrue(report["passed"], report)
+
+    def test_env_reader_only_reads_literal_assignments(self) -> None:
+        self.env.write_text('A=1\nexport TARGET_VERSION="1.2.3"\nCODEX_BIN_SHA256=\'abc\'\n# TARGET_VERSION="no"\nB=$(rm -rf /)\nPLAIN=value # c\n', encoding="utf-8")
+        self.assertEqual(pre._env_value(self.env, "TARGET_VERSION"), "1.2.3")
+        self.assertEqual(pre._env_value(self.env, "CODEX_BIN_SHA256"), "abc")
+        self.assertIsNone(pre._env_value(self.env, "MISSING"))
+        self.assertIsNone(pre._env_value(None, "A"))
+        self.assertIsNone(pre._env_value(self.root / "absent", "A"))
+
+
 class DriverCopyTests(unittest.TestCase):
     def test_driver_carries_identical_copies(self) -> None:
         driver = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
@@ -790,7 +959,9 @@ class DriverCopyTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn(name, only_help)
         self.assertIn("host-toolchain", wrapper_usage)
-        self.assertIn("五项", wrapper_usage)
+        self.assertIn("七项", wrapper_usage)
+        self.assertIn("local-capture-receipt", wrapper_usage)
+        self.assertIn("tui-prelaunch-receipt", wrapper_usage)
 
 
 if __name__ == "__main__":

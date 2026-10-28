@@ -20,6 +20,10 @@
 #                        被跳过的项在 results.txt 与 summary.json 里记为 skipped（带理由），不是 passed；
 #   main-security-scan   main 上的 Security Scan 先核绿（优化第 14 项）：main 当前头对应的运行必须已完成、success、不超过 36 小时；仓库取调用环境的
 #                        SECURITY_SCAN_REPO（owner/name，本仓库的 gh 默认会查到上游，必须显式给），要有登录好的 gh；没配置同样算未通过，跳过同上。
+#   local-capture-receipt   要进入入口门禁的修复提交（ENTRY_COMMIT），必须已有“本机完整 make test-capture-tools 通过”的本地收据（优化第 4 项；local/local-capture-tools-receipt.sh
+#                        生成，收据放 $RUNROOT/local-receipts/）：提交号一致、命令是完整目标、退出码 0、工作树干净、封口对得上。上一轮第三轮入口门禁就红在没跑完整测试的修复提交上；
+#   tui-prelaunch-receipt   新版二进制 TUI 零请求启动预探收据（优化第 5 项；tui-prelaunch-receipt.sh 生成）：版本等于本轮目标版本、二进制摘要等于登记值、必需场景
+#                        （compact、ws-idle-close、daemon、guardian）齐全且全部通过、零真实请求。两项只对 Codex 做（Claude 记为 skipped）；跳过规矩同上两项（OPENING_CHECKS_SKIP + 理由）。
 # 按客户端（Claude 升级 B5a-06、B5a-09）：必填参数、部署收据与五摘要、目标客户端的参数键与另核的容器、官方包的复核模块、
 #   plan-audit 的参数模板、环境收据模块与探针版本参数取客户端表（lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。
 # 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh、stage1.sh 与入口编排器 entry.sh 开头调用，也可单独运行）
@@ -219,6 +223,33 @@ main_security_scan() {
   return "$rc"
 }
 
+# 起跑前两张收据（优化第 4、5 项，helper 是同目录的 opening_checks.py；收据目录 $RUNROOT/local-receipts）。只对 Codex 做；Claude 没有这两条流程，记为 skipped（未做检查，不是通过）。
+receipt_not_applicable() {
+  if [ "$CT_CLIENT" = codex ]; then return 1; fi
+  printf '%s\n' "本轮客户端 ${CT_CLIENT} 没有这条流程，未做检查" > "$OUT/$1.skipped"
+  echo "跳过 $1：本轮客户端 ${CT_CLIENT} 不适用（未做检查，不是通过）"
+  return 0
+}
+
+local_capture_receipt() {
+  local rc=0 skip=0
+  opening_skipped local-capture-receipt || skip=$?
+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi
+  if receipt_not_applicable local-capture-receipt; then return 0; fi
+  if [ -z "${ENTRY_COMMIT:-}" ]; then echo "参数文件没有 ENTRY_COMMIT（要进入入口门禁的提交），无法核对本地收据"; return 1; fi
+  python3 -B "$DRV/opening_checks.py" capture-receipt-check --dir "$RUNROOT/local-receipts" --commit "$ENTRY_COMMIT" || rc=$?
+  return "$rc"
+}
+
+tui_prelaunch_receipt() {
+  local rc=0 skip=0
+  opening_skipped tui-prelaunch-receipt || skip=$?
+  if [ "$skip" = 0 ]; then return 0; elif [ "$skip" = 2 ]; then return 1; fi
+  if receipt_not_applicable tui-prelaunch-receipt; then return 0; fi
+  python3 -B "$DRV/opening_checks.py" tui-receipt-check --dir "$RUNROOT/local-receipts" --version "$TARGET_VERSION" --binary-sha256 "${!CT_BINARY_SHA256_KEY}" || rc=$?
+  return "$rc"
+}
+
 echo "ENTRY_PREFLIGHT_START $(utc_now) round=${ROUND} stamp=${STAMP} out=${OUT}"
 check required-parameters required_parameters
 check guard-pre-plan guard_pre_plan
@@ -229,6 +260,8 @@ check plan-audit plan_audit
 check environment-probe environment_probe
 check model-availability model_availability
 check main-security-scan main_security_scan
+check local-capture-receipt local_capture_receipt
+check tui-prelaunch-receipt tui_prelaunch_receipt
 python3 -B - "$OUT/results.txt" "$OUT/summary.json" "$OUT" <<'PY'
 import json, os, sys
 checks = dict(line.split() for line in open(sys.argv[1], encoding="utf-8") if line.strip())
