@@ -33,7 +33,7 @@ func TestTurnMetadataHTTPCompactionRequestsDefaultsToLegacyAndRejectsInvalid(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if section := decoded.(*TurnMetadataSection); section.HTTPCompactionRequests {
+	if section, ok := decoded.(*TurnMetadataSection); !ok || section.HTTPCompactionRequests {
 		t.Fatal("缺省应为 false")
 	}
 	encoded, _ := json.Marshal(decoded)
@@ -44,7 +44,7 @@ func TestTurnMetadataHTTPCompactionRequestsDefaultsToLegacyAndRejectsInvalid(t *
 	if err != nil {
 		t.Fatalf("声明的节被拒绝：%v", err)
 	}
-	if !declared.(*TurnMetadataSection).HTTPCompactionRequests {
+	if section, ok := declared.(*TurnMetadataSection); !ok || !section.HTTPCompactionRequests {
 		t.Fatal("声明后应为 true")
 	}
 	cases := []struct {

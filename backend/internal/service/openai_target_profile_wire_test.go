@@ -63,7 +63,8 @@ func applyProfileRulePatches(t *testing.T, doc *profilecontract.SnapshotDoc, pat
 		require.Len(t, segments, 2, "补丁路径必须是 /<节>/<字段>：%s", patch.Path)
 		field := reflect.ValueOf(doc).Elem().FieldByName(segments[0])
 		require.True(t, field.IsValid() && field.Type() == reflect.TypeOf(json.RawMessage{}), "快照文档没有可选节 %s", segments[0])
-		raw := field.Interface().(json.RawMessage)
+		raw, rawIsJSON := field.Interface().(json.RawMessage)
+		require.True(t, rawIsJSON, "可选节 %s 不是 json.RawMessage", segments[0])
 		require.NotEmpty(t, raw, "上一版画像没有可选节 %s，补丁 %s 无法 add", segments[0], patch.Path)
 		section := map[string]json.RawMessage{}
 		require.NoError(t, json.Unmarshal(raw, &section))
