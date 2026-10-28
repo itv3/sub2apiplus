@@ -121,7 +121,8 @@ Job 与请求，再按已有恢复规则从合法 checkpoint 启动后继。缺�
    `/etc/sub2api-egress/private.key`（root:root、0600）。
 3. 起草新策略（只改 `allowed_public_ipv4`、`nodes.exit.*`、`authorization`、`revision`、`policy_id`），
    不要把新旧两个出口同时放进 `allowed_public_ipv4`。
-4. 用运维脚本 `deploy/egress-ops/egress-ctl` 校验草稿并预览差异（`apply --dry-run`，不改任何状态），确认后正式执行：
-   它带授权人与原因、备份旧策略、追加变更审计、先装出口端再装源端、`egress-check` 通过才放行，失败回滚旧策略并重装。
-   脚本从现行运行包内调用既有 `egress-install`，不换运行包。完整步骤、前置检查与回滚见该目录的 `RUNBOOK.md`。
+4. 用运维脚本 `deploy/egress-ops/egress-ctl` 两段式执行：同一份草稿先在出口机、再在源端（ARM64）各校验并预览差异
+   （`apply --dry-run`，不改任何状态），确认后正式执行。每台机器上它都带授权人与原因、备份本机旧策略、追加变更审计、
+   从现行运行包内调用既有 `egress-install`（不换运行包）、核对通过才放行，失败回滚本机旧策略并重装。脚本不连接任何其他机器：
+   出口机成功后打印一行审计记录，操作员带到源端，源端先核对两端装的是同一份策略再动手。完整步骤、前置检查与回滚见该目录的 `RUNBOOK.md`。
 5. 容器内用三个探针站核对出口，复核 DB、Redis、入站健康与上游 TLS，稳定观察后恢复升级派发。
