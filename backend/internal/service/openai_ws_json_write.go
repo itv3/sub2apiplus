@@ -70,9 +70,10 @@ func writeOpenAIPreparedJSON(ctx context.Context, connection openAIWSClientConn,
 	return connection.WriteJSON(ctx, json.RawMessage(append([]byte(nil), payload...)))
 }
 
-// WritePreparedJSON 保留 wsjson.Write 的紧凑 JSON、HTML 转义及末尾换行行为。
-// Writer 分段发送同一条文本消息，避免为了补一个换行再复制整份正文。
-func (c *coderOpenAIWSClientConn) WritePreparedJSON(ctx context.Context, payload []byte) (err error) {
+// WritePreparedJSON 把已定型的帧正文原样作为一条文本消息发出，不追加任何字节。
+// 官方客户端对序列化结果直接发送（serde_json::to_string，没有末尾换行）；以前这里沿用 wsjson.Write 的
+// 末尾换行，使每条业务消息比官方多一个 0x0a。
+func (c *coderOpenAIWSClientConn) WritePreparedJSON(ctx context.Context, payload []byte) error {
 	if c == nil || c.conn == nil {
 		return errOpenAIWSConnClosed
 	}
@@ -83,19 +84,5 @@ func (c *coderOpenAIWSClientConn) WritePreparedJSON(ctx context.Context, payload
 	if err != nil {
 		return fmt.Errorf("failed to write JSON message: failed to marshal JSON: %w", err)
 	}
-	writer, err := c.conn.Writer(ctx, coderws.MessageText)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		closeErr := writer.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
-	if _, err = writer.Write(raw); err != nil {
-		return err
-	}
-	_, err = writer.Write([]byte{'\n'})
-	return err
+	return c.conn.Write(ctx, coderws.MessageText, raw)
 }
