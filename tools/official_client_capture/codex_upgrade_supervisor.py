@@ -1619,7 +1619,6 @@ def post_run_tooling_facts(
     inner_manifest: Mapping[str, Any],
     *,
     run_started_at_utc: str,
-    retain_attempt: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """按五条文件事实判定父动作失败能否归为 post-run-tooling。
 
@@ -1628,9 +1627,10 @@ def post_run_tooling_facts(
     ``reasons`` 只在不满足时给出，用于审计说明，不参与摘要。任何文件缺失或
     结构非法都记为不满足，而不是抛出——分类失败只意味着沿用原分类。
 
-    OPT-14：枚举“等待收据的候选 attempt”时跳过已被环境隔离作废、被证据根冲突隔离的 attempt（见
-    ``_invalidated_candidate_attempts``）。``retain_attempt`` 只在复算历史收据时传入——收据当年绑定的那个 attempt
-    即使后来被隔离也照旧计入，历史事实不因后续隔离改写（失败时刻只有它一个等待收据的 attempt）。
+    OPT-14：等待收据的候选 attempt 不止一个时，才去读环境隔离／证据根冲突隔离收据，把已被作废的旧 attempt 排除（见
+    ``_invalidated_candidate_attempts``）；排除后仍有 attempt 才采用排除结果。只有一个等待收据的 attempt 时一律不读收据、
+    照旧计数——它即使已被隔离作废，仍是后处理失败的目标（修好接着跑第 24／28 项：被隔离的等待封存 attempt 先对账再重跑）；
+    作废的 attempt 一个都不剩时同样保持原计数，所以这一改动只会让原先因“旧 attempt 凑成第二个”而被拒的情形通过。
     """
 
     reasons: list[str] = []
@@ -1737,9 +1737,6 @@ def post_run_tooling_facts(
                 "item_ids": list(canonical_binding["item_ids"]),
             }
         else:
-            invalidated_attempts = _invalidated_candidate_attempts(campaign_dir)
-            if retain_attempt is not None:
-                invalidated_attempts.discard(retain_attempt)
             for candidate_dir in sorted(candidates_root.iterdir()):
                 attempts_root = candidate_dir / "attempts"
                 if candidate_dir.is_symlink() or not attempts_root.is_dir():
@@ -1748,14 +1745,18 @@ def post_run_tooling_facts(
                     attempt_path = attempt_root / "attempt.json"
                     if attempt_root.is_symlink() or not attempt_path.is_file():
                         continue
-                    if (candidate_dir.name, attempt_root.name) in invalidated_attempts:
-                        # OPT-14：已被隔离作废的 attempt 永不 seal，不计入等待收据的 attempt。
-                        continue
                     payload = _read_bounded_json(attempt_path, "候选 attempt")
                     if payload.get("status") in POST_RUN_TOOLING_ATTEMPT_STATUSES:
                         awaiting.append(
                             (candidate_dir.name, attempt_root.name, attempt_root)
                         )
+            if len(awaiting) > 1:
+                # OPT-14：隔离作废之后重跑出新 attempt，旧 attempt 的 attempt.json 仍是 awaiting_receipts，会和新的凑成两个。
+                # 已被隔离作废的 attempt 永不 seal，排除后仍有 attempt 才采用排除结果（一个都不剩就保持原计数）。
+                invalidated_attempts = _invalidated_candidate_attempts(campaign_dir)
+                live = [item for item in awaiting if (item[0], item[1]) not in invalidated_attempts]
+                if live:
+                    awaiting = live
     except (OSError, SupervisorError) as error:
         return fail(f"候选 attempt 目录无法枚举：{error}")
     if len(awaiting) != 1:
@@ -2138,17 +2139,10 @@ def load_post_run_tooling_receipt(
             unchanged = False
             break
     if unchanged:
-        # OPT-14：收据绑定的 attempt 即使后来被隔离作废，复算仍把它算作当年唯一等待收据的 attempt。
-        bound_candidate, bound_attempt = facts.get("candidate_id"), facts.get("attempt_id")
         recomputed = post_run_tooling_facts(
             campaign_dir,
             inner_manifest,
             run_started_at_utc=run_started_at_utc,
-            retain_attempt=(
-                (bound_candidate, bound_attempt)
-                if isinstance(bound_candidate, str) and isinstance(bound_attempt, str)
-                else None
-            ),
         )
         if not recomputed["qualifies"] or recomputed["facts"] != dict(facts):
             raise SupervisorError("post-run-tooling 收据事实与当前复算不一致。")

@@ -363,9 +363,9 @@ from urllib.parse import urlsplit
 # 2026-10-29（0.165.0 版本登记）：新增 0.165.0 目标版本清单与 0.164.0→0.165.0 升级对（0.164.0 是真实 Active，其全部清单保留），目标场景清单切到 0.165.0，
 # staging 默认目录改为 codex-0.165.0-managed-tools，部署命名改为 01650（与驱动按目标版本推导的 c{compact} 前缀一致）。消费者仍只按 codex-*-supervisor-enable-*
 # 通配与其后的时间戳取最新收据，不绑定版本号。断言预处理器文件本身没有改动，DEFAULT_ASSERTION_PREPARER_DIGEST 不变；监督器 codex_upgrade_supervisor.py
-# 因 OPT-14（等待收据的候选 attempt 计数跳过被隔离作废的 attempt）有改动，DEFAULT_SUPERVISOR_DIGEST 按新文件字节重算（09b326d0… 变 618fb434…）。
+# 因 OPT-14（等待收据的候选 attempt 计数跳过被隔离作废的 attempt）有改动，DEFAULT_SUPERVISOR_DIGEST 按新文件字节重算（09b326d0… 变 90120f52…）。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "618fb434ccf84a54d6b4ac417d4ca241182a26906721e43332ff29ce66ffdd1c"
+    "90120f529b2ebc8c37077272c0f7f624dbdcfb33ab145c2dbab6af02f46a8a1f"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
