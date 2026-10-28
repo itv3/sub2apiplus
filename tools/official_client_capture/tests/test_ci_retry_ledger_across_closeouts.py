@@ -77,21 +77,26 @@ class GateExecutorVariablesDoNotLeakIntoNestedExecutorsTests(unittest.TestCase):
         self.assertEqual(completed.stdout.strip(), "<unset>")
 
     def test_every_variable_the_closeout_sets_for_the_gates_is_scrubbed_by_the_test_package(self) -> None:
-        """守卫：以后 codex_closeout.run_gates 给门禁进程再加环境变量，却忘了加进测试包的剔除清单，这里就红。"""
+        """守卫：以后收尾给门禁进程再加环境变量，却忘了加进白名单或测试包的剔除清单，这里就红。
+
+        收尾注入门禁的环境变量统一由 ``gate_injected_env`` 给出，``run_gates`` 里不能再内联拼环境字典；
+        每个注入变量必须登记在 ``GATE_ENV_WHITELIST``，分类为 ``units``（会被单元继承）的必须在真实测试包的 ``GATE_EXECUTOR_ENV_NAMES`` 里。"""
 
         tree = ast.parse(Path(closeout.__file__).read_text(encoding="utf-8"))
         run_gates = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_gates")
-        names: set[str] = set()
-        for node in ast.walk(run_gates):
-            if isinstance(node, ast.Dict) and any(
-                key is None and isinstance(value, ast.Attribute) and value.attr == "environ"
-                for key, value in zip(node.keys, node.values)
-            ):  # 含 **os.environ 的那个环境字典
-                names |= {key.value for key in node.keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
-        self.assertIn("UNIT_EXECUTOR_RETRY_LEDGER", names, "没找到 run_gates 的环境字典，守卫失效")
-        # ARM64_VC_ENV 只给驱动自己用（驱动白名单不转发给单元），PYTHONDONTWRITEBYTECODE 无害；其余都会被单元继承，必须在剔除清单里。
-        passthrough = {"ARM64_VC_ENV", "PYTHONDONTWRITEBYTECODE"}
-        self.assertEqual(sorted(names - passthrough - set(test_package.GATE_EXECUTOR_ENV_NAMES)), [])
+        inline = [node for node in ast.walk(run_gates) if isinstance(node, ast.Dict) and any(
+            key is None and isinstance(value, ast.Attribute) and value.attr == "environ" for key, value in zip(node.keys, node.values))]
+        self.assertEqual(inline, [], "run_gates 不能内联拼 **os.environ 环境字典：门禁环境一律经 gate_env／gate_injected_env 构造，预检才核对得到")
+        self.assertTrue(any(isinstance(node, ast.Call) and getattr(node.func, "id", None) == "gate_env" for node in ast.walk(run_gates)),
+                        "run_gates 没有经 gate_env 构造门禁环境，守卫失效")
+        config = {"gate": {"vc_env": "/x/env.sh"}}
+        injected = closeout.gate_injected_env(config, Path("/x/gate-retry-ledger"))
+        self.assertIn("UNIT_EXECUTOR_RETRY_LEDGER", injected, "没找到收尾注入的补跑账本变量，守卫失效")
+        self.assertEqual(sorted(set(injected) - set(closeout.GATE_ENV_WHITELIST)), [], "有注入变量没登记在白名单里")
+        inherited = {name for name in injected if closeout.GATE_ENV_WHITELIST[name][0] == "units"}
+        self.assertEqual(sorted(inherited - set(test_package.GATE_EXECUTOR_ENV_NAMES)), [])
+        # 反过来：测试包剔除清单里的名字也都得是收尾真会注入的（清单不能悄悄积累无主条目）。
+        self.assertEqual(sorted(set(test_package.GATE_EXECUTOR_ENV_NAMES) - inherited), [])
 
 
 class SharedLedgerAcrossCloseoutsTests(base.RetryRunBase):

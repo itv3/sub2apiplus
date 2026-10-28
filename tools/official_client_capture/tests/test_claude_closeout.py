@@ -29,6 +29,7 @@ from unittest import mock
 from tools import claude_closeout
 from tools import codex_closeout as closeout
 from tools.ci import client_table, entry_gates
+from tools.official_client_capture.tests import closeout_preflight_fixture as preflight_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOLS = REPO_ROOT / "tools"
@@ -282,6 +283,7 @@ class ClaudeCloseoutTests(unittest.TestCase):
         state = terminal.write_fixture_catalog(self.repo, "9.9.9")
         facts = terminal.fixture_terminal_receipt(self.repo, state, previous_version="9.9.8",
                                                   campaign_id=FINAL_CAMPAIGN, official_campaign_id=OFFICIAL_CAMPAIGN)
+        preflight_fixture.write_scrub_file(self.repo)  # 候选测试包的剔除清单：环境注入核对要读它
         self.base = commit_all(self.repo, "隔离基线")
         remote = self.root / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
@@ -315,6 +317,7 @@ class ClaudeCloseoutTests(unittest.TestCase):
                                             "result": str(self.work / "deployment.json")},
                        "push": {"remote": "origin", "ref": "refs/heads/main", "expected_tip": self.base}}
         self.plan_path = self.work / "plan.json"
+        self.addCleanup(preflight_fixture.patch_frozen_coverage().stop)  # 隔离仓库没有冻结台账，冻结覆盖检查默认换成通过
         for patcher in (
             mock.patch.object(closeout, "collect_guide_material", return_value=self.material),
             mock.patch("tools.upstream_merge.freeze.generate_freeze_successor", return_value={"transitions": []}),

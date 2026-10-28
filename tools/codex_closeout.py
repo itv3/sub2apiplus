@@ -571,6 +571,159 @@ def _inherit_predict():
     return sys.modules[name]
 
 
+def _background_preflight():
+    """同仓库 tools/ci 的后台验证起跑前置检查（收尾复用其中的“冻结收据”一项，不另写一套冻结覆盖判定）。"""
+    name = "closeout_background_preflight_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "ci" / "background_preflight.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+# ---------------------------------------------------------------------------
+# 收尾两道预检（OPT-17 冻结覆盖、OPT-18 门禁环境注入）：都是秒级，必须赶在两小时的全量门禁起跑之前报出
+# ---------------------------------------------------------------------------
+
+# 拆提交的做法（上一次升级的先例）：候选链与收尾分支都改了同一个冻结文件时，git 自动合并出的内容没有任何承接收据登记，
+# 收尾候选因此带着未承接的冻结路径，全量门禁约两小时后才在冻结测试处变红。合并后树内容不变，只是把一个提交拆成三个。
+FREEZE_SPLIT_ADVICE = (
+    "处理办法（合并结果文件拆成三个提交，合并后树内容不变）：①把这些路径还原成收尾侧（合并前收尾分支那一侧）的版本，单独提交；"
+    "②再恢复合并结果，单独提交；③对②生成承接收据：python3 -B -m tools.upstream_merge freeze-successor-generate --before <①的提交> "
+    "--after <②的提交> --tag <标识> --reason <原因> --dry-run，结果须是 passed_local_evidence_successor 且人工待办为空，去掉 --dry-run 加 --output "
+    "docs/egress/maintenance/<标识>-freeze-successor.json 生成后单独提交（源码与收据不能同一提交）。"
+    "先例提交：ed4fca062（还原）、05c47bdc7（恢复合并结果）、9076cffe0（承接收据）。处理完在新工作根重新 prepare。"
+)
+
+
+def frozen_coverage(tree):
+    """某棵树里有没有“当前内容不在任何承接收据登记里”的冻结路径（秒级，只读）。
+
+    直接复用后台验证起跑前置检查的“冻结收据”一项（``background_preflight.check_freeze_receipts``，即 ``test_ci_background_preflight`` 里
+    “真实仓库头无未承接冻结路径”那一项的实现，与门禁里 Go／Python 冻结测试同一张承接图），不在收尾里另写判定。返回它的结果字典：
+    ``passed``、``problems``、``detail``（含 ``registered`` 登记路径数、``uncovered`` 未承接路径）。"""
+    return _background_preflight().check_freeze_receipts(Path(tree))
+
+
+def require_frozen_coverage(tree, *, subject):
+    """冻结覆盖预检；不通过就抛错并就地给出拆提交的办法，通过返回 ``{"registered": 登记路径数, "uncovered": []}``。"""
+    report = frozen_coverage(tree)
+    if not report["passed"]:
+        raise CloseoutError(f"{subject}没有通过冻结覆盖预检（不起跑，免得全量门禁两小时后才在冻结测试处变红）：" + "；".join(report["problems"])
+                            + "。" + FREEZE_SPLIT_ADVICE)
+    return {"registered": report["detail"].get("registered"), "uncovered": list(report["detail"].get("uncovered") or [])}
+
+
+# 收尾给门禁进程显式注入的环境变量白名单：名称 → (用途分类, 说明)。分类决定该变量会不会被测试嵌套执行器继承：
+#   driver：只给驱动脚本自己读，驱动的白名单环境不把它转发给单元（单元与嵌套执行器都看不到）；
+#   harmless：单元看得到，但不改变任何测试行为；
+#   units：驱动显式转发给执行器，单元继承它，测试里嵌套起的临时执行器（``{**os.environ, ...}``）也会继承——候选的测试包必须在导入时把它剔除
+#          （``tools/official_client_capture/tests/__init__.py`` 的 ``GATE_EXECUTOR_ENV_NAMES``），否则嵌套执行器会改用外层门禁的持久状态而改变行为。
+# 以后收尾要给门禁再加环境变量，必须先在这里登记并给出分类；没登记的注入一律在起跑前报错（上一次升级就是因为给执行器多设了一个变量、
+# 测试包没剔除，整轮全量门禁白跑约两小时，三个单元变红）。
+GATE_ENV_WHITELIST = {
+    "ARM64_VC_ENV": ("driver", "驱动参数文件路径，只给驱动脚本自己读，不转发给单元"),
+    "PYTHONDONTWRITEBYTECODE": ("harmless", "不写字节码缓存（树里不能留 __pycache__），不改变测试行为"),
+    "UNIT_EXECUTOR_RETRY_LEDGER": ("units", "补跑累计账本目录，驱动转发给执行器、单元继承；测试包须在导入时剔除"),
+}
+# 候选的测试包里登记“要剔除的门禁注入变量”的文件与常量名。
+GATE_SCRUB_FILE = "tools/official_client_capture/tests/__init__.py"
+GATE_SCRUB_NAME = "GATE_EXECUTOR_ENV_NAMES"
+
+
+def gate_injected_env(config, ledger):
+    """收尾显式注入门禁进程的环境变量（只列收尾自己加的，不含从操作员环境原样带过去的那些）。"""
+    return {
+        "ARM64_VC_ENV": config["gate"]["vc_env"],
+        "PYTHONDONTWRITEBYTECODE": "1",
+        # 补跑累计账本跨收尾共用（见 gate_retry_ledger）；驱动的白名单环境显式转发这一个变量。
+        "UNIT_EXECUTOR_RETRY_LEDGER": str(ledger),
+    }
+
+
+def gate_env(config, ledger):
+    """门禁进程的完整环境：操作员环境原样带过去，再叠加收尾显式注入的那几个。返回 ``(环境, 显式注入)``。"""
+    injected = gate_injected_env(config, ledger)
+    return {**os.environ, **injected}, injected
+
+
+def candidate_scrubbed_env_names(plan):
+    """候选提交的测试包登记的“导入时剔除的门禁注入变量”；读不到、解析不了返回 ``None``（调用方按失败关闭处理）。"""
+    shown = git(plan["candidate"], "show", f"{plan['candidate_commit']}:{GATE_SCRUB_FILE}", check=False)
+    if shown.returncode:
+        return None
+    try:
+        tree = ast.parse(shown.stdout)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == GATE_SCRUB_NAME for target in node.targets):
+            if isinstance(node.value, (ast.Tuple, ast.List)) and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in node.value.elts):
+                return {item.value for item in node.value.elts}
+            return None
+    return None
+
+
+def check_gate_env(plan, injected):
+    """起跑前核对门禁环境注入：每个注入变量都得在白名单里；会被单元继承的那类，候选测试包必须已登记剔除。
+
+    返回逐变量的核对行 ``[{name, value, role, note, ok, problem}]``；不会抛错，由调用方汇总 ``problem`` 后决定是否停下。"""
+    scrubbed = candidate_scrubbed_env_names(plan)
+    rows = []
+    for name in sorted(injected):
+        row = {"name": name, "value": injected[name], "role": None, "note": "", "ok": True, "problem": None}
+        entry = GATE_ENV_WHITELIST.get(name)
+        if entry is None:
+            row.update(ok=False, problem=f"{name} 不在收尾门禁环境注入的白名单里：多余的注入可能被单元与测试嵌套起的执行器继承而改变行为；"
+                                         "要注入请先在 GATE_ENV_WHITELIST 登记并分类，必要时让候选测试包在导入时剔除它")
+        else:
+            row.update(role=entry[0], note=entry[1])
+            if entry[0] == "units":
+                if scrubbed is None:
+                    row.update(ok=False, problem=f"{name} 会被单元继承，但候选提交里读不到测试包的剔除清单 {GATE_SCRUB_FILE}::{GATE_SCRUB_NAME}")
+                elif name not in scrubbed:
+                    row.update(ok=False, problem=f"{name} 会被单元继承，候选测试包的 {GATE_SCRUB_NAME} 没有登记它：测试里嵌套起的临时执行器会改用外层门禁的持久状态，"
+                                                 "相关单元只在收尾门禁里变红（整轮约两小时白跑）；把它加进该清单再重新 prepare")
+        rows.append(row)
+    return rows
+
+
+def render_gate_env(rows):
+    """把环境注入核对结果打印成人能读的几行（写到 stderr，stdout 留给 JSON 结果）。"""
+    lines = [f"收尾门禁环境变量注入核对（白名单 {len(GATE_ENV_WHITELIST)} 项，本次注入 {len(rows)} 项）："]
+    for row in rows:
+        lines.append(f"  [{'通过' if row['ok'] else '不通过'}] {row['name']}={row['value']}  分类 {row['role'] or '未登记'}"
+                     + (f"：{row['note']}" if row["note"] else ""))
+        if row["problem"]:
+            lines.append(f"      问题：{row['problem']}")
+    return "\n".join(lines)
+
+
+def gate_preflight(plan, ledger):
+    """全量门禁起跑前的两道秒级预检：①候选里没有未承接的冻结路径；②注入的环境变量都在白名单、会被继承的都已被测试包剔除。
+
+    两道都过才返回核对摘要；任一道不过就抛 ``CloseoutError``（把两道的问题一起报全），此时门禁还没起、没写任何“开始”占位。"""
+    config = plan["basis"]["config"]
+    problems, summary = [], {}
+    report = frozen_coverage(plan["candidate"])
+    summary["frozen_coverage"] = {"registered": report["detail"].get("registered"), "uncovered": list(report["detail"].get("uncovered") or []),
+                                  "passed": report["passed"]}
+    if not report["passed"]:
+        problems.append("冻结覆盖：" + "；".join(report["problems"]) + "。" + FREEZE_SPLIT_ADVICE)
+    rows = check_gate_env(plan, gate_injected_env(config, ledger))
+    summary["injected_env"] = rows
+    print(render_gate_env(rows), file=sys.stderr)
+    problems += [row["problem"] for row in rows if not row["ok"]]
+    if problems:
+        raise CloseoutError("收尾门禁起跑前预检不通过，全量门禁没有起：" + "；".join(f"（{index}）{text}" for index, text in enumerate(problems, 1)))
+    return summary
+
+
 def inherit_veto(plan, run_ids):
     """逐单元承接的类型变化一票否决（补承接视图发现不了的“同名文件变目录”，已知缺口 R2）：每个来源运行的提交到收尾候选提交之间有类型变化、
     符号链接、子模块或 ``.gitmodules`` 变更，或来源提交解析不出、变更集读不出，就拒绝承接（失败关闭；要完整执行就去掉 ``gate.unit_inherit``）。"""
@@ -678,6 +831,9 @@ def prepare(config, *, dry_run=False):
     branch = git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
     if git(repo, "status", "--porcelain").stdout.strip():
         raise CloseoutError("权威仓库必须先提交并保持干净，才能绑定收尾方案")
+    # 冻结覆盖预检第一道（OPT-17，秒级、只读，dry-run 也跑）：权威仓库头本身不能带未承接的冻结路径。合并候选链进收尾分支时两边都改了同一冻结文件，
+    # 自动合并出的内容没有承接收据，收尾候选就会带着它，全量门禁约两小时后才在冻结测试处变红；这里先拦，错误里直接给拆提交的办法。
+    head_coverage = require_frozen_coverage(repo, subject="权威仓库头")
     updates = source_updates(repo, Path(config["guide"]).read_text(), client=client)
     material = safety.read(config["material"])
     if not all(material.get(key) for key in ("campaign_id", "candidate_id", "target_version", "classification_sha256", "official_stage_sha256")):
@@ -705,7 +861,8 @@ def prepare(config, *, dry_run=False):
     key = digest(basis)
     if dry_run:
         return {"status": "dry_run", "input_sha256": key, "changed_paths": sorted([*updates, config["terminal_relative"]]),
-                "manual_gates": ["guide-review", "cleanup-authorization", "release-publication"], "work_root": str(work)}
+                "manual_gates": ["guide-review", "cleanup-authorization", "release-publication"], "work_root": str(work),
+                "frozen_coverage": head_coverage}
     with run_lock(work):
         path = work / "plan.json"
         if path.exists():
@@ -742,6 +899,9 @@ def prepare(config, *, dry_run=False):
         git(candidate, "add", "--", *outputs)
         git(candidate, "commit", "--no-gpg-sign", "-m", "收尾候选：" + config["tag"])
         commit = git(candidate, "rev-parse", "HEAD").stdout.strip()
+        # 冻结覆盖预检第二道（OPT-17）：出候选提交后立刻复查——全量门禁实际跑的就是这个提交；候选自己生成的冻结收据没盖住的路径也在这里拦下。
+        # 不通过时不写方案、不建 bundle，候选目录保留现场（要重来就用新工作根）。
+        require_frozen_coverage(candidate, subject="收尾候选提交 " + commit[:12])
         git(candidate, "branch", row["closeout_candidate_branch"], commit)
         bundle = work / "candidate.bundle"
         git(candidate, "bundle", "create", str(bundle), row["closeout_candidate_branch"])
@@ -1033,6 +1193,13 @@ def gate_retry_ledger(config):
     return Path(config["work_root"]).parent / "gate-retry-ledger"
 
 
+def gate_preflight_only(plan_path):
+    """只做起跑前两道预检（不起门禁、不写占位、不持锁以外的任何写入）：给操作员在起全量门禁之前随时自查，结果与 ``gates`` 起跑前的预检逐字相同。"""
+    plan = load_plan(plan_path)
+    summary = gate_preflight(plan, gate_retry_ledger(plan["basis"]["config"]))
+    return {"status": "preflight_passed", **summary}
+
+
 def run_gates(plan_path):
     """在独立进程会话中跑完整门禁；中断后只对账，绝不自动启动第二份全量作业。"""
     plan = load_plan(plan_path)
@@ -1051,6 +1218,10 @@ def run_gates(plan_path):
             # 输出完备则确认原运行；不完备保留现场，由新方案新工作根重跑。
             files = check_gate_result(plan)
         else:
+            # 起跑前两道秒级预检（OPT-17、OPT-18）：候选里没有未承接的冻结路径、注入门禁的环境变量都在白名单且会被继承的都已被测试包剔除。
+            # 放在写“开始”占位之前：不通过就一个门禁进程都不起，不留任何占位，修好后同一方案可以直接重跑。
+            ledger = gate_retry_ledger(config)
+            preflight = gate_preflight(plan, ledger)
             inherit = gate_inherit(config)
             if inherit:
                 # 跑之前先过一票否决：来源提交到候选提交之间有类型变化就别白跑一轮承接（门禁结果出来后 check_gate_result 还会独立复核一次）。
@@ -1062,12 +1233,9 @@ def run_gates(plan_path):
                     *(["--unit-inherit-request", inherit["request"], "--unit-inherit-stage", inherit["stage"]] if inherit else []),
                     plan["bundle"]["path"], client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
                     config["gate"]["node_modules"]]
-            ledger = gate_retry_ledger(config)
             journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat(),
-                                                 "retry_ledger": str(ledger)})
-            env = {**os.environ, "ARM64_VC_ENV": config["gate"]["vc_env"], "PYTHONDONTWRITEBYTECODE": "1",
-                   # 补跑累计账本跨收尾共用（见 gate_retry_ledger）；驱动的白名单环境显式转发这一个变量。
-                   "UNIT_EXECUTOR_RETRY_LEDGER": str(ledger)}
+                                                 "retry_ledger": str(ledger), "preflight": preflight})
+            env, _injected = gate_env(config, ledger)
             started = time.monotonic()
             with (work / "gates.log").open("xb") as log:
                 os.chmod(log.name, 0o600)
@@ -1276,6 +1444,8 @@ def main(argv=None):
     pre.add_argument("--dry-run", action="store_true")
     gate = sub.add_parser("gates", help="按标准 full-gates 合同重跑所有单元")
     gate.add_argument("--plan", required=True)
+    gate.add_argument("--preflight-only", action="store_true",
+                      help="只跑起跑前两道预检（冻结覆盖、门禁环境注入核对）并打印，不起门禁、不写任何占位")
     release = sub.add_parser("publish", help="消费人工批准、核对门禁并恢复收尾")
     release.add_argument("--plan", required=True)
     release.add_argument("--guide-approval", required=True)
@@ -1300,7 +1470,7 @@ def main(argv=None):
         elif args.command == "prepare":
             result = prepare(safety.read(args.config), dry_run=args.dry_run)
         elif args.command == "gates":
-            result = run_gates(args.plan)
+            result = gate_preflight_only(args.plan) if args.preflight_only else run_gates(args.plan)
         else:
             result = publish(args.plan, {"guide-review": args.guide_approval, "release-publication": args.publication_approval,
                                         "cleanup": args.cleanup_approval})
