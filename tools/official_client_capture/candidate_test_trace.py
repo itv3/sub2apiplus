@@ -183,8 +183,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-29（0.165.0 集成重绑）：集成分支并入 WS 压缩请求帧新回合 id 与 HTTP 回合请求 root_turn_id 两处改动，动到映射已登记的 official_egress_openai_ws.go、
 # official_egress_identity_authority.go、officialegress/compiler.go；映射只重绑这三份源码快照共 4 个叶子（ws.go 2、identity_authority.go 1、compiler.go 1），
 # 不改变测试、事实宇宙或规则语义。载荷逐项审核：400 个叶子里变化的 4 处全是 sha256 叶子，非摘要叶子 0 处变化；映射文件摘要 cd7e0a18… 变为 0cd678af…。
+# 2026-10-29（0.165.0 集成重绑）：0.165.0 变更集（W1 生效 effort 与 configuration_update、W2 turn_id／一消息一帧／兜底身份、W3 整段重放同连接／窗口号／压缩帧／
+# 动态键）改动了映射已登记的生产源码；映射只重绑这些源码快照共 5 个叶子（official_egress_openai_http.go 5），不改变测试、事实宇宙或规则语义。
+# 载荷逐项审核：400 个叶子里变化的 5 处全是 sha256／test_file_sha256 叶子，非快照叶子 0 处变化；映射文件摘要 0cd678af… 变为 31572ad2…。
 FROZEN_MAPPING_SHA256 = (
-    "0cd678af2760968784508aee14bf34342711d72a3e89ef5962620b533e0792e7"
+    "31572ad24e7d22972764245f2693ead05c892286c5625c656a0b9f1135fb65cd"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
