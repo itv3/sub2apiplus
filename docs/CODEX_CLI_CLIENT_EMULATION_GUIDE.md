@@ -892,7 +892,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：
   `http-guardian-credits`、`http-mcp-attribution` 各匹配 4 条（场景 A03、A04 的 HTTP Responses），`ws-guardian-credits`、`ws-mcp-attribution` 各匹配 16 条（场景 A05、A06 的
   `response.create`）。候选断言 `assert-SPEC-BODY-008` 核对 HTTP 与 WS 两类载体的两项取值。
-- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明后由编译器写入动态键（`root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间）。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致（未核实，旧行为同）；HTTP 路径官方 `client_metadata` 也带 `root_turn_id`，网关 HTTP 尚未补。
+- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明的动态键中，`root_turn_id` 同时适用于 WS 帧与 HTTP `/responses` 回合请求（含压缩请求）：HTTP 请求的 `client_metadata` 带 `root_turn_id`，根线程上等于本请求出站的 `turn_id`；子代理、guardian、记忆合并线程不写。Lite 标记与发送时间戳只属于 WS 帧，HTTP 请求体不写；WS 帧的 `root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致（未核实，旧行为同）。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-BODY-009 x-codex-turn-metadata 的键集合
@@ -921,7 +921,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   （键为 21 键的有序子集、必含 13 键）；新增的 `history_initialization` 由源码确认（0.163.0 起，0.165.0 复核仍成立）。`turn-metadata-keys` 与
   `turn-metadata-analytics-default` 两项判据在 0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，
   attempt `20261027T135446Z-d8a16a8e788de81e`）各匹配 0 条：这是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
-- **实现**：网关生成有可信取值的键：基础 14 键；画像 `WindowTracking` 声明时另生成 `window_number`、`context_window_id`；画像 `RootThreadKeys` 声明时，根线程另生成 `agent_name`（`/root`）与 `root_turn_id`（回合帧，等于 `turn_id`，预热无）。`sandbox_mode`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled` 取决于用户本地配置或模型目录，网关没有可信来源，维持不生成。压缩请求（`WSCompactionRequests`）：`request_kind=compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象，不带 `model`、`reasoning_effort`、`turn_trigger`。画像 `TurnMetadata.Keys`
+- **实现**：网关生成有可信取值的键：基础 14 键；画像 `WindowTracking` 声明时另生成 `window_number`、`context_window_id`；画像 `RootThreadKeys` 声明时，根线程另生成 `agent_name`（`/root`）与 `root_turn_id`（回合帧，等于 `turn_id`，预热无）。`sandbox_mode`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled` 取决于用户本地配置或模型目录，网关没有可信来源，维持不生成。压缩请求（`WSCompactionRequests`）：`request_kind=compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象，不带 `model`、`reasoning_effort`、`turn_trigger`；压缩请求有自己的新回合 id：`turn_id` 是新的 UUIDv7，`root_turn_id` 同值，既不同于压缩前最后一个业务回合，也不同于压缩后的下一个业务回合，同一压缩帧重试取同一 id。画像 `WindowTracking`、`RootThreadKeys` 对 HTTP `/responses` 回合请求同样生效：turn metadata 带 `window_number`、`context_window_id`；根线程另带 `agent_name`（`/root`）与 `root_turn_id`（等于 `turn_id`，压缩请求同样）。HTTP 窗口号取自下游 `x-codex-window-id` 头的数字后缀（无状态读取，只采数字），窗口头、`client_metadata`、turn metadata 的窗口身份一致；上下文窗口 id 由（会话、窗口号）稳定派生，同窗口内各请求相同，窗口号加一后换新。画像 `TurnMetadata.HTTPCompactionRequests` 声明后，HTTP `/responses` 上的压缩请求（`input` 带 `compaction_trigger`）：`request_kind` 为 `compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象并排在最后一个键，不带 `model`、`reasoning_effort`、`turn_trigger`；与 `WSCompactionRequests` 各自独立，WS 与 HTTP 两条出站路径分别声明。画像 `TurnMetadata.Keys`
   增加 `history_initialization`（字典序位于 `context_window_id` 与 `installation_id` 之间）。网关生成回合 id 时按该库的位布局与单调上下文编码（内嵌毫秒回拨 7 毫秒），开始时间由 `turn_id` 推出：内嵌毫秒加以 `turn_id` 为种子、按上述 143 个样本的分布确定性抽取的 0～7 毫秒（29 毫秒离群值不计入）；会话、线程、item id 的内嵌毫秒另回拨 50 毫秒，使其总早于首个回合 id。
 - **状态**：✅ 源码充分；抓包充分（13 个既有必含键沿用 0.157.0 官方样本，新增的 `history_initialization` 由源码确认，0.165.0
   复核仍成立）。
@@ -1154,7 +1154,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `x-codex-beta-features: remote_compaction_v2`。TUI 压缩走 WS 时触发项位于 `response.create` 帧中。
   0.165.0：压缩请求自身的 `reasoning.effort` 优先取窗口钉死的基线；压缩成功后钉子重置、旧 `configuration_update` 随历史压缩消失；WS 上压缩后的下一帧是无 `previous_response_id` 的整段重放，再下一轮恢复增量
   （非正式实采 c1、c2：压缩请求本身是增量帧 `previous_response_id`＋单项 `compaction_trigger`，`request_kind=compaction`，其 turn metadata 没有 `model`、`reasoning_effort` 键；压缩完成后的整段重放帧在同一连接上）。
-  WS 上的压缩请求是 `previous_response_id` 加单项 `compaction_trigger` 的增量帧：请求体不带 `access_programs`，turn metadata 如 SPEC-BODY-009 所述。
+  WS 上的压缩请求是 `previous_response_id` 加单项 `compaction_trigger` 的增量帧：请求体不带 `access_programs`，turn metadata 如 SPEC-BODY-009 所述。HTTP 压缩请求体同样不带 `access_programs`（官方实采：主线程回合请求带、压缩请求不带）。
 - **源码**：[L1] `core/src/compact_remote_v2_attempt.rs:172`、
   `model-provider/src/capabilities.rs:21-44`、
   `features/src/lib.rs:2151-2156`、`core/src/tasks/compact.rs:63-76`。0.165.0 复核（该状态自 0.163.0 起如此，0.164.0 到 0.165.0 未变）：`RemoteCompactionSupport` 只剩 `V2` 与 `Unsupported`（V1 与 `/responses/compact`
