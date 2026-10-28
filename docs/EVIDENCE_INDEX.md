@@ -2,7 +2,7 @@
 
 > 由 `tools/evidence_index.py` 生成，不要手改。
 
-本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.163.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
+本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.164.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
 `sub2api-egress` 被生成器硬禁止；它只能用于第三部分的实现差异比对。
 
 ## 0. 证据类型与边界
@@ -199,14 +199,14 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-WS-005 | ① OAuth 可见规则 | 内置 OpenAI OAuth | ✅ 验过 | `clean-tool-20260728T132346Z` | **R** | Lite WS 原始帧与键序 | `raw-scrubbed/clean-tool-20260728T132346Z/` （4 个 .bin） |
 |  |  |  |  | `audit-ws005-nonlite-20260730a` | **R** | 非 Lite WS 原始帧：warmup／增量键序及 instructions／tools 正向形态 | `raw-scrubbed/audit-ws005-nonlite-20260730a/` （4 个 .bin） |
 
-## 2.1 Campaign 封存证据（Active 0.163.0，24 项）
+## 2.1 Campaign 封存证据（Active 0.164.0，24 项）
 
 正文实测以 `assert-SPEC-*` 引用本条候选断言的编号项登记为 C。官方取证与候选断言的原始字节、观测和
 断言结论封存在 ARM64 私有归档，仓库内只登记坐标：
 
-- 终态收据：`docs/egress/maintenance/CODEX_CLI_0160_TO_0163_TERMINAL_STATE_RECEIPT.json`
-- 官方证据 Campaign：`c01630-formal-vc1-r2-20261020t131500z`；canonical Campaign：`c01630-formal-vc1-r2-20261020t131500z`
-- 私有归档：`/root/private-archives/codex-0.163.0-c01630-formal-vc1-r2-20261020t131500z-20261022t175120z.tar.gz`（SHA-256 `e191f44abf478a2031a228d4466f9df4c3421f344b76281c1bbdb5c15b8c86f9`，108226656 字节）
+- 终态收据：`docs/egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json`
+- 官方证据 Campaign：`c01640-formal-vc1-r1-20261027t000000z`；canonical Campaign：`c01640-formal-vc1-r1-20261027t000000z`
+- 私有归档：`/root/private-archives/codex-0.164.0-c01640-formal-vc1-r1-20261027t000000z-20261028t052056z.tar.gz`（SHA-256 `e136ad5a632732f3a2ad3ab6fbb5e5b1fa8ee96a270311d149762133f34a276e`，81879356 字节）
 
 | 编号项 | 分类 | 验证状态 | 候选断言 |
 |---|---|---|---|
