@@ -90,7 +90,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 # 当前基线对应的 Codex 目标版本；重封换新文件名，旧基线原样保留（见模块说明第二节）。
 BASELINE_CODEX_VERSION = "0.164.0"
 BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "codex_identity_conservation_baseline_0_164_0.json"
-BASELINE_SHA256 = "77d7d1e22de912de06f5360ec2ea24f07e5f43e7a3508afca272762dc27e440d"
+BASELINE_SHA256 = "121ce9c0d3cac425f0d8c75e662b436727c579ee2ab0918907fa764b5a84292c"
 BASELINE_SCHEMA = "codex-identity-conservation-baseline/v1"
 # 基线的 17 个顶层键及其次序（与旧基线同构）：封存入口按这个次序写，测试按这个集合与次序校验。
 BASELINE_KEYS = (

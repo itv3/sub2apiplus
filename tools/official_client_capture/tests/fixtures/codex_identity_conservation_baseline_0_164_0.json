@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "c18da9d90e8b66756cff4a80ba9b069a58e5230e",
+ "source_commit": "897389292a6357bc6dacb8827c0d7da0bd77876d",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "a95bd72ddab0661b2001738981bfa36c3c86b18dbc7f61eace9b9fc9bdd1d6d4",
+ "files_sha256": "6ce5bd27a11e169804539c9252aa040238c4dd5d4387d763672acab3192230cf",
  "wire_producer_sha256": "b8d562ac72a549ff261ac5b813ea63812a1ca71a8c49e06c893dbd61ccbfc867",
- "evidence_semantics_sha256": "fcb7ebdf54867b712d13444251bcdf72bd3351876e1eaf3f5227f0f7d6a964e1",
+ "evidence_semantics_sha256": "9e95ee5470b1a714786eed4a9214e4ec71423eec54f8a12d3659c11704979726",
  "control_sha256": "a1c0400c05ba711d2d4b2ea1da845806da352a4aea0d5ea61423bfc8709175a7",
  "orchestrator_closure_sha256": {
   "wire_producer": "33f2d92cb9a69c31fb133024146b1cdf51fb4a8aa6416a5564c2d49759e8a3db",
@@ -2199,7 +2199,7 @@
   },
   {
    "path": "codex_upgrade_evidence_labels_0_164_0.json",
-   "sha256": "7ca3d033cc979c77f05db4378e078a5b24fd00cebd83188715493fadc3e0048a"
+   "sha256": "c3ed7b01c576f521ffb48249ed931e7c13c633d5d095284d60c98c67a5958deb"
   },
   {
    "path": "codex_upgrade_evidence_manifest.py",
