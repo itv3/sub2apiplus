@@ -74,35 +74,21 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
   // 页面只显示整数部分：小数点及其后内容直接舍去，不四舍五入；整数部分超过 2^53 也必须保持完整。
   const balanceInteger = '12345678901234567890'
 
-  // 余额字符串到页面显示的对照表，同时驱动「实时查询」和「缓存回显」两条路径。
-  const balanceCases = [
-    { name: '示例值 57333.8597510000 舍去小数', balance: '57333.8597510000', expected: '57333' },
-    { name: '0.9 舍去后是 0，不四舍五入成 1', balance: '0.9', expected: '0' },
-    { name: '1.9999 不进位', balance: '1.9999', expected: '1' },
-    { name: '0.0000 显示 0', balance: '0.0000', expected: '0' },
-    { name: '没有小数点的整数原样显示', balance: '42', expected: '42' },
-    { name: '超长整数部分保持完整', balance: '12345678901234567890.0123', expected: balanceInteger },
-    { name: '超过 2^53 的整数不丢精度（Number 会变成 ...992）', balance: '9007199254740993', expected: '9007199254740993' },
-    { name: '超长整数部分加超长小数部分', balance: '99999999999999999999999999999999.99999999999999999999', expected: '99999999999999999999999999999999' },
-    { name: '前后空白先被去掉', balance: '  57333.85  ', expected: '57333' },
-    { name: '整数部分为空的 .9 显示 0', balance: '.9', expected: '0' },
-    { name: '小数点后为空的 5. 显示 5', balance: '5.', expected: '5' },
-    { name: '带正号的 +7.8 去掉正号', balance: '+7.8', expected: '7' },
-    { name: '多余前导零 007.5 规整为 7', balance: '007.5', expected: '7' },
-    { name: '负零 -0.0 显示 0（通过非负检查的唯一负号写法）', balance: '-0.0', expected: '0' },
-    { name: '负数仍走「可用」', balance: '-1.5', expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+  // 页面显示对照表，同时驱动「实时查询」和「缓存回显」两条路径。
+  // 取整规则本身（小数点位置、前导零、正负号、科学计数法等全部边界写法）由 src/utils/__tests__/codexCredits.spec.ts 逐条直测，
+  // 这里只留确认组件确实接上了取整的端到端用例，以及不属于取整函数、由组件自己负责的规则（前后空白、负数、状态值）。
+  const displayCases = [
+    // 超长整数部分（balance 常量）保持完整、小数部分舍去
+    { name: 'decimal precision truncated to the integer part', credits: balance, expected: balanceInteger },
+    { name: '示例值 57333.8597510000 舍去小数', credits: { has_credits: true, unlimited: false, balance: '57333.8597510000' }, expected: '57333' },
+    { name: '0.9 舍去后是 0，不四舍五入成 1', credits: { has_credits: true, unlimited: false, balance: '0.9' }, expected: '0' },
+    // 前后空白由组件的 trim 先去掉，再交给取整；取整函数本身不处理空白。
+    { name: '前后空白先被去掉再取整', credits: { has_credits: true, unlimited: false, balance: '  57333.85  ' }, expected: '57333' },
     // 不是普通十进制的写法无法安全地按字符串截断，保持改动前的行为：原样显示（只去前后空白），不取整、不改成「可用」。
-    { name: '科学计数法 1.5e3 原样显示', balance: '1.5e3', expected: '1.5e3' },
-    { name: '科学计数法 1E3 原样显示', balance: '1E3', expected: '1E3' },
-    { name: '科学计数法带负指数 25e-1 原样显示', balance: '25e-1', expected: '25e-1' },
-    { name: '十六进制 0x10 原样显示', balance: '0x10', expected: '0x10' },
-    { name: '二进制 0b101 原样显示', balance: '0b101', expected: '0b101' },
-    { name: '八进制 0o17 原样显示', balance: '0o17', expected: '0o17' },
-    { name: '非普通十进制写法同样先去前后空白', balance: '  1.5e3  ', expected: '1.5e3' },
-  ]
-
-  // 非金额的状态值必须原样显示，不受取整影响。
-  const stateCases = [
+    { name: '科学计数法同样先去前后空白，然后原样显示', credits: { has_credits: true, unlimited: false, balance: '  1.5e3  ' }, expected: '1.5e3' },
+    // 负数通不过有效值检查（检查在组件里），仍显示「可用」。
+    { name: '负数仍走「可用」', credits: { has_credits: true, unlimited: false, balance: '-1.5' }, expected: 'admin.accounts.openaiQuotaReset.pointsAvailable' },
+    // 以下是非金额的状态值，必须原样显示，不受取整影响。
     { name: 'zero', credits: { has_credits: false, unlimited: false, balance: '0' }, expected: '0' },
     { name: 'zero with a leftover fraction string', credits: { has_credits: false, unlimited: false, balance: '3.7' }, expected: '0' },
     { name: 'unlimited takes precedence', credits: { has_credits: false, unlimited: true, balance: null }, expected: 'admin.accounts.openaiQuotaReset.pointsUnlimited' },
@@ -114,14 +100,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
     { name: 'null credits', credits: null, expected: '—' },
   ]
 
-  it.each([
-    ...balanceCases.map(({ name, balance: value, expected }) => ({
-      name,
-      credits: { has_credits: true, unlimited: false, balance: value },
-      expected,
-    })),
-    ...stateCases,
-  ])('queries and displays $name independently of reset cards', async ({ credits, expected }) => {
+  it.each(displayCases)('queries and displays $name independently of reset cards', async ({ credits, expected }) => {
     vi.mocked(refreshOpenAIQuota).mockResolvedValue({
       credits, fetched_at: 1770000000, cache_persisted: false, credits_cache_persisted: true,
     })
@@ -137,14 +116,7 @@ describe('OpenAIQuotaResetCell — Codex 点数', () => {
   })
 
   // 缓存回显：从账号 extra 里的快照直接水合，不发上游请求；显示规则必须与实时查询一致。
-  it.each([
-    ...balanceCases.map(({ name, balance: value, expected }) => ({
-      name,
-      credits: { has_credits: true, unlimited: false, balance: value },
-      expected,
-    })),
-    ...stateCases.filter((item) => item.credits != null),
-  ])('rehydrates and displays $name from the cached snapshot', ({ credits, expected }) => {
+  it.each(displayCases.filter((item) => item.credits != null))('rehydrates and displays $name from the cached snapshot', ({ credits, expected }) => {
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account: makeAccount({
       extra: { codex_credits_snapshot: { credits: credits as typeof balance, fetched_at: 1770000000 } },
     }) } })
