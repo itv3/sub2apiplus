@@ -253,8 +253,8 @@ _TURN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 INPUT_PASSTHROUGH_SUMMARY_LIMIT = 16
 
 
-def _turn_metadata_turn_id(client_metadata) -> str | None:
-    """client_metadata["x-codex-turn-metadata"]（一行 JSON 对象字符串）里的 turn_id；取不到返回 None。"""
+def _turn_metadata_object(client_metadata) -> dict | None:
+    """client_metadata["x-codex-turn-metadata"]（一行 JSON 对象字符串）解析成的对象；不是对象或取不到返回 None。"""
 
     if not isinstance(client_metadata, dict):
         return None
@@ -265,8 +265,34 @@ def _turn_metadata_turn_id(client_metadata) -> str | None:
         parsed = json.loads(raw)
     except ValueError:
         return None
-    turn_id = parsed.get("turn_id") if isinstance(parsed, dict) else None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _turn_metadata_turn_id(client_metadata) -> str | None:
+    """client_metadata["x-codex-turn-metadata"]（一行 JSON 对象字符串）里的 turn_id；取不到返回 None。"""
+
+    parsed = _turn_metadata_object(client_metadata)
+    turn_id = parsed.get("turn_id") if parsed is not None else None
     return turn_id if isinstance(turn_id, str) and turn_id else None
+
+
+# 回合元数据里的线程来源（0.165.0 登记新增，登记窗口内改受管摘要器）。官方 TUI 每个会话另开一条标题线程（独立 WS 连接、独立预热、
+# 一个业务帧），它的 turn metadata 里 thread_source 是 ``thread_title``，主线程是 ``user``；判据要按线程区分两者，否则标题线程的
+# 连接和预热帧会被算进主线程。但 client_metadata 里的头值整条只记长度（里面有会话、线程、回合标识），所以只把这一个枚举取值摘出来：
+# 非这两个取值的一律记成 ``other``（不记原文）。不含任何标识，也不含对话内容。
+THREAD_SOURCES = ("user", "thread_title")
+
+
+def turn_metadata_summary(client_metadata) -> dict | None:
+    """``client_metadata`` 里 turn metadata 的枚举摘要 ``{"thread_source": "user"|"thread_title"|"other"}``；没有可解析的 turn metadata 返回 None。"""
+
+    parsed = _turn_metadata_object(client_metadata)
+    if parsed is None:
+        return None
+    source = parsed.get("thread_source")
+    if not isinstance(source, str):
+        return None
+    return {"thread_source": source if source in THREAD_SOURCES else "other"}
 
 
 def input_passthrough_summary(items, client_metadata) -> dict | None:
@@ -324,12 +350,16 @@ def input_passthrough_summary(items, client_metadata) -> dict | None:
 
 
 def shape_top_level(parsed: dict) -> dict:
-    """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head`` 与逐项 passthrough 整体形态 ``_passthrough``。
+    """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head`` 与逐项 passthrough 整体形态 ``_passthrough``，
+    带 turn metadata 的另附线程来源枚举 ``_turn_metadata``。
 
     summarize_body、WS 帧解析和 mitm 派生三处共用，保证三条路径对同一份请求体给出同构摘要。
     """
 
     shape = {k: shape_value(v) for k, v in parsed.items()}
+    turn_metadata = turn_metadata_summary(parsed.get("client_metadata"))
+    if turn_metadata is not None:
+        shape["_turn_metadata"] = turn_metadata
     items = parsed.get("input")
     if isinstance(items, list) and isinstance(shape.get("input"), dict):
         head = input_head_summary(items)

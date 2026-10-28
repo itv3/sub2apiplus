@@ -1113,13 +1113,177 @@
               "A06"
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.shape.previous_response_id"
+          },
+          "description": "官方换模型／压缩后新窗口／目录不支持 update 的模型改推理强度时的整段重放帧不带 previous_response_id（按帧标签 frame_role=replay 选帧；该标签由引擎按“相对前一业务帧换了模型、请求级 effort 变了或前一帧是压缩请求”派生，不看 previous_response_id 本身）",
+          "id": "replay-frame-no-previous-response-id",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "replay"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.shape.generate"
+          },
+          "description": "整段重放帧不带 generate（generate=false 只用于会话开头的预热帧）",
+          "id": "replay-frame-no-generate",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "replay"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._first.type",
+            "value": "str:additional_tools"
+          },
+          "description": "整段重放帧携带完整历史：Lite 模型的 additional_tools 前缀项随历史重放，仍排在 input 最前",
+          "id": "replay-frame-carries-full-history",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "replay"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_equal",
+            "value": 3
+          },
+          "description": "整段重放不补预热：A20、A21、A22 各只有会话开头那一个 generate=false 的主线程预热帧，其后任何时刻都不再出现（标题线程另有自己的连接与预热，按线程角色排除）",
+          "id": "replay-no-second-warmup",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.generate",
+                "value": "bool:false"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_equal",
+            "value": 3
+          },
+          "description": "整段重放不重连：A20、A21、A22 各只有一次主线程 WS 握手（重放帧与此前的预热、业务帧在同一条连接上）",
+          "id": "replay-same-connection",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              }
+            ]
+          }
         }
       ],
       "description": "response.create 字段遵循固定槽位和条件省略",
       "rule_id": "SPEC-WS-005",
       "scenario_ids": [
         "A05",
-        "A06"
+        "A06",
+        "A20",
+        "A21",
+        "A22"
       ]
     },
     {
@@ -4939,6 +5103,47 @@
       ],
       "scenario_id": "A15",
       "trigger": "依次由 Codex 0.165.0 exec 与 PTY TUI 触发两次启动 models，再等待同一 TUI 进程 initialize 后发出带 codex-tui suffix 的真实插件 GET"
+    },
+    {
+      "description": "WS 中途换模型：换模型后的第一帧是同一连接上的整段重放（无 previous_response_id、无 generate、不重新握手、不补预热），握手头保持建连时的旧值",
+      "preconditions": [
+        "两个模型都在模型目录里且声明 supports_reasoning_effort_updates=true，换模型的第二个模型须与主线模型不同",
+        "TUI 带 --no-daemon，设置动作发生在回合之间",
+        "判据按线程区分主线程与标题线程，重放帧由换模型认出"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "scenario_id": "A20",
+      "trigger": "官方 TUI 同一会话主线模型 → 目录里同样支持 update 的 Lite 专项模型 → 换回，每次换模型后各发一轮；握手头 x-codex-routing-hint 仍是首个模型，新模型只出现在每帧 client_metadata 的 turn metadata 里"
+    },
+    {
+      "description": "WS 压缩后续聊：压缩请求本身是增量帧（previous_response_id 加单项 compaction_trigger），压缩完成后的下一轮是同一连接上的整段重放，窗口号由 :0 变 :1，再下一轮恢复增量",
+      "preconditions": [
+        "模型目录声明 supports_reasoning_effort_updates=true（主线模型），采集账号 config.toml 的 model_reasoning_effort=low",
+        "压缩由用户命令触发（证据中的压缩原因必须是 user_requested），压缩与每个提示词共用保持时长",
+        "真实压缩响应的内容形态以官方为准，判据只要求恰有 1 个 compaction 项且在新用户消息之前"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "scenario_id": "A21",
+      "trigger": "官方 TUI 两轮提示词（其间改一次推理强度）、/compact、再两轮（其间再改一次推理强度）；压缩后窗口内钉死的基线重建为压缩时的当前选择，压缩前的 configuration_update 随历史压缩消失"
+    },
+    {
+      "description": "目录里 supports_reasoning_effort_updates=false 的模型改推理强度：不产生 configuration_update，请求级 reasoning.effort 直接变，客户端在同一连接发全量帧",
+      "preconditions": [
+        "模型目录里该模型的 supports_reasoning_effort_updates=false，且采集账号可用",
+        "TUI 带 --no-daemon，设置动作发生在回合之间"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "scenario_id": "A22",
+      "trigger": "官方 TUI 使用目录里 update=false 的模型，一轮提示词后 /model --reasoning=high，再一轮提示词；第二业务帧的请求级 effort 跟随用户，无 previous_response_id，同连接"
     }
   ],
   "schema_version": "codex-candidate-rule-expectations/v1",

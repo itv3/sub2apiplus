@@ -1,7 +1,17 @@
 {
-  "schema_version": "codex-upgrade-profile-rule-patches/v1",
+  "schema_version": "codex-upgrade-profile-rule-patches/v2",
   "baseline_version": "0.164.0",
   "target_version": "0.165.0",
   "active_profile_sha256": "cc524283fabd55058eec1b4d36c46c63f7e17b4f287a36e2a43cfddb0ea702c1",
-  "rule_patches": []
+  "rule_patches": [
+    {
+      "rule_ids": [
+        "SPEC-WS-005"
+      ],
+      "op": "add",
+      "path": "/WebSocketContinuation/ReplayOnSameConnection",
+      "before": null,
+      "after": true
+    }
+  ]
 }

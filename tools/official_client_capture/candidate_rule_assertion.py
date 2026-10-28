@@ -1024,6 +1024,82 @@ def _pcap_observations(
     return observations
 
 
+# ---------------------------------------------------------------------------
+# 连接级派生标签：线程角色与整段重放帧（0.165.0 登记新增，落在受管断言引擎里）
+# ---------------------------------------------------------------------------
+# 官方 TUI 每个会话在主线程之外另开一条标题线程（独立 WS 连接、独立预热、一个业务帧），换模型、压缩之后官方还会在同一连接上
+# 整段重放历史。判据要按线程区分两者、并只看重放帧，但这两件事都不是原始字节里的标签：线程来源在 turn metadata 里（摘要器只摘出
+# 枚举取值 ``shape._turn_metadata.thread_source``），重放帧要靠与前一业务帧的比较才能认出。所以由引擎在载入一条 WS 连接的观测时派生：
+#   * ``thread_role``：连接里第一个带 ``_turn_metadata.thread_source`` 的帧决定整条连接——``user``→main，``thread_title``→title，
+#     其它→other；叠加到这条连接的握手 http_request 与全部 websocket_frame；没有任何 turn metadata 的连接不打这个标签。
+#   * ``frame_role=replay``：主线程里“前一个业务帧触发了非增量原因”之后的业务帧——相对前一业务帧换了模型、请求级 reasoning.effort 变了，
+#     或前一业务帧是压缩请求（input 含 compaction_trigger）。这些正是官方客户端无法续链、必须整段重放的原因（客户端 NonIncrementalReason）。
+#     选择条件**只看触发原因，不看被判据验证的属性**（previous_response_id、generate、连接是否复用）：否则“重放帧不带 previous_response_id”
+#     这类判据就成了同义反复。预热帧（generate=false）不算业务帧。已由 frame_labels 声明过 frame_role 的帧保持声明值，不被覆盖。
+THREAD_ROLE_LABEL = "thread_role"
+THREAD_ROLE_BY_SOURCE = {"user": "main", "thread_title": "title"}
+FRAME_ROLE_REPLAY = "replay"
+
+
+def _frame_shape(frame: Mapping[str, Any]) -> Mapping[str, Any]:
+    shape = frame.get("shape")
+    return shape if isinstance(shape, Mapping) else {}
+
+
+def derive_connection_roles(
+    frames: Sequence[Mapping[str, Any]],
+) -> tuple[str | None, set[int]]:
+    """由一条 WS 连接的全部帧事实（按出现顺序，含 frame_index、opcode、起始帧的 event_type 与 shape）派生 (线程角色, 整段重放帧序号集合)。"""
+
+    thread_role: str | None = None
+    for frame in frames:
+        turn_metadata = _frame_shape(frame).get("_turn_metadata")
+        source = turn_metadata.get("thread_source") if isinstance(turn_metadata, Mapping) else None
+        if isinstance(source, str):
+            thread_role = THREAD_ROLE_BY_SOURCE.get(source, "other")
+            break
+    replay: set[int] = set()
+    if thread_role != "main":
+        return thread_role, replay
+    previous: tuple[Any, Any, bool] | None = None
+    for frame in frames:
+        index = frame.get("frame_index")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or frame.get("opcode") not in WS_DATA_MESSAGE_OPCODES
+            or frame.get("event_type") != "response.create"
+        ):
+            continue
+        shape = _frame_shape(frame)
+        if shape.get("generate") == "bool:false":
+            continue
+        reasoning = shape.get("reasoning")
+        effort = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+        input_shape = shape.get("input")
+        types = input_shape.get("_types") if isinstance(input_shape, Mapping) else None
+        current = (shape.get("model"), effort, isinstance(types, list) and "compaction_trigger" in types)
+        if previous is not None and (current[0] != previous[0] or current[1] != previous[1] or previous[2]):
+            replay.add(index)
+        previous = current
+    return thread_role, replay
+
+
+def _with_connection_roles(
+    observation: Observation, thread_role: str | None, replay: set[int], frame_index: int | None
+) -> Observation:
+    """把派生的线程角色（握手 http_request 与帧）和重放帧标记叠加到观测的标签上；已声明的标签保持原值。"""
+
+    labels = dict(observation.labels)
+    if thread_role is not None and THREAD_ROLE_LABEL not in labels:
+        labels[THREAD_ROLE_LABEL] = thread_role
+    if frame_index is not None and frame_index in replay and "frame_role" not in labels:
+        labels["frame_role"] = FRAME_ROLE_REPLAY
+    if labels == dict(observation.labels):
+        return observation
+    return dataclasses.replace(observation, labels=labels)
+
+
 def _h1_observations(
     path: Path,
     artifact_path: str,
@@ -1076,6 +1152,8 @@ def _h1_observations(
             )
 
     parsed_frames: list[dict[str, Any]] = []
+    thread_role: str | None = None
+    replay_frames: set[int] = set()
     if requests and any(
         name.lower() == "upgrade"
         for name in requests[0].get("header_names_in_order", [])
@@ -1092,10 +1170,18 @@ def _h1_observations(
                 ],
                 artifact_path,
             )
+            # 线程角色与整段重放帧由引擎从这条连接的帧事实派生（见 derive_connection_roles）。
+            thread_role, replay_frames = derive_connection_roles(
+                [{**frame, "frame_index": position} for position, frame in enumerate(parsed_frames)]
+            )
             for frame_index, frame in enumerate(parsed_frames):
                 # 帧级标签只叠加到派生事实；原始 relay 字节始终保持只读。
                 observation_labels = dict(labels)
                 observation_labels.update(labels_by_frame.get(frame_index, {}))
+                if thread_role is not None and THREAD_ROLE_LABEL not in observation_labels:
+                    observation_labels[THREAD_ROLE_LABEL] = thread_role
+                if frame_index in replay_frames and "frame_role" not in observation_labels:
+                    observation_labels["frame_role"] = FRAME_ROLE_REPLAY
                 for scenario_id in scenario_ids:
                     observations.append(
                         Observation(
@@ -1117,6 +1203,14 @@ def _h1_observations(
     if frame_labels and not parsed_frames:
         # 没有 WebSocket 帧（不是升级请求）却声明了帧级标签：与逐帧引用不存在的帧同义。
         resolve_frame_label_selectors(frame_labels, [], artifact_path)
+    if thread_role is not None:
+        # 握手请求属于同一条连接：线程角色也叠加到升级请求的 http_request 观测上。
+        observations = [
+            _with_connection_roles(item, thread_role, set(), None)
+            if item.record_type == "http_request" and item.data.get("wire_protocol") == "websocket"
+            else item
+            for item in observations
+        ]
     return observations
 
 
@@ -1238,11 +1332,19 @@ def _trace_observations(
         )
     # 选择键（原始帧序号／消息序号／事件类型序号）落到具体帧；没命中任何帧即失败关闭。
     labels_by_frame = resolve_frame_label_selectors(frame_labels, frame_facts, artifact_path)
+    # 线程角色与整段重放帧由引擎从这条连接的帧事实派生（见 derive_connection_roles）；声明过的帧标签优先。
+    thread_role, replay_frames = derive_connection_roles(frame_facts)
     for observation, frame_index in pending:
         if frame_index is not None and frame_index in labels_by_frame:
             observation = dataclasses.replace(
                 observation, labels={**observation.labels, **labels_by_frame[frame_index]}
             )
+        if observation.record_type == "websocket_frame" or (
+            observation.record_type == "http_request"
+            and isinstance(observation.data, Mapping)
+            and observation.data.get("wire_protocol") == "websocket"
+        ):
+            observation = _with_connection_roles(observation, thread_role, replay_frames, frame_index)
         observations.append(observation)
     if not observations:
         raise AssertionConfigurationError(f"结构化 trace 为空：{artifact_path}")

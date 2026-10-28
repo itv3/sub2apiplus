@@ -849,6 +849,39 @@ class InputPassthroughSummaryTests(unittest.TestCase):
             self.assertNotIn("_passthrough", json.dumps(relay_extract.shape_top_level(empty)))
 
 
+class TurnMetadataSummaryTests(unittest.TestCase):
+    """relay_extract 给带 turn metadata 的请求体附的线程来源枚举 ``_turn_metadata``（0.165.0 登记新增）：只记枚举，不记任何标识。"""
+
+    @staticmethod
+    def body(source) -> dict:
+        metadata = {"session_id": "11111111-1111-7111-8111-111111111111", "turn_id": "22222222-2222-7222-8222-222222222222"}
+        if source is not None:
+            metadata["thread_source"] = source
+        return {"type": "response.create", "client_metadata": {"x-codex-turn-metadata": json.dumps(metadata)}}
+
+    def test_user_title_and_other_sources(self) -> None:
+        for source, expected in (("user", "user"), ("thread_title", "thread_title"), ("subagent", "other"), ("", "other")):
+            with self.subTest(source=source):
+                shape = relay_extract.shape_top_level(self.body(source))
+                self.assertEqual(shape["_turn_metadata"], {"thread_source": expected})
+
+    def test_summary_carries_no_identifiers_or_raw_values(self) -> None:
+        serialized = json.dumps(relay_extract.shape_top_level(self.body("a-very-long-private-source-name")))
+        self.assertIn('"thread_source": "other"', serialized)
+        for secret in ("11111111-1111", "22222222-2222", "private-source"):
+            self.assertNotIn(secret, serialized)
+
+    def test_absent_without_a_parseable_turn_metadata_source(self) -> None:
+        self.assertNotIn("_turn_metadata", relay_extract.shape_top_level({"type": "response.create"}))
+        self.assertNotIn("_turn_metadata", relay_extract.shape_top_level(self.body(None)))
+        self.assertNotIn("_turn_metadata", relay_extract.shape_top_level({"client_metadata": {"x-codex-turn-metadata": "not json"}}))
+        # 三条摘要路径（summarize_body、WS 帧、mitm 派生）共用 shape_top_level，同一份请求体给出同构摘要。
+        raw = json.dumps(self.body("user")).encode("utf-8")
+        self.assertEqual(
+            relay_extract.summarize_body(raw, "", "application/json")["shape"]["_turn_metadata"], {"thread_source": "user"}
+        )
+
+
 class MainTrackLiteExpectation0164Tests(MainTrackLiteExpectationTests):
     """0.164.0 候选期望清单（由 0.163.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
 
@@ -870,6 +903,27 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
 
     MANIFEST_SUFFIX = "0_165_0"
 
+    # 0.165.0 清单相对上一版的全部差异登记在这里；调研结论每落一类，就在这里加一类，审计测试逐项核对，多出或缺少都红。
+    DESCRIPTION_ONLY_0165 = [
+        ("SPEC-EP-002", "oauth-refresh-body-keys"),
+        ("SPEC-EP-022", "image-header-order"),
+        ("SPEC-WS-005", "first-business-frame-carries-prefix"),
+        ("SPEC-WS-005", "warmup-input-empty"),
+    ]
+    # 规则新增的检查（追加在原检查之后，按此顺序）。
+    ADDED_CHECKS_0165 = {
+        "SPEC-WS-005": [
+            "replay-frame-no-previous-response-id",
+            "replay-frame-no-generate",
+            "replay-frame-carries-full-history",
+            "replay-no-second-warmup",
+            "replay-same-connection",
+        ],
+    }
+    # 规则的 scenario_ids 变化（旧值必须是新值的前缀）。
+    SCENARIO_IDS_0165 = {"SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"]}
+    ADDED_SCENARIOS_0165 = ["A20", "A21", "A22"]
+
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
         raw = (TOOL_ROOT / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8")
         # 目标断言画像里不得出现 baseline 版本字面量。
@@ -877,34 +931,143 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         self.assertNotIn(r"0\\.164\\.0", raw)
         reverted = json.loads(raw.replace("0.165.0", "0.164.0").replace(r"0\\.165\\.0", r"0\\.164\\.0"))
         old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8"))
-        self.assertEqual({k: v for k, v in reverted.items() if k != "rules"}, {k: v for k, v in old.items() if k != "rules"})
-        self.assertEqual(len(reverted["rules"]), len(old["rules"]))
-        differences = []
+        self.assertEqual(
+            {k: v for k, v in reverted.items() if k not in {"rules", "scenarios"}},
+            {k: v for k, v in old.items() if k not in {"rules", "scenarios"}},
+        )
+        # 场景列表：上一版的场景逐字不变，另加登记的新场景。
+        self.assertEqual([s for s in reverted["scenarios"] if s["scenario_id"] in {o["scenario_id"] for o in old["scenarios"]}], old["scenarios"])
+        self.assertEqual(
+            [s["scenario_id"] for s in reverted["scenarios"] if s["scenario_id"] not in {o["scenario_id"] for o in old["scenarios"]}],
+            self.ADDED_SCENARIOS_0165,
+        )
+        self.assertEqual([r["rule_id"] for r in reverted["rules"]], [r["rule_id"] for r in old["rules"]])
+        description_only = []
         for new_rule, old_rule in zip(reverted["rules"], old["rules"]):
-            self.assertEqual(new_rule["rule_id"], old_rule["rule_id"])
-            self.assertEqual(
-                {k: v for k, v in new_rule.items() if k != "checks"}, {k: v for k, v in old_rule.items() if k != "checks"},
-                new_rule["rule_id"],
-            )
-            self.assertEqual([c["id"] for c in new_rule["checks"]], [c["id"] for c in old_rule["checks"]], new_rule["rule_id"])
+            rule_id = new_rule["rule_id"]
+            changed_keys = {k for k in set(new_rule) | set(old_rule) if k != "checks" and new_rule.get(k) != old_rule.get(k)}
+            if rule_id in self.SCENARIO_IDS_0165:
+                self.assertEqual(changed_keys, {"scenario_ids"}, rule_id)
+                self.assertEqual(new_rule["scenario_ids"], self.SCENARIO_IDS_0165[rule_id])
+                self.assertEqual(new_rule["scenario_ids"][: len(old_rule["scenario_ids"])], old_rule["scenario_ids"])
+            else:
+                self.assertEqual(changed_keys, set(), rule_id)
+            old_ids = [c["id"] for c in old_rule["checks"]]
+            added = self.ADDED_CHECKS_0165.get(rule_id, [])
+            self.assertEqual([c["id"] for c in new_rule["checks"]], old_ids + added, rule_id)
             for new_check, old_check in zip(new_rule["checks"], old_rule["checks"]):
                 if new_check != old_check:
                     keys = sorted(k for k in set(new_check) | set(old_check) if new_check.get(k) != old_check.get(k))
-                    differences.append((new_rule["rule_id"], new_check["id"], tuple(keys)))
-        self.assertEqual(
-            sorted(differences),
-            [
-                ("SPEC-EP-002", "oauth-refresh-body-keys", ("description",)),
-                ("SPEC-EP-022", "image-header-order", ("description",)),
-                ("SPEC-WS-005", "first-business-frame-carries-prefix", ("description",)),
-                ("SPEC-WS-005", "warmup-input-empty", ("description",)),
-            ],
-        )
+                    self.assertEqual(keys, ["description"], (rule_id, new_check["id"]))
+                    description_only.append((rule_id, new_check["id"]))
+        self.assertEqual(sorted(description_only), sorted(self.DESCRIPTION_ONLY_0165))
         # SIM-06 在两份清单里都已对齐批准画像 b2：BODY-003 main-messages-keep-passthrough 期望 1。
         for document in (old, reverted):
             body003 = next(rule for rule in document["rules"] if rule["rule_id"] == "SPEC-BODY-003")
             check = next(item for item in body003["checks"] if item["id"] == "main-messages-keep-passthrough")
             self.assertEqual(check["assertion"]["value"], 1)
+
+    # ---- W3：WS 整段重放不重连（SPEC-WS-005，A20～A22；线程角色与重放帧标签由引擎派生，这里手造带标签的观测跑正反例） ----
+
+    @staticmethod
+    def replay_observation(scenario, role, shape, *, connection=1, index=0, thread="main"):
+        return candidate_rule_assertion.Observation(
+            record_id=f"{scenario}-{role}-{index}",
+            scenario_id=scenario,
+            record_type="websocket_frame",
+            artifact_path=f"relay/conn00{connection}.client_to_upstream.bin",
+            evidence_paths=(f"relay/conn00{connection}.client_to_upstream.bin",),
+            labels={"frame_role": role, "thread_role": thread},
+            data={"event_type": "response.create", "connection_id": connection, "frame_index": index, "shape": shape},
+        )
+
+    @staticmethod
+    def replay_handshake(scenario, index=0, thread="main"):
+        return candidate_rule_assertion.Observation(
+            record_id=f"{scenario}-hs-{index}",
+            scenario_id=scenario,
+            record_type="http_request",
+            artifact_path=f"relay/conn00{index + 1}.client_to_upstream.bin",
+            evidence_paths=(f"relay/conn00{index + 1}.client_to_upstream.bin",),
+            labels={"thread_role": thread},
+            data={"wire_protocol": "websocket", "method": "GET"},
+        )
+
+    GOOD_REPLAY = {"type": "str:response.create", "input": {"_first": {"type": "str:additional_tools"}}}
+    WARMUP = {"type": "str:response.create", "generate": "bool:false", "input": "array:<len=0>"}
+    REPLAY_SCENARIOS = ("A20", "A21", "A22")
+
+    def good_replay_observations(self):
+        observations = []
+        for scenario in self.REPLAY_SCENARIOS:
+            observations += [
+                self.replay_observation(scenario, "warmup", self.WARMUP, index=0),
+                self.replay_observation(scenario, "replay", self.GOOD_REPLAY, index=3),
+                self.replay_handshake(scenario),
+                # 标题线程：独立连接、独立预热、预热后的业务帧；主线程判据不得把它算进去。
+                self.replay_observation(scenario, "warmup", self.WARMUP, connection=2, index=0, thread="title"),
+                self.replay_observation(
+                    scenario, "replay", {"type": "str:response.create", "previous_response_id": "str:x"},
+                    connection=2, index=1, thread="title"),
+                self.replay_handshake(scenario, 1, thread="title"),
+            ]
+        return observations
+
+    def test_replay_checks_are_registered_for_the_three_replay_scenarios(self) -> None:
+        rule = next(item for item in self.profile["rules"] if item["rule_id"] == "SPEC-WS-005")
+        self.assertEqual(rule["scenario_ids"], ["A05", "A06", "A20", "A21", "A22"])
+        ids = [check["id"] for check in rule["checks"]]
+        self.assertEqual(ids[-5:], self.ADDED_CHECKS_0165["SPEC-WS-005"])
+        profile_scenarios = {item["scenario_id"]: item for item in self.profile["scenarios"]}
+        for scenario_id in self.REPLAY_SCENARIOS:
+            self.assertEqual(profile_scenarios[scenario_id]["required_artifact_kinds"], ["relay_binary", "websocket_trace"])
+        payload = acceptance_contract.build_contract_payload(self.profile)
+        self.assertEqual(payload["validation_modes"]["SPEC-WS-005"], "candidate_profile")
+        self.assertEqual(payload["rule_counts"], {"dual_wire": 25, "candidate_profile": 18})
+
+    def test_replay_checks_pass_on_official_shaped_replay_and_ignore_the_title_thread(self) -> None:
+        observations = self.good_replay_observations()
+        for check_id in self.ADDED_CHECKS_0165["SPEC-WS-005"]:
+            with self.subTest(check_id=check_id):
+                rule, check = self.check("SPEC-WS-005", check_id)
+                matched = candidate_rule_assertion._select_observations(observations, check["select"], rule["scenario_ids"])
+                passed, _ = candidate_rule_assertion._evaluate_assertion(matched, check["assertion"])
+                self.assertTrue(passed)
+
+    def run_replay_check(self, check_id, observations) -> bool:
+        rule, check = self.check("SPEC-WS-005", check_id)
+        matched = candidate_rule_assertion._select_observations(observations, check["select"], rule["scenario_ids"])
+        return candidate_rule_assertion._evaluate_assertion(matched, check["assertion"])[0]
+
+    def test_replay_checks_reject_the_old_gateway_behaviour_and_fail_closed(self) -> None:
+        scenarios = self.REPLAY_SCENARIOS
+        # 旧做法：重放帧被网关链了预热响应（带 previous_response_id）。
+        chained = {**self.GOOD_REPLAY, "previous_response_id": "str:<present>"}
+        bad = [self.replay_observation(s, "replay", chained, index=3) for s in scenarios]
+        self.assertFalse(self.run_replay_check("replay-frame-no-previous-response-id", bad))
+        # 重放帧带 generate。
+        bad = [self.replay_observation(s, "replay", {**self.GOOD_REPLAY, "generate": "bool:false"}, index=3) for s in scenarios]
+        self.assertFalse(self.run_replay_check("replay-frame-no-generate", bad))
+        # 重放帧缺 Lite 前缀。
+        bad = [self.replay_observation(s, "replay", {"type": "str:response.create", "input": {"_first": {"type": "str:message"}}}, index=3) for s in scenarios]
+        self.assertFalse(self.run_replay_check("replay-frame-carries-full-history", bad))
+        # 网关补了第二个预热（每个场景两个 generate=false 主线程帧）。
+        bad = []
+        for s in scenarios:
+            bad += [self.replay_observation(s, "warmup", self.WARMUP, index=0), self.replay_observation(s, "warmup", self.WARMUP, index=4)]
+        self.assertFalse(self.run_replay_check("replay-no-second-warmup", bad))
+        # 重放新开了连接（每个场景两次主线程握手）。
+        bad = []
+        for s in scenarios:
+            bad += [self.replay_handshake(s, 0), self.replay_handshake(s, 1)]
+        self.assertFalse(self.run_replay_check("replay-same-connection", bad))
+        # 失败关闭：没有任何重放帧被选中（标签缺失、别的场景、只有标题线程）时不得空过。
+        for observations in (
+            [self.replay_observation("A18", "first_business", self.GOOD_REPLAY)],
+            [self.replay_observation("A06", "replay", self.GOOD_REPLAY)],
+            [self.replay_observation("A20", "replay", self.GOOD_REPLAY, thread="title")],
+        ):
+            self.assertFalse(self.run_replay_check("replay-frame-no-previous-response-id", observations))
 
 
 class CandidateA06FrameLabelsTests(unittest.TestCase):

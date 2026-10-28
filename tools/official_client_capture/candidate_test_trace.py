@@ -335,8 +335,13 @@ FROZEN_MAPPING_SHA256 = (
 #   （A04 入站是第三方形态，网关不为第三方用户消息合成逐项 passthrough，每个请求恰有 1 条 message 无 passthrough；基础指令消息被剥离会变 2、开始合成会变 0，两者都失败）。
 # 验收契约现算仍为 23412204…（dual_wire=25／candidate_profile=18）。source_spec_sha256 仍是指南第二章当前摘要，指南第二部分换到 0.165.0 后由集成步骤重绑。
 # 摘要 d721e240… 变为 566d0881…。
+# 2026-10-29（0.165.0 第二轮登记，W3 整段重放不重连）：SPEC-WS-005 的 scenario_ids 由 [A05, A06] 增为 [A05, A06, A20, A21, A22]，追加 5 条检查
+# （replay-frame-no-previous-response-id／replay-frame-no-generate／replay-frame-carries-full-history／replay-no-second-warmup／replay-same-connection，
+# 选择条件读引擎派生的 thread_role 与 frame_role=replay 标签），画像场景列表加 A20～A22。载荷审核：叶子只增不减，既有叶子逐字不变；规则数 43、
+# 验收契约分组仍 dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-WS-005 多 5 条，side_coverage.candidate 多 A20～A22。
+# 摘要 566d0881… 变为 6dec5ff5…。
 FROZEN_PROFILE_SHA256 = (
-    "566d0881d14973a9fac1e4e39ccfbfc7513be2c027d55c9f8887527dd4b03c40"
+    "6dec5ff516f2d47969c3e63df2979b98ad740c42223e66b6468f1cea43c55666"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

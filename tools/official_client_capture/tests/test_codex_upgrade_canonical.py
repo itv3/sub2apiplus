@@ -1176,9 +1176,15 @@ class CanonicalImportTests(unittest.TestCase):
                     rule,
                 )
 
+    # 0.165.0 画像补丁清单当前登记的全部补丁（op、路径、归属规则）；调研结论每落一条，这里同步加一条。
+    EXPECTED_0165_PATCHES = (
+        # W3：官方客户端换模型、压缩后新窗口、目录不支持 update 的模型改推理强度时在同一连接上整段重放；声明后网关对自管续链客户端不重连、不补预热。
+        ("add", "/WebSocketContinuation/ReplayOnSameConnection", ("SPEC-WS-005",)),
+    )
+
     def test_0165_patch_manifest_binds_real_active_profile(self) -> None:
-        """0.165.0 补丁清单绑定当前 active 的 0.164.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），补丁暂为空：
-        版本登记只做与行为差异无关的机械部分，行为差异（画像要改的字段）由上游调研结论落定后再逐条登记成补丁，那时这条测试要同步改成逐条断言。"""
+        """0.165.0 补丁清单绑定当前 active 的 0.164.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），
+        逐条登记已落定的画像变化：键控路径都是已有小节里新增一个可选字段（add），所以目标画像 = active 画像换版本号 + 这些字段。"""
 
         active_profile = (
             ROOT
@@ -1189,13 +1195,22 @@ class CanonicalImportTests(unittest.TestCase):
             ROOT / "tools/official_client_capture/profile_rule_patches_0_165_0.json"
         )
         patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(patch_payload["schema_version"], "codex-upgrade-profile-rule-patches/v2")
         self.assertEqual(patch_payload["baseline_version"], "0.164.0")
         self.assertEqual(patch_payload["target_version"], "0.165.0")
         self.assertEqual(
             patch_payload["active_profile_sha256"],
             codex_upgrade.file_sha256(active_profile),
         )
-        self.assertEqual(patch_payload["rule_patches"], [])
+        patches = patch_payload["rule_patches"]
+        # 传输画像：补丁清单里不得有传输字段的变化。
+        for patch in patches:
+            self.assertFalse(patch["path"].startswith("/Transports"), patch["path"])
+        self.assertEqual(
+            sorted((patch["op"], patch["path"], tuple(patch["rule_ids"])) for patch in patches),
+            sorted(self.EXPECTED_0165_PATCHES),
+        )
+        affected = sorted({rule for patch in patches for rule in patch["rule_ids"]})
 
         with tempfile.TemporaryDirectory() as directory:
             fixture_root = Path(directory)
@@ -1206,6 +1221,12 @@ class CanonicalImportTests(unittest.TestCase):
                 "0.164.0",
                 "0.165.0",
             )
+            # 每条补丁的路径在 active 里必须原本不存在（add 的前提），在目标里按补丁的 after 值落下。
+            for patch in patches:
+                section, key = patch["path"].lstrip("/").split("/")
+                self.assertNotIn(key, active_payload[section], patch["path"])
+                self.assertIsNone(patch["before"], patch["path"])
+                target_payload[section][key] = patch["after"]
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -1222,7 +1243,15 @@ class CanonicalImportTests(unittest.TestCase):
                             "classification": "inherit",
                             "baseline_rule": "SPEC-CODEX-IDENTITY",
                             "target_rule": "SPEC-CODEX-IDENTITY",
-                        }
+                        },
+                        *(
+                            {
+                                "classification": "change",
+                                "baseline_rule": rule,
+                                "target_rule": rule,
+                            }
+                            for rule in affected
+                        ),
                     ],
                 },
             )
@@ -1234,8 +1263,11 @@ class CanonicalImportTests(unittest.TestCase):
                 patch_manifest_path=patch_manifest,
             )
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["affected_rule_ids"], affected)
             self.assertEqual(result["live_request_count"], 0)
+            for patch in patches:
+                for rule in patch["rule_ids"]:
+                    self.assertIn(patch["path"], result["rule_field_paths"][rule])
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
