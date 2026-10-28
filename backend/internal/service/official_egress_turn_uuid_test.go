@@ -189,3 +189,53 @@ func TestGenerateOfficialStableTurnUUIDV7IsStableAndUsesOfficialLayout(t *testin
 	require.EqualValues(t, 7, parsed.Version())
 	require.Zero(t, (officialCodexRandA(parsed)>>2)&3)
 }
+
+// session、thread、window、at_／msg_ item id 等非回合 id 也必须是官方位布局（rand_a 第 2、3 位恒为 0）。
+func TestOfficialStableUUIDV7ForSessionAndItemIDsUsesOfficialLayout(t *testing.T) {
+	// 官方实采样本（各版一致）：线程／会话 id，以及 at_／msg_ item id 的 UUID 部分。
+	for _, text := range []string{
+		"01a17935-c8ae-7882-9b88-60f5c3ad6e5b",
+		"01a17935-5c98-7f51-995d-9105098f672a",
+		"01a17935-5c98-7f51-995d-9110469c51d5",
+		"01a1794c-7ff8-77a1-a7b0-c82436e27910",
+		"01a17daa-cd77-76c1-ab1e-58fd8f1e9d95",
+	} {
+		parsed, err := uuid.Parse(text)
+		require.NoError(t, err)
+		require.Zero(t, (officialCodexRandA(parsed)>>2)&3, text)
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 3000; i++ {
+		key := newOfficialUUIDV7Seed(officialUUIDV7DomainSession).WriteInt(i).Key()
+		text := generateOfficialStableUUIDV7(key)
+		require.Equal(t, text, generateOfficialStableUUIDV7(key), "同一个键必须稳定")
+		parsed, err := uuid.Parse(text)
+		require.NoError(t, err)
+		require.EqualValues(t, 7, parsed.Version())
+		require.Equal(t, uuid.RFC4122, parsed.Variant())
+		require.Zero(t, (officialCodexRandA(parsed)>>2)&3, "id=%s", text)
+		require.False(t, seen[text])
+		seen[text] = true
+	}
+}
+
+// 派生出的 HTTP 身份里 session／thread／turn 都满足官方布局，且共用同一个单调上下文：先生成的 id 字典序不大于后生成的。
+func TestDerivedHTTPIdentityIDsUseOfficialLayout(t *testing.T) {
+	account := newOfficialOpenAIHTTPTestAccount(94777)
+	body := []byte(`{"model":"gpt-5.4","input":"official-layout-94777"}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	identity, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, contract, officialClientProfileModeActive)
+	require.NoError(t, err)
+	for _, text := range []string{identity.sessionID, identity.turnID} {
+		parsed, parseErr := uuid.Parse(text)
+		require.NoError(t, parseErr)
+		require.EqualValues(t, 7, parsed.Version())
+		require.Zero(t, (officialCodexRandA(parsed)>>2)&3, text)
+	}
+	sessionID, err := uuid.Parse(identity.sessionID)
+	require.NoError(t, err)
+	turnID, err := uuid.Parse(identity.turnID)
+	require.NoError(t, err)
+	require.LessOrEqual(t, officialCodexEmbeddedMs(sessionID), officialCodexEmbeddedMs(turnID), "会话 id 不晚于它的第一个回合 id")
+}

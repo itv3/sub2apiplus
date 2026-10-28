@@ -290,12 +290,16 @@ func (c *officialUUIDV7LRUCache) stats() officialUUIDV7CacheStats {
 	}
 }
 
+// newOfficialUUIDV7 生成 session、thread、item id 等非回合 id。位布局与官方 Uuid::now_v7() 逐位一致
+// （见文件末尾“官方 Codex 回合 id”一节），与回合 id 共用同一个单调上下文——官方进程内所有 UUIDv7 也共用一个。
+// 内嵌毫秒回拨 officialCodexIDLeadMs：官方的会话（线程）id 总比它的第一个回合 id 早几十毫秒生成
+// （实采差 26～46 毫秒），回拨后新会话里“会话 id 不晚于回合 id”的先后关系与官方一致，也避免回合 id
+// 因共用单调上下文被拉到与会话 id 同一毫秒、使回合开始时间晚于生成时刻。
+// 以前用 google/uuid 的 NewV7，rand_a 是亚毫秒时间，第 2、3 位为 0 的只有 25%，官方恒为 100%。
+// 各版本画像无需门控：本地各版官方实采（含当前与上一版）里的 UUIDv7 全部满足同一布局，且这些 id 本来就是
+// 记录时随机的值，不存在按固定字节重放的封存证据。
 func newOfficialUUIDV7() string {
-	value, err := uuid.NewV7()
-	if err != nil {
-		value = uuid.New()
-	}
-	return value.String()
+	return officialCodexTurnUUIDContext.generate(officialCodexTurnClock().UnixMilli() - officialCodexIDLeadMs)
 }
 
 var officialUUIDV7Cache = newOfficialUUIDV7LRUCache(
@@ -341,6 +345,9 @@ const (
 	// officialCodexTurnSubmitLeadMs 是 turn_id 内嵌毫秒相对生成时刻的回拨量，等于实采差值的最大值，
 	// 保证“内嵌毫秒 + 抽样差值”不晚于生成时刻。
 	officialCodexTurnSubmitLeadMs = 4
+
+	// officialCodexIDLeadMs 是会话、线程、item id 内嵌毫秒相对生成时刻的回拨量，须大于回合 id 的回拨量。
+	officialCodexIDLeadMs = 50
 
 	// Rust uuid 库的计数器常量：42 位计数器，重置时取 41 位随机数（最高位留空，防止同毫秒内溢出）。
 	officialCodexUUIDV7ReseedMask  = uint64(1)<<41 - 1
