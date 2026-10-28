@@ -64,6 +64,39 @@ type officialOpenAIWSDerivedState struct {
 	// 载体节时使用：续链帧上重复的同一段正文据此丢弃，换了一段才追加（见 applyOfficialCodexWSBaseInstructions）。
 	baseInstructionsSent   bool
 	baseInstructionsDigest officialCodexBaseInstructionsDigest
+	// windowReasoningEffort 记住这条连接上窗口内最近一次 configuration_update 的 effort：官方客户端在 WS 上用
+	// previous_response_id 续链时只发新增项，用户之前改的 effort 不在本帧 input 里，但 turn metadata 的 reasoning_effort
+	// 仍应是用户当前选择（见 windowReasoningEffortForFrame）。
+	windowReasoningEffort string
+}
+
+// windowReasoningEffortForFrame 返回本帧 turn metadata 应记录的、来自 configuration_update 的生效 effort（ok 为假表示本帧
+// 没有这样的取值，调用方回落到请求级 effort 与模型默认值），并更新连接上记住的取值：
+//   - 帧的 input 里有 configuration_update：取最后一条并记住；
+//   - 没有、帧带 previous_response_id（增量续链）且之前记住过：沿用；
+//   - 其余（首帧、预热帧、换模型或压缩后的整段重放）：新的基线，清掉记录。
+func (s *officialOpenAIWSDerivedState) windowReasoningEffortForFrame(payload map[string]any) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	// 预热帧（generate=false）不属于某一轮：网关为整段重放补预热时会在链帧之前建一帧，它不能清掉窗口记录。
+	if generate, present := payload["generate"].(bool); present && !generate {
+		return "", false
+	}
+	update, hasUpdate := lastConfigurationUpdateEffortFromReqBody(payload)
+	incremental := strings.TrimSpace(officialOpenAIString(payload, "previous_response_id")) != ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case hasUpdate:
+		s.windowReasoningEffort = update
+		return update, true
+	case incremental && s.windowReasoningEffort != "":
+		return s.windowReasoningEffort, true
+	default:
+		s.windowReasoningEffort = ""
+		return "", false
+	}
 }
 
 // setFullHistoryFallback 记录本轮是否按“断线后重发的完整历史”开新链。
@@ -1639,8 +1672,12 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(
 			// 官方 additional_tools（AdditionalTools{id, role, tools}）、compaction_trigger、configuration_update 这几种项没有
 			// internal_chat_message_metadata_passthrough 字段，补 turn_id 会让它们多出官方不会发的成员。画像声明 uuidv7 方案的
 			// 版本才修正；旧画像保持原行为。
-			if baseInstructions.UsesUUIDv7IDs() &&
-				officialCodexItemTypeHasNoTurnMetadata(strings.TrimSpace(officialOpenAIString(item, "type"))) {
+			// 例外是 configuration_update（较新官方客户端默认开启 reasoning_effort_override 后在会话内改 effort 时追加）：
+			// 旧版本客户端从不发这种项，没有任何历史字节需要保持，所以不论画像版本一律不补 passthrough，避免目标画像仍是
+			// 旧版本（候选期、回退）时入站的这种项被多塞一个官方不会发的成员。
+			itemType := strings.TrimSpace(officialOpenAIString(item, "type"))
+			if itemType == openAIConfigurationUpdateItemType ||
+				(baseInstructions.UsesUUIDv7IDs() && officialCodexItemTypeHasNoTurnMetadata(itemType)) {
 				continue
 			}
 			itemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]
@@ -1932,6 +1969,13 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	extension := officialCodexTurnMetadataExtension{
 		Model:           officialOpenAIString(payload, "model"),
 		ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+	}
+	// WS 增量帧的 input 只含新增项：之前帧里的 configuration_update 由连接状态带入，保证 turn metadata 记的是用户当前选择。
+	if carried, ok := egressContext.openAIWSDerived.windowReasoningEffortForFrame(payload); ok {
+		if strings.EqualFold(carried, "ultra") {
+			carried = "max"
+		}
+		extension.ReasoningEffort = carried
 	}
 	if !prewarm {
 		conditional := egressContext.codexRuntimeState.ConditionalHeaders

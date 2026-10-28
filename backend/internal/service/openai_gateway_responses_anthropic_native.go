@@ -56,6 +56,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
+	// Anthropic 上游不认识 configuration_update：把会话内改的 effort 折进请求级 effort 再转换。
+	foldConfigurationUpdateEffortIntoResponsesRequest(&responsesReq)
 	originalModel := responsesReq.Model
 	if strings.TrimSpace(originalModel) == "" {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", "model is required")

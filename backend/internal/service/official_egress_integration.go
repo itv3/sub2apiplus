@@ -270,6 +270,7 @@ func attachOfficialEgressHTTPContextWithMode(
 		DefaultReasoningSummary:           modelCapabilities.DefaultReasoningSummary,
 		SupportsReasoningSummaryParameter: modelCapabilities.SupportsReasoningSummaryParameter,
 		ReasoningDefaultsKnown:            modelCapabilities.ReasoningDefaultsKnown,
+		SupportsReasoningEffortUpdates:    modelCapabilities.SupportsReasoningEffortUpdates,
 		InvocationID:                      invocationID,
 		CodexRuntimeState:                 codexRuntimeState,
 	})

@@ -45,10 +45,12 @@ var bundledOpenAIModelCapabilities = map[string]openAIModelCapabilities{
 	"gpt-6.1-sol": {
 		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "low",
 		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+		SupportsReasoningEffortUpdates: true,
 	},
 	"gpt-6-astra": {
 		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
 		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+		SupportsReasoningEffortUpdates: true,
 	},
 	"codex-auto-review": {
 		SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
@@ -91,6 +93,10 @@ type openAIModelCapabilities struct {
 	DefaultReasoningSummary           string
 	SupportsReasoningSummaryParameter bool
 	ReasoningDefaultsKnown            bool
+	// SupportsReasoningEffortUpdates 对应模型目录的 supports_reasoning_effort_updates（serde 缺省 false）：
+	// 为真的模型，官方客户端在窗口内改 effort 时以 input 里的 configuration_update 项承载，请求级 effort 钉在窗口基线上。
+	// bundled 快照只含目标版本内置目录里为真的两个 slug（gpt-6.1-sol、gpt-6-astra），其余模型以账号清单为准。
+	SupportsReasoningEffortUpdates bool
 }
 
 type openAIModelCapabilitySnapshot struct {
@@ -127,6 +133,7 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 			DefaultReasoningLevel             *string `json:"default_reasoning_level"`
 			DefaultReasoningSummary           *string `json:"default_reasoning_summary"`
 			SupportsReasoningSummaryParameter *bool   `json:"supports_reasoning_summary_parameter"`
+			SupportsReasoningEffortUpdates    bool    `json:"supports_reasoning_effort_updates"`
 			Visibility                        string  `json:"visibility"`
 		} `json:"models"`
 	}
@@ -160,6 +167,8 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 		}
 		capability.ReasoningDefaultsKnown = true
 		capability.UseResponsesLite = model.UseResponsesLite
+		// 账号清单对同名模型拥有更高优先级：清单没写（serde 缺省 false）就是不支持，不沿用 bundled。
+		capability.SupportsReasoningEffortUpdates = model.SupportsReasoningEffortUpdates
 		if model.SupportsParallelToolCalls != nil {
 			capability.SupportsParallelToolCalls = *model.SupportsParallelToolCalls
 		}

@@ -173,7 +173,16 @@ type WebSocketContinuationSection struct {
 type ReasoningEffortSection struct {
 	// CustomNumericSerialization：自定义档位能按 u64 解析时的出站形态，目前只支持 u64_integer。
 	CustomNumericSerialization string `json:"CustomNumericSerialization"`
+	// ConfigurationUpdate：较新版本官方客户端默认开启 reasoning_effort_override 后，窗口内 effort 的变化以 input 里的
+	// configuration_update 项承载（请求级 reasoning.effort 在窗口内保持基线）。本字段声明 HTTP 出站（Responses HTTP，
+	// 对应官方不带 WS 预热的 provider）对第三方入站如何呈现这种项；缺省表示不合成（旧版本行为，也是 WS 出站的唯一取值：
+	// 有 WS 预热的路径窗口首轮不带该项）。目前只支持 http_first_turn：模型目录声明 supports_reasoning_effort_updates 的
+	// 模型，每个窗口在首个用户轮次之后带一条取值为请求 effort 的 update，之后各请求随历史在同一位置重放。
+	ConfigurationUpdate string `json:"ConfigurationUpdate,omitempty"`
 }
+
+// ReasoningEffortConfigurationUpdateHTTPFirstTurn 是 ReasoningEffortSection.ConfigurationUpdate 目前唯一的非缺省取值。
+const ReasoningEffortConfigurationUpdateHTTPFirstTurn = "http_first_turn"
 
 // ImageGenerationSection 声明 imagegen 出站的 background 取值与编辑请求的图片引用形态。
 //
@@ -469,6 +478,10 @@ func validateOptionalSection(name string, value any) error {
 	case *ReasoningEffortSection:
 		if section.CustomNumericSerialization != "u64_integer" {
 			return fmt.Errorf("CustomNumericSerialization 只支持 u64_integer，实际 %q", section.CustomNumericSerialization)
+		}
+		if section.ConfigurationUpdate != "" && section.ConfigurationUpdate != ReasoningEffortConfigurationUpdateHTTPFirstTurn {
+			return fmt.Errorf("ConfigurationUpdate 只支持 %s（缺省表示不合成），实际 %q",
+				ReasoningEffortConfigurationUpdateHTTPFirstTurn, section.ConfigurationUpdate)
 		}
 		return nil
 	case *ImageGenerationSection:

@@ -63,6 +63,8 @@ func (s *GatewayService) ForwardAsResponses(
 	if err := json.Unmarshal(adaptedBody, &responsesReq); err != nil {
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
+	// Anthropic 上游不认识 configuration_update：把会话内改的 effort 折进请求级 effort 再转换。
+	foldConfigurationUpdateEffortIntoResponsesRequest(&responsesReq)
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
 
@@ -295,8 +297,13 @@ func liftResponsesAdditionalTools(requestBody map[string]any) (bool, error) {
 
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
 // and normalizes it for usage logging.
+//
+// 生效 effort：input 里最后一条 configuration_update 优先于请求级 reasoning.effort。
 func ExtractResponsesReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
-	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	raw, ok := lastConfigurationUpdateEffort(body)
+	if !ok {
+		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	}
 	if raw == "" {
 		return nil
 	}

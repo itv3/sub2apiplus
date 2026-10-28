@@ -334,7 +334,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageInputSize           string
 		payloadBytes             int
 		requestedReasoningEffort *string
+		// reasoningEffortCarry 是本帧沿用的之前帧里的 configuration_update effort（增量续链帧才有），见 openAIWindowEffortCarrier。
+		reasoningEffortCarry string
 	}
+	// 窗口内最近一次 configuration_update 的 effort：官方客户端用 previous_response_id 续链的增量帧只含新增项，
+	// 之前帧里的 update 不在本帧 input 里。策略之前的请求 effort 与策略之后的生效 effort 各记一份；
+	// 仅在 parseClientPayload 里逐帧推进（同一连接的客户端帧由同一个 goroutine 顺序处理）。
+	var effortCarrier, requestedEffortCarrier openAIWindowEffortCarrier
+	// currentReasoningEffortCarry 是当前待发送帧沿用的 effort，随 parseClientPayload 的结果更新，sendAndRelay 生成用量结果时读取。
+	currentReasoningEffortCarry := ""
 	ingressSessionOriginalModel := ""
 	bridgeSessionSelected := false
 
@@ -398,12 +406,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		requestedReasoningEffort := CanonicalRequestedReasoningEffort(normalized, strings.TrimSpace(values[1].String()))
+		requestedCarry := requestedEffortCarrier.advance(normalized)
+		requestedReasoningEffort := canonicalRequestedReasoningEffortFromRaw(
+			requestedReasoningEffortRawWithCarry(normalized, requestedCarry), normalized, strings.TrimSpace(values[1].String()),
+		)
 		if next, policyErr := applyOpenAIWSReasoningEffortPolicy(normalized, hooks); policyErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, policyErr.Error(), policyErr)
 		} else {
 			normalized = next
 		}
+		reasoningEffortCarry := effortCarrier.advance(normalized)
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
 		var normalizedIndex *officialJSONRawIndex
 		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndIndex(s.cfg, normalized, account, responsesLite, &normalizedIndex); compatibilityErr != nil {
@@ -687,6 +699,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageInputSize:           imageInputSize,
 			payloadBytes:             payloadBytes,
 			requestedReasoningEffort: requestedReasoningEffort,
+			reasoningEffortCarry:     reasoningEffortCarry,
 		}, nil
 	}
 
@@ -1753,7 +1766,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					UpstreamResponseModelConflict: responseModelObserver.Conflict(),
 					UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
 					ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTierFromBody(payload)),
-					ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
+					ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromRaw(effectiveReasoningEffortRawWithCarry(payload, currentReasoningEffortCarry), mappedModel, originalModel), payload, mappedModel),
 					RequestedReasoningEffort:      requestedReasoningEffort,
 					Stream:                        reqStream,
 					OpenAIWSMode:                  true,
@@ -1788,6 +1801,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentImageInputSize := firstPayload.imageInputSize
 	currentPayloadBytes := firstPayload.payloadBytes
 	currentRequestedReasoningEffort := firstPayload.requestedReasoningEffort
+	currentReasoningEffortCarry = firstPayload.reasoningEffortCarry
 	firstPayload = openAIWSClientPayload{}
 	isStrictAffinityTurn := func(payload []byte) bool {
 		if !storeDisabled {
@@ -2809,6 +2823,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		currentImageInputSize = nextPayload.imageInputSize
 		currentPayloadBytes = nextPayload.payloadBytes
 		currentRequestedReasoningEffort = nextPayload.requestedReasoningEffort
+		currentReasoningEffortCarry = nextPayload.reasoningEffortCarry
 		rejectedFieldRetryState = newOpenAIResponsesRejectedFieldRetryState(currentPayload)
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(currentPayload, account)
 		if !storeDisabled {
