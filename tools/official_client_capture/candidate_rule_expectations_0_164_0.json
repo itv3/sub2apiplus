@@ -2421,9 +2421,9 @@
           "assertion": {
             "operator": "all_equal",
             "path": "data.body.shape.input._passthrough.messages_without",
-            "value": 0
+            "value": 1
           },
-          "description": "每个 message 项都带逐项 passthrough（被网关整体剥离时 messages_without 非 0）：官方出站、画像 uuidv7、官方形态三条件满足时入站逐项 passthrough 原样保留",
+          "description": "A04 入站是第三方形态的非 Lite 明文（不带逐项 passthrough）：网关只给自己合成的基础指令消息带 passthrough，不为第三方入站的用户消息合成（W1b 已知差距），因此每个请求恰好 1 条 message（用户消息）没有 passthrough；若基础指令消息的 passthrough 被剥离会变成 2，若开始为第三方入站合成会变成 0，两者都必须失败并重新审核。官方形态入站原样保留逐项 passthrough 由 Go 单测 TestOpenAIGatewayForwardOfficialEgressHTTPPreservesItemPassthrough 覆盖",
           "id": "main-messages-keep-passthrough",
           "select": {
             "record_type": "http_request",
