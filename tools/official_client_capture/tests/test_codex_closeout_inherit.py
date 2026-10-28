@@ -9,12 +9,15 @@
   没配置承接时承接单元仍被拒绝（旧口径）；
 * 收据：逐项列出承接单元（来源运行、来源记录摘要、视图摘要）与被重跑的单元和原因；
 * 窄化来源记录的真实流程（不桩 ``verify_published``）：承接项带 ``inherit_check``，收尾校验全部真实运行；
+* 请求后置（第 17 项正式启用）：承接请求绑定收尾候选提交，只能在 ``prepare`` 之后生成——``gate.unit_inherit`` 只写阶段，``inherit-propose``／``inherit-request`` 对候选提交生成请求，
+  ``gates --unit-inherit-request`` 起跑前对照方案复核并绑定占位；请求与候选提交不一致即拒绝；收尾改动只触及少数文件时只重跑对应单元，其余承接；
 * 一票否决（已知缺口 R2）：来源提交到候选提交之间有“同名文件变目录”之类的类型翻转时，收尾拒绝承接——跑门禁之前先拦、门禁结果出来后再独立复核一次；
   来源提交解析不出来同样失败关闭。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -420,3 +423,352 @@ class NarrowedCloseoutTests(CloseoutInheritBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeferredRequestTests(CloseoutInheritBase):
+    """请求后置的收尾承接：候选提交由 ``prepare`` 生成，承接请求必须绑定它，所以请求在 ``prepare`` 之后才能生成。
+
+    世界里让 ``test_alpha`` 与 ``egress-spec:check-a`` 读收尾会改写的指南（来源记录里登记的是改写前的摘要），其余单元不读它：收尾候选只改指南与终态收据，
+    所以只有这两个单元该被重跑，其余全部承接。执行器按单元的当前输入与来源记录逐项比对，门禁输出由 ``write_gate_files`` 按真实形状接上。"""
+
+    READERS = ("test_alpha", "egress-spec:check-a")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.old_guide = (self.case.repo / closeout.GUIDE).read_text()
+
+    @staticmethod
+    def guide_entry(text: str) -> dict:
+        return ur.value_entry("tests", "file:" + closeout.GUIDE, hashlib.sha256(text.encode("utf-8")).hexdigest())
+
+    def deferred_config(self, world: fx.World) -> dict:
+        config = deepcopy(self.case.config)
+        config["gate"].update(work=str(self.fixed), record_store=str(world.store.root), unit_inherit={"stage": "pre-ledger"})
+        return config
+
+    def make_world(self) -> fx.World:
+        return fx.World(self.root / "deferred-world", inputs={unit: [self.guide_entry(self.old_guide)] for unit in self.READERS})
+
+    def prepare_deferred(self, world: fx.World) -> dict:
+        self.case.config = self.deferred_config(world)
+        return self.case.prepare()
+
+    def context_for(self, world: fx.World, plan: dict, **overrides) -> dict:
+        """执行器在候选提交上现算的上下文（commit 是 prepare 产出的候选提交，门禁组合与组合名按收尾 full-gates）。"""
+        values = {"commit": plan["candidate_commit"], "profile": "full-gates", "gates": sorted(entry_gates.profile_gates("full-gates"))}
+        values.update(overrides)
+        return world.context(**values)
+
+    def candidate_request(self, world: fx.World, plan: dict, *, units=None, **overrides) -> tuple[Path, dict]:
+        context = self.context_for(world, plan, **overrides)
+        world.sample(T0)
+        return world.request(at=T0, context=context, sources=world.sources(units=units)), context
+
+    def candidate_run(self, world: fx.World, plan: dict, request: Path, context: dict, *, changed=READERS):
+        """候选提交上的一次承接运行：改写了指南，所以读它的单元当前输入变了、其余没变。"""
+        new_guide = (Path(plan["candidate"]) / closeout.GUIDE).read_text()
+        self.assertNotEqual(new_guide, self.old_guide, "（对照）收尾候选确实改写了指南")
+        currents = {unit: world.current(unit, inputs=[self.guide_entry(new_guide)]) if unit in changed else world.current(unit)
+                    for unit in world.units}
+        result = world.run(request, times=(T0, T0 + 60, T0 + 120), currents=currents, context=lambda _name: context)
+        self.assertEqual(result.problems, [])
+        return result
+
+    def fake_driver(self, plan: dict, world: fx.World, result):
+        """只替换门禁驱动那一次调用：像真实驱动那样把这次承接运行的输出文件写进 ``<工作根>/gates``，返回成功；记下命令行。"""
+        real, calls = closeout.subprocess.run, []
+
+        def run(argv, *args, **kwargs):
+            if argv and argv[0] == "bash":
+                calls.append(list(argv))
+                self.write_gate_files(plan, world, result)
+                return mock.Mock(returncode=0)
+            return real(argv, *args, **kwargs)
+
+        return mock.patch.object(closeout.subprocess, "run", side_effect=run), calls
+
+    def forbid_driver(self):
+        real = closeout.subprocess.run
+
+        def run(argv, *args, **kwargs):
+            if argv and argv[0] == "bash":
+                raise AssertionError("预检不通过时不应启动门禁驱动")
+            return real(argv, *args, **kwargs)
+
+        return mock.patch.object(closeout.subprocess, "run", side_effect=run)
+
+    def clock(self, moment: float):
+        return mock.patch.object(closeout._unit_inherit(), "current_time", return_value=moment)
+
+    # ---- 配置形状 ----
+
+    def test_the_deferred_shape_is_accepted_without_any_request_file_and_the_old_shape_still_is(self) -> None:
+        world = self.make_world()
+        config = self.deferred_config(world)
+        closeout.validate_config(config)
+        plan = self.prepare_deferred(world)
+        self.assertEqual(plan["basis"]["config"]["gate"]["unit_inherit"], {"stage": "pre-ledger"})
+        self.assertEqual([path for path in plan["basis"]["input_files"] if path.endswith("request.json")], [], "后置写法 prepare 时没有请求可绑")
+        old = self.inherit_config(world, world.request(at=T0))
+        closeout.validate_config(old)
+        for label, value in (("空", {}), ("多余键", {"stage": "pre-ledger", "mode": "x"}), ("阶段非法", {"stage": "closeout"}), ("只有请求", {"request": "/x"})):
+            with self.subTest(case=label):
+                bad = self.deferred_config(world)
+                bad["gate"]["unit_inherit"] = value
+                with self.assertRaises(closeout.CloseoutError):
+                    closeout.validate_config(bad)
+        for key in ("work", "record_store"):
+            with self.subTest(missing=key):
+                bad = self.deferred_config(world)
+                bad["gate"].pop(key)
+                with self.assertRaises(closeout.CloseoutError):
+                    closeout.validate_config(bad)
+
+    # ---- 起跑前复核：请求与候选提交不一致即拒绝 ----
+
+    def test_a_request_bound_to_another_commit_is_refused_before_the_driver_starts(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        request, _ = self.candidate_request(world, plan, commit="c" * 40)  # 夹具里常见的“别的提交”：在 prepare 之前就写好的请求只能绑别的提交
+        with self.clock(T0 + 150), self.forbid_driver():
+            with self.assertRaisesRegex(closeout.CloseoutError, f"请求绑定的提交 {'c' * 12} 不是本方案的收尾候选提交 {plan['candidate_commit'][:12]}"):
+                closeout.run_gates(self.case.plan_path, str(request))
+        self.assertIsNone(closeout.journal_read(plan, "gates", "started"))
+        self.assertIsNone(closeout.journal_read(plan, "gates", closeout.INHERIT_REQUEST_PHASE), "拒绝时不留绑定占位")
+
+    def test_any_other_context_mismatch_is_refused_too(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        for label, overrides, fragment in (
+                ("阶段不对", {"stage": "post-ledger"}, "stage"), ("客户端不对", {"client": "claude"}, "client"),
+                ("记录库不对", {"record_store": str(self.root / "elsewhere")}, "record_store"),
+                ("门禁组合不对", {"gates": ["pre-a3"]}, "gates"), ("组合名不对", {"profile": "entry"}, "profile")):
+            with self.subTest(case=label):
+                request, _ = self.candidate_request(world, plan, **overrides)
+                with self.clock(T0 + 150), self.forbid_driver():
+                    with self.assertRaisesRegex(closeout.CloseoutError, f"与本收尾方案不一致.*{fragment}"):
+                        closeout.run_gates(self.case.plan_path, str(request))
+        request, _ = self.candidate_request(world, plan)
+        payload = json.loads(request.read_text())
+        payload["reuse_enabled"] = False
+        request.write_text(json.dumps(payload))
+        with self.clock(T0 + 150), self.forbid_driver():
+            with self.assertRaisesRegex(closeout.CloseoutError, "reuse_enabled"):
+                closeout.run_gates(self.case.plan_path, str(request))
+
+    def test_expired_approvals_are_caught_before_the_two_hour_gate_not_after(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        request, _ = self.candidate_request(world, plan)
+        with self.clock(T0 + 10 * 86400), self.forbid_driver():                       # 批准有效期是 T0-1 天到 T0+2 天
+            with self.assertRaisesRegex(closeout.CloseoutError, "承接请求不可用"):
+                closeout.run_gates(self.case.plan_path, str(request))
+
+    def test_a_configured_deferred_inheritance_without_a_request_is_refused_not_silently_rerun(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        with self.forbid_driver():
+            with self.assertRaisesRegex(closeout.CloseoutError, "没有给承接请求"):
+                closeout.run_gates(self.case.plan_path)
+        self.assertIsNone(closeout.journal_read(plan, "gates", "started"))
+
+    def test_a_request_is_refused_when_the_plan_has_no_inheritance_configured(self) -> None:
+        plan = self.case.prepare()
+        world = self.make_world()
+        request, _ = self.candidate_request(world, plan)
+        with self.forbid_driver():
+            with self.assertRaisesRegex(closeout.CloseoutError, "不接受"):
+                closeout.run_gates(self.case.plan_path, str(request))
+
+    # ---- 正式流程：收尾改动只触及少数文件时只重跑对应单元 ----
+
+    def test_only_the_units_the_closeout_changes_touch_are_rerun_and_everything_else_is_inherited(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        request, context = self.candidate_request(world, plan)
+        result = self.candidate_run(world, plan, request, context)
+        patcher, calls = self.fake_driver(plan, world, result)
+        with self.clock(T0 + 150), patcher:
+            done = closeout.run_gates(self.case.plan_path, str(request))
+        self.assertEqual(done["status"], "passed")
+        summary = done["unit_inherit"]
+        self.assertEqual(sorted(item["unit_id"] for item in summary["rerun"]), sorted(self.READERS), "只重跑读了收尾改写文件的单元")
+        self.assertEqual({item["unit_id"] for item in summary["inherited"]}, set(world.units) - set(self.READERS), "其余单元全部承接")
+        self.assertTrue(all(item["reasons"] for item in summary["rerun"]), "被重跑的单元写明原因")
+        self.assertIsNotNone(summary["consumption"], "刚跑完做过一次真消费")
+        # 命令行：unit-inherit 模式、固定坐标、记录库、绑定的请求与阶段。
+        argv = calls[0]
+        self.assertEqual(argv[argv.index("--mode") + 1], "unit-inherit")
+        self.assertEqual(argv[argv.index("--work") + 1], str(self.fixed))
+        self.assertEqual(argv[argv.index("--unit-inherit-request") + 1], str(request))
+        self.assertEqual(argv[argv.index("--unit-inherit-stage") + 1], "pre-ledger")
+        # 绑定占位与收据里的请求摘要。
+        bound = closeout.journal_read(plan, "gates", closeout.INHERIT_REQUEST_PHASE)
+        self.assertEqual(bound["request"], closeout.safety.file_binding(request))
+        self.assertEqual(bound["candidate_commit"], plan["candidate_commit"])
+        self.assertEqual(summary["request"], bound["request"])
+        self.assertEqual(closeout.journal_read(plan, "gates", "started")["argv"], argv)
+
+    def test_a_unit_the_source_cannot_prove_falls_back_to_rerun(self) -> None:
+        """请求的来源集合里没有的单元（记录库里找不到能证明的来源记录）不承接，回退重跑；其余照常承接。"""
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        provable = [unit for unit in world.units if unit != "test_beta"]
+        request, context = self.candidate_request(world, plan, units=provable)
+        result = self.candidate_run(world, plan, request, context, changed=())
+        patcher, _calls = self.fake_driver(plan, world, result)
+        with self.clock(T0 + 150), patcher:
+            summary = closeout.run_gates(self.case.plan_path, str(request))["unit_inherit"]
+        self.assertEqual([item["unit_id"] for item in summary["rerun"]], ["test_beta"])
+        self.assertEqual({item["unit_id"] for item in summary["inherited"]}, set(provable))
+
+    def test_the_bound_request_cannot_be_swapped_or_edited_afterwards(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        request, context = self.candidate_request(world, plan)
+        result = self.candidate_run(world, plan, request, context)
+        patcher, _calls = self.fake_driver(plan, world, result)
+        with self.clock(T0 + 150), patcher:
+            closeout.run_gates(self.case.plan_path, str(request))
+        other, _ = self.candidate_request(world, plan)                      # 另一份（路径与字节都不同）的请求
+        with self.clock(T0 + 150):
+            with self.assertRaisesRegex(closeout.CloseoutError, "已绑定另一份承接请求|不能换"):
+                closeout.bind_inherit_request(closeout.load_plan(self.case.plan_path), str(other))
+            self.assertEqual(closeout.bind_inherit_request(closeout.load_plan(self.case.plan_path), str(request))["request"], str(request), "同一份可以重复绑定")
+        request.write_text(request.read_text() + " ")
+        with self.assertRaisesRegex(closeout.CloseoutError, "承接请求文件被改动"):
+            closeout.check_gate_result(closeout.load_plan(self.case.plan_path))
+
+    def test_check_gate_result_refuses_when_deferred_inheritance_was_never_bound(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        with self.assertRaisesRegex(closeout.CloseoutError, "还没有绑定承接请求"):
+            closeout.check_gate_result(plan)
+
+    def test_preflight_only_checks_the_request_without_binding_it(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        request, _context = self.candidate_request(world, plan)
+        with self.clock(T0 + 150):
+            result = closeout.gate_preflight_only(self.case.plan_path, str(request))
+            self.assertEqual(result["unit_inherit_request"]["commit"], plan["candidate_commit"])
+            self.assertEqual(result["unit_inherit_request"]["units"], len(world.units))
+            self.assertIsNone(closeout.journal_read(plan, "gates", closeout.INHERIT_REQUEST_PHASE), "只自查，不写占位")
+            self.assertEqual(closeout.main(["gates", "--plan", str(self.case.plan_path), "--preflight-only", "--unit-inherit-request", str(request)]), 0)
+        wrong, _ = self.candidate_request(world, plan, commit="c" * 40)
+        with self.clock(T0 + 150):
+            self.assertEqual(closeout.main(["gates", "--plan", str(self.case.plan_path), "--preflight-only", "--unit-inherit-request", str(wrong)]), 2)
+
+    # ---- 提案与请求的生成（候选提交由 prepare 产出之后） ----
+
+    def propose_driver(self, world: fx.World, plan: dict, *, commit: str | None = None, rc: int = 0):
+        """替换驱动：像真实执行器 ``--unit-inherit-propose`` 那样只写提案目录（上下文绑定它跑的那个提交）。"""
+        real, calls = closeout.subprocess.run, []
+
+        def run(argv, *args, **kwargs):
+            if argv and argv[0] == "bash":
+                calls.append(list(argv))
+                if rc == 0:
+                    context = self.context_for(world, plan, commit=commit or plan["candidate_commit"])
+                    verifier = closeout._unit_inherit()
+                    verifier.write_proposal(argv[argv.index("--unit-inherit-propose") + 1], context=context, sources=world.sources())
+                return mock.Mock(returncode=rc)
+            return real(argv, *args, **kwargs)
+
+        return mock.patch.object(closeout.subprocess, "run", side_effect=run), calls
+
+    def sign(self, world: fx.World, proposal: Path) -> list[str]:
+        binding = json.loads((proposal / "binding.json").read_text())["binding_sha256"]
+        return [world.approval(role, binding)["path"] for role in sorted(fx.fs.APPROVAL_ROLES)]
+
+    def test_inherit_propose_runs_the_executor_on_the_candidate_commit_and_refuses_a_foreign_proposal(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        patcher, calls = self.propose_driver(world, plan)
+        with patcher:
+            result = closeout.inherit_propose(self.case.plan_path)
+        self.assertEqual(result["status"], "proposal_written")
+        self.assertEqual(result["commit"], plan["candidate_commit"])
+        self.assertEqual(result["units"], len(world.units))
+        argv = calls[0]
+        self.assertEqual(argv[argv.index("--unit-inherit-propose") + 1], str(self.case.work / "inherit" / "proposal"))
+        self.assertEqual(argv[-2], plan["candidate_commit"], "位置参数依次是 bundle、分支、候选提交、前端依赖")
+        self.assertEqual(argv[argv.index("--mode") + 1], "unit-inherit")
+        with patcher:
+            with self.assertRaisesRegex(closeout.CloseoutError, "已存在，不覆盖"):
+                closeout.inherit_propose(self.case.plan_path)
+
+    def test_inherit_propose_refuses_a_proposal_bound_to_another_commit_or_a_failed_executor(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        patcher, _ = self.propose_driver(world, plan, commit="c" * 40)
+        with patcher:
+            with self.assertRaisesRegex(closeout.CloseoutError, "不是本方案的收尾候选提交"):
+                closeout.inherit_propose(self.case.plan_path)
+        shutil_root = self.case.work / "inherit"
+        for path in sorted(shutil_root.rglob("*"), reverse=True):
+            path.rmdir() if path.is_dir() else path.unlink()
+        shutil_root.rmdir()
+        patcher, _ = self.propose_driver(world, plan, rc=1)
+        with patcher:
+            with self.assertRaisesRegex(closeout.CloseoutError, "承接提案没有生成"):
+                closeout.inherit_propose(self.case.plan_path)
+
+    def test_inherit_request_assembles_a_request_the_gates_accept_and_refuses_a_foreign_proposal(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        patcher, _ = self.propose_driver(world, plan)
+        with patcher:
+            proposed = closeout.inherit_propose(self.case.plan_path)
+        proposal = Path(proposed["proposal"])
+        approvals = self.sign(world, proposal)
+        world.sample(T0)
+        with self.clock(T0 + 30):
+            result = closeout.inherit_request(self.case.plan_path, proposal=str(proposal), approvals=approvals,
+                                              clock_source=f"file:{world.clock_file}")
+        self.assertEqual(result["status"], "request_written")
+        self.assertEqual(result["commit"], plan["candidate_commit"])
+        request = self.case.work / "inherit" / "request.json"
+        self.assertTrue(request.is_file())
+        with self.clock(T0 + 30):
+            self.assertEqual(closeout.bind_inherit_request(plan, str(request), write=False)["request"], str(request))
+        # 提案是别的提交的：组装前就拒绝，不写请求。
+        foreign = world.root / "foreign-proposal"
+        fx.ui.write_proposal(foreign, context=self.context_for(world, plan, commit="c" * 40), sources=world.sources())
+        with self.clock(T0 + 30):
+            with self.assertRaisesRegex(closeout.CloseoutError, "提案绑定的提交 c{12} 不是本方案的收尾候选提交"):
+                closeout.inherit_request(self.case.plan_path, proposal=str(foreign), approvals=approvals, output=str(self.case.work / "inherit" / "other.json"),
+                                         clock_source=f"file:{world.clock_file}")
+        self.assertFalse((self.case.work / "inherit" / "other.json").exists())
+
+    def test_inherit_request_refuses_approvals_that_do_not_sign_this_proposal(self) -> None:
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        patcher, _ = self.propose_driver(world, plan)
+        with patcher:
+            proposal = Path(closeout.inherit_propose(self.case.plan_path)["proposal"])
+        wrong = [world.approval(role, "0" * 64)["path"] for role in sorted(fx.fs.APPROVAL_ROLES)]
+        world.sample(T0)
+        with self.clock(T0 + 30):
+            with self.assertRaisesRegex(closeout.CloseoutError, "承接请求组装失败|承接请求不可用"):
+                closeout.inherit_request(self.case.plan_path, proposal=str(proposal), approvals=wrong, clock_source=f"file:{world.clock_file}")
+
+    def test_the_command_line_wires_propose_request_and_gates_together(self) -> None:
+        """三个子命令经 ``main`` 串起来：inherit-propose → inherit-request → gates --unit-inherit-request（驱动与时钟替身），退出码都是 0。"""
+        world = self.make_world()
+        plan = self.prepare_deferred(world)
+        patcher, _ = self.propose_driver(world, plan)
+        with patcher:
+            self.assertEqual(closeout.main(["inherit-propose", "--plan", str(self.case.plan_path)]), 0)
+        proposal = self.case.work / "inherit" / "proposal"
+        approvals = [arg for path in self.sign(world, proposal) for arg in ("--approval", path)]
+        world.sample(T0)
+        with self.clock(T0 + 30):
+            self.assertEqual(closeout.main(["inherit-request", "--plan", str(self.case.plan_path), "--proposal", str(proposal), *approvals,
+                                            "--clock-source", f"file:{world.clock_file}"]), 0)
+        request = self.case.work / "inherit" / "request.json"
+        result = self.candidate_run(world, plan, request, self.context_for(world, plan))
+        driver, _calls = self.fake_driver(plan, world, result)
+        with self.clock(T0 + 150), driver:
+            self.assertEqual(closeout.main(["gates", "--plan", str(self.case.plan_path), "--unit-inherit-request", str(request)]), 0)
+        self.assertEqual(closeout.journal_read(plan, "gates", "done")["status"], "passed")
