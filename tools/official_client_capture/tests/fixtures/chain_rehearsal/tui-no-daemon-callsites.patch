@@ -2,9 +2,9 @@ diff --git a/tools/official_client_capture/drive_codex_tui.py b/tools/official_c
 index f291e0590..92231a220 100644
 --- a/tools/official_client_capture/drive_codex_tui.py
 +++ b/tools/official_client_capture/drive_codex_tui.py
-@@ -149,6 +149,11 @@ def main() -> int:
-     ap.add_argument("--prompt-hold", type=float, default=120,
-                     help="每条普通提示词发送后保持多久")
+@@ -306,6 +306,11 @@ def main() -> int:
+     ap.add_argument("--setting-hold", type=float, default=8,
+                     help="--step 里设置类动作（effort／model／effort-up／effort-down）之后保持多久")
      ap.add_argument("--log", default=None, help="把 TUI 原始输出写到这个文件")
 +    ap.add_argument("--no-daemon", action="store_true",
 +                    help="传给 codex 的 --no-daemon：不经共享后台 daemon，用内嵌 app-server。"
@@ -14,7 +14,7 @@ index f291e0590..92231a220 100644
      ap.add_argument("--disable", action="append", default=[],
                      help="传给 codex 的 --disable <FEATURE>，可重复")
      ap.add_argument("--enable", action="append", default=[],
-@@ -177,6 +182,9 @@ def main() -> int:
+@@ -344,6 +349,9 @@ def main() -> int:
                   "--sandbox", args.sandbox_mode]
      else:
          argv += ["--dangerously-bypass-approvals-and-sandbox"]
@@ -89,4 +89,4 @@ index 248d2c180..e075d5a20 100755
 +    --no-daemon \
      ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
      --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
- elif [[ $prompt == "__IMAGE_EDIT_FILE_ID__" ]]; then
+ elif [[ $prompt == "__EFFORT_UPDATE_TUI__" ]]; then
