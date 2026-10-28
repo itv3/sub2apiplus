@@ -8858,7 +8858,15 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--capture-root", type=Path, default=Path("/root/oauth-capture"))
     plan.add_argument("--capture-container", default="capture-cli")
     plan.add_argument("--service-container", default="sub2apiplus")
-    plan.add_argument("--keeper-container", default="sub2apiplus-keeper")
+    plan.add_argument(
+        "--keeper-container",
+        default="sub2apiplus-keeper",
+        help=(
+            "keeper（账号保活容器）名称。keeper 已下线不再部署：该名字的容器不存在时，"
+            "环境探针与 Job 演练如实记为未部署并跳过，候选采集脚本也不再停启它；"
+            "名字对应的容器在场时行为与以往完全一致（必须在跑、采集期间停启并恢复）。"
+        ),
+    )
     plan.add_argument("--postgres-container", default="sub2apiplus-postgres")
     plan.add_argument("--redis-container", default="sub2apiplus-redis")
     plan.add_argument(

@@ -83,7 +83,9 @@ class Fixture:
         names = {item.arg for step in es.STEPS for item in step.inputs if item.kind == "driver"}
         for name in names:
             _write((self.driver / name).resolve() if name.startswith("../") else self.driver / name, f"# 驱动 {name}\n")
-        self.images = {name: f"sha256:{index}" * 8 for index, name in enumerate(es.JOB_CONTAINERS)}
+        # keeper（账号保活容器）已下线不再部署：夹具里 docker inspect 对它报 No such object（退出码 1），
+        # 其余四个 Job 容器照常有镜像。keeper 在场的口径见 EntryStepsRuleTests.test_keeper_*。
+        self.images = {name: f"sha256:{index}" * 8 for index, name in enumerate(es.JOB_CONTAINERS) if name != "sub2apiplus-keeper"}
         self.image_refs = {"alpine:3.21": "sha256:alpine", "ghcr.io/x/runtime@sha256:aa": "sha256:runtime"}
         self.facts_fail = False
         products = root / "products"
@@ -160,6 +162,8 @@ class Fixture:
             self.inspect_calls = getattr(self, "inspect_calls", 0) + 1
             return 0, "日志行\n" + json.dumps(self.formal_site) + "\n"
         if argv[:4] == ["docker", "inspect", "--format", "{{.Image}}"]:
+            if argv[4] not in self.images:
+                return 1, f"Error response from daemon: No such object: {argv[4]}\n"
             return 0, self.images[argv[4]] + "\n"
         if argv[:5] == ["docker", "image", "inspect", "--format", "{{.Id}}"]:
             return 0, self.image_refs.get(argv[5], "") + "\n"
@@ -311,6 +315,22 @@ class EntryStepsAcceptanceTests(EntryStepsTestCase):
 
 
 class EntryStepsRuleTests(EntryStepsTestCase):
+    def test_keeper_absent_is_recorded_truthfully_and_does_not_block_the_chain(self) -> None:
+        """keeper 缺席：Job 演练的输入里如实记 unavailable，整条链照常沿用，不因缺席而重做或报缺。"""
+
+        entries = {entry["name"]: entry for entry in es.resolve_inputs(es.STEP_BY_ID["job-rehearsal"], self.fx.ctx())}
+        keeper = entries["container_image:sub2apiplus-keeper"]
+        self.assertEqual(keeper["detail"]["value"], "unavailable(rc=1)")
+        self.assertNotEqual(keeper["sha256"], es.MISSING)
+        self.assertEqual(_by(self.fx.evaluate(), "run"), set())
+
+    def test_keeper_appearing_or_disappearing_changes_job_rehearsal_input(self) -> None:
+        """keeper 重新部署（出现镜像）时，Job 演练的输入变了、该步骤及下游重做；在场时的口径与以往一致。"""
+
+        self.fx.images["sub2apiplus-keeper"] = "sha256:" + "8" * 64
+        reasons = _step(self.fx.evaluate(), "job-rehearsal")["reasons"]
+        self.assertIn("输入变了：环境 container_image:sub2apiplus-keeper", reasons)
+
     def test_every_reason_is_reported_at_once(self) -> None:
         self.fx.params["MAIN_MODEL"] = "gpt-5.7"
         self.fx.images["capture-cli"] = "sha256:" + "9" * 64

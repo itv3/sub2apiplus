@@ -168,6 +168,8 @@ GATEWAY_COMPARED_FIELDS = (
     "residual_candidate_proxies",
     "runtime_residue",
 )
+# docker inspect 在容器不存在时的固定报错片段（只用于识别 keeper 缺席，不回显 stderr）。
+KEEPER_MISSING_RE = re.compile(r"No such (?:object|container)", re.IGNORECASE)
 SHA256_LINE_RE = re.compile(r"^(?P<sha256>[0-9a-f]{64})\s")
 SERVICE_INSPECT_TEMPLATE = (
     '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},"started_at":{{json .State.StartedAt}}}'
@@ -638,12 +640,22 @@ def _collect_gateway_facts(
     custom = run(["docker", "exec", service, "test", "-e", CUSTOM_CA_PATH], "service-custom-ca", check=False).returncode
     if custom not in (0, 1):
         raise ConfigurationError("无法确认服务容器里是否残留临时 CA。")
-    try:
-        keeper_running = json.loads(run(["docker", "inspect", "--format", "{{json .State.Running}}", keeper], "keeper").stdout)
-    except json.JSONDecodeError as error:
-        raise ConfigurationError("keeper 容器状态输出不是 JSON。") from error
-    if type(keeper_running) is not bool:
-        raise ConfigurationError("keeper 容器运行状态非法。")
+    # keeper（账号保活容器）已下线不再部署：docker 明确报告容器不存在才算缺席，如实记 deployed=false、running=false；
+    # 其它失败（守护进程不可达、超时等）与以往一样失败关闭。在场时命令、错误消息与快照形状都与以往完全一致。
+    keeper_probe = run(["docker", "inspect", "--format", "{{json .State.Running}}", keeper], "keeper", check=False)
+    keeper_deployed = True
+    if keeper_probe.returncode != 0:
+        if keeper_probe.stdout.strip() == "" and KEEPER_MISSING_RE.search(keeper_probe.stderr or ""):
+            keeper_deployed, keeper_running = False, False
+        else:
+            raise ConfigurationError(f"candidate-gateway:keeper 执行失败（退出码 {keeper_probe.returncode}）。")
+    else:
+        try:
+            keeper_running = json.loads(keeper_probe.stdout)
+        except json.JSONDecodeError as error:
+            raise ConfigurationError("keeper 容器状态输出不是 JSON。") from error
+        if type(keeper_running) is not bool:
+            raise ConfigurationError("keeper 容器运行状态非法。")
     postgres_env = run(["docker", "inspect", "--format", ENV_TEMPLATE, postgres], "postgres-env").stdout
     user, database = _env_value(postgres_env, "POSTGRES_USER"), _env_value(postgres_env, "POSTGRES_DB")
     if not user or not database:
@@ -692,7 +704,11 @@ def _collect_gateway_facts(
             "ca_bundle_sha256": bundle,
             "custom_ca_present": custom == 0,
         },
-        "keeper": {"container": keeper, "running": bool(keeper_running)},
+        "keeper": (
+            {"container": keeper, "running": bool(keeper_running)}
+            if keeper_deployed
+            else {"container": keeper, "running": False, "deployed": False}
+        ),
         "postgres": {"container": postgres},
         "account": {
             "id": account_id,

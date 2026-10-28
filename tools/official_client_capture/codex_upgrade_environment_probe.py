@@ -198,11 +198,50 @@ def _load_single_json(text: str, description: str) -> Mapping[str, Any]:
     return value
 
 
-def _docker_inspect(container: str, role: str) -> Mapping[str, Any]:
+# docker inspect 在容器不存在时的固定报错片段（新旧 CLI 措辞为 object／container 两种）。
+CONTAINER_MISSING_RE = re.compile(r"No such (?:object|container)", re.IGNORECASE)
+# 允许缺席的角色。keeper（账号保活容器）已于下线后不再部署，升级工具不再强求它在场；
+# 其余四个角色缺席仍然是环境错误，一律失败关闭。
+OPTIONAL_ROLES = frozenset({"keeper"})
+
+
+def _container_is_missing(completed: subprocess.CompletedProcess[str]) -> bool:
+    """docker inspect 明确报告「容器不存在」才算缺席。
+
+    判据同时要求：退出码非零、stdout 为空或空数组、stderr 带有 No such object／container。
+    其余失败（守护进程不可达、超时、权限、输出异常）一律不当缺席，仍按失败处理；
+    stderr 只用于匹配，绝不回显到错误消息。
+    """
+
+    return (
+        completed.returncode != 0
+        and completed.stdout.strip() in ("", "[]")
+        and bool(CONTAINER_MISSING_RE.search(completed.stderr or ""))
+    )
+
+
+def _docker_inspect(
+    container: str,
+    role: str,
+    *,
+    optional: bool = False,
+) -> Mapping[str, Any] | None:
+    """docker inspect 单个容器；``optional`` 为真且容器确实不存在时返回 ``None``（未部署）。
+
+    ``optional`` 为假（或容器在场）时行为与改造前完全一致：命令、错误消息逐字不变。
+    """
+
     completed = _run_command(
         ["docker", "inspect", container],
         description=f"{role} 容器检查",
+        allow_failure=optional,
     )
+    if optional and completed.returncode != 0:
+        if _container_is_missing(completed):
+            return None
+        raise EnvironmentProbeError(
+            f"{role} 容器检查执行失败（退出码 {completed.returncode}）"
+        )
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -756,12 +795,17 @@ def _service_state(
         },
         "probe_kind": "service",
         "processes": [
-            {
-                "health": containers[role]["health"],
-                "role": role,
-                "running": containers[role]["running"],
-                "status": containers[role]["status"],
-            }
+            (
+                # 未部署的可选角色如实记为未部署，不伪造运行状态。
+                {"deployed": False, "role": role}
+                if containers[role].get("deployed") is False
+                else {
+                    "health": containers[role]["health"],
+                    "role": role,
+                    "running": containers[role]["running"],
+                    "status": containers[role]["status"],
+                }
+            )
             for role in ("service", "keeper")
         ],
     }
@@ -851,6 +895,12 @@ def _configuration_state(
     )
     records: list[dict[str, Any]] = []
     for role, container in roles:
+        if role not in container_ids:
+            # 可选角色未部署：没有容器可检查 hosts 与 CA bundle，如实记「未部署」。
+            records.append(
+                {"container": container, "deployed": False, "role": role}
+            )
+            continue
         hosts_digest = _container_hosts_digest(container, role, container_ids[role])
         if hosts_digest is None:
             raise EnvironmentProbeError(f"{role} 容器缺少 /etc/hosts")
@@ -973,15 +1023,25 @@ def _run_probe(arguments: ProbeArguments) -> dict[str, Any]:
         "capture": arguments.capture_container,
     }
     inspected = {
-        role: _docker_inspect(container, role)
+        role: _docker_inspect(
+            container, role, optional=role in OPTIONAL_ROLES
+        )
         for role, container in container_names.items()
     }
     container_records = {
-        role: _container_state(role, container_names[role], inspected[role])
+        role: (
+            # 可选角色（keeper）确实不存在：环境证据如实记「未部署」，
+            # 不再要求它在跑；其余角色缺席在 _docker_inspect 里已经失败关闭。
+            {"container": container_names[role], "deployed": False, "role": role}
+            if inspected[role] is None
+            else _container_state(role, container_names[role], inspected[role])
+        )
         for role in container_names
     }
     container_ids = {
-        role: str(inspected[role].get("Id", "")) for role in container_names
+        role: str(document.get("Id", ""))
+        for role, document in inspected.items()
+        if document is not None
     }
     database_user, database_name = _database_identity(inspected["postgres"])
 

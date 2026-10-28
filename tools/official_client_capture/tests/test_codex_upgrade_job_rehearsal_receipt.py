@@ -914,6 +914,45 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             replayed["failure_lifecycle_probe_sha256"], r"^[0-9a-f]{64}$"
         )
 
+    def test_finalize_and_replay_for_keeper_absent_and_present(self) -> None:
+        """keeper 已下线：合成夹具缺省记未部署；旧口径（五个容器都在跑）的收据仍按原规则重放通过。"""
+
+        for keeper_deployed in (False, True):
+            with self.subTest(keeper_deployed=keeper_deployed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                path = create_job_rehearsal_receipt(
+                    root,
+                    contract=self._contract(root),
+                    preflight_campaign_id="preflight-0151",
+                    keeper_deployed=keeper_deployed,
+                )
+                facts = json.loads((root / "facts.json").read_text(encoding="utf-8"))
+                keeper = next(item for item in facts["containers"] if item["name"] == "sub2apiplus-keeper")
+                self.assertEqual("running" in keeper, keeper_deployed)
+                self.assertEqual(receipt.replay(root, path.name)["status"], "passed")
+
+    def test_replay_rejects_tampered_keeper_not_deployed_entry(self) -> None:
+        """未部署条目只允许 keeper 且 deployed 为 false：篡改成别的容器缺席必须在重放时被拒。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            create_job_rehearsal_receipt(
+                root,
+                contract=self._contract(root),
+                preflight_campaign_id="preflight-0151",
+            )
+            facts_path = root / "facts.json"
+            facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            redis = next(item for item in facts["containers"] if item["name"] == "sub2apiplus-redis")
+            redis.clear()
+            redis.update({"name": "sub2apiplus-redis", "deployed": False})
+            facts["runtime_identity_sha256"] = receipt._runtime_identity(facts)
+            self._rewrite(facts_path, facts)
+            with self.assertRaises(receipt.JobRehearsalReceiptError):
+                receipt.rehearsal_validate_containers(facts["containers"], {"configuration": self._contract(root)["configuration"]})
+
     def test_current_facts_missing_storage_probe_fail_closed(self) -> None:
         """新 P0 不能用缺少运行目录写探针的旧结构生成通过收据。"""
 
@@ -1512,6 +1551,129 @@ class JobRehearsalReceiptTests(unittest.TestCase):
                 receipt.JobRehearsalReceiptError, "原始通过收据漂移"
             ):
                 receipt.assert_recovery_compatible(built, contract)
+
+
+class KeeperOptionalContainerTests(unittest.TestCase):
+    """keeper（账号保活容器）已下线：Job 演练容器事实允许它缺席，其余四个容器仍严格。"""
+
+    CONFIGURATION = {
+        "capture_container": "capture-cli",
+        "service_container": "sub2apiplus",
+        "keeper_container": "sub2apiplus-keeper",
+        "postgres_container": "sub2apiplus-postgres",
+        "redis_container": "sub2apiplus-redis",
+    }
+    ALL = sorted(CONFIGURATION.values())
+
+    @staticmethod
+    def _document(name: str, *, running: bool = True) -> dict[str, object]:
+        return {
+            "Name": f"/{name}",
+            "Id": "a" * 64,
+            "Image": f"sha256:{'b' * 64}",
+            "State": {"Running": running},
+        }
+
+    def _fake_docker(self, *, missing: set[str], broken: set[str] = frozenset(), calls: list[list[str]] | None = None):
+        """替身 ``_run``：docker inspect 对 missing 里的名字报 No such object，对 broken 里的名字报守护进程故障。"""
+
+        def fake_run(argv: list[str], label: str, *args: object, **kwargs: object) -> bytes:
+            if calls is not None:
+                calls.append(list(argv))
+            self.assertEqual(argv[:2], ["docker", "inspect"])
+            names = argv[2:]
+            for name in names:
+                if name in broken:
+                    raise receipt.JobRehearsalReceiptError(f"{label}失败：Cannot connect to the Docker daemon")
+            absent = [name for name in names if name in missing]
+            if absent:
+                text = "\n".join(f"Error response from daemon: No such object: {name}" for name in absent)
+                raise receipt.JobRehearsalReceiptError(f"{label}失败：{text}")
+            return json.dumps([self._document(name) for name in names]).encode("utf-8")
+
+        return fake_run
+
+    def test_all_five_present_is_unchanged_single_inspect(self) -> None:
+        calls: list[list[str]] = []
+        with mock.patch.object(receipt, "_run", side_effect=self._fake_docker(missing=set(), calls=calls)):
+            facts = receipt._container_facts(self.CONFIGURATION)
+        self.assertEqual([item["name"] for item in facts], self.ALL)
+        self.assertTrue(all(set(item) == {"name", "container_id", "image_id", "running"} for item in facts))
+        # 在场时仍是一次 docker inspect 命令，不多出任何存在性探针。
+        self.assertEqual(calls, [["docker", "inspect", *self.ALL]])
+
+    def test_keeper_absent_is_recorded_as_not_deployed(self) -> None:
+        with mock.patch.object(receipt, "_run", side_effect=self._fake_docker(missing={"sub2apiplus-keeper"})):
+            facts = receipt._container_facts(self.CONFIGURATION)
+        self.assertEqual([item["name"] for item in facts], self.ALL)
+        keeper = next(item for item in facts if item["name"] == "sub2apiplus-keeper")
+        self.assertEqual(keeper, {"name": "sub2apiplus-keeper", "deployed": False})
+        self.assertEqual(sum("running" in item for item in facts), 4)
+        contract = {"configuration": self.CONFIGURATION}
+        receipt.rehearsal_validate_containers(facts, contract)
+
+    def test_other_container_missing_still_fails_even_when_keeper_absent(self) -> None:
+        for other in ("sub2apiplus", "sub2apiplus-postgres", "sub2apiplus-redis", "capture-cli"):
+            with self.subTest(other=other), mock.patch.object(
+                receipt, "_run", side_effect=self._fake_docker(missing={"sub2apiplus-keeper", other})
+            ):
+                with self.assertRaises(receipt.JobRehearsalReceiptError):
+                    receipt._container_facts(self.CONFIGURATION)
+
+    def test_other_container_missing_with_keeper_present_fails_as_before(self) -> None:
+        with mock.patch.object(receipt, "_run", side_effect=self._fake_docker(missing={"sub2apiplus-redis"})):
+            with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "No such object: sub2apiplus-redis"):
+                receipt._container_facts(self.CONFIGURATION)
+
+    def test_keeper_existing_but_stopped_still_fails(self) -> None:
+        """只有「不存在」才算未部署；容器在场却没在跑，仍按原规则失败。"""
+
+        def fake_run(argv: list[str], label: str, *args: object, **kwargs: object) -> bytes:
+            return json.dumps(
+                [self._document(name, running=name != "sub2apiplus-keeper") for name in argv[2:]]
+            ).encode("utf-8")
+
+        with mock.patch.object(receipt, "_run", side_effect=fake_run):
+            with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "未运行或身份非法"):
+                receipt._container_facts(self.CONFIGURATION)
+
+    def test_daemon_failure_on_keeper_is_not_treated_as_absent(self) -> None:
+        # 第一条命令因守护进程故障失败；存在性探针也失败但不是 No such object，必须原样抛出。
+        with mock.patch.object(receipt, "_run", side_effect=self._fake_docker(missing=set(), broken={"sub2apiplus-keeper"})):
+            with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "Docker daemon"):
+                receipt._container_facts(self.CONFIGURATION)
+
+    def test_validate_containers_accepts_only_the_keeper_not_deployed_entry(self) -> None:
+        contract = {"configuration": self.CONFIGURATION}
+
+        def running(name: str) -> dict[str, object]:
+            return {"name": name, "container_id": "a" * 64, "image_id": f"sha256:{'b' * 64}", "running": True}
+
+        def entries(skip_keeper: object = None) -> list[dict[str, object]]:
+            result = [running(name) for name in self.ALL if name != "sub2apiplus-keeper"]
+            result.append(running("sub2apiplus-keeper") if skip_keeper is None else skip_keeper)
+            return sorted(result, key=lambda item: str(item["name"]))
+
+        # 五个都在跑：沿用旧规则。
+        receipt.rehearsal_validate_containers(entries(), contract)
+        # keeper 如实记未部署：通过。
+        receipt.rehearsal_validate_containers(entries({"name": "sub2apiplus-keeper", "deployed": False}), contract)
+        # deployed 必须是 false；名字必须是合同登记的 keeper；其它容器不得借未部署条目缺席。
+        for bad in (
+            {"name": "sub2apiplus-keeper", "deployed": True},
+            {"name": "sub2apiplus-other", "deployed": False},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(receipt.JobRehearsalReceiptError):
+                receipt.rehearsal_validate_containers(entries(bad), contract)
+        redis_missing = [
+            item for item in entries({"name": "sub2apiplus-keeper", "deployed": False})
+            if item["name"] != "sub2apiplus-redis"
+        ] + [{"name": "sub2apiplus-redis", "deployed": False}]
+        with self.assertRaises(receipt.JobRehearsalReceiptError):
+            receipt.rehearsal_validate_containers(sorted(redis_missing, key=lambda item: str(item["name"])), contract)
+        # 缺条目：仍要求集合完整覆盖。
+        with self.assertRaises(receipt.JobRehearsalReceiptError):
+            receipt.rehearsal_validate_containers(entries()[:-1], contract)
 
 
 if __name__ == "__main__":

@@ -743,7 +743,18 @@ if docker exec "$service_container" test -e "$custom_ca_path"; then
   exit 1
 fi
 custom_ca_baseline_absent=1
-keeper_was_running=$(docker inspect -f '{{.State.Running}}' "$keeper_container")
+# keeper（账号保活容器）已下线不再部署：容器不存在就如实视为未部署（keeper_was_running=false），
+# 后面的停、启、恢复核验自然全部跳过；在场时与以往完全一致（读运行状态，在跑则先停、退出时按原状态恢复）。
+# 只认 docker 明确报告 No such object／container；守护进程不可达等其它失败照旧失败退出。
+if keeper_probe=$(docker inspect -f '{{.State.Running}}' "$keeper_container" 2>&1); then
+  keeper_was_running=$keeper_probe
+elif [[ $keeper_probe == *"No such object"* || $keeper_probe == *"No such container"* ]]; then
+  keeper_was_running=false
+  echo "keeper 容器不存在（未部署），跳过停启：$keeper_container" >&2
+else
+  echo "无法读取 keeper 容器状态：$keeper_probe" >&2
+  exit 1
+fi
 if [[ $keeper_was_running == true ]]; then
   docker stop "$keeper_container" >/dev/null
 fi

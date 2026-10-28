@@ -77,7 +77,7 @@ if probe not in control.get("no_report", []):
         "probe_id": probe, "account_id": int(os.environ["ACCOUNT_ID"]), "api_key_id": int(os.environ["API_KEY_ID"]),
         "trigger": trigger, "relay_port": int(os.environ["RELAY_PORT"]), "capture_exit_code": code,
         "account_proxy_original": "3|NULL", "account_proxy_restored_equal": restored, "account_gate_restored_equal": True,
-        "hosts_sha256_equal": True, "ca_bundle_sha256_equal": True, "keeper_was_running": True, "runtime_secrets_removed": True,
+        "hosts_sha256_equal": True, "ca_bundle_sha256_equal": True, "keeper_was_running": False, "runtime_secrets_removed": True,
         "started_at_utc": "2026-10-07T00:00:00Z", "ended_at_utc": "2026-10-07T00:00:01Z",
     }
     if trigger == "ingress-negative":
