@@ -975,20 +975,63 @@ class WsMessageFormSummaryTests(unittest.TestCase):
 
 
 class TurnMetadataSummaryTests(unittest.TestCase):
-    """relay_extract 给带 turn metadata 的请求体附的线程来源枚举 ``_turn_metadata``（0.165.0 登记新增）：只记枚举，不记任何标识。"""
+    """relay_extract 给带 turn metadata 的请求体附的结构摘要 ``_turn_metadata``（0.165.0 登记新增）：
+    线程来源、请求类型、顶层键名、窗口号、compaction 子键名；只记枚举与键名，不记任何标识与对话内容。"""
 
     @staticmethod
-    def body(source) -> dict:
+    def body(source, **extra) -> dict:
         metadata = {"session_id": "11111111-1111-7111-8111-111111111111", "turn_id": "22222222-2222-7222-8222-222222222222"}
         if source is not None:
             metadata["thread_source"] = source
+        metadata.update(extra)
         return {"type": "response.create", "client_metadata": {"x-codex-turn-metadata": json.dumps(metadata)}}
 
     def test_user_title_and_other_sources(self) -> None:
         for source, expected in (("user", "user"), ("thread_title", "thread_title"), ("subagent", "other"), ("", "other")):
             with self.subTest(source=source):
                 shape = relay_extract.shape_top_level(self.body(source))
-                self.assertEqual(shape["_turn_metadata"], {"thread_source": expected})
+                summary = shape["_turn_metadata"]
+                self.assertEqual(summary["thread_source"], expected)
+                # 键名按出现顺序给出；没有 request_kind／window_number／compaction 时这些字段不出现。
+                self.assertEqual(summary["keys"], ["session_id", "turn_id", "thread_source"])
+                for absent in ("request_kind", "window_number", "compaction_keys"):
+                    self.assertNotIn(absent, summary)
+
+    def test_request_kind_enum(self) -> None:
+        for kind, expected in (("prewarm", "prewarm"), ("turn", "turn"), ("compaction", "compaction"), ("review", "other"), ("", "other")):
+            with self.subTest(kind=kind):
+                summary = relay_extract.shape_top_level(self.body("user", request_kind=kind))["_turn_metadata"]
+                self.assertEqual(summary["request_kind"], expected)
+        # 非字符串的 request_kind 不进摘要。
+        self.assertNotIn("request_kind", relay_extract.shape_top_level(self.body("user", request_kind=3))["_turn_metadata"])
+
+    def test_window_number_bounds(self) -> None:
+        for window, present in ((0, True), (1, True), (1000, True), (1001, False), (-1, False), (True, False), ("1", False), (1.5, False)):
+            with self.subTest(window=window):
+                summary = relay_extract.shape_top_level(self.body("user", window_number=window))["_turn_metadata"]
+                if present:
+                    self.assertEqual(summary["window_number"], window)
+                else:
+                    self.assertNotIn("window_number", summary)
+
+    def test_compaction_object_keys_only(self) -> None:
+        compaction = {"trigger": "manual", "reason": "user_requested", "implementation": "responses_compaction_v2", "phase": "standalone_turn"}
+        shape = relay_extract.shape_top_level(self.body("user", request_kind="compaction", compaction=compaction))
+        summary = shape["_turn_metadata"]
+        self.assertEqual(summary["compaction_keys"], ["trigger", "reason", "implementation", "phase"])
+        self.assertIn("compaction", summary["keys"])
+        # compaction 里的取值（原因、实现名）不进摘要，只留键名。
+        self.assertNotIn("responses_compaction_v2", json.dumps(shape))
+        # compaction 不是对象时不给 compaction_keys。
+        self.assertNotIn("compaction_keys", relay_extract.shape_top_level(self.body("user", compaction="x"))["_turn_metadata"])
+
+    def test_keys_are_bounded_and_truncated(self) -> None:
+        many = {f"k{index:02d}": index for index in range(60)}
+        summary = relay_extract.shape_top_level(self.body("user", **many))["_turn_metadata"]
+        self.assertEqual(len(summary["keys"]), relay_extract.TURN_METADATA_KEYS_LIMIT)
+        long_key = "x" * 100
+        summary = relay_extract.shape_top_level(self.body("user", **{long_key: 1}))["_turn_metadata"]
+        self.assertTrue(all(len(key) <= 40 for key in summary["keys"]))
 
     def test_summary_carries_no_identifiers_or_raw_values(self) -> None:
         serialized = json.dumps(relay_extract.shape_top_level(self.body("a-very-long-private-source-name")))
@@ -998,12 +1041,16 @@ class TurnMetadataSummaryTests(unittest.TestCase):
 
     def test_absent_without_a_parseable_turn_metadata_source(self) -> None:
         self.assertNotIn("_turn_metadata", relay_extract.shape_top_level({"type": "response.create"}))
-        self.assertNotIn("_turn_metadata", relay_extract.shape_top_level(self.body(None)))
         self.assertNotIn("_turn_metadata", relay_extract.shape_top_level({"client_metadata": {"x-codex-turn-metadata": "not json"}}))
+        # 没有 thread_source 但有可解析的对象：仍给出 keys（压缩帧、预热帧靠键名判），只是没有 thread_source。
+        summary = relay_extract.shape_top_level(self.body(None))["_turn_metadata"]
+        self.assertNotIn("thread_source", summary)
+        self.assertEqual(summary["keys"], ["session_id", "turn_id"])
         # 三条摘要路径（summarize_body、WS 帧、mitm 派生）共用 shape_top_level，同一份请求体给出同构摘要。
         raw = json.dumps(self.body("user")).encode("utf-8")
         self.assertEqual(
-            relay_extract.summarize_body(raw, "", "application/json")["shape"]["_turn_metadata"], {"thread_source": "user"}
+            relay_extract.summarize_body(raw, "", "application/json")["shape"]["_turn_metadata"],
+            relay_extract.shape_top_level(self.body("user"))["_turn_metadata"],
         )
 
 

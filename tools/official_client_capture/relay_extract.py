@@ -276,23 +276,40 @@ def _turn_metadata_turn_id(client_metadata) -> str | None:
     return turn_id if isinstance(turn_id, str) and turn_id else None
 
 
-# 回合元数据里的线程来源（0.165.0 登记新增，登记窗口内改受管摘要器）。官方 TUI 每个会话另开一条标题线程（独立 WS 连接、独立预热、
-# 一个业务帧），它的 turn metadata 里 thread_source 是 ``thread_title``，主线程是 ``user``；判据要按线程区分两者，否则标题线程的
-# 连接和预热帧会被算进主线程。但 client_metadata 里的头值整条只记长度（里面有会话、线程、回合标识），所以只把这一个枚举取值摘出来：
-# 非这两个取值的一律记成 ``other``（不记原文）。不含任何标识，也不含对话内容。
+# 回合元数据的可断言摘要（0.165.0 登记新增，登记窗口内改受管摘要器）。client_metadata 里的 x-codex-turn-metadata 头值整条只记长度（里面有会话、线程、
+# 回合标识），判据却要看其中的几个结构事实，所以只把这些摘出来，不记任何标识与对话内容：
+#   * ``thread_source``：官方 TUI 每个会话另开一条标题线程（独立 WS 连接、独立预热、一个业务帧），主线程是 ``user``、标题线程是 ``thread_title``，
+#     其它取值记 ``other``——判据据此区分线程（引擎的 derive_connection_roles 也读它）；
+#   * ``request_kind``：``prewarm``／``turn``／``compaction``，其它记 ``other``——压缩请求帧与普通回合帧的 turn metadata 形态不同；
+#   * ``keys``：turn metadata 顶层键名（按出现顺序，至多 40 个）——压缩帧没有 model／reasoning_effort 键、有 compaction 键，预热帧没有 root_turn_id，都靠它判；
+#   * ``window_number``：上下文窗口号（0～1000 的整数；官方压缩后新窗口的第一帧起由 0 变 1）；
+#   * ``compaction_keys``：``compaction`` 对象的键名（有该对象时）。
 THREAD_SOURCES = ("user", "thread_title")
+REQUEST_KINDS = ("prewarm", "turn", "compaction")
+TURN_METADATA_KEYS_LIMIT = 40
+WINDOW_NUMBER_LIMIT = 1000
 
 
 def turn_metadata_summary(client_metadata) -> dict | None:
-    """``client_metadata`` 里 turn metadata 的枚举摘要 ``{"thread_source": "user"|"thread_title"|"other"}``；没有可解析的 turn metadata 返回 None。"""
+    """``client_metadata`` 里 turn metadata 的结构摘要（字段见上）；没有可解析的 turn metadata 对象返回 None，取不到的字段不出现。"""
 
     parsed = _turn_metadata_object(client_metadata)
     if parsed is None:
         return None
+    out: dict = {"keys": [str(key)[:40] for key in list(parsed.keys())[:TURN_METADATA_KEYS_LIMIT]]}
     source = parsed.get("thread_source")
-    if not isinstance(source, str):
-        return None
-    return {"thread_source": source if source in THREAD_SOURCES else "other"}
+    if isinstance(source, str):
+        out["thread_source"] = source if source in THREAD_SOURCES else "other"
+    kind = parsed.get("request_kind")
+    if isinstance(kind, str):
+        out["request_kind"] = kind if kind in REQUEST_KINDS else "other"
+    window = parsed.get("window_number")
+    if isinstance(window, int) and not isinstance(window, bool) and 0 <= window <= WINDOW_NUMBER_LIMIT:
+        out["window_number"] = window
+    compaction = parsed.get("compaction")
+    if isinstance(compaction, dict):
+        out["compaction_keys"] = [str(key)[:40] for key in list(compaction.keys())[:TURN_METADATA_KEYS_LIMIT]]
+    return out
 
 
 # 回合 id、会话标识的官方位布局摘要（0.165.0 登记新增，W2）。官方 turn_id、session_id、thread_id 等都是 ``Uuid::now_v7()``，该库的编码使 ``rand_a``
@@ -411,7 +428,7 @@ def input_passthrough_summary(items, client_metadata) -> dict | None:
 
 def shape_top_level(parsed: dict) -> dict:
     """顶层对象的形态摘要：逐字段 ``shape_value``，``input`` 数组另附头两项形态 ``_head`` 与逐项 passthrough 整体形态 ``_passthrough``，
-    带 turn metadata 的另附线程来源枚举 ``_turn_metadata``。
+    带 turn metadata 的另附结构摘要 ``_turn_metadata``（线程来源、请求类型、顶层键名、窗口号、compaction 子键名，见 ``turn_metadata_summary``）。
 
     summarize_body、WS 帧解析和 mitm 派生三处共用，保证三条路径对同一份请求体给出同构摘要。
     """
