@@ -907,5 +907,60 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             self.assertEqual(check["assertion"]["value"], 1)
 
 
+class CandidateA06FrameLabelsTests(unittest.TestCase):
+    """证据标签里每个 A06 ``frame_labels`` 索引都必须落在真实候选帧布局的 response.create 起始帧上。
+
+    背景：上一版登记时标签写成索引 1，候选网关向上游发出的压缩消息被拆成多个分片帧，预热消息占原始帧 0 至 6，
+    首个业务消息的起始帧其实是 7；手造观测的单测从不核对标签声明与真实分片布局，所以登记全绿、实采才暴露。
+    这里用真实候选实采的帧布局夹具（只记帧序号、事件类型、fin、分片数）核对：标签索引落在续帧上（没有 event_type）会让
+    选择器命中 0 条，封存预检才拒绝——这条测试把拒绝提前到登记阶段。
+    """
+
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "candidate_a06_ws_frames_0164.json"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.frames = {item["frame_index"]: item for item in json.loads(cls.FIXTURE.read_text(encoding="utf-8"))["frames"]}
+
+    def a06_frame_labels(self, path: Path) -> dict[str, dict[str, str]]:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        found = [
+            rule["frame_labels"]
+            for entry in document["entries"]
+            if entry["job_id"] == "candidate-frozen-core"
+            for rule in entry["rules"]
+            if "A06" in rule.get("scenario_ids", []) and "frame_labels" in rule
+        ]
+        self.assertEqual(len(found), 1, path.name)
+        return found[0]
+
+    def test_fixture_is_a_real_fragmented_layout(self) -> None:
+        starts = sorted(index for index, item in self.frames.items() if item["event_type"] == "response.create")
+        self.assertEqual(starts, [0, 7, 14])
+        # 每条消息的分片数与起始帧间距一致，最后一个分片带 fin。
+        self.assertEqual([self.frames[index]["message_fragment_count"] for index in starts], [7, 7, 3])
+        self.assertTrue(self.frames[6]["fin"] and self.frames[13]["fin"] and self.frames[16]["fin"])
+
+    def test_every_labeled_index_is_a_response_create_start_frame(self) -> None:
+        for suffix in ("0_164_0", "0_165_0"):
+            with self.subTest(suffix=suffix):
+                labels = self.a06_frame_labels(TOOL_ROOT / f"codex_upgrade_evidence_labels_{suffix}.json")
+                self.assertEqual({key: value["frame_role"] for key, value in labels.items()}, {"0": "warmup", "7": "first_business"})
+                for key in labels:
+                    frame = self.frames[int(key)]
+                    self.assertEqual(frame["event_type"], "response.create", f"frame_labels[{key}] 落在续帧上，选择器会命中 0 条")
+                # 首个业务消息紧接在预热消息最后一个分片之后开始：起始帧 = 预热起始帧 + 预热消息的分片数。
+                warmup, business = int(next(k for k, v in labels.items() if v["frame_role"] == "warmup")), int(
+                    next(k for k, v in labels.items() if v["frame_role"] == "first_business")
+                )
+                self.assertEqual(business, warmup + self.frames[warmup]["message_fragment_count"])
+
+    def test_a_label_on_a_continuation_frame_is_detected(self) -> None:
+        """上一版登记的错误写法（first_business 绑在索引 1）在这份真实布局上必须被识别为落在续帧上。"""
+
+        self.assertIsNone(self.frames[1]["event_type"])
+        self.assertNotEqual(self.frames[1]["event_type"], "response.create")
+
+
 if __name__ == "__main__":
     unittest.main()

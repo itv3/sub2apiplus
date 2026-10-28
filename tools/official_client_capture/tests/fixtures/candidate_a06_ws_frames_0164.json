@@ -1,0 +1,109 @@
+{
+  "description": "候选 A06 单一 WS 连接（candidate-frozen-core，scenarios/A06/relay/conn001.client_to_upstream.bin）在 Codex 0.164.0 候选实采里的原始帧布局：只记帧序号、事件类型、fin 与消息分片数，不含任何载荷。候选网关向上游发出的压缩消息会被拆成多个分片帧，所以 response.create 消息的起始帧是 0、7、14 而不是 0、1、2。",
+  "source": "0.164.0 WSFIX 归档的候选断言包 derived/A06/websocket_trace 观测（评估基线 b2 通过 201 条检查的那一份）",
+  "note": "若网关改成一消息一帧（SIM-04）或重采使分片数变化，这份夹具要换成新实采的帧布局，证据标签的 first_business 帧索引同步改。",
+  "frames": [
+    {
+      "frame_index": 0,
+      "event_type": "response.create",
+      "fin": false,
+      "message_fragment_count": 7
+    },
+    {
+      "frame_index": 1,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 2,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 3,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 4,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 5,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 6,
+      "event_type": null,
+      "fin": true,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 7,
+      "event_type": "response.create",
+      "fin": false,
+      "message_fragment_count": 7
+    },
+    {
+      "frame_index": 8,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 9,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 10,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 11,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 12,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 13,
+      "event_type": null,
+      "fin": true,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 14,
+      "event_type": "response.create",
+      "fin": false,
+      "message_fragment_count": 3
+    },
+    {
+      "frame_index": 15,
+      "event_type": null,
+      "fin": false,
+      "message_fragment_count": null
+    },
+    {
+      "frame_index": 16,
+      "event_type": null,
+      "fin": true,
+      "message_fragment_count": null
+    }
+  ]
+}
