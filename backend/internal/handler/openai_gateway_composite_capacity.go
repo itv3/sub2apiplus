@@ -15,7 +15,6 @@ package handler
 
 import (
 	"context"
-	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -89,19 +88,4 @@ func compositeAcquireSessionHash(sessionHash string, temporarySwap bool) string 
 		return ""
 	}
 	return sessionHash
-}
-
-// messagesDispatchMappedModelForPlatform 返回 Anthropic Messages 入口在某个目标平台下的调度级模型映射。
-// composite 分组解析到 grok 或多协议 API Key 供应商时，分组的 Messages 调度映射（gpt-5.x 默认值）
-// 是 openai 专属，发给这些上游必错，模型改写交给账号级 model_mapping，返回空串；
-// 其它平台沿用分组配置。resolveOpenAIMessagesDispatchMappedModel 与满载换号共用本函数，保证口径一致。
-func messagesDispatchMappedModelForPlatform(apiKey *service.APIKey, platform, requestedModel string) string {
-	if apiKey == nil || apiKey.Group == nil {
-		return ""
-	}
-	if apiKey.Group.Platform == service.PlatformComposite &&
-		(platform == service.PlatformGrok || service.IsMultiProtocolAPIKeyProvider(platform)) {
-		return ""
-	}
-	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
 }
