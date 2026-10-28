@@ -35,7 +35,7 @@ UPSTREAM_MERGE_TRANSITION_REASON ?=
 # 隔离工作树请传 CODEX_SPEC_SOURCE_ROOT=<主工作区>/local-analysis/sources/codex-cli-<版本>；
 # 旧变量名 CODEX_0_149_1_SOURCE_ROOT 过渡期仍认并保留：tools/ci/target_platform_gate.py（及驱动副本）的摘要被受管文件
 # codex_upgrade_gate_receipt.py 的 TARGET_VERIFIER_SHA256S 钉住，它仍用旧名传源码根；等以后的受管批次统一改名后再删除这一层兼容。
-CODEX_SPEC_SOURCE_VERSION ?= 0.164.0
+CODEX_SPEC_SOURCE_VERSION ?= 0.165.0
 CODEX_SPEC_SOURCE_ROOT ?= $(if $(CODEX_0_149_1_SOURCE_ROOT),$(CODEX_0_149_1_SOURCE_ROOT),$(CURDIR)/local-analysis/sources/codex-cli-$(CODEX_SPEC_SOURCE_VERSION))
 CAPTURE_TYPESCRIPT_MODULE ?= $(CURDIR)/frontend/node_modules/typescript/lib/typescript.js
 CAPTURE_TYPESCRIPT_SHA256 := f316520790d4db220a10d890c5f85310e26a1bd3c104b8d3b5eb62ba0491651b
