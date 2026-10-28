@@ -1957,6 +1957,15 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if compactionRequest {
 		extension.Model, extension.ReasoningEffort = "", ""
 	}
+	// 根线程的 agent_name 与根回合 id（画像 TurnMetadata.RootThreadKeys；子代理、guardian 与记忆合并线程不写）。
+	rootTurnID := ""
+	if officialCodexWSRootThread(egressContext) {
+		extension.AgentName = officialCodexRootAgentName
+		if !prewarm {
+			rootTurnID = turnID
+			extension.RootTurnID = turnID
+		}
+	}
 	if !prewarm && !compactionRequest {
 		conditional := egressContext.codexRuntimeState.ConditionalHeaders
 		extension.TurnTrigger = officialCodexTurnTrigger(
@@ -1993,6 +2002,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	}
 	if egressContext.responsesLite {
 		metadata[responsesLiteWSMetadataKey] = "true"
+	}
+	// 根线程的回合帧带根回合 id（预热帧没有回合；是否出站由画像 ClientMetadata.DynamicKeys 决定）。
+	if rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
 	}
 	return metadata, sessionID, nil
 }

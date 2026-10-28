@@ -207,6 +207,12 @@ type CodexIdentityFacts struct {
 	//
 	// omitempty：取 false 时 JSON 形态与旧结构逐字节相同，旧版本画像下的身份事实摘要保持不变。
 	WindowAdvances bool `json:",omitempty"`
+	// RootTurnID 是本 WS 帧的根回合 id（根线程上等于 TurnID，预热帧没有）；ResponsesLiteWS 表示本帧的模型走 Lite。
+	// 二者只进入 WS 帧的 client_metadata，且只在画像 ClientMetadata.DynamicKeys 声明对应键时才写。
+	//
+	// omitzero／omitempty：未登记时序列化形态与旧结构逐字节相同，旧画像下的身份事实摘要保持不变。
+	RootTurnID      CodexIdentityValue `json:",omitzero"`
+	ResponsesLiteWS bool               `json:",omitempty"`
 }
 
 func (f CodexIdentityFacts) Validate() error {

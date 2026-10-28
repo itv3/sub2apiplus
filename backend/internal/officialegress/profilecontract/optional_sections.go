@@ -131,6 +131,15 @@ type TurnMetadataSection struct {
 	//
 	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
 	WSCompactionRequests bool `json:"WSCompactionRequests,omitempty"`
+	// RootThreadKeys：根线程回合写 agent_name 与 root_turn_id。
+	//
+	// 官方客户端的 turn metadata 里，agent_name 是线程的代理路径（根线程为 `/root`，握手与每帧都带），root_turn_id 是根回合的
+	// 回合 id（根线程上等于本回合的 turn_id，预热帧没有回合所以不带；官方 0.165 实采，TUI 与 exec 一致）。子代理、guardian
+	// 审阅与记忆合并线程的取值没有样本，网关不写。声明 true 后网关只对根线程写这两个键；声明时 Keys 必须包含 agent_name 与
+	// root_turn_id。缺省（false）表示旧行为：不写这两个键。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
+	RootThreadKeys bool `json:"RootThreadKeys,omitempty"`
 }
 
 // TurnMetadataSessionDefaults 是目标版本客户端默认会话模型的 turn metadata 取值，登记时取自该版本官方内置
@@ -157,6 +166,16 @@ type ClientMetadataSection struct {
 	// 引擎支持的闭集且不得为空串；存在时不能为空表。omitempty 保证未使用该字段的节
 	// 序列化形态与摘要不变。
 	KeyConditions map[string]ConditionKind `json:"KeyConditions,omitempty"`
+	// DynamicKeys：WS 帧里由客户端逐请求写入的动态键（排序去重，取值见 clientMetadataDynamicKeyKinds）。
+	//
+	// 官方 0.165 的 WS response.create 的 client_metadata 除身份键与常量外还带：root_turn_id（根回合 id，预热帧没有）、
+	// ws_request_header_x_openai_internal_codex_responses_lite（本请求的模型走 Lite 时为 "true"）、
+	// x-codex-ws-stream-request-start-ms（发送前一刻的 Unix 毫秒时间戳，每个 WS 请求都带，含预热帧）。这些键不是常量也不是
+	// 身份事实，编译器按本字段声明写入：root_turn_id 与 Lite 取自调用方提供的帧事实，时间戳由编译器在编译该帧时取当前时间。
+	// 缺省表示旧行为：client_metadata 只含身份键与常量。键不得与 Constants 重名。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写空列表会让同一份语义出现两种表示，因此校验要求列表非空。
+	DynamicKeys []string `json:"DynamicKeys,omitempty"`
 }
 
 // ConditionFor 返回常量键的写入条件：KeyConditions 覆盖优先，其余键取 Condition。
@@ -424,6 +443,9 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 			if value, declared := fields["WSCompactionRequests"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 WSCompactionRequests 存在时必须为 true", name)
 			}
+			if value, declared := fields["RootThreadKeys"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 RootThreadKeys 存在时必须为 true", name)
+			}
 		}
 		if name == SectionTurnState {
 			if value, declared := fields["ResetOnNewTurn"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
@@ -489,6 +511,13 @@ func validateOptionalSection(name string, value any) error {
 				}
 			}
 		}
+		if section.RootThreadKeys {
+			for _, key := range []string{"agent_name", "root_turn_id"} {
+				if !slices.Contains(section.Keys, key) {
+					return fmt.Errorf("RootThreadKeys 存在时 Keys 必须包含 %s", key)
+				}
+			}
+		}
 		if section.WSCompactionRequests && !slices.Contains(section.CompactionImplementations, "responses_compaction_v2") {
 			return errors.New("WSCompactionRequests 存在时 CompactionImplementations 必须包含 responses_compaction_v2")
 		}
@@ -516,6 +545,16 @@ func validateOptionalSection(name string, value any) error {
 				}
 				if condition == "" || !EngineSupportedEnumValues().Contains(EnumDomainConditionKind, string(condition)) {
 					return fmt.Errorf("KeyConditions 的条件未受支持: %q=%q", key, condition)
+				}
+			}
+		}
+		if section.DynamicKeys != nil {
+			if err := requireSortedUniqueKnown("DynamicKeys", section.DynamicKeys, clientMetadataDynamicKeyKinds); err != nil {
+				return err
+			}
+			for _, key := range section.DynamicKeys {
+				if _, collides := section.Constants[key]; collides {
+					return fmt.Errorf("DynamicKeys 与 Constants 重名: %s", key)
 				}
 			}
 		}
@@ -608,6 +647,32 @@ func validateOptionalSection(name string, value any) error {
 	default:
 		return fmt.Errorf("未知可选节类型: %s", name)
 	}
+}
+
+// clientMetadataDynamicKeyKinds 是 ClientMetadataSection.DynamicKeys 允许的取值全集。
+var clientMetadataDynamicKeyKinds = map[string]bool{
+	"root_turn_id": true,
+	"ws_request_header_x_openai_internal_codex_responses_lite": true,
+	"x-codex-ws-stream-request-start-ms":                       true,
+}
+
+// requireSortedUniqueKnown 要求列表非空、严格升序，且每个元素都在 known 里。
+func requireSortedUniqueKnown(field string, values []string, known map[string]bool) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%s 不能为空", field)
+	}
+	if !sort.StringsAreSorted(values) {
+		return fmt.Errorf("%s 必须排序", field)
+	}
+	for index, value := range values {
+		if !known[value] {
+			return fmt.Errorf("%s 含未知取值: %q", field, value)
+		}
+		if index > 0 && values[index-1] == value {
+			return fmt.Errorf("%s 含重复取值: %q", field, value)
+		}
+	}
+	return nil
 }
 
 // requireSortedUnique 要求列表非空、严格升序（即排序且无重复），元素满足可选的格式约束。

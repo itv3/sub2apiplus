@@ -165,11 +165,44 @@ func officialCodexWSHandshakeTurnMetadataExtension(
 	sessionID string,
 	extension officialCodexTurnMetadataExtension,
 ) officialCodexTurnMetadataExtension {
-	if egressContext == nil || !officialCodexTurnMetadataWindowTracking(egressContext.ProfileMode()) {
+	if egressContext == nil {
+		return extension
+	}
+	if officialCodexRootThreadDeclared(egressContext) {
+		extension.AgentName = officialCodexRootAgentName
+	}
+	if !officialCodexTurnMetadataWindowTracking(egressContext.ProfileMode()) {
 		return extension
 	}
 	number := 0
 	extension.WindowNumber = &number
 	extension.ContextWindowID = officialCodexContextWindowID(sessionID, number)
 	return extension
+}
+
+// officialCodexRootAgentName 是根线程在 turn metadata 里的 agent_name（官方 0.165 实采：TUI 与 exec 的主线程都是 /root）。
+const officialCodexRootAgentName = "/root"
+
+// officialCodexWSRootThread 判断会话是不是根线程：画像声明 RootThreadKeys，且没有子代理（含 guardian）与记忆合并标记。
+// 子代理、guardian 审阅与记忆合并线程的 agent_name／root_turn_id 没有官方样本，网关不写。
+func officialCodexWSRootThread(egressContext *OfficialEgressContext) bool {
+	if egressContext == nil || egressContext.openAIWSDerived == nil {
+		return false
+	}
+	return officialCodexRootThreadDeclared(egressContext)
+}
+
+// officialCodexRootThreadDeclared 与 officialCodexWSRootThread 的区别是不要求会话已建好派生状态：连接握手的 turn metadata
+// 在登记会话身份的过程中生成，此时派生状态还没有挂上。
+func officialCodexRootThreadDeclared(egressContext *OfficialEgressContext) bool {
+	if egressContext == nil {
+		return false
+	}
+	section := officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata
+	if section == nil || !section.RootThreadKeys {
+		return false
+	}
+	conditional := egressContext.codexRuntimeState.ConditionalHeaders
+	return strings.TrimSpace(conditional["x-openai-subagent"]) == "" &&
+		!strings.EqualFold(strings.TrimSpace(conditional["x-openai-memgen-request"]), "true")
 }

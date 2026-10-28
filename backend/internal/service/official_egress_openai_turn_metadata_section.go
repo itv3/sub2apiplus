@@ -74,6 +74,9 @@ type officialCodexTurnMetadataExtension struct {
 	// WindowNumber／ContextWindowID 是上下文窗口身份（画像 WindowTracking）；为 nil／空串表示不写对应键。
 	WindowNumber    *int
 	ContextWindowID string
+	// AgentName／RootTurnID 是根线程的代理路径与根回合 id（画像 RootThreadKeys）；空串表示不写对应键。
+	AgentName  string
+	RootTurnID string
 }
 
 // officialCodexTurnTrigger 按入口与会话种类给出 turn_trigger 取值；无法确定时返回空串。
@@ -164,6 +167,14 @@ func applyOfficialCodexTurnMetadataSection(
 	if trigger := strings.TrimSpace(extension.TurnTrigger); trigger != "" &&
 		declared(officialCodexTurnMetadataKeyTurnTrigger) {
 		values[officialCodexTurnMetadataKeyTurnTrigger] = trigger
+	}
+	if section.RootThreadKeys {
+		if name := strings.TrimSpace(extension.AgentName); name != "" && declared("agent_name") {
+			values["agent_name"] = name
+		}
+		if id := strings.TrimSpace(extension.RootTurnID); id != "" && declared("root_turn_id") {
+			values["root_turn_id"] = id
+		}
 	}
 	if section.WindowTracking {
 		if extension.WindowNumber != nil && declared("window_number") {

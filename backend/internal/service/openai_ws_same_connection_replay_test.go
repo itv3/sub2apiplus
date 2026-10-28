@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1207,6 +1208,162 @@ func TestOfficialCodexCompactionMetadataForReasonMatchesHTTPRule(t *testing.T) {
 			require.Equal(t, want, officialCodexCompactionMetadataForReason(reason))
 		})
 	}
+}
+
+// withClientMetadataSectionProfile 对 mode 槽位 ClientMetadata 节做改写（叠加在已有改写之上）。
+func withClientMetadataSectionProfile(t *testing.T, mode string, mutate func(section *profilecontract.ClientMetadataSection)) {
+	t.Helper()
+	withMutatedOfficialProfile(t, mode, func(doc *profilecontract.SnapshotDoc) {
+		require.NotEmpty(t, doc.ClientMetadata, "槽位 %s 的画像必须已有 ClientMetadata 节", mode)
+		var section profilecontract.ClientMetadataSection
+		require.NoError(t, json.Unmarshal(doc.ClientMetadata, &section))
+		mutate(&section)
+		raw, err := json.Marshal(section)
+		require.NoError(t, err)
+		doc.ClientMetadata = raw
+	})
+}
+
+func replayObjectKeys(object gjson.Result) []string {
+	var keys []string
+	object.ForEach(func(key, _ gjson.Result) bool {
+		keys = append(keys, key.String())
+		return true
+	})
+	return keys
+}
+
+func replaySubtract(keys []string, remove ...string) []string {
+	var out []string
+	for _, key := range keys {
+		if !slices.Contains(remove, key) {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// replayConfigDependentTurnMetadataKeys 是官方 turn metadata 里取值取决于用户本地配置或模型目录、网关没有可信来源的四个键
+// （SPEC-BODY-009：网关只生成有可信取值的键）：沙箱模式、自动审阅开关、node REPL 的两个开关。网关不写，是刻意的。
+var replayConfigDependentTurnMetadataKeys = []string{
+	"sandbox_mode", "auto_review_enabled", "node_repl_auto_review_required", "node_repl_disabled",
+}
+
+// 根线程键（画像 TurnMetadata.RootThreadKeys）。官方 0.165 会话（c1）的 turn metadata：根线程带 agent_name（/root），回合帧带
+// root_turn_id（等于 turn_id），预热帧没有 root_turn_id；与官方相比只差四个取决于本地配置的键（刻意不写，见
+// replayConfigDependentTurnMetadataKeys），其余键的集合与相对顺序一致。画像不声明（对照）时保持旧行为：不写这两个键。
+//
+// client_metadata 的三个动态键由 Executor 编译器按画像 ClientMetadata.DynamicKeys 写入（官方出站字节层面），
+// 见 officialegress 包 TestWebSocketFrameClientMetadataDynamicKeysFollowProfile 与本文件的语义帧用例。
+func TestOpenAIWSRootThreadKeysMatchOfficialTurnMetadata(t *testing.T) {
+	mode := officialClientProfileModeActive
+	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
+	if !section.UsesUUIDv7IDs() {
+		t.Skip("槽位画像不是增量窗口方案，实采帧的前缀形态不适用")
+	}
+	session := loadCodex0165Session(t, "c1_ws_compact_continue")
+	var steps []replayStep
+	for index := 1; index <= 6; index++ {
+		steps = append(steps, session.step(t, index))
+	}
+
+	withReplayOnSameConnectionProfile(t, mode, true)
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) {
+		section.WindowTracking = true
+		section.WSCompactionRequests = true
+		section.RootThreadKeys = true
+	})
+	handshakes, sent := replayRunSteps(t, mode, replay0165Manifest, steps)
+	require.Len(t, handshakes, 1)
+	frames := codexGateResponseCreateFrames(handshakes[0])
+	require.Len(t, frames, 6)
+
+	handshakeTM := replayHandshakeTurnMetadata(handshakes[0])
+	require.Equal(t, "/root", handshakeTM.Get("agent_name").String(), "握手 turn metadata 带根线程的 agent_name")
+	require.False(t, handshakeTM.Get("root_turn_id").Exists(), "握手是预热形态，没有 root_turn_id")
+
+	for index, frame := range frames {
+		label := fmt.Sprintf("第 %d 帧", index+1)
+		prewarm := gjson.GetBytes(frame, "generate").Type == gjson.False
+		tm := replayFrameTurnMetadata(frame)
+		officialTM := replayFrameTurnMetadata(sent[index])
+		require.Equal(t, "/root", tm.Get("agent_name").String(), label)
+		if prewarm {
+			require.False(t, tm.Get("root_turn_id").Exists(), label)
+		} else {
+			require.NotEmpty(t, tm.Get("turn_id").String(), label)
+			require.Equal(t, tm.Get("turn_id").String(), tm.Get("root_turn_id").String(), label+"：根线程的 root_turn_id 等于 turn_id")
+		}
+		// turn metadata：键集合与官方只差四个取决于本地配置的键；键序一致。
+		wantKeys := replaySubtract(replayObjectKeys(officialTM), replayConfigDependentTurnMetadataKeys...)
+		require.Equal(t, wantKeys, replayObjectKeys(tm), label+"：turn metadata 的键集合与键序与官方一致（除四个配置相关键）")
+	}
+
+	// 对照：不声明。
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) {
+		section.WindowTracking = false
+		section.WSCompactionRequests = false
+		section.RootThreadKeys = false
+	})
+	legacyHandshakes, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
+	for index, frame := range codexGateResponseCreateFrames(legacyHandshakes[0]) {
+		label := fmt.Sprintf("对照第 %d 帧", index+1)
+		require.False(t, replayFrameTurnMetadata(frame).Get("agent_name").Exists(), label)
+		require.False(t, replayFrameTurnMetadata(frame).Get("root_turn_id").Exists(), label)
+	}
+}
+
+// 语义帧里的动态 client_metadata 事实：根线程的回合帧带 root_turn_id（预热帧与子代理线程不带），Lite 连接带 Lite 标记，
+// 每帧带发送时间戳；这些事实交给 Executor 编译器，按画像 ClientMetadata.DynamicKeys 决定是否出站。
+func TestOpenAIWSSemanticFrameCarriesDynamicClientMetadataFacts(t *testing.T) {
+	mode := officialClientProfileModeActive
+	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
+	if !section.UsesUUIDv7IDs() {
+		t.Skip("槽位画像不是增量窗口方案，实采帧的前缀形态不适用")
+	}
+	session := loadCodex0165Session(t, "c1_ws_compact_continue")
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.RootThreadKeys = true })
+
+	prepare := func(subagent bool) (prewarm, business []byte) {
+		prewarmFrame := session.frames[1]
+		gin.SetMode(gin.TestMode)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		applyOfficialOpenAIWSIngressHeadersForTest(c, prewarmFrame)
+		ctx, err := attachOfficialEgressWebSocketContext(
+			withOpenAIResponsesLiteCapability(context.Background(), true), c, newOfficialOpenAIHTTPTestAccount(94),
+			"wss://chatgpt.com/backend-api/codex/responses", prewarmFrame, wsLegacyConfigForMode(mode),
+		)
+		require.NoError(t, err)
+		egressContext, ok := OfficialEgressContextFromContext(ctx)
+		require.True(t, ok)
+		require.NotNil(t, egressContext.openAIWSDerived)
+		if subagent {
+			egressContext.codexRuntimeState.ConditionalHeaders["x-openai-subagent"] = "review"
+		}
+		run := func(raw []byte, expectedPrev string) []byte {
+			t.Helper()
+			candidate, _, err := normalizeOpenAIOAuthResponsesCompatibilityBody(raw)
+			require.NoError(t, err)
+			final, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, raw, candidate, expectedPrev, false)
+			require.NoError(t, err)
+			return final
+		}
+		prewarm = run(prewarmFrame, "")
+		business = run(session.frames[2], "resp_informal_0001")
+		return prewarm, business
+	}
+
+	prewarm, business := prepare(false)
+	require.False(t, gjson.GetBytes(prewarm, "client_metadata.root_turn_id").Exists(), "预热帧没有 root_turn_id")
+	require.Equal(t, "true", gjson.GetBytes(prewarm, "client_metadata."+responsesLiteWSMetadataKey).String(), "Lite 连接的帧带 Lite 标记")
+	require.NotEmpty(t, gjson.GetBytes(prewarm, `client_metadata.x-codex-ws-stream-request-start-ms`).String())
+	turnID := gjson.GetBytes(business, "client_metadata.turn_id").String()
+	require.NotEmpty(t, turnID)
+	require.Equal(t, turnID, gjson.GetBytes(business, "client_metadata.root_turn_id").String(), "根线程回合帧的 root_turn_id 等于 turn_id")
+
+	_, subagentBusiness := prepare(true)
+	require.False(t, gjson.GetBytes(subagentBusiness, "client_metadata.root_turn_id").Exists(), "子代理线程没有官方样本，不写 root_turn_id")
 }
 
 func TestShouldReplayOnSameOpenAIWSConnection(t *testing.T) {
