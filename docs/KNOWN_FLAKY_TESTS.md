@@ -21,6 +21,17 @@
 - 疑似根因：看门狗判定依赖真实时钟和心跳间隔，CI 高负载时看门狗循环的调度延迟超过了用例的等待窗口。
 - 处置：现象一致可复跑一次。根治要把看门狗与心跳改用可注入的时钟，或把等待改为按状态轮询到上限，列入后续工具修复。
 
+### test_codex_upgrade_watchdog（Campaign lease 时间窗口）
+
+- 位置：Python，`tools/official_client_capture/tests/test_codex_upgrade_watchdog.py`。
+- 现象：`make test-capture-tools` 全量满载时偶发 1 个 error，报 `ConfigurationError: Campaign lease 时间窗口非法。`；抛出点是
+  `tools/official_client_capture/codex_upgrade.py` 校验 lease 载荷的 `deadline <= started or heartbeat < started`。该模块与被测代码在出错那次均未改动。
+- 出现记录：
+  - 2026-10-28，`reg0164/opt1-slim` 头 `77622efa3` 的本机全量 `make test-capture-tools`（Ran 8640，failures=0，errors=1，skipped=45，1352 秒，EXIT=2）。
+- 本机复现：同一模块在执行器诊断重跑中通过，另单独重跑 4 次全过；同日 `reg0164/closeprep` 上 3 次全量（头 `7c62c53f3`、`7e98b3c4f`、`246a12c21`）均 Ran 8640、OK，无此 error。
+- 疑似根因（未核实）：lease 的 `started_at_utc`、`deadline_at_utc`、`last_heartbeat_at_utc` 取自真实墙钟，用例窗口很短；整机满载时进程调度延迟让毫秒级时间戳比较偶发越界。
+- 处置：现象一致时先单独重跑本模块 3 次确认，再复跑全量一次，并在“出现记录”追加一行。根治要把 lease 用例的时钟改为可注入或加宽窗口，列入后续工具修复（改该测试文件要走受管根的版本登记，不在收尾里顺手改）。
+
 ## 已修复
 
 ### TestPinnedOpenAIModelsListMixedAccountsShareColdCacheAcrossGroups
