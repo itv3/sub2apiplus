@@ -2667,6 +2667,13 @@
    "owner": "codex",
    "rule": "name:codex"
   },
+  "test_drive_codex_tui_steps": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "codex",
+   "rule": "name:codex"
+  },
   "test_driver_client_table": {
    "claude_plan": "run",
    "codex_plan": "run",

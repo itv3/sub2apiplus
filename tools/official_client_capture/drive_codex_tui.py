@@ -30,6 +30,7 @@ import select
 import signal
 import sys
 import time
+from typing import NamedTuple
 
 ANSI = re.compile(
     rb"\x1b\[[0-9;?]*[ -/]*[@-~]"   # CSI（含 `\x1b[0 q` 这类带中间字节的）
@@ -106,6 +107,10 @@ class Tui:
             time.sleep(0.3)  # 让 TUI 把字符渲染进输入框再回车
             os.write(self.fd, b"\r")
 
+    def send_keys(self, raw: bytes) -> None:
+        """发原始按键字节（不补回车）。Alt 组合键在终端里是 ESC 前缀加字符。"""
+        os.write(self.fd, raw)
+
     def close(self) -> None:
         try:
             os.write(self.fd, b"\x03")  # Ctrl+C
@@ -123,6 +128,152 @@ class Tui:
             pass
         if self.log:
             self.log.close()
+
+
+# ---------------------------------------------------------------------------
+# 有序步骤（--step）：同一个 TUI 进程内按顺序做“会中途改设置”的动作
+# ---------------------------------------------------------------------------
+# 为什么需要：0.165 起 reasoning_effort_override 默认开启，官方客户端在会话中途改推理强度、换模型、
+# 压缩后继续对话，请求形态各不相同（configuration_update 项、整段重放等），采这些场景需要在一个
+# 会话里依次做“发提示词 → 改设置 → 再发提示词”。`--prompt` 只能连发普通提示词，无法穿插设置动作。
+#
+# 步骤写法：`动作[@保持秒数][:参数]`，保持秒数缺省时按动作类别取默认值。
+#   prompt[@秒]:文本        发一条普通提示词，随后保持（默认 --prompt-hold）
+#   effort[@秒]:档位        发 `/model --reasoning=档位`，只改推理强度（默认 --setting-hold）
+#   model[@秒]:模型[,档位]  发 `/model 模型 [--reasoning=档位]`，中途换模型（默认 --setting-hold）
+#   effort-up[@秒]          按 Alt+. 提高一档推理强度（键盘快捷键路径，默认 --setting-hold）
+#   effort-down[@秒]        按 Alt+, 降低一档推理强度
+#   compact[@秒]            发 `/compact`，随后保持（默认 --slash-hold）
+#   slash[@秒]:命令         发任意斜杠命令原文（默认 --slash-hold）
+#   wait@秒 或 wait:秒      只等待，不输入
+# `/model` 的内联参数形态来自 TUI 源码 chatwidget/model_command.rs：位置参数是模型，
+# `--reasoning=<level>` 是推理强度；没给模型时沿用当前模型。快捷键见 chatwidget/reasoning_shortcuts.rs。
+
+EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+MODEL_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+STEP_RE = re.compile(r"^(?P<kind>[a-z][a-z-]*)(?:@(?P<hold>[0-9]+(?:\.[0-9]+)?))?(?::(?P<arg>.*))?$", re.DOTALL)
+# 动作 → 默认保持时长的类别：prompt 用 --prompt-hold，setting 用 --setting-hold，slash 用 --slash-hold。
+STEP_KINDS = {
+    "prompt": "prompt",
+    "effort": "setting",
+    "model": "setting",
+    "effort-up": "setting",
+    "effort-down": "setting",
+    "compact": "slash",
+    "slash": "slash",
+    "wait": "wait",
+}
+# 需要参数的动作与必须没有参数的动作。
+STEP_NEEDS_ARG = {"prompt", "effort", "model", "slash"}
+STEP_NO_ARG = {"effort-up", "effort-down", "compact"}
+# Alt 组合键的终端编码：ESC 加字符（xterm 的 metaSendsEscape 行为，crossterm 解析为 Alt+字符）。
+ALT_PERIOD = b"\x1b."
+ALT_COMMA = b"\x1b,"
+
+
+class Step(NamedTuple):
+    """一个已校验的步骤：kind 是动作名，arg 是参数，hold 为 None 表示用该类别的默认保持时长。
+
+    用 NamedTuple 而不是 dataclass：测试与探测会用 importlib 按文件路径加载本脚本且不登记进
+    sys.modules，dataclass 在这种加载方式下会因找不到模块而报错。
+    """
+
+    kind: str
+    arg: str | None
+    hold: float | None
+
+
+def parse_step(spec: str) -> Step:
+    """解析并严格校验一条 `--step`；写错的步骤宁可当场报错，也不要让 TUI 对着一条残缺命令空等。"""
+    matched = STEP_RE.match(spec)
+    if not matched:
+        raise ValueError(f"无法解析步骤：{spec!r}")
+    kind, arg = matched.group("kind"), matched.group("arg")
+    hold = float(matched.group("hold")) if matched.group("hold") is not None else None
+    if kind not in STEP_KINDS:
+        raise ValueError(f"未知步骤动作 {kind!r}（可用：{', '.join(sorted(STEP_KINDS))}）")
+    if kind in STEP_NO_ARG and arg:
+        raise ValueError(f"步骤 {kind} 不接受参数：{spec!r}")
+    if kind in STEP_NEEDS_ARG and not (arg and arg.strip()):
+        raise ValueError(f"步骤 {kind} 需要参数：{spec!r}")
+    if kind == "effort":
+        arg = arg.strip()
+        if arg not in EFFORT_LEVELS:
+            raise ValueError(f"effort 档位 {arg!r} 不在 {EFFORT_LEVELS} 内")
+    elif kind == "model":
+        model, _, level = arg.strip().partition(",")
+        if not MODEL_SLUG.match(model):
+            raise ValueError(f"model 步骤的模型名不合法：{model!r}")
+        if level and level not in EFFORT_LEVELS:
+            raise ValueError(f"model 步骤的档位 {level!r} 不在 {EFFORT_LEVELS} 内")
+        arg = f"{model},{level}" if level else model
+    elif kind == "slash":
+        arg = arg.strip()
+        if not arg.startswith("/"):
+            raise ValueError(f"slash 步骤的命令必须以 / 开头：{spec!r}")
+    elif kind == "wait":
+        # wait 的秒数既可写 wait@30 也可写 wait:30；两者都没有则报错。
+        if hold is None:
+            if arg is None or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", arg.strip()):
+                raise ValueError(f"wait 步骤需要秒数（wait@30 或 wait:30）：{spec!r}")
+            hold, arg = float(arg.strip()), None
+        elif arg:
+            raise ValueError(f"wait 步骤只能给一个秒数：{spec!r}")
+    return Step(kind=kind, arg=arg, hold=hold)
+
+
+def parse_steps(specs: list[str]) -> list[Step]:
+    return [parse_step(spec) for spec in specs]
+
+
+def step_typed_text(step: Step) -> str | None:
+    """需要在输入框里敲字并回车的步骤返回要敲的文本；按键步骤和等待步骤返回 None。"""
+    if step.kind == "prompt":
+        return step.arg
+    if step.kind == "effort":
+        return f"/model --reasoning={step.arg}"
+    if step.kind == "model":
+        model, _, level = (step.arg or "").partition(",")
+        return f"/model {model} --reasoning={level}" if level else f"/model {model}"
+    if step.kind == "compact":
+        return "/compact"
+    if step.kind == "slash":
+        return step.arg
+    return None
+
+
+def step_raw_keys(step: Step) -> bytes | None:
+    """按键步骤要发送的原始字节；其余步骤返回 None。"""
+    if step.kind == "effort-up":
+        return ALT_PERIOD
+    if step.kind == "effort-down":
+        return ALT_COMMA
+    return None
+
+
+def step_hold_seconds(step: Step, prompt_hold: float, setting_hold: float, slash_hold: float) -> float:
+    if step.hold is not None:
+        return step.hold
+    category = STEP_KINDS[step.kind]
+    return {"prompt": prompt_hold, "setting": setting_hold, "slash": slash_hold, "wait": 0.0}[category]
+
+
+def run_steps(tui, steps: list[Step], prompt_hold: float, setting_hold: float, slash_hold: float,
+              sleep=time.sleep) -> None:
+    """按顺序执行步骤。tui 只需提供 send／send_keys／pump，单测里用替身验证调用顺序，不需要真终端。"""
+    for index, step in enumerate(steps, start=1):
+        label = step.kind if step.arg is None else f"{step.kind}:{step.arg}"
+        hold = step_hold_seconds(step, prompt_hold, setting_hold, slash_hold)
+        print(f"--- 步骤 {index}/{len(steps)}：{label}（保持 {hold:g} 秒）---", flush=True)
+        text = step_typed_text(step)
+        keys = step_raw_keys(step)
+        if text is not None:
+            tui.send(text)
+        elif keys is not None:
+            tui.send_keys(keys)
+        tui.pump(hold)
+        sleep(2)
+    print("--- 步骤阶段结束 ---", flush=True)
 
 
 def main() -> int:
@@ -148,6 +299,12 @@ def main() -> int:
                          "指定后不再执行预热与斜杠命令流程")
     ap.add_argument("--prompt-hold", type=float, default=120,
                     help="每条普通提示词发送后保持多久")
+    ap.add_argument("--step", action="append", default=[],
+                    help="同一个 TUI 进程内按顺序执行的步骤，可重复，写法 `动作[@保持秒数][:参数]`："
+                         "prompt:文本、effort:档位、model:模型[,档位]、effort-up、effort-down、compact、"
+                         "slash:/命令、wait@秒。指定后不再执行 --prompt 与预热／斜杠流程，也不能与 --prompt 同用")
+    ap.add_argument("--setting-hold", type=float, default=8,
+                    help="--step 里设置类动作（effort／model／effort-up／effort-down）之后保持多久")
     ap.add_argument("--log", default=None, help="把 TUI 原始输出写到这个文件")
     ap.add_argument("--no-daemon", action="store_true",
                     help="传给 codex 的 --no-daemon：不经共享后台 daemon，用内嵌 app-server。"
@@ -170,6 +327,16 @@ def main() -> int:
                     choices=["read-only", "workspace-write", "danger-full-access"],
                     help="--no-bypass 时采用的沙箱模式")
     args = ap.parse_args()
+
+    # 步骤先于启动校验：写错的步骤当场退出，不要先起一个 TUI 再失败。
+    try:
+        steps = parse_steps(args.step)
+    except ValueError as error:
+        print(f"步骤参数错误：{error}", flush=True)
+        return 2
+    if steps and args.prompt:
+        print("步骤参数错误：--step 与 --prompt 不能同时使用（把提示词写成 prompt:文本 步骤）", flush=True)
+        return 2
 
     os.makedirs(args.cwd, exist_ok=True)
     os.chdir(args.cwd)
@@ -224,7 +391,9 @@ def main() -> int:
         tui.wait_for(["Codex", "▌", "⏎"], 30, "启动")
         time.sleep(2)
 
-        if args.prompt:
+        if steps:
+            run_steps(tui, steps, args.prompt_hold, args.setting_hold, args.slash_hold)
+        elif args.prompt:
             # 同一进程、同一会话连续触发同类工具，专门用于判断第二次调用是否复用连接。
             # 固定等待而不猜屏幕状态：真正完成与否最终仍由中继字节判定。
             for index, prompt in enumerate(args.prompt, start=1):

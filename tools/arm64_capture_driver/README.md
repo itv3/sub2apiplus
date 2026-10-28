@@ -437,6 +437,11 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   审查等交互屏拦住首帧即失败。失败组合在新命名空间里以 48×160 窗口复跑一次，只用于识别是哪类交互屏。
   探测前后在命名空间外比对容器状态指纹并检查残留进程。报告在 `$PROBE/report.json`（每次运行另存
   `attempts/<时间>/`），`verify` 拒绝未通过、自摘要不符、Campaign 不符或带验收参数的报告。
+  会话内有序步骤场景（`effort-update-ws`、`effort-update-http`、`model-switch-ws`、`compact-continue-ws`、
+  `effort-unsupported-ws`）的调用点用驱动的 `--step` 写交互流程；`--step`／`--setting-hold` 只决定在 TUI 里敲什么，
+  不进客户端命令行，探测用自己的口令提示词，不复刻步骤。`effort-update-http` 的调用点把脚本里的
+  `http_probe_provider_config`（名叫 OpenAI、`supports_websockets=false` 的 provider）展开成一串 `--config`，
+  探测表 `HTTP_PROBE_PROVIDER_CONFIG` 与脚本数组逐项一致（静态测试对照），版本取作业环境的 `CODEX_VERSION`。
 * 替身只做 TUI 引导必需的最小应答：`accounts/check` 回显请求头里的账号（与真实上游同构）、`/models` 用
   CODEX_HOME 中客户端自己缓存的最近一次真实目录（新版本首次探测时目录来自上一版本的缓存，迁移屏判断以此为准，
   报告 `models_catalog` 记录来源）、WebSocket 升级回 426（客户端立即回退 HTTP）、`POST …/responses` 回 400、

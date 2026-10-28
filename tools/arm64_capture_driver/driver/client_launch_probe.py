@@ -62,7 +62,20 @@ RELAY_DEFAULTS = {
     "CODEX_BIN": "/root/.local/bin/codex",
     "MODEL": "gpt-5.4",
     "DISABLE_FEATURES": "plugins apps",
+    "CODEX_VERSION": "0.145.0",
 }
+# 只走 HTTP 的 OAuth provider（run_official_relay_scenario.sh 的 http_probe_provider_config 数组逐项展开；{codex_version} 为
+# CODEX_VERSION，缺省同脚本）。名字仍是 OpenAI、supports_websockets=false：没有 WS 预热。静态测试逐项对照脚本数组。
+HTTP_PROBE_PROVIDER_CONFIG = (
+    "model_provider=openai-http-probe",
+    "model_providers.openai-http-probe.name=OpenAI",
+    "model_providers.openai-http-probe.base_url=https://chatgpt.com/backend-api/codex",
+    "model_providers.openai-http-probe.wire_api=responses",
+    "model_providers.openai-http-probe.supports_websockets=false",
+    "model_providers.openai-http-probe.requires_openai_auth=true",
+    "model_providers.openai-http-probe.http_headers.version={codex_version}",
+)
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 TOOL_ROOT_SUFFIX = "tools/official_client_capture"
 # 非 daemon 的 TUI 场景在调用点一律显式带 --no-daemon（驱动转给客户端）：新版客户端取消了 TUI 对共享后台服务的
 # 功能开关白名单，TUI 带 --disable plugins／apps 会去核对 daemon 的功能状态，不一致就报
@@ -103,6 +116,40 @@ TUI_SCENARIOS: dict[str, dict[str, Any]] = {
             "--no-bypass", "--approval-policy", "on-request", "--sandbox-mode", "workspace-write",
             "--config", 'approvals_reviewer="auto_review"', *NO_DAEMON,
         ],
+        "variables": ("DISABLE_FEATURES",),
+    },
+    # reasoning_effort_override 默认开启后：会话内用 --step 改推理强度、换模型、压缩后续聊（步骤只决定在 TUI 里敲什么，
+    # 不进客户端命令行；探测用自己的口令提示词，不复刻步骤）。SWITCH_MODEL 只进步骤，不进命令行。
+    "effort-update-ws": {
+        "marker": "__EFFORT_UPDATE_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": list(NO_DAEMON),
+        "variables": ("DISABLE_FEATURES",),
+    },
+    # 只走 HTTP 的 OAuth provider：调用点把 http_probe_provider_config 展开成 --config 序列，位于 --no-daemon 之后、--disable 之前。
+    "effort-update-http": {
+        "marker": "__EFFORT_UPDATE_HTTP_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": list(NO_DAEMON),
+        "variables": ("DISABLE_FEATURES", "CODEX_VERSION", "http_probe_provider_config", "item"),
+        "http_probe_provider": True,
+    },
+    "model-switch-ws": {
+        "marker": "__MODEL_SWITCH_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": list(NO_DAEMON),
+        "variables": ("DISABLE_FEATURES", "SWITCH_MODEL", "switch_model"),
+    },
+    "compact-continue-ws": {
+        "marker": "__COMPACT_CONTINUE_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": list(NO_DAEMON),
+        "variables": ("DISABLE_FEATURES",),
+    },
+    "effort-unsupported-ws": {
+        "marker": "__EFFORT_UNSUPPORTED_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": list(NO_DAEMON),
         "variables": ("DISABLE_FEATURES",),
     },
     "review-tui": {
@@ -225,6 +272,14 @@ def drive_options(scenario: str, environment: Mapping[str, str]) -> list[str]:
         if environment.get("TUI_DISABLE"):
             options += ["--disable", *_features(environment["TUI_DISABLE"], "TUI_DISABLE")]
     options += list(spec["fixed"])
+    if spec.get("http_probe_provider"):
+        # $(for item in "${http_probe_provider_config[@]}"; do printf -- '--config %s ' "$item"; done)：每项一个 --config，
+        # 版本取 CODEX_VERSION（空串与未设置同样取默认值，脚本校验三段数字）。
+        version = environment.get("CODEX_VERSION") or RELAY_DEFAULTS["CODEX_VERSION"]
+        if not VERSION_RE.fullmatch(version):
+            raise ProbeConfigError(f"CODEX_VERSION 必须是三段数字：{version!r}")
+        for item in HTTP_PROBE_PROVIDER_CONFIG:
+            options += ["--config", item.format(codex_version=version)]
     # DISABLE_FEATURES=${DISABLE_FEATURES:-"plugins apps"}：空串与未设置同样取默认值
     for feature in _features(environment.get("DISABLE_FEATURES") or RELAY_DEFAULTS["DISABLE_FEATURES"], "DISABLE_FEATURES"):
         options += ["--disable", feature]
