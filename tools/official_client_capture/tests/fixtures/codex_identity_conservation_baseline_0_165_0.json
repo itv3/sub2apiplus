@@ -1,0 +1,2833 @@
+{
+ "schema_version": "codex-identity-conservation-baseline/v1",
+ "source_commit": "eb0276a22698321fa07018459cc06cc654b2d94e",
+ "policy_version": 8,
+ "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
+ "files_sha256": "d982d8896cac606ae5437f282fc697eaf14209a7b28cff56227ca76d90697c5b",
+ "wire_producer_sha256": "e843e875cffa7c17f1b7e0fd599f9d56f1ff806beb1521c483a2b008d683922a",
+ "evidence_semantics_sha256": "a8e6989ddcb25e40941f20cf435d777dee1da689f2baad5d745a483b3e61a018",
+ "control_sha256": "aeb4efba3beeb2aab5f5e9ba1c6de75ffa4be017445377e00f93723a9ab844b6",
+ "orchestrator_closure_sha256": {
+  "wire_producer": "a0394a9ba0aa8a4a9a55ec8b2a12170a799ea8894ec5fe6956c86626710aff3a",
+  "evidence_semantics": "14ebeb8ad32caa926bb35c1d40d49c61ea621c39509460011ec6d7748b5e06d4"
+ },
+ "checker_sha256": "06176262cbac5029a4eb225d959ae6f02abd5528588faecc1a8376f2c5a4b893",
+ "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
+ "compare_reader_sha256": "1d5870c96faeb322e1c07cd9a4cdeab7f17a3354a2be6734e8af337fc7d6078d",
+ "accept_reader_sha256": "d7149a32b5c00c696ddb0b5634befc9d7ac5ec89129e96ae435f0ab323fdb09a",
+ "layer_counts": {
+  "wire_producer": 59,
+  "evidence_semantics": 76,
+  "control": 137,
+  "ignored": 167,
+  "defaulted": 0
+ },
+ "defaulted_paths": [],
+ "closure_symbols": {
+  "wire_producer": {
+   "functions": [
+    "HistoricalSourceSpecBinding",
+    "Job",
+    "ScenarioReceiptContext",
+    "_archive_failed_job_evidence",
+    "_campaign_arguments",
+    "_campaign_file",
+    "_cloud_config_bundle_global_failure",
+    "_collect_model_condition_receipt",
+    "_collect_scenario_receipts",
+    "_evidence_root_has_bytes",
+    "_expand_roots",
+    "_failed_job_evidence_host_route",
+    "_finalize_scenario_receipt",
+    "_fingerprint",
+    "_format_template",
+    "_git_commit",
+    "_historical_run_summary_failure_observations",
+    "_job_context",
+    "_job_execution_payload",
+    "_job_execution_sha256",
+    "_job_failure_observations",
+    "_job_incremental_metadata",
+    "_job_run_id",
+    "_job_tool_components",
+    "_job_tool_dependency_files",
+    "_load_frozen_assertion_source_spec_binding",
+    "_load_plan_jobs",
+    "_normalize_failure_observations",
+    "_read_json",
+    "_reject_symlink_components",
+    "_run_job_impl",
+    "_run_job_with_retry",
+    "_safe_plan",
+    "_scenario_job_execution_contract",
+    "_scenario_non_execution_contract",
+    "_scenario_source_spec_binding",
+    "_secure_write_json_once",
+    "_terminate_process",
+    "_tool_component_for_path",
+    "_tool_component_identities",
+    "_tool_dependency_declaration",
+    "_tool_entry_digest_map",
+    "_tool_identity",
+    "_tool_identity_sides",
+    "_tool_tree_entries",
+    "_validate_capture_runtime_ids",
+    "_validate_jobs",
+    "_validate_phase_coverage",
+    "_validate_scenario_manifest_shape",
+    "_validate_scenario_variable_contract",
+    "_validate_side_triggers",
+    "_wait_process",
+    "load_extra_jobs",
+    "load_scenario_jobs",
+    "run_job"
+   ],
+   "constants": [
+    "ASSERTION_PROFILE_SCHEMA",
+    "CAMPAIGN_GLOBAL_PRECONDITION_ERROR",
+    "CLOUD_CONFIG_BUNDLE_TIMEOUT_MARKER",
+    "DEFAULT_HEARTBEAT_SECONDS",
+    "EXTRA_JOB_SCHEMA",
+    "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS",
+    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+    "GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE",
+    "GLOBAL_PRECONDITION_SCAN_MAX_FILES",
+    "HISTORICAL_RUN_SUMMARY_CONTRACTS",
+    "HISTORICAL_RUN_SUMMARY_MAX_BYTES",
+    "IMMUTABLE_IMAGE_RE",
+    "JOB_RETRY_DELAY_SECONDS",
+    "JOB_RETRY_LIMIT",
+    "REPORT_SCHEMA",
+    "REQUIRED_CLIENT_BINDINGS",
+    "RULE_RE",
+    "RUNTIME_CODEX_BINARY_JOB_IDS",
+    "RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS",
+    "RUNTIME_WINDOW_ID_PLACEHOLDER",
+    "SAFE_ABSOLUTE_PATH_RE",
+    "SAFE_ID_RE",
+    "SCENARIO_EVIDENCE_ROOT_ROLE",
+    "SCENARIO_FACTS_DIR",
+    "SCENARIO_JOB_EXECUTION_FIELDS",
+    "SCENARIO_SCHEMA",
+    "SHA256_RE",
+    "TOOL_DEPENDENCY_PATH_RE",
+    "VERSION_RE",
+    "_ACTIVE_CAMPAIGN_LEASE",
+    "_CONTROL_PLANE_TOOL_FILES",
+    "_ENVIRONMENT_PLANE_TOOL_FILES",
+    "_EVALUATION_SIDE_FILES",
+    "_PRODUCER_TOOL_FILES",
+    "_RELAY_TOOL_FILES",
+    "_RUNTIME_TOOL_PREFIXES",
+    "_SCENARIO_TOOL_FILES",
+    "_TOOL_COMPONENT_NAMES",
+    "_WATCHDOG_ONLY_TOOL_FILES"
+   ]
+  },
+  "evidence_semantics": {
+   "functions": [
+    "CampaignLease",
+    "EvidenceIntegrityError",
+    "HistoricalSourceSpecBinding",
+    "Job",
+    "ScenarioReceiptContext",
+    "ToolEvolutionRequired",
+    "_active_unsealed_attempts",
+    "_analysis_payload",
+    "_apply_candidate_runtime_override",
+    "_approve_frozen_capture_seal",
+    "_approved_assertion_profile_path",
+    "_approved_rules",
+    "_approved_scenario_with_formal_execution_contract",
+    "_assert_job_rehearsal_compatible",
+    "_assert_recovery_rehearsal_uses_successor_controls",
+    "_assert_sealed_stage_checkpoint_progression",
+    "_attempt_cause_identity",
+    "_attempt_conflict_quarantine_receipt",
+    "_attempt_continuity_drift_receipt",
+    "_attempt_continuity_drifted",
+    "_attempt_evidence_binding",
+    "_attempt_evolution_impact",
+    "_attempt_evolution_invalidated_job_ids",
+    "_attempt_evolution_reconciled",
+    "_attempt_failure_facts",
+    "_attempt_isolation_receipt",
+    "_attempt_reconciled_terminal",
+    "_attempt_recovery_segment_reconciled",
+    "_attempt_recovery_segment_root",
+    "_attempt_recovery_segment_terminal_failed",
+    "_attempt_reference_matches",
+    "_authoritative_recovery_execute_jobs",
+    "_baseline_private_root",
+    "_bind_active_lease_attempt",
+    "_bound_evidence_path",
+    "_bound_runtime_scenario_transition_job_ids",
+    "_build_interrupted_recovery_tool_transition",
+    "_build_phase_evaluation_transition_preview",
+    "_c0154_vc5_failed_job_control_epoch_source_context",
+    "_campaign_arguments",
+    "_campaign_attempt_roots",
+    "_campaign_contamination_facts",
+    "_campaign_contamination_records",
+    "_campaign_coordinates",
+    "_campaign_effective_tool_identity",
+    "_campaign_environment_decision",
+    "_campaign_file",
+    "_campaign_jobs",
+    "_campaign_lease_pid_alive",
+    "_campaign_lease_staleness",
+    "_campaign_lease_status",
+    "_campaign_lease_stop_path",
+    "_campaign_ledger_summary_for_baseline",
+    "_campaign_lock",
+    "_campaign_timing_ledger_dir",
+    "_campaign_tool_evolutions",
+    "_candidate_build_receipt_path",
+    "_candidate_control_refresh_source_transition",
+    "_candidate_delivery_receipt_path",
+    "_candidate_external_gate_binding",
+    "_candidate_post_client_restoration",
+    "_candidate_readiness_bound_file",
+    "_candidate_revision_dir",
+    "_candidate_revisions_root",
+    "_candidate_revisions_status",
+    "_candidate_runtime_override_path",
+    "_candidate_stage_receipt_boundary",
+    "_candidate_write_ledger_status",
+    "_canonicalize_tool_component_bundle",
+    "_canonicalize_watchdog_component_bundle",
+    "_capture_assertion_context",
+    "_capture_attempt_path",
+    "_capture_attempt_relative",
+    "_classification_candidate_job_evidence_roots",
+    "_classification_candidate_reuse_attempt_source",
+    "_complete_vc_phase",
+    "_conflict_compromised_attempts",
+    "_conflict_quarantined_attempts",
+    "_container_image_id",
+    "_contamination_fact",
+    "_contamination_window_start_epoch",
+    "_control_epoch_empty_boundary",
+    "_control_epoch_failed_scope_production_paths",
+    "_control_epoch_files",
+    "_control_epoch_final_execution_authorization",
+    "_control_epoch_final_execution_scope",
+    "_control_epoch_identity_unchanged",
+    "_control_epoch_invariants",
+    "_control_epoch_path",
+    "_control_epoch_previous_controls",
+    "_control_epoch_production_invariant_digest",
+    "_control_epoch_required_phase",
+    "_control_epoch_runtime_repair_amendment_path",
+    "_control_epoch_runtime_repair_path",
+    "_control_epoch_source_campaign_dir",
+    "_control_epoch_source_context",
+    "_control_epoch_stop_checkpoint",
+    "_control_epoch_stop_required_phase",
+    "_control_epoch_zero_boundary",
+    "_control_path_from_recovery_binding",
+    "_control_receipt_relative",
+    "_control_replacement_context",
+    "_control_replacement_context_matches",
+    "_control_replacement_file_binding",
+    "_control_replacement_stopped_ledger",
+    "_control_replacement_supervisor_audit",
+    "_current_attempt_recovery_baseline",
+    "_current_candidate_revision",
+    "_current_candidate_revision_record",
+    "_current_evaluation_baseline",
+    "_deadline_orphan_validate_probe_root",
+    "_deduplicate_evidence_roots",
+    "_directory_identity",
+    "_directory_tree_digest",
+    "_effective_results_document",
+    "_environment_isolations",
+    "_environment_probe_arguments",
+    "_evaluation_baseline_dir",
+    "_evaluation_baseline_states",
+    "_evaluation_baselines_status",
+    "_evaluation_transition_path",
+    "_evaluation_transition_preview_path",
+    "_evidence_conflict_quarantines",
+    "_evidence_file_binding",
+    "_evidence_files",
+    "_evidence_inventory",
+    "_evidence_label_change_registered_by_evolution",
+    "_evidence_manifest_checkpoint_path",
+    "_evidence_manifest_configuration_error",
+    "_evidence_manifest_path",
+    "_evidence_manifest_rebinds",
+    "_evidence_permissions_private",
+    "_evidence_root_map",
+    "_evidence_root_relocations",
+    "_evidence_root_supersessions",
+    "_evidence_security",
+    "_existing_candidate_revisions",
+    "_external_file_binding",
+    "_external_json_object",
+    "_extract_json_surfaces",
+    "_failed_capture_attempts",
+    "_failed_job_evidence_host_route",
+    "_failed_job_ids",
+    "_failed_job_recovery_high_risk_paths",
+    "_file_sha256_bounded",
+    "_final_execution_epoch_phase_recovery_context",
+    "_finalize_attempt_restoration",
+    "_finalize_scenario_receipt",
+    "_fingerprint",
+    "_format_template",
+    "_git_blob_sha256",
+    "_git_commit",
+    "_guard_candidate_revision_write",
+    "_h2_request_surface",
+    "_header_names",
+    "_header_value",
+    "_historical_phase_evaluation_transition_frozen_state",
+    "_historical_run_summary_failure_observations",
+    "_image_repo_digests",
+    "_imported_stage_checkpoint_path",
+    "_imported_stage_evaluation_transition_source",
+    "_imported_stage_evidence_manifest_path",
+    "_interrupted_recovery_campaign_plan",
+    "_interrupted_recovery_failed_supervisor",
+    "_interrupted_recovery_job_ids_for_path",
+    "_interrupted_recovery_source_snapshot",
+    "_interrupted_recovery_transition_path",
+    "_inventory_content_index",
+    "_inventory_contents_equal",
+    "_inventory_index",
+    "_is_c0154_a15_post_run_seal_source",
+    "_is_c0154_v7_failed_core_source",
+    "_is_c0154_vc5_failed_job_control_epoch_campaign",
+    "_is_c0154_vc5_failed_job_control_epoch_source",
+    "_is_classification_candidate_metadata_only_attempt",
+    "_is_official_evidence_reuse_metadata_only_attempt",
+    "_is_official_sealed_control_epoch_source",
+    "_is_policy_v2_identity",
+    "_is_rfc3339_timestamp",
+    "_is_strict_pre_job_failure",
+    "_is_world_traversable_executable",
+    "_isolated_contamination_keys",
+    "_isolation_invalidated_attempts",
+    "_job_context",
+    "_job_execution_payload",
+    "_job_execution_sha256",
+    "_job_failure_observations",
+    "_job_finished_before",
+    "_job_incremental_metadata",
+    "_job_rehearsal_configuration",
+    "_job_rehearsal_contract_from_arguments",
+    "_job_rehearsal_contract_from_manifest",
+    "_job_rehearsal_control_from_receipt",
+    "_job_run_id",
+    "_job_tool_components",
+    "_job_tool_dependency_files",
+    "_latest_attempt_summary",
+    "_lease_identity_matches",
+    "_ledger_last_stage_revision",
+    "_legacy_attempt_relative_evidence_path",
+    "_legacy_stage_path",
+    "_legacy_vc0_phase_recovery_scope",
+    "_load_attempt_recovery_reservation",
+    "_load_attempt_recovery_segment",
+    "_load_candidate_runtime_override",
+    "_load_capture_attempt",
+    "_load_capture_reservation",
+    "_load_classification_candidate_reuse_transition",
+    "_load_control_epoch_receipt",
+    "_load_control_epoch_runtime_repair",
+    "_load_evaluation_baseline_recovery",
+    "_load_evidence_manifest",
+    "_load_imported_stage_checkpoint",
+    "_load_interrupted_recovery_contract",
+    "_load_or_build_attempt_surface",
+    "_load_phase_evaluation_transition",
+    "_load_seal_draft",
+    "_load_stage_result",
+    "_load_vc3_gate_requirements",
+    "_manifest_allows_incremental_noop_rehearsal",
+    "_manifest_policy_version",
+    "_manifest_surface_files",
+    "_materialize_metadata_only_after_snapshot",
+    "_materialize_metadata_only_probe_snapshot",
+    "_merge_surfaces",
+    "_metadata_only_historical_epoch_fallback_allowed",
+    "_metadata_only_repair_receipt_complete",
+    "_metadata_only_seal_repair_allowed",
+    "_metadata_only_stopped_timing_allowed",
+    "_normalize_campaign_lease_note",
+    "_normalize_failure_observations",
+    "_normalize_watchdog_operation",
+    "_normalized_host",
+    "_normalized_path",
+    "_official_compaction_lite_recovery_tool_impact",
+    "_official_compaction_recovery_successor_impact",
+    "_official_epoch_allows_classification_tool_drift",
+    "_official_evidence_reuse_attempt_source",
+    "_official_label_vocabulary",
+    "_official_scenario_execution_contract",
+    "_official_sealed_control_epoch_source_context",
+    "_on_disk_campaign_configuration",
+    "_optional_campaign_timing_ledger_dir",
+    "_ordered_capture_attempts",
+    "_parse_client_evidence",
+    "_phase_evaluation_allowed_operations",
+    "_phase_evaluation_changed_files",
+    "_phase_evaluation_environment_boundary",
+    "_phase_evaluation_failed_job_production_changes",
+    "_phase_evaluation_pre_job_environment_boundary",
+    "_phase_evaluation_recovery_scope",
+    "_phase_evaluation_recovery_successor_operations",
+    "_phase_evaluation_transition_index",
+    "_phase_evaluation_transition_source",
+    "_phase_recovery_controls_from_arguments",
+    "_physical_evidence_index",
+    "_plan_control_receipts",
+    "_previous_capture_facts",
+    "_probe_capture_environment",
+    "_profile_binding_from_manifest",
+    "_project_ledger_status",
+    "_published_c0154_a15_post_run_seal_coordinates",
+    "_published_c0154_v7_recovery_coordinates",
+    "_read_campaign_lease",
+    "_read_campaign_lease_stop_receipts",
+    "_read_candidate_revision_record",
+    "_read_evaluation_baseline_commit",
+    "_read_json",
+    "_rebase_reused_result",
+    "_record_candidate_seal_failure",
+    "_record_evaluation_side_drift",
+    "_recovery_continuity_receipt_path",
+    "_recovery_rehearsal_preflight_from_receipt",
+    "_recovery_rehearsal_target_scenario_override",
+    "_recovery_root_sets",
+    "_recovery_segment_contamination_facts",
+    "_reject_contaminated_campaign",
+    "_reject_symlink_components",
+    "_release_certification_required",
+    "_replay_attempt_evidence_permissions",
+    "_replay_attempt_recovery_evidence_permissions",
+    "_replay_bound_candidate_external_gate",
+    "_replay_bound_official_compaction_recovery_handoff",
+    "_replay_candidate_build_receipt",
+    "_replay_candidate_delivery_receipt",
+    "_replay_capture_stage_receipts",
+    "_replay_evidence_permission_closeout",
+    "_replay_projected_candidate_build_receipt",
+    "_replay_vc_checkpoint",
+    "_replay_vc_completion",
+    "_request_host",
+    "_request_surface",
+    "_require_attempt_current_under_evolutions",
+    "_require_attempt_recovery_successor_segment",
+    "_require_c0154_a15_post_run_seal_source_binding",
+    "_require_c0154_v7_frozen_legacy_build_receipt",
+    "_require_c0154_v7_recovery_source_binding",
+    "_require_candidate_in_current_revision",
+    "_require_candidate_revision",
+    "_require_clean_candidate_source",
+    "_require_file_binding",
+    "_require_formal_campaign",
+    "_require_outside_candidate_source",
+    "_require_recovery_binding",
+    "_require_recovery_preview_scope_equals_frozen_jobs",
+    "_require_recovery_revision",
+    "_required_client_bindings",
+    "_requires_complete_vc_artifacts",
+    "_rerun_all_invalidated_attempts",
+    "_resolve_attempt_binding",
+    "_resolve_candidate_build_binding_path",
+    "_resolve_receipt",
+    "_retired_official_label_values",
+    "_reused_result_ids",
+    "_revalidate_model_condition_result",
+    "_rfc3339_datetime",
+    "_run_external_command",
+    "_run_seal_assertion_gate",
+    "_runtime_codex_binary_bindings",
+    "_scan_evidence_files",
+    "_scan_pcap",
+    "_scan_relay_bytes",
+    "_scenario_job_execution_contract",
+    "_scenario_non_execution_contract",
+    "_scenario_source_spec_binding",
+    "_seal_attempt_recovery_segment",
+    "_seal_capture_attempt",
+    "_seal_draft",
+    "_seal_draft_path",
+    "_seal_preview",
+    "_seal_preview_path",
+    "_seal_transition_index",
+    "_sealed_stage_recovery_context",
+    "_sealed_stage_timing_checkpoint",
+    "_secret_environment_names",
+    "_secure_copy_file_once",
+    "_secure_write_json_once",
+    "_stage_evaluation_transition_binding",
+    "_stage_evidence_manifest",
+    "_stage_inventory_binding_matches",
+    "_stage_path",
+    "_stage_read_source",
+    "_stage_result_document",
+    "_stage_write_target",
+    "_successor_abandoned_attempt",
+    "_successor_copy_expectations",
+    "_successor_incremental_noop_preflight",
+    "_successor_incremental_noop_preflight_from_coordinates",
+    "_successor_reason_ancestor",
+    "_successor_runtime_configuration",
+    "_successor_uses_reclassified_historical_plan_binding",
+    "_supersession_row_state",
+    "_supervisor_audit_bound_mapping_matches",
+    "_surface",
+    "_target_scenario_source_spec_only_drift",
+    "_terminal_transition_attempt_inventory",
+    "_terminal_transition_file_binding",
+    "_terminal_transition_preflight_facts",
+    "_terminal_transition_supervisor_audit",
+    "_third_party_client_model",
+    "_tool_component_bundle",
+    "_tool_component_drift",
+    "_tool_component_for_path",
+    "_tool_component_identities",
+    "_tool_dependency_declaration",
+    "_tool_entry_digest_map",
+    "_tool_entry_index",
+    "_tool_identity",
+    "_tool_identity_drift",
+    "_tool_identity_side_digest",
+    "_tool_identity_side_digest_excluding",
+    "_tool_identity_sides",
+    "_tool_tree_entries",
+    "_utc_now",
+    "_validate_attempt_bound_file",
+    "_validate_attempt_failure_facts",
+    "_validate_attempt_file_binding",
+    "_validate_attempt_incremental_fields",
+    "_validate_attempt_reference",
+    "_validate_attempt_relative_path",
+    "_validate_attempt_watchdog_bindings",
+    "_validate_attempt_watchdog_fields",
+    "_validate_campaign_lease_payload",
+    "_validate_campaign_lease_stop_receipt",
+    "_validate_candidate_readiness_binding",
+    "_validate_candidate_runtime_override_value",
+    "_validate_candidate_source_transition",
+    "_validate_capture_job_results",
+    "_validate_capture_runtime_ids",
+    "_validate_checkpoint_records",
+    "_validate_classification_candidate_reuse_preview",
+    "_validate_classification_candidate_reuse_transition_payload",
+    "_validate_codex_identity",
+    "_validate_deadline_orphan_attempt_bindings",
+    "_validate_deadline_orphan_contract_document",
+    "_validate_direct_predecessor_official_attempt",
+    "_validate_effective_results",
+    "_validate_existing_campaign_path",
+    "_validate_failed_job_tool_recovery_source",
+    "_validate_freeze_deletion_proof",
+    "_validate_frozen_phase_recovery_controls",
+    "_validate_historical_recovery_scope",
+    "_validate_incremental_job_result",
+    "_validate_incremental_tool_transition",
+    "_validate_initial_vc_control_artifacts",
+    "_validate_interrupted_recovery_transition",
+    "_validate_jobs",
+    "_validate_observed_profile_receipt",
+    "_validate_official_reuse_target_scenario_import",
+    "_validate_phase_evaluation_transition",
+    "_validate_phase_recovery_controls",
+    "_validate_predecessor_import_receipt",
+    "_validate_recovery_execution_handoff_parent_terminal",
+    "_validate_restoration_report",
+    "_validate_runtime_target_scenario_change",
+    "_validate_scenario_manifest_shape",
+    "_validate_scenario_variable_contract",
+    "_validate_side_triggers",
+    "_validate_stage_contract",
+    "_validate_surface_document",
+    "_validate_terminal_transition_preflight_receipt",
+    "_validate_watchdog_document_values",
+    "_validate_watchdog_time_window",
+    "_validated_c0154_a15_post_run_seal_source_scope",
+    "_validated_c0154_v7_recovery_source_scope",
+    "_vc5_reopened_baseline",
+    "_vc_campaign_plan",
+    "_vc_checkpoint_path",
+    "_vc_checkpoint_reference",
+    "_vc_completion_receipt_path",
+    "_vc_control_binding",
+    "_vc_receipt_subject",
+    "_vc_run_manifest_from_batch",
+    "_verify_campaign_binding",
+    "_verify_candidate_attempt_identity",
+    "_verify_capture_seal_preview",
+    "_verify_catalog_stage_output",
+    "_verify_codex_package",
+    "_verify_container_image_reference",
+    "_verify_control_receipts",
+    "_verify_official_binaries",
+    "_verify_plan_identity",
+    "_verify_plan_identity_v2",
+    "_verify_predecessor_import_shallow",
+    "_verify_stage_evidence",
+    "_verify_stopped_classification_draft_approval",
+    "_write_campaign_lease_stop_once",
+    "_write_or_verify_json",
+    "_ws_surface",
+    "campaign_status",
+    "compare_surfaces",
+    "load_campaign_manifest",
+    "load_extra_jobs",
+    "load_rule_manifest",
+    "load_scenario_jobs",
+    "save_stage_result",
+    "scan_evidence"
+   ],
+   "constants": [
+    "ATTEMPT_RECOVERY_DIRNAME",
+    "ATTEMPT_RECOVERY_RESERVATION_FILENAME",
+    "ATTEMPT_RECOVERY_RESERVATION_SCHEMA",
+    "ATTEMPT_RECOVERY_SUCCESS_STATUS",
+    "ATTEMPT_RECOVERY_SUMMARY_FILENAME",
+    "ATTEMPT_RECOVERY_SUMMARY_SCHEMA",
+    "BASELINE_PRIVATE_EVIDENCE_DIRNAME",
+    "BATCHED_FAILED_CAPTURE_RECOVERY_KIND",
+    "C0154_A15_POST_RUN_SEAL_SOURCE",
+    "C0154_V7_RECOVERY_SOURCE",
+    "C0154_VC5_FAILED_JOB_CONTROL_EPOCH",
+    "CAMPAIGN_LEASE_FILENAME",
+    "CAMPAIGN_LEASE_LOCK_FILENAME",
+    "CAMPAIGN_LEASE_MAX_STOP_RECEIPTS",
+    "CAMPAIGN_LEASE_SCHEMA",
+    "CAMPAIGN_LEASE_STALE_MULTIPLIER",
+    "CAMPAIGN_LEASE_STATES",
+    "CAMPAIGN_LEASE_STOP_DIRECTORY",
+    "CAMPAIGN_LEASE_STOP_SCHEMA",
+    "CAMPAIGN_MODES",
+    "CAMPAIGN_SCHEMA",
+    "CANDIDATE_INVALIDATION_FILENAME",
+    "CANDIDATE_PURPOSES",
+    "CANDIDATE_READINESS_BINDING_SCHEMA",
+    "CANDIDATE_RUNTIME_OVERRIDE_BINARY_KEYS",
+    "CANDIDATE_RUNTIME_OVERRIDE_COMPOSE_KEYS",
+    "CANDIDATE_RUNTIME_OVERRIDE_CONTAINER_KEYS",
+    "CANDIDATE_RUNTIME_OVERRIDE_FILENAME",
+    "CANDIDATE_RUNTIME_OVERRIDE_INT_KEYS",
+    "CANDIDATE_RUNTIME_OVERRIDE_KEYS",
+    "CANDIDATE_RUNTIME_OVERRIDE_SCHEMA",
+    "CANDIDATE_VC_PHASES",
+    "CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS",
+    "CAPTURE_ATTEMPT_SCHEMA",
+    "CAPTURE_RESERVATION_SCHEMA",
+    "CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS",
+    "CLASSIFICATION_CANDIDATE_REUSE_PREVIEW_SCHEMA",
+    "CLASSIFICATION_CANDIDATE_REUSE_SOURCE_MANIFEST_FILENAME",
+    "CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS",
+    "CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_FILENAME",
+    "CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_SCHEMA",
+    "CLASSIFICATION_FACT_CORRECTION_REASON",
+    "CLIENT_BINDING_SCHEMA",
+    "CONTINUITY_DRIFT_ERROR_TYPE",
+    "CONTROL_EPOCH_DIRECTORY",
+    "CONTROL_EPOCH_FILENAME",
+    "CONTROL_EPOCH_FILENAME_RE",
+    "CONTROL_EPOCH_FINAL_EXECUTION_JOB_IDS",
+    "CONTROL_EPOCH_FINAL_EXECUTION_MAX_SECONDS",
+    "CONTROL_EPOCH_FINAL_EXECUTION_MODE",
+    "CONTROL_EPOCH_FINAL_EXECUTION_SCHEMA",
+    "CONTROL_EPOCH_MAX_COUNT",
+    "CONTROL_EPOCH_RUNTIME_REPAIR_AMENDMENT_FILENAME",
+    "CONTROL_EPOCH_RUNTIME_REPAIR_FILENAME",
+    "CONTROL_EPOCH_RUNTIME_REPAIR_SCHEMA",
+    "CONTROL_EPOCH_SCHEMA",
+    "DEADLINE_ORPHAN_AUDIT_FILENAME",
+    "DEADLINE_ORPHAN_CONTRACT_FILENAME",
+    "DEADLINE_ORPHAN_CONTRACT_SCHEMA",
+    "DEADLINE_ORPHAN_FINALIZER_FILENAME",
+    "DEADLINE_ORPHAN_FINALIZER_SCHEMA",
+    "DEFAULT_HEARTBEAT_SECONDS",
+    "DEFAULT_WATCHDOG_TIMEOUT_SECONDS",
+    "EFFECTIVE_RESULTS_FILENAME",
+    "EFFECTIVE_RESULTS_SCHEMA",
+    "ENVIRONMENT_ISOLATION_DIR",
+    "ENVIRONMENT_ISOLATION_RE",
+    "ENVIRONMENT_ISOLATION_SCHEMA",
+    "EVALUATION_BASELINE_ABANDON_FILENAME",
+    "EVALUATION_BASELINE_AUTHORIZATION_FILENAME",
+    "EVALUATION_BASELINE_COMMIT_FILENAME",
+    "EVALUATION_BASELINE_PREPARED_FILENAME",
+    "EVALUATION_BASELINE_RECOVERY_FILENAME",
+    "EVIDENCE_CONFLICT_DISPOSITIONS",
+    "EVIDENCE_CONFLICT_QUARANTINE_DIR",
+    "EVIDENCE_CONFLICT_QUARANTINE_RE",
+    "EVIDENCE_CONFLICT_QUARANTINE_SCHEMA",
+    "EVIDENCE_ROOT_SUPERSESSION_DIR",
+    "EVIDENCE_ROOT_SUPERSESSION_RE",
+    "EVIDENCE_ROOT_SUPERSESSION_SCHEMA",
+    "EXTRA_JOB_SCHEMA",
+    "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS",
+    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+    "FREEZE_DELETION_PROOF_ALGORITHM",
+    "FREEZE_REFERENCE_SCAN_ALGORITHM",
+    "FREEZE_SUCCESSOR_RESULT_PASSED",
+    "FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS",
+    "HISTORICAL_RUN_SUMMARY_CONTRACTS",
+    "HISTORICAL_RUN_SUMMARY_MAX_BYTES",
+    "IMAGE_ID_RE",
+    "IMMUTABLE_IMAGE_RE",
+    "IMPORTED_STAGE_CHECKPOINT_SCHEMA",
+    "INCREMENTAL_TOOL_TRANSITION_SCHEMA",
+    "INTERRUPTED_RECOVERY_TRANSITION_FILENAME",
+    "INTERRUPTED_RECOVERY_TRANSITION_SCHEMA",
+    "JOB_CHECKPOINT_SCHEMA",
+    "LEGACY_CAPTURE_ATTEMPT_SCHEMA",
+    "LEGACY_CAPTURE_RESERVATION_SCHEMA",
+    "LEGACY_SEAL_PREVIEW_SCHEMA",
+    "MANIFEST_PROJECTION_FILENAME",
+    "MAX_ATTEMPT_WALL_SECONDS",
+    "MAX_HEARTBEAT_SECONDS",
+    "MAX_JSON_BYTES",
+    "MAX_PHASE_EVALUATION_TRANSITIONS",
+    "METADATA_ONLY_STOP_NEXT_ACTION_PREFIX",
+    "OBSERVED_PROFILE_SCHEMA",
+    "OFFICIAL_ATTEMPT_IMPORT_MODE",
+    "OFFICIAL_COMPACTION_LITE_RECOVERY_FILES",
+    "OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS",
+    "OFFICIAL_COMPACTION_LITE_RECOVERY_TRANSITION_ID",
+    "OFFICIAL_EVIDENCE_REUSE_REASON",
+    "OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON",
+    "OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS",
+    "POST_RUN_SEAL_RECOVERY_REASON",
+    "PREDECESSOR_CONTROL_REPLACEMENT_IMPORT_SCHEMA",
+    "PREDECESSOR_IMPORT_SCHEMA",
+    "PREDECESSOR_IMPORT_SCHEMA_V1",
+    "PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA",
+    "PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA",
+    "PREDECESSOR_RECOVERY_IMPORT_SCHEMA",
+    "PREDECESSOR_REHEARSAL_IMPORT_SCHEMA",
+    "PREDECESSOR_RUNTIME_IMPORT_SCHEMA",
+    "PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMA",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMAS",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMA_V1",
+    "RECLASSIFICATION_SUCCESSOR_REASONS",
+    "RECOVERY_CONTINUITY_DRIFT_RECEIPT_NAME",
+    "RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA",
+    "RECOVERY_CONTINUITY_DRIFT_STATUSES",
+    "RECOVERY_EXECUTION_HANDOFF_SCHEMA",
+    "RELEASE_CERTIFICATION_POLICY_VERSION",
+    "REQUIRED_CLIENT_BINDINGS",
+    "RESTORATION_SCHEMA",
+    "REVISIONS_DIRNAME",
+    "RULE_RE",
+    "RULE_SCHEMA",
+    "RUNTIME_CODEX_BINARY_JOB_IDS",
+    "RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS",
+    "RUNTIME_WINDOW_ID_PLACEHOLDER",
+    "RUN_NONCE_RE",
+    "SAFE_ABSOLUTE_PATH_RE",
+    "SAFE_ID_RE",
+    "SCENARIO_EVIDENCE_ROOT_ROLE",
+    "SCENARIO_FACTS_DIR",
+    "SCENARIO_JOB_EXECUTION_FIELDS",
+    "SCENARIO_SCHEMA",
+    "SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS",
+    "SEAL_DRAFT_SCHEMA",
+    "SEAL_FAILURE_SCHEMA",
+    "SEAL_PREVIEW_SCHEMA",
+    "SHA256_RE",
+    "SKIP_DIRECTORIES",
+    "STAGE_SCHEMA",
+    "STANDARD_PHASE_EVALUATION_TRANSITIONS",
+    "SUCCESSOR_REASONS",
+    "SURFACE_SCHEMA",
+    "TERMINAL_PHASE_EVALUATION_TRANSITION",
+    "TOOL_DEPENDENCY_PATH_RE",
+    "TOOL_EVALUATION_DRIFT_SCHEMA",
+    "TOOL_EVALUATION_RECOVERY_CONTROLS_SCHEMA",
+    "TOOL_EVALUATION_TERMINAL_PREFLIGHT_SCHEMA",
+    "TOOL_EVALUATION_TRANSITION_PREVIEW_SCHEMA",
+    "TOOL_EVALUATION_TRANSITION_SCHEMA",
+    "VC5_REOPEN_DIRNAME_PREFIX",
+    "VC_ARTIFACT_MIN_VERSION",
+    "VERSION_RE",
+    "WATCHDOG_CHECKPOINT_SCHEMA",
+    "WATCHDOG_HEARTBEAT_SCHEMA",
+    "WATCHDOG_OPERATION_RE",
+    "WATCHDOG_SENSITIVE_RE",
+    "_ACTIVE_CAMPAIGN_LEASE",
+    "_ATTEMPT_REFERENCE_FIELDS",
+    "_CANDIDATE_STAGE_ROOTS",
+    "_CANONICAL_EVALUATION_ONLY_FILES",
+    "_CLASSIFICATION_APPROVAL_FIELDS",
+    "_CONTROL_PLANE_TOOL_FILES",
+    "_ENVIRONMENT_PLANE_TOOL_FILES",
+    "_EVALUATION_BASELINE_DIR_RE",
+    "_EVALUATION_COMPONENT_FILES",
+    "_EVALUATION_SIDE_FILES",
+    "_LOW_RISK_TOOL_COMPONENTS",
+    "_PHASE_EVALUATION_HYBRID_FILES",
+    "_PHASE_EVALUATION_OPERATIONS",
+    "_PHASE_EVALUATION_TRANSITION_FILE_RE",
+    "_POLICY_V2_EVALUATION_OPERATIONS",
+    "_PRODUCER_TOOL_FILES",
+    "_RELAY_TOOL_FILES",
+    "_RUNTIME_TOOL_PREFIXES",
+    "_SCENARIO_TOOL_FILES",
+    "_SEALED_STAGE_RECOVERY_ALLOWED_FILES",
+    "_STAGE_ALIASES",
+    "_SUCCESSOR_OFFICIAL_SURFACE_PATH",
+    "_SUPERSESSION_ROW_FIELDS",
+    "_TERMINAL_TRANSITION_REQUIRED_OPERATIONS",
+    "_TOOL_COMPONENT_NAMES",
+    "_WATCHDOG_ONLY_TOOL_FILES"
+   ]
+  },
+  "evaluator_reader": {
+   "functions": [
+    "EvidenceIntegrityError",
+    "HistoricalSourceSpecBinding",
+    "Job",
+    "_acceptance_contract",
+    "_acceptance_contract_sha256",
+    "_acceptance_expected_check_ids",
+    "_acceptance_validation_modes",
+    "_approved_assertion_profile_path",
+    "_approved_rules",
+    "_approved_scenario_with_formal_execution_contract",
+    "_assertions_root",
+    "_assertions_root_for_baseline",
+    "_attempt_evidence_binding",
+    "_attempt_recovery_segment_root",
+    "_attempt_reference_matches",
+    "_authoritative_recovery_execute_jobs",
+    "_authorized_evaluator_digests",
+    "_b0_evaluator_authorized_digests",
+    "_bound_evidence_path",
+    "_bound_runtime_scenario_transition_job_ids",
+    "_campaign_arguments",
+    "_campaign_coordinates",
+    "_campaign_file",
+    "_campaign_jobs",
+    "_campaign_machine_command",
+    "_campaign_tool_evolutions",
+    "_candidate_build_receipt_path",
+    "_candidate_external_gate_binding",
+    "_candidate_stage_receipt_boundary",
+    "_capture_attempt_path",
+    "_capture_attempt_relative",
+    "_capture_stage_attempt_context",
+    "_classification_official_authority",
+    "_conflict_compromised_attempts",
+    "_current_evaluation_baseline",
+    "_directory_identity",
+    "_directory_tree_digest",
+    "_effective_assertion_profile",
+    "_effective_classification_view",
+    "_evaluation_baseline_dir",
+    "_evidence_conflict_quarantines",
+    "_evidence_file_binding",
+    "_evidence_files",
+    "_evidence_inventory",
+    "_evidence_manifest_configuration_error",
+    "_evidence_manifest_rebinds",
+    "_evidence_permissions_private",
+    "_evidence_root_map",
+    "_evidence_root_relocations",
+    "_evidence_root_supersessions",
+    "_evidence_security",
+    "_external_file_binding",
+    "_external_json_object",
+    "_extract_json_surfaces",
+    "_failed_job_evidence_host_route",
+    "_fingerprint",
+    "_format_template",
+    "_git_blob_sha256",
+    "_git_commit",
+    "_h2_request_surface",
+    "_header_names",
+    "_header_value",
+    "_historical_run_summary_failure_observations",
+    "_imported_stage_checkpoint_path",
+    "_imported_stage_evidence_manifest_path",
+    "_interrupted_recovery_campaign_plan",
+    "_inventory_content_index",
+    "_inventory_contents_equal",
+    "_inventory_index",
+    "_is_c0154_v7_failed_core_source",
+    "_is_policy_v2_identity",
+    "_is_rfc3339_timestamp",
+    "_job_context",
+    "_job_execution_payload",
+    "_job_execution_sha256",
+    "_job_failure_observations",
+    "_legacy_attempt_relative_evidence_path",
+    "_legacy_stage_path",
+    "_load_attempt_recovery_reservation",
+    "_load_attempt_recovery_segment",
+    "_load_capture_attempt",
+    "_load_evaluation_baseline_recovery",
+    "_load_evaluation_run_index",
+    "_load_evidence_manifest",
+    "_load_imported_stage_checkpoint",
+    "_load_seal_draft",
+    "_load_stage_result",
+    "_load_vc3_gate_requirements",
+    "_merge_surfaces",
+    "_normalize_failure_observations",
+    "_normalized_host",
+    "_normalized_path",
+    "_official_scenario_execution_contract",
+    "_parse_client_evidence",
+    "_physical_evidence_index",
+    "_plan_evaluator_entry_digests",
+    "_profile_binding_from_manifest",
+    "_read_evaluation_baseline_commit",
+    "_read_json",
+    "_reject_symlink_components",
+    "_replay_bound_candidate_external_gate",
+    "_replay_candidate_build_receipt",
+    "_replay_capture_stage_receipts",
+    "_replay_evaluation_checkpoint_chain",
+    "_replay_projected_candidate_build_receipt",
+    "_request_host",
+    "_request_surface",
+    "_require_c0154_v7_frozen_legacy_build_receipt",
+    "_require_clean_candidate_source",
+    "_require_file_binding",
+    "_require_formal_campaign",
+    "_require_outside_candidate_source",
+    "_require_recovery_binding",
+    "_require_recovery_revision",
+    "_required_client_bindings",
+    "_requires_complete_vc_artifacts",
+    "_rerun_machine_assertion",
+    "_resolve_candidate_build_binding_path",
+    "_resolve_receipt",
+    "_revalidate_model_condition_result",
+    "_rfc3339_datetime",
+    "_run_external_command",
+    "_runtime_codex_binary_bindings",
+    "_scan_evidence_files",
+    "_scan_pcap",
+    "_scan_relay_bytes",
+    "_scenario_job_execution_contract",
+    "_scenario_non_execution_contract",
+    "_scenario_source_spec_binding",
+    "_seal_draft_path",
+    "_seal_preview_path",
+    "_seal_transition_index",
+    "_secure_write_json_once",
+    "_stage_evidence_manifest",
+    "_stage_inventory_binding_matches",
+    "_stage_path",
+    "_stage_read_source",
+    "_stage_result_document",
+    "_stage_write_target",
+    "_successor_uses_reclassified_historical_plan_binding",
+    "_supersession_row_state",
+    "_surface",
+    "_surface_from_stage",
+    "_target_scenario_source_spec_only_drift",
+    "_third_party_client_model",
+    "_tool_dependency_declaration",
+    "_validate_assertion_results",
+    "_validate_attempt_reference",
+    "_validate_candidate_source_transition",
+    "_validate_capture_job_results",
+    "_validate_capture_runtime_ids",
+    "_validate_evidence_bindings",
+    "_validate_existing_campaign_path",
+    "_validate_freeze_deletion_proof",
+    "_validate_incremental_job_result",
+    "_validate_jobs",
+    "_validate_machine_assertion",
+    "_validate_observed_profile_receipt",
+    "_validate_official_reuse_target_scenario_import",
+    "_validate_predecessor_import_receipt",
+    "_validate_restoration_report",
+    "_validate_runtime_target_scenario_change",
+    "_validate_scenario_manifest_shape",
+    "_validate_scenario_variable_contract",
+    "_validate_side_triggers",
+    "_validate_stage_contract",
+    "_validated_c0154_v7_recovery_source_scope",
+    "_verify_campaign_binding",
+    "_verify_capture_seal_preview",
+    "_verify_catalog_stage_output",
+    "_verify_evaluator_digests_authorized",
+    "_verify_predecessor_import_shallow",
+    "_verify_reader_runtime_baseline",
+    "_verify_reuse_anchor_chain",
+    "_verify_sealed_acceptance_identical",
+    "_verify_sealed_official_binaries",
+    "_verify_stage_evidence",
+    "_ws_surface",
+    "accept_campaign",
+    "build_coverage",
+    "compare_campaign",
+    "compare_surfaces",
+    "load_campaign_manifest",
+    "load_extra_jobs",
+    "load_rule_manifest",
+    "load_scenario_jobs",
+    "save_stage_result",
+    "scan_evidence"
+   ],
+   "constants": [
+    "ACCEPTANCE_SCHEMA",
+    "APPROVAL_REVISION_FILENAME",
+    "ASSERTION_TEMPLATE_SCHEMA",
+    "ATTEMPT_RECOVERY_DIRNAME",
+    "ATTEMPT_RECOVERY_RESERVATION_FILENAME",
+    "ATTEMPT_RECOVERY_RESERVATION_SCHEMA",
+    "ATTEMPT_RECOVERY_SUMMARY_FILENAME",
+    "ATTEMPT_RECOVERY_SUMMARY_SCHEMA",
+    "C0154_A15_POST_RUN_SEAL_SOURCE",
+    "C0154_V7_RECOVERY_SOURCE",
+    "CAMPAIGN_MODES",
+    "CAMPAIGN_SCHEMA",
+    "CANDIDATE_PURPOSES",
+    "CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS",
+    "CAPTURE_ATTEMPT_SCHEMA",
+    "CLIENT_BINDING_SCHEMA",
+    "COMPARISON_SCHEMA",
+    "EVALUATION_BASELINE_AUTHORIZATION_FILENAME",
+    "EVALUATION_BASELINE_COMMIT_FILENAME",
+    "EVALUATION_BASELINE_RECOVERY_FILENAME",
+    "EVALUATION_CHECKPOINTS_DIRNAME",
+    "EVALUATION_RUN_FILENAME",
+    "EVIDENCE_CONFLICT_DISPOSITIONS",
+    "EVIDENCE_CONFLICT_QUARANTINE_DIR",
+    "EVIDENCE_CONFLICT_QUARANTINE_RE",
+    "EVIDENCE_CONFLICT_QUARANTINE_SCHEMA",
+    "EVIDENCE_ROOT_SUPERSESSION_DIR",
+    "EVIDENCE_ROOT_SUPERSESSION_RE",
+    "EVIDENCE_ROOT_SUPERSESSION_SCHEMA",
+    "EXTRA_JOB_SCHEMA",
+    "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS",
+    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+    "FREEZE_DELETION_PROOF_ALGORITHM",
+    "FREEZE_REFERENCE_SCAN_ALGORITHM",
+    "FREEZE_SUCCESSOR_RESULT_PASSED",
+    "FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS",
+    "HISTORICAL_RUN_SUMMARY_CONTRACTS",
+    "HISTORICAL_RUN_SUMMARY_MAX_BYTES",
+    "IMAGE_ID_RE",
+    "IMMUTABLE_IMAGE_RE",
+    "IMPORTED_STAGE_CHECKPOINT_SCHEMA",
+    "INTERRUPTED_RECOVERY_TRANSITION_FILENAME",
+    "INTERRUPTED_RECOVERY_TRANSITION_SCHEMA",
+    "LEGACY_CAPTURE_ATTEMPT_SCHEMA",
+    "LEGACY_SEAL_PREVIEW_SCHEMA",
+    "MAX_JSON_BYTES",
+    "MAX_PHASE_EVALUATION_TRANSITIONS",
+    "OBSERVED_PROFILE_SCHEMA",
+    "OFFICIAL_EVIDENCE_REUSE_REASON",
+    "OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON",
+    "POST_RUN_SEAL_RECOVERY_REASON",
+    "PREDECESSOR_CONTROL_REPLACEMENT_IMPORT_SCHEMA",
+    "PREDECESSOR_IMPORT_SCHEMA",
+    "PREDECESSOR_IMPORT_SCHEMA_V1",
+    "PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA",
+    "PREDECESSOR_RECOVERY_IMPORT_SCHEMA",
+    "PREDECESSOR_REHEARSAL_IMPORT_SCHEMA",
+    "PREDECESSOR_RUNTIME_IMPORT_SCHEMA",
+    "PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMA",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMAS",
+    "PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMA_V1",
+    "RECLASSIFICATION_SUCCESSOR_REASONS",
+    "REQUIRED_CLIENT_BINDINGS",
+    "RESTORATION_SCHEMA",
+    "RULE_RE",
+    "RULE_SCHEMA",
+    "RUNTIME_CODEX_BINARY_JOB_IDS",
+    "RUNTIME_WINDOW_ID_PLACEHOLDER",
+    "SAFE_ABSOLUTE_PATH_RE",
+    "SAFE_ID_RE",
+    "SCENARIO_JOB_EXECUTION_FIELDS",
+    "SCENARIO_SCHEMA",
+    "SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS",
+    "SEAL_DRAFT_SCHEMA",
+    "SEAL_PREVIEW_SCHEMA",
+    "SHA256_RE",
+    "SKIP_DIRECTORIES",
+    "STAGE_SCHEMA",
+    "SUCCESSOR_REASONS",
+    "SURFACE_SCHEMA",
+    "TERMINAL_PHASE_EVALUATION_TRANSITION",
+    "TOOL_DEPENDENCY_PATH_RE",
+    "TOOL_EVALUATION_TRANSITION_SCHEMA",
+    "VC_ARTIFACT_MIN_VERSION",
+    "VERSION_RE",
+    "_ACTIVE_CAMPAIGN_LEASE",
+    "_ATTEMPT_REFERENCE_FIELDS",
+    "_CANDIDATE_STAGE_ROOTS",
+    "_CLASSIFICATION_APPROVAL_FIELDS",
+    "_PHASE_EVALUATION_TRANSITION_FILE_RE",
+    "_STAGE_ALIASES",
+    "_SUPERSESSION_ROW_FIELDS"
+   ]
+  }
+ },
+ "entries": [
+  {
+   "path": "__init__.py",
+   "sha256": "10fc1b65451f15520f7c3354642fc29991ca25eb55cbacd23300b1fe5c57ef6d"
+  },
+  {
+   "path": "acceptance_contract.py",
+   "sha256": "0af44c196afd59212d14d77a499c3e457056e2af8e007d494f6b04a8432a8fe7"
+  },
+  {
+   "path": "addons/mitm_capture.py",
+   "sha256": "f2b161b0917ae528a6f8573248f2be5a86d7e89784ffbea39c9920808f65a7b9"
+  },
+  {
+   "path": "analyze_claude_21220_pending_evidence.py",
+   "sha256": "d721c2d02fd0f8f325f65b5f3dacfb30723c34f0c6e137408370fbb1fb33011c"
+  },
+  {
+   "path": "assertion_gate.py",
+   "sha256": "be0268af5750edc5ff05dda3c260f8db75012cab77b22d3541c78f2d63e0d3cb"
+  },
+  {
+   "path": "build_assertion_bundle.py",
+   "sha256": "68bd96c1df0a4a68a6f86ac373036ec7eca32a2304ff7792bd0d337556004fc7"
+  },
+  {
+   "path": "build_capture_manifest.py",
+   "sha256": "1c08b805245d98814723580cbf357129209cb2be2b3c55c25736a1ac92f8dced"
+  },
+  {
+   "path": "build_compaction_model_catalog.py",
+   "sha256": "401ba7a08146c00fb03f86d608a0d71db4338e55635cf00445dbe27bc68b85f3"
+  },
+  {
+   "path": "build_evidence_catalog.py",
+   "sha256": "53399f23731bd492fb38227e03a56ff474b710b70fb4e8612d12b5c6929a20a2"
+  },
+  {
+   "path": "build_fingerprint_proxy.sh",
+   "sha256": "7ef1bb5e67c8231816ab643e9bb5f9f3ee7e9c66a145625bcf840dda3dc85feb"
+  },
+  {
+   "path": "build_kilo_client_receipts.py",
+   "sha256": "c9b6aa04cc0ca4d664c6e0aa573dd4e6df25c99ca84e53c4cb2877f55c07aede"
+  },
+  {
+   "path": "build_observed_profile_runtime_audit.py",
+   "sha256": "8af1486c0671aa2ab6231665d9a2ff6f7affea2adf5a2255f4bf6e54b379a4f7"
+  },
+  {
+   "path": "build_rule_assertion_results.py",
+   "sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0"
+  },
+  {
+   "path": "build_scenario_facts.py",
+   "sha256": "9f00e1d463c9faeab626b03c0f2be8b38fedbf5bda194ca5b554315cc57972cf"
+  },
+  {
+   "path": "candidate_capture_manifest.schema.json",
+   "sha256": "170d6edc1ea48623d60b91d2d5a1248c1c6d3cf03fbc6f31e3853b17c6f93d02"
+  },
+  {
+   "path": "candidate_evidence_guard.py",
+   "sha256": "5a1a32cc4382c53d5f7e157134408d5c7e49b5886acdbe0aed0832359cf081ea"
+  },
+  {
+   "path": "candidate_observation.schema.json",
+   "sha256": "e06fd645704ea048126d4efecc1d2850fad07bf408f918fb598181f81ffc4992"
+  },
+  {
+   "path": "candidate_rule_assertion.py",
+   "sha256": "06176262cbac5029a4eb225d959ae6f02abd5528588faecc1a8376f2c5a4b893"
+  },
+  {
+   "path": "candidate_rule_assertion_result.example.json",
+   "sha256": "8186e7e34bae7cb0a103aa57bd0a9b364c7aef5823568c862abc5d9c464e645b"
+  },
+  {
+   "path": "candidate_rule_assertion_result.schema.json",
+   "sha256": "5a90fe12801f223c565f3c9ffb5d1ebcb8b80dc0773061fdf3e80979121879bd"
+  },
+  {
+   "path": "candidate_rule_expectation_overrides_0_149_1.json",
+   "sha256": "3c457f8186be79582111e74b36b330f1cafecb9a24c7ddcadd0771389fde5ffa"
+  },
+  {
+   "path": "candidate_rule_expectations_0_145_0.json",
+   "sha256": "20441c49c10212147ecbe6bd824e8f0b5e690239754ceb0218ff014c5cc037fd"
+  },
+  {
+   "path": "candidate_rule_expectations_0_147_0.json",
+   "sha256": "0b4549d5c4a506a0f0a238fd761a1fcecffdc556b03d9bf052ff9ffc190fe4eb"
+  },
+  {
+   "path": "candidate_rule_expectations_0_149_1.json",
+   "sha256": "a249521bfeeafaf49f34c2c282036bb98d054fe4665a88d604b7cad3491ee5b2"
+  },
+  {
+   "path": "candidate_rule_expectations_0_151_0.json",
+   "sha256": "8d8bdfd1b120fb95f769f11c7e270a7d071542b266a28313558110a3526f09a1"
+  },
+  {
+   "path": "candidate_rule_expectations_0_154_0.json",
+   "sha256": "9255ece957fee0b596d87e95c2ac58e593699c180bec02134fe2857726ee18c4"
+  },
+  {
+   "path": "candidate_rule_expectations_0_156_1.json",
+   "sha256": "dac1f2f6d4efcb572d268698d7df6c7d9dee86ce63dc2d9bbe734526516801c1"
+  },
+  {
+   "path": "candidate_rule_expectations_0_157_0.json",
+   "sha256": "71c5fd2223385605bb632d6415673d8de8f782d9646f78e2aadfbfbc2656ce2b"
+  },
+  {
+   "path": "candidate_rule_expectations_0_160_0.json",
+   "sha256": "796beced6457739c5f819bdb29fee980f130b53d6f18b9e569dea24404af41e6"
+  },
+  {
+   "path": "candidate_rule_expectations_0_163_0.json",
+   "sha256": "a1136b8cac1d09f4f7ebf7b4f091f63f804c172bd089813a034c941661c7bb72"
+  },
+  {
+   "path": "candidate_rule_expectations_0_164_0.json",
+   "sha256": "e50fbe07894d90aff4b1a95b0ec6c26a26b5faca1a13816f0b9bf09a697becfc"
+  },
+  {
+   "path": "candidate_rule_expectations_0_165_0.json",
+   "sha256": "502e7010f6824a694b46303986682a5975f72822a4e28253609e1c99c3f6d00f"
+  },
+  {
+   "path": "candidate_test_fact_map.schema.json",
+   "sha256": "f1d35c27a6ce1024115ea926288108b443d638cab54fb878a80af9d0526ec0cd"
+  },
+  {
+   "path": "candidate_test_fact_map_0_145_0.json",
+   "sha256": "3fc0759d0b845263967cef05b2b90137253071db11c8da941474e83b9087eef2"
+  },
+  {
+   "path": "candidate_test_fact_map_0_147_0.json",
+   "sha256": "7e11d0de1805cbc0631938ab4f9c0cca155b8542dd0f921cc11eeaf4fa121fd4"
+  },
+  {
+   "path": "candidate_test_fact_map_0_149_1.json",
+   "sha256": "d0f36acace6a872c2a339680418396c3e2a11148bd44e8faca42da880a6455e8"
+  },
+  {
+   "path": "candidate_test_fact_map_0_151_0.json",
+   "sha256": "a40f458e59643cb67fb0f2fe65c55de0534dc263d0e94502aa2946aedc06b56f"
+  },
+  {
+   "path": "candidate_test_fact_map_0_154_0.json",
+   "sha256": "d4b7b4efef8cd740018ebfe22e93973ea7710ac5347cf7be388b37a1979ae0b0"
+  },
+  {
+   "path": "candidate_test_fact_map_0_156_1.json",
+   "sha256": "fe6981d7ae2910e8a7b02d6dd554f6abaf3e079fd8b6562eb5e48aa2ad3c3934"
+  },
+  {
+   "path": "candidate_test_fact_map_0_157_0.json",
+   "sha256": "7b47334686048bffc4501a7a4cf8a4d5291a4878b8d39975e47b177b75cdc59a"
+  },
+  {
+   "path": "candidate_test_fact_map_0_160_0.json",
+   "sha256": "5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957"
+  },
+  {
+   "path": "candidate_test_fact_map_0_163_0.json",
+   "sha256": "299ef7356b5a409d03a94883ac02e64700998e6346ce0eee637453ac66c07b8a"
+  },
+  {
+   "path": "candidate_test_fact_map_0_164_0.json",
+   "sha256": "6e1cedb04ebd971102f49413c8e0a547f686e743a9e520709d237677a94162a1"
+  },
+  {
+   "path": "candidate_test_fact_map_0_165_0.json",
+   "sha256": "31572ad24e7d22972764245f2693ead05c892286c5625c656a0b9f1135fb65cd"
+  },
+  {
+   "path": "candidate_test_trace.py",
+   "sha256": "a209d441bc99e429c0db045c1ad5a8786f72e58a13c54eb413181b6d7f55468a"
+  },
+  {
+   "path": "candidate_test_trace_receipt.schema.json",
+   "sha256": "654cc9707e08468401f80f01f6943b482b01833260e188ff0e4e858fae6cf36c"
+  },
+  {
+   "path": "capture.py",
+   "sha256": "957081e23c29cb10c8e109bd67d80736b2cb382d7c1ebfe45c8b3c1b40f367ca"
+  },
+  {
+   "path": "capturelib/__init__.py",
+   "sha256": "ae63ab9d675311088a0c8f392ee56513981b04d03cf9a537dead341648e27396"
+  },
+  {
+   "path": "capturelib/analysis.py",
+   "sha256": "66c9cb6e95e3d5e91be84dd30b6f6ac00490b59da9ee918d9d3bda7b3271ace7"
+  },
+  {
+   "path": "capturelib/claude_fw_f_v3.py",
+   "sha256": "1990283f0b4997704b9fcdbe9a4b6fb3d20b37685a1bf62193b674bc55c45e09"
+  },
+  {
+   "path": "capturelib/claude_fw_f_v4.py",
+   "sha256": "c5bb6677c23ede590528ec5483f49ead3b075162eee4457a00f84fcaa28e0203"
+  },
+  {
+   "path": "capturelib/claude_fw_f_v5.py",
+   "sha256": "551c314edef747f7d915f523c77a93c49374aa876a92dbd42609478ca3a2da01"
+  },
+  {
+   "path": "capturelib/claude_fw_f_v5_version_facts_2_1_285.json",
+   "sha256": "f1bebd0034f6ab7ee35f9b893ca4b627235ae78592d347e60859355d037efec8"
+  },
+  {
+   "path": "capturelib/environment.py",
+   "sha256": "8422b65adf998812a6bd70e4f80b3150e43b06682638258bcf55be9d54e5da60"
+  },
+  {
+   "path": "capturelib/identity.py",
+   "sha256": "bb502ffe21a62ec221a1510ac03c62d4c28675cbf61b6b4c6513004761fed725"
+  },
+  {
+   "path": "capturelib/lifecycle.py",
+   "sha256": "40d85606526f05c5665ff8d4f5a1d31f691d6f38e0fb7ab1bb480ae2b4a26f23"
+  },
+  {
+   "path": "capturelib/manifest.py",
+   "sha256": "cdc00f016d20ccc0b181cc64e9a15bae03664c77b0794f7a0787a682ea7c8f65"
+  },
+  {
+   "path": "capturelib/model.py",
+   "sha256": "fd8b0f0db30bd8d49147fab04f93b40e777e2e799d20d8861b17ff30bf554b5a"
+  },
+  {
+   "path": "capturelib/recovery.py",
+   "sha256": "db5321d8730246c981c5de073ffa35395f389c6cbda0f27c916481c54ed3aa51"
+  },
+  {
+   "path": "capturelib/scenarios.py",
+   "sha256": "5bd0d9141fcd79b7f7ccb5a860bda023980db27620bd7e25e59f2886275818ab"
+  },
+  {
+   "path": "capturelib/security.py",
+   "sha256": "9ba325fea09e3aaf14e915d2588bf0d6aba768962ae8be99207b51906de9ebf3"
+  },
+  {
+   "path": "certify_release.py",
+   "sha256": "a6b2c1f66dd2b86c4318f777e2d53ca6c1c0fdd1bb3d1ab5fb64ab71e3756ea8"
+  },
+  {
+   "path": "check_sample_integrity.py",
+   "sha256": "65f8528535125624f2042ed0fbb06866c8bd3c382090b6f254585b4f29912333"
+  },
+  {
+   "path": "claude_21220/check_coverage.py",
+   "sha256": "57891d98eff2236fd57fa2a7853120a9e552e554136bbe2946708cf7aa6ec2c8"
+  },
+  {
+   "path": "claude_21220/hitcc_2_1_197_coverage.json",
+   "sha256": "c942f2f52c9254c31cfa80e764bb0d8269b9cca7aeab446afcdee027e6617b5c"
+  },
+  {
+   "path": "claude_21220/rules_2_1_220.json",
+   "sha256": "a1d2d4d8fd492416da711b56854966103d370b4899f1166b4f666f704025879d"
+  },
+  {
+   "path": "claude_21220/source_2_1_88_coverage.json",
+   "sha256": "be04643165027f798cfc48051577bcfcfb1c89cd0a00daf6b09616665737f6f8"
+  },
+  {
+   "path": "claude_acceptance_contract.py",
+   "sha256": "513729e0097fd532678fbe99901110eec0f8745a59d91f03ada74943c7e4b6b7"
+  },
+  {
+   "path": "claude_build_rule_assertion_results.py",
+   "sha256": "e7aa1393c148fd77c4c4ea56af70be7baef2eb291be594e20122e99e647faa7f"
+  },
+  {
+   "path": "claude_build_runtime_audit.py",
+   "sha256": "270f554b677b68870246e02561ecd6c797e6c1e3a6b686dfc4a4002c2a18f28d"
+  },
+  {
+   "path": "claude_bundle_reachability.py",
+   "sha256": "e4d6a5076c74cd910ad5ee33ac4bfe352696979f9238e3bd7cc19fa195f3a036"
+  },
+  {
+   "path": "claude_client_receipt.schema.json",
+   "sha256": "4f10764e15655d38587e276cfefdbe7d50ee4aabe9d0b3498de0e8b034615a94"
+  },
+  {
+   "path": "claude_client_receipt_contract.py",
+   "sha256": "d6dbd345c95b4ad501e3fc3ab7718de79aeb3ac96bd0fbaf65ba5e8129335e0a"
+  },
+  {
+   "path": "claude_drive_desktop.py",
+   "sha256": "19246a5b1d193a33c6e71d36551e40610e19e272f712cf36036b6faedb512168"
+  },
+  {
+   "path": "claude_drive_tui_cli.py",
+   "sha256": "aec80f36cffbc8e727d957e863e7e6b4f060204e607b615135498445ee328c87"
+  },
+  {
+   "path": "claude_drive_vscode.py",
+   "sha256": "54c360d087277feb474deeeb695b7c5f370c39c5a694b9297722ea143a4ff2fc"
+  },
+  {
+   "path": "claude_fw_e.py",
+   "sha256": "c736f181cc0e852dd3a56d644d2cd2e3041c72d23a1004fd502df0af292f6a41"
+  },
+  {
+   "path": "claude_fw_e_complete_campaign.py",
+   "sha256": "396b7525b6fb8855f59640c572c6bef4f0efd24742d594f6bf8720126957926d"
+  },
+  {
+   "path": "claude_fw_e_crosswalk.py",
+   "sha256": "8fc796648d6253d05f8707d9a921df557a1a2d4a15b54ae1784504cb238b500c"
+  },
+  {
+   "path": "claude_fw_e_disposition_policy_2_1_226.json",
+   "sha256": "febbb84d8acfb60a5cea104e10ad95c7738b7f6e885f0ea0b07759a204209d07"
+  },
+  {
+   "path": "claude_fw_e_dispositions.py",
+   "sha256": "307ab4c41e39a170cf7113395599410b92788f7b93d4948614c6e91202a6b0e5"
+  },
+  {
+   "path": "claude_fw_e_historical_candidate_baseline_v1.json",
+   "sha256": "9b0d8a415b02746539474ba0edace8407078857cb45a5f5978741254c854cf59"
+  },
+  {
+   "path": "claude_fw_e_relay.py",
+   "sha256": "4eb7e65d54f488179c459cdaaf062666755e120cd0f129ad45c7a9bce9a9fd68"
+  },
+  {
+   "path": "claude_fw_e_runtime_snapshot.py",
+   "sha256": "f1459e57690703d735af8abd28da840414a8043c043e7b8c6e8907d85c2be1d0"
+  },
+  {
+   "path": "claude_fw_e_seal_plan.py",
+   "sha256": "988ac259374610492c8604f4c577ff543d990ca7f975dbae9f0bf167fdf152fa"
+  },
+  {
+   "path": "claude_fw_e_validation_closure.py",
+   "sha256": "a1143dbc1349ab73b316e98bf4e0f1f337b1ae0924049cf381c2b345e31046a5"
+  },
+  {
+   "path": "claude_fw_f_complete_runner.py",
+   "sha256": "c1de6b8074cf497b8180e3bcbac6292c90814ac611fb7924767fd89ea289c4bd"
+  },
+  {
+   "path": "claude_fw_f_discovery_clearance.py",
+   "sha256": "f4963be7bb6e6c923a6a583ce844d0fc3982c6dc1bf0d607254c967e9a967213"
+  },
+  {
+   "path": "claude_fw_f_discovery_policy_2_1_226.json",
+   "sha256": "8dfd59a2962b9f326cf1e50e2588cefc558475a3a63969d67faca8bfae9c9a64"
+  },
+  {
+   "path": "claude_fw_f_measured_rules.py",
+   "sha256": "c8750033fc8f69cb9f754a96bcd9942b81699bb4bfdcdd2a111536af0ce313e2"
+  },
+  {
+   "path": "claude_fw_f_profile.py",
+   "sha256": "f5e6b8c8cf03d15b0604022def2f9c6f03231c8dcd4392cd936220e569a2d62b"
+  },
+  {
+   "path": "claude_fw_f_profile_policy_2_1_226.json",
+   "sha256": "964c0b6c69bdbcedd6edf990fea5eb0eb08c41a13ebd58a3b0de65fa2f3287e7"
+  },
+  {
+   "path": "claude_fw_f_v21_finalize.py",
+   "sha256": "ad57340d53414d213899fd069d7b120c05a25069b4d22242c29347bd76bf66de"
+  },
+  {
+   "path": "claude_fw_g_acceptance.py",
+   "sha256": "48df4b8a2a7b0a8bced36e9b1aa878f551b8c5642260ed5cc2872ac59f7f69b0"
+  },
+  {
+   "path": "claude_fw_g_candidate_pair.py",
+   "sha256": "b723b27ea765889e4d74d10d2f10f09983dfe1990cebc645975aae99aeb9c132"
+  },
+  {
+   "path": "claude_fw_g_generation_policy.schema.json",
+   "sha256": "bc0f7faf4761ab53efa30a20b7b0c6b22aa950c343c7e4de841942175121e549"
+  },
+  {
+   "path": "claude_fw_g_generation_policy_2_1_226.json",
+   "sha256": "61b2e52ed6dd224567e23a9ebd3d3db3d1d202032404170e1aef034497318097"
+  },
+  {
+   "path": "claude_fw_g_generation_policy_2_1_226_v2.json",
+   "sha256": "8e96d5841daececc778dd9ee5a9791abbdbc59f1422d81613c04b125723d8e17"
+  },
+  {
+   "path": "claude_fw_g_implementation_coverage_2_1_226.json",
+   "sha256": "cc783db04973554d83ee9f4bf8581d48f7caf0f1bdf4beafcc34199d53aeedfb"
+  },
+  {
+   "path": "claude_fw_g_official_finalize.py",
+   "sha256": "3c9da2757566caecedc137eb5c4077cf6ad76900fc73a9fed1f4688744cd5614"
+  },
+  {
+   "path": "claude_gate_material_reader_contract.json",
+   "sha256": "dd05516ad08e8f71142efbe065b33a4a70d9ceb9acc3173181f370281edf4c4a"
+  },
+  {
+   "path": "claude_gate_material_reader_identity.schema.json",
+   "sha256": "8ba7bb0723cba32d35c92e5bf86b1f0f4e1c1a29cac373b5ca8d7e7a11ec65c0"
+  },
+  {
+   "path": "claude_gate_material_worker.py",
+   "sha256": "eb3ec67cec96d7e888e5798000b5c8a6f9ba7865f1c5f14014518e660468641f"
+  },
+  {
+   "path": "claude_generation_policy.py",
+   "sha256": "a3f3b9557bc4d2e84bf44a3a2a941036c31722e26f1ed3390d4178c8cd93058a"
+  },
+  {
+   "path": "claude_mac_agent_bridge.py",
+   "sha256": "e50fc187063f13ff298ee3b5e41743b6f1974b4c3ef0872939c6ae01034b6caa"
+  },
+  {
+   "path": "claude_mac_capability_probe.py",
+   "sha256": "ce658067a1b26db4d3b0354b822ed47fe525eff5fb8f3ff7f6ef65c27114201c"
+  },
+  {
+   "path": "claude_mac_capture_contract.py",
+   "sha256": "95575f5a459b06a2c5fa2cc67777b824314c2e5720025bdfd7ffabd1a584634b"
+  },
+  {
+   "path": "claude_mac_capture_dependency_core.py",
+   "sha256": "2092aef04902c9b41128610c833ba5398b61da55ba6b7fc909c58e4e058b781f"
+  },
+  {
+   "path": "claude_mac_capture_engine_core.py",
+   "sha256": "d17a9444a2575dd379971b17d34fa8b11d2ee99bae30e946111bbea5268610f8"
+  },
+  {
+   "path": "claude_mac_capture_fixture_policy.py",
+   "sha256": "cc764512d1b861c504c8f55d480b99916c528ac44b96872997c06352985ad79b"
+  },
+  {
+   "path": "claude_mac_capture_h2.py",
+   "sha256": "a0c18db68b2c4d6251c10dab2c10cf2e068a56f747a238bcfbb6322d91a505c4"
+  },
+  {
+   "path": "claude_mac_capture_h2_contract.py",
+   "sha256": "a98e13fb940448043392d04087f3bfc7e4ab617d752b2f421731c1292a94f9fd"
+  },
+  {
+   "path": "claude_mac_capture_h2_core.py",
+   "sha256": "9bd2221d0f2ca9178ed13f03b724ae68329f150cf5e640926e1ddec00bb5f62a"
+  },
+  {
+   "path": "claude_mac_capture_h2_dependencies.py",
+   "sha256": "8d583c506cfee0a2a1dfd57bc773e46978bf9305328e55f1fda3aee1d495f9e8"
+  },
+  {
+   "path": "claude_mac_capture_h2_runtime.py",
+   "sha256": "a033c1eaec392f2094f44c91e48c995d68575aa095af6043cb6f49e331bc43e0"
+  },
+  {
+   "path": "claude_mac_capture_runtime_core.py",
+   "sha256": "3248464140bf514344e93a69b93aea0b56fc3d8f56777e84d779aebd13cc3c9d"
+  },
+  {
+   "path": "claude_mac_capture_wire.py",
+   "sha256": "23b8667468181a07dda7cd695077ec0f55a4d8f5862ec7be656cea10d635ffb5"
+  },
+  {
+   "path": "claude_mac_client_source.py",
+   "sha256": "30024456a21f599519e342d45e8f29f3c66de66baadbec1515480b75d290e950"
+  },
+  {
+   "path": "claude_mac_formal_capture_contract.py",
+   "sha256": "54401b93d7506721c0d8ee75ea3c87765688144352b5943400539b542b72736c"
+  },
+  {
+   "path": "claude_mac_formal_capture_service.py",
+   "sha256": "8a06a77f0c712743a8c3707011c81cfa16f8816f820239f9bb486f0d80f36170"
+  },
+  {
+   "path": "claude_mac_managed_source.py",
+   "sha256": "3d45540120c03af1ce052159ca2e1cb23f4d54ed1e203b1e6efcce4092e484fc"
+  },
+  {
+   "path": "claude_mac_process_events.py",
+   "sha256": "01fcff3e9ee1f8d93fd12d20f9903fd9ab97db88d07bceaab522a2da323d71ac"
+  },
+  {
+   "path": "claude_mac_process_events_build.py",
+   "sha256": "84f1b90f2afc89cbb204b7e329e12cd9d15768b8b9c7b5f0035df2b7057ab81b"
+  },
+  {
+   "path": "claude_mac_process_events_contract.py",
+   "sha256": "f09b7497663f888975bc180960254079cde6e9e65763a7259ec29ecd0c64200a"
+  },
+  {
+   "path": "claude_mac_process_identity.py",
+   "sha256": "f3484536e424f5c7b8ed13b6904fd08c7230cf2fe22f8fb7d51f96ce184aee0f"
+  },
+  {
+   "path": "claude_mac_product_authority.py",
+   "sha256": "ff8f844888f59fe919a31de2f52377e057fcc9139b37132a3693c20ab74e21d1"
+  },
+  {
+   "path": "claude_mac_product_broker.py",
+   "sha256": "cbc5e47843b46a21ad098f7147408a838dcee1a7931d8c26041f73355c2246db"
+  },
+  {
+   "path": "claude_mac_product_completion.py",
+   "sha256": "5273db256620d230984f0b48dbfd09084043f339104c7b30f5c17660b2d76c18"
+  },
+  {
+   "path": "claude_mac_product_flows.py",
+   "sha256": "ffd72d97b8a7d4e82aa8fe02f7c65d80c50a884f72bd4626d3a83280b5f7c0e3"
+  },
+  {
+   "path": "claude_mac_product_logs.py",
+   "sha256": "3be883852c75631c02efb77a627dba12917511b2e486dbcd08e2e1fe8102c7cb"
+  },
+  {
+   "path": "claude_mac_product_materials.py",
+   "sha256": "b8e450639e019c8d63737902039e1be06e948309694f2cffe2a149608cb0c74a"
+  },
+  {
+   "path": "claude_mac_product_modules.py",
+   "sha256": "c91d54f22961f86c203bbbfe6327887d165b273bc705938920b1d9531e32b263"
+  },
+  {
+   "path": "claude_mac_product_native.py",
+   "sha256": "19a81a9bf3e8404f8fb3c5dc8c08894c56942dafd813850380f7652286eb70dd"
+  },
+  {
+   "path": "claude_mac_product_origins.py",
+   "sha256": "f95ad1d70caa2766bbf74fb1d13595dccd268bd128041e51b9b964cbd7d53b5f"
+  },
+  {
+   "path": "claude_mac_product_provider.py",
+   "sha256": "ba23337bbf24f8cb41533a7c939de3d46ac2ae250d681224bc23d1c6d47914c6"
+  },
+  {
+   "path": "claude_mac_product_recipe.py",
+   "sha256": "4ffd7fd4ffdfbfc66514cecce1b2e651be29480e400afa28f614d7693a8784f0"
+  },
+  {
+   "path": "claude_mac_product_recorder.py",
+   "sha256": "75ce1a59f465e0d075badb3df4641321aec3ffdf36af03d450cba70ad12dad78"
+  },
+  {
+   "path": "claude_mac_product_source.py",
+   "sha256": "ee53445486281086c39ec06051ef2df4fdc3c7ee1e17483bd29e556eae6a48ae"
+  },
+  {
+   "path": "claude_mac_product_state.py",
+   "sha256": "0b5219e78ddb74a3a73906292c8cb23ba169ce4eb0dde26163001208d8fb0edd"
+  },
+  {
+   "path": "claude_mac_recorder.py",
+   "sha256": "2e88b88426a8f5c6feea4a1224ab242542f534c30a34baa16b773d6d4bfa96f1"
+  },
+  {
+   "path": "claude_mac_state_journal.py",
+   "sha256": "cfe65b13420ab00b238b172fdc043ab0aade798ff3ff278514d631ba74f88a00"
+  },
+  {
+   "path": "claude_oauth_refresh.py",
+   "sha256": "ebea74bb0f16b47e96a71ce475a65100b8f3bb2a93bf7c7ee0cf953c0e742e8b"
+  },
+  {
+   "path": "claude_qualification_intake.schema.json",
+   "sha256": "3318b5d10c35bcf3e46c8ad5ca61353f89fc4b3a53b5682c3a9f487e3bb49bb4"
+  },
+  {
+   "path": "claude_qualification_material_import.py",
+   "sha256": "e9e23fb3e3b8a3a9d3545dde3cbe4327f178675145f41f0c13f73210dfffb9d5"
+  },
+  {
+   "path": "claude_qualification_material_import.schema.json",
+   "sha256": "3257ec37208dafb55b9cb098eac2f151b781ae68fcaa1e3f84f0f381e67200f0"
+  },
+  {
+   "path": "claude_qualification_material_source.py",
+   "sha256": "dcc4694a28c54b484b1eae92f463d00a372ccd49179f3b40e39012e0a598d9d0"
+  },
+  {
+   "path": "claude_qualification_source_acquisition.schema.json",
+   "sha256": "bc3ec0626a4971360147be663c664a67fc551f7c0645cef2e379937b5d014fad"
+  },
+  {
+   "path": "claude_recorded_evaluation_contract.py",
+   "sha256": "9863b4d359a525fdb3af9fffeea3af5aa592dbd5cb316420e2707c7732bf16e5"
+  },
+  {
+   "path": "claude_required_rules_2_1_226.json",
+   "sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045"
+  },
+  {
+   "path": "claude_root_cause_codes.json",
+   "sha256": "f843f59cd7f0fef6cdecd58ac098adf574e22ee7ef3903ea31527599214e3f4f"
+  },
+  {
+   "path": "claude_rule_assertion.py",
+   "sha256": "df9da4432abb5f4370aa3d78a82d6f9c45d4ab66ba5f24de4eb561a89eeac534"
+  },
+  {
+   "path": "claude_rule_expectations_2_1_226.json",
+   "sha256": "d53b7548dcd46358506c3d2c6112e1a5766b72f139ac82124ac19c3c44991fb4"
+  },
+  {
+   "path": "claude_rule_expectations_templates.json",
+   "sha256": "ad882ddbe970571d8f0f9080be15a6da39aea1acadd8603b7e981ffe67a12b7b"
+  },
+  {
+   "path": "claude_run_candidate_capture.sh",
+   "sha256": "b874fb2e810db33568327bdb1f0cbe6fd58551fea46c28d3bc563004c793b6ea"
+  },
+  {
+   "path": "claude_target_inventory.py",
+   "sha256": "198c0ff1449aadbd78baaa421eb4a48ba6936e18c292b416f055a53c27525ed6"
+  },
+  {
+   "path": "claude_tool_identity_policy.py",
+   "sha256": "5e82e37688f77e56eaa2b075f6619f4b702bb86706f6750f219575963ae025c8"
+  },
+  {
+   "path": "claude_tool_identity_policy_v2.json",
+   "sha256": "e7b6abfa0a9b345b866d85c6a87c3378210c26d5890279741b07a32b715aee39"
+  },
+  {
+   "path": "claude_upgrade.py",
+   "sha256": "70c22901aafe91c5034337193efa12f86b359205bc00377d64f6653152394950"
+  },
+  {
+   "path": "claude_upgrade_accept.py",
+   "sha256": "4893efa3409d5e6c61df8a722460d069f716bd1f4ad79ec8e75949f67231fdec"
+  },
+  {
+   "path": "claude_upgrade_acceptance.py",
+   "sha256": "b7239b4d3288425936065ede0aecc24e69f7a08ecc9d1efbef3502cced817d65"
+  },
+  {
+   "path": "claude_upgrade_arm64_delivery_executor.py",
+   "sha256": "8e709988fe554a815158bfb9678ae3938c17f8f5a0c3de942bf4f210a928962d"
+  },
+  {
+   "path": "claude_upgrade_arm64_environment_receipt.py",
+   "sha256": "2995f6c5c949102bcfb635567d5a7c26c1188cb546a230ef8d90ba80caa33574"
+  },
+  {
+   "path": "claude_upgrade_arm64_executor_configuration_v2.schema.json",
+   "sha256": "1bdcf944bcea5a0d846140bed40ecb7d6a0a99087d587d474cdac65e9defb72a"
+  },
+  {
+   "path": "claude_upgrade_assertion_profile.py",
+   "sha256": "ac7f42cd33923af8015f2a06669aa601ac78608beef7461bb060716892687adb"
+  },
+  {
+   "path": "claude_upgrade_atomic_rehearsal.py",
+   "sha256": "bcb21836e08c279e7d0a09965d8bc6cdc98d5cb3c05fdefe434800ccff648719"
+  },
+  {
+   "path": "claude_upgrade_attempt_recovery.py",
+   "sha256": "205ea7eaeb2040dec64bfb37077c5006491b52a8e8b4617cef904a386f4b3b87"
+  },
+  {
+   "path": "claude_upgrade_attempt_segment.py",
+   "sha256": "2ff2c99d4bfbb6b8540de528488bb0b72485a2591b2dc843ee99a78fa003dd56"
+  },
+  {
+   "path": "claude_upgrade_baseline.py",
+   "sha256": "350e36085c2bff3c34ca36c9814ff5e0503404a0709844ab8e1ea8c7811137aa"
+  },
+  {
+   "path": "claude_upgrade_batch.py",
+   "sha256": "4e551ce095ea0eed6359377862282835c7771d3e8834372bd6cc63785944f9e8"
+  },
+  {
+   "path": "claude_upgrade_boundary_checks.py",
+   "sha256": "d617da10c8e9fff651f1338f8d15f9b750af88e1978306f7c98c9ff7eb33cdd1"
+  },
+  {
+   "path": "claude_upgrade_campaign.py",
+   "sha256": "e2f68b95a7a1dd95e9fe52ee19bd23abe610dc312dd4d45d895b5c6dc75f5cb6"
+  },
+  {
+   "path": "claude_upgrade_candidate.py",
+   "sha256": "d3d14a8f37415fe0221c44f07b8c62c825700f26af249944a330a8b830d0a9d2"
+  },
+  {
+   "path": "claude_upgrade_candidate_capture.py",
+   "sha256": "9eb63682b7d66a22cdb1aa2acb54ff3f5a4eed93f49b26e5d7f47f705653e8d1"
+  },
+  {
+   "path": "claude_upgrade_candidate_reuse.py",
+   "sha256": "fdd843c64033cb9440d0f6c9928bc8c6d8d334daaf51fa2abae56fe803c76060"
+  },
+  {
+   "path": "claude_upgrade_candidate_seal.py",
+   "sha256": "c9185b663d4a4fe3a0bed456fba4a637cb7782f0f325e716eea3e8ac9765e12d"
+  },
+  {
+   "path": "claude_upgrade_capture.py",
+   "sha256": "3313549101ebbde1c16b8d757da52d499d9f34d30ddb1c2e7b715fc3b99e0e25"
+  },
+  {
+   "path": "claude_upgrade_classify.py",
+   "sha256": "12486773d432dc419018a2631ea4133c59522d7e3342ebfcc50e0f96847e0de2"
+  },
+  {
+   "path": "claude_upgrade_client_adapter.py",
+   "sha256": "1ee18c56cf72ddf1b116fd0cc7830be3f5654f19d65741dc9989bc600d7ed81a"
+  },
+  {
+   "path": "claude_upgrade_client_receipts.py",
+   "sha256": "5fdd5dd7aa3d270115a04a04f6325c8e8315a6cf51f24f0ad543baa6d8499cf1"
+  },
+  {
+   "path": "claude_upgrade_compare.py",
+   "sha256": "91418fd3ffb36e196c7088fec0d842aa3d1a57fc69ed4c3164a30745c9002e42"
+  },
+  {
+   "path": "claude_upgrade_delivery.py",
+   "sha256": "8873b8605bc4b537b5461e61ff380278acf76e957cbc51d96d70f5c826dd7165"
+  },
+  {
+   "path": "claude_upgrade_delivery_installation.py",
+   "sha256": "1c782d0032a2bd88251c6897ebb592b31f94d77cdfdf0e7f2d3d30d3cdb3e445"
+  },
+  {
+   "path": "claude_upgrade_delivery_qualification_v3.schema.json",
+   "sha256": "e2a24ad25efb932aa03a52fb468be153093382f98b7024e177308146d9f88b19"
+  },
+  {
+   "path": "claude_upgrade_delivery_recovery_guard.py",
+   "sha256": "fbcc7aad9a9adad2e223a7fb4bebfdea4974edec4af13bad4959c63b75f400f5"
+  },
+  {
+   "path": "claude_upgrade_discovery.py",
+   "sha256": "72a714bb6304c0f8fcc8f176bbc09bce80b12ecc48ca5906059d1909b4700f51"
+  },
+  {
+   "path": "claude_upgrade_evaluation_recovery.py",
+   "sha256": "c146d0c9305aa4ab8ea250c94d6d2433af4edd0ccb67b56ffc88bd32260d64d3"
+  },
+  {
+   "path": "claude_upgrade_evidence.py",
+   "sha256": "8fc22b55d97fd20db3bf7105c31f7a5a8f086c69723f7f4a9e45b540ada55861"
+  },
+  {
+   "path": "claude_upgrade_evidence_labels_2_1_285.json",
+   "sha256": "c0c30a5421d907a0c3b3a60466f9bf591b91e41b808ce97a09e961833c23b685"
+  },
+  {
+   "path": "claude_upgrade_evolution.py",
+   "sha256": "1052b0b932bda6824b1cbcb4f8d078a9df591716d60f6fab4b8b9275b5f6cc0a"
+  },
+  {
+   "path": "claude_upgrade_failure_lifecycle.py",
+   "sha256": "49014483f469b6eff6ce1f1f98db5e0ceaae9303ceb726724af07b353d59c3f7"
+  },
+  {
+   "path": "claude_upgrade_freeze.py",
+   "sha256": "ea94ad513bfb21c92db2c99dafa9a54812e9afbfbcac3d256b0bbef7c63fb871"
+  },
+  {
+   "path": "claude_upgrade_guard_epochs.py",
+   "sha256": "9994c0f14151fbc862d668300e59499180015a262745918dc88e35fca2b6186c"
+  },
+  {
+   "path": "claude_upgrade_job_rehearsal.py",
+   "sha256": "d99bf8cb4691e4910aa819f82c5fc7c1e438e8b370c0aeb0ee824e030fbc9f6c"
+  },
+  {
+   "path": "claude_upgrade_job_tool_tree.py",
+   "sha256": "cd8e63eb87e8db0b7f8c3f0b53a12e0736d48f39dd92738bec94456a7856a794"
+  },
+  {
+   "path": "claude_upgrade_live_request_provenance.py",
+   "sha256": "f4064b9d85218cd31cb53c4a9620d478b71d4cd2d1a6501121255afe9643dc76"
+  },
+  {
+   "path": "claude_upgrade_mac_budget.py",
+   "sha256": "e3a52939c6b76d12aac95ecb95b986fbd81265186cc8c0e5516d4bffaee4d2a0"
+  },
+  {
+   "path": "claude_upgrade_mac_candidate_services.py",
+   "sha256": "1d73c12148e4338706b2841e10c7a57ad31c18fd73155b381b7c9b72c3b045c4"
+  },
+  {
+   "path": "claude_upgrade_mac_capture_client.py",
+   "sha256": "e9f0bdcab38a7afdd16413f91010ea4aa0a594f65830461d592751ad27c8322e"
+  },
+  {
+   "path": "claude_upgrade_mac_capture_service.py",
+   "sha256": "e41c5708580781b7f948bbf19464b4e7ccceeb54e0fba0b0fdf497f4312f36f5"
+  },
+  {
+   "path": "claude_upgrade_mac_client_capture.py",
+   "sha256": "f284dbfddfc6a4c4b6d2787b374061a0bcccc7b4771c069f571deb5fe061d071"
+  },
+  {
+   "path": "claude_upgrade_plan.py",
+   "sha256": "7853031303c17af431436449a6ad974d41aa4b05f382e7ecd1c4db34737ceb77"
+  },
+  {
+   "path": "claude_upgrade_predecessor.py",
+   "sha256": "bce8ee2fe0fc4816d5387c15f814160a19917ba9ffb9d10fd5be7d93fc78b26c"
+  },
+  {
+   "path": "claude_upgrade_predecessor_sealed.py",
+   "sha256": "d5930df09c48897ecbf896504d1327af37fd941b9e509814fab51853beede552"
+  },
+  {
+   "path": "claude_upgrade_probe_preflight.py",
+   "sha256": "31537f569159ca0fac097f92a39ba773878f9461915c9eceef1aaa1bfe35e510"
+  },
+  {
+   "path": "claude_upgrade_profile.py",
+   "sha256": "ba3a9266352884bd6e0209dfc9de44a4bb31c5cbf4fb2e9aae6e5ffa0b20ff63"
+  },
+  {
+   "path": "claude_upgrade_recovery.py",
+   "sha256": "7824a73fde546e518f0ead144d9d8c380f89dbe489b466f0b81fee9a3c5ea9b4"
+  },
+  {
+   "path": "claude_upgrade_recovery_history.py",
+   "sha256": "4b0c831660efcc4ea57706954a41665c5b8876db42d372a3fc7069fd1e6ba3d7"
+  },
+  {
+   "path": "claude_upgrade_release.py",
+   "sha256": "2bfc86caf17dd7981dca823862001114d9ff4b3ff62cb11bb7e7c0d89dc72f14"
+  },
+  {
+   "path": "claude_upgrade_revision.py",
+   "sha256": "5664e7a94bf96e6e6cfa756e21aa34fab79f1832a423d01983b975f0c90e0c88"
+  },
+  {
+   "path": "claude_upgrade_rules_2_1_285.json",
+   "sha256": "5e32d005df86d9ccc51c44b8f58a011e9f403bee872d3f548c3786fc960df3ad"
+  },
+  {
+   "path": "claude_upgrade_scenarios.schema.json",
+   "sha256": "1392223dbc2e87ab26e576a8895a8cd943dfc3e07938072d2427c219d9ab1373"
+  },
+  {
+   "path": "claude_upgrade_scenarios_2_1_285.json",
+   "sha256": "3d6b2f1cf1884975822b85e56bd866f4751c451935b7724407ad7d36beb7ce43"
+  },
+  {
+   "path": "claude_upgrade_seal.py",
+   "sha256": "72260efa4f832ec143f3710b7a66824798c0f116eff2d7116f964bb21572b4d1"
+  },
+  {
+   "path": "claude_upgrade_segment_seal.py",
+   "sha256": "8ab1de05ed6c6a46caaf15da82b94ec7c0cd29efb17c75a7e637054c707f9f01"
+  },
+  {
+   "path": "claude_upgrade_static.py",
+   "sha256": "c00964e23c0e83f20d74129de2d964e10cb26f6ae1cf295afb87a112eaeb168e"
+  },
+  {
+   "path": "claude_upgrade_store.py",
+   "sha256": "ce866d111c09ebe61f6e896f8c5012c952e3b7db48229c927b2a3d353f01c9bc"
+  },
+  {
+   "path": "claude_upgrade_vc.py",
+   "sha256": "0806174db0b10017346b5f34b7dc27248985389f3b23566e8ec254675aed0185"
+  },
+  {
+   "path": "claude_upgrade_vc0_closeout.py",
+   "sha256": "bc17e44cd5db548853bb9d2dba9905bc4c5cbed683542127721e7688df3cd42b"
+  },
+  {
+   "path": "claude_upgrade_vc5_admission.py",
+   "sha256": "5dbc6c4810a3f41d437ab917e59151b3cc6088566613bfced1baadbc8e5c9450"
+  },
+  {
+   "path": "claude_upgrade_wire_projection.py",
+   "sha256": "06f17416cc805f30293a2e96eb2392a8656b5e4493b55a4065d5c4efac27d674"
+  },
+  {
+   "path": "claude_upgrade_wire_projection_2_1_226.json",
+   "sha256": "5b7ff51fcc097619ffeb7ca04586ebf51f48daab4e49392e8992b0f6a6b62662"
+  },
+  {
+   "path": "claude_upgrade_zero_request_smoke.py",
+   "sha256": "09f72f9898a971ed818be24c5e29dcfbfeaf10c24d0146350f7bcca0982a64b1"
+  },
+  {
+   "path": "codex_egress_profile.schema.json",
+   "sha256": "d012e137567f17e501b9555ef8dc98a5a265403296669b69e738f7d31ccb680d"
+  },
+  {
+   "path": "codex_runtime_egress_bundle.schema.json",
+   "sha256": "3174fd6d3c8e5758d22de03465dec2502a25439d5e63cca33890b34fdbd7e1e2"
+  },
+  {
+   "path": "codex_runtime_egress_compose.schema.json",
+   "sha256": "4432963d47b1e1077a62465699c119886212029eb51940c720d57f74278d1110"
+  },
+  {
+   "path": "codex_runtime_egress_exit_health.schema.json",
+   "sha256": "2259b6b432978c2e545bf7f2b19c969d688daed445b4dded1f8c613beb4466f3"
+  },
+  {
+   "path": "codex_runtime_egress_install.schema.json",
+   "sha256": "fb8cfe03d91ed76ca3d87369fe9337a021d4df43e994b6239848a0c39a9dcc34"
+  },
+  {
+   "path": "codex_runtime_egress_policy.schema.json",
+   "sha256": "33f49c3c3be6883f0de89a97e78042b396bc9d9039c7869eba7e3e488f436161"
+  },
+  {
+   "path": "codex_runtime_egress_status.schema.json",
+   "sha256": "a5fe824474ab3b289e81eb6334a13c396dc1598c5e33a02f8e790e785b33427e"
+  },
+  {
+   "path": "codex_upgrade.py",
+   "sha256": "5de83538114138bb8942df1a141ba3904f620cfabf31238c2359f564ca0ed156"
+  },
+  {
+   "path": "codex_upgrade_action_output_binding.schema.json",
+   "sha256": "64c3cb454444e73840a1023101d18599394c55485307eed09d09e4205fa8d12d"
+  },
+  {
+   "path": "codex_upgrade_approval_revision.schema.json",
+   "sha256": "5629288a7bb4645443ab3d24cd6c60908e0884179471f9d1420b019824d91ade"
+  },
+  {
+   "path": "codex_upgrade_arm64_environment_receipt.py",
+   "sha256": "6f8329206fa52a2d907124ec7403b5ea2da903b0667ecf0a204208c0025a793b"
+  },
+  {
+   "path": "codex_upgrade_arm64_environment_receipt.schema.json",
+   "sha256": "2690f0302356cdb83f1163b5c84ac34f016f449c4221d4a1e1c88784d4a347a5"
+  },
+  {
+   "path": "codex_upgrade_attempt_recovery_reservation.schema.json",
+   "sha256": "a56dfbc644e71b44615fdcb89b67e41edb796009e1c327431fbdd698fe800f19"
+  },
+  {
+   "path": "codex_upgrade_campaign.schema.json",
+   "sha256": "3b36a2ea6f385a61f6ab58511fc8a600d108d0e7c587c17dcc40dfd2480eed70"
+  },
+  {
+   "path": "codex_upgrade_campaign_disposition.py",
+   "sha256": "b017f0bf405f4a127c13efe5136b442cac3a2d80ffaea2281ef1fc14fddde91e"
+  },
+  {
+   "path": "codex_upgrade_campaign_lease.schema.json",
+   "sha256": "625a266246273a2fc2a96aa783b03f6c800354d435a58b15389498b8bb1980e0"
+  },
+  {
+   "path": "codex_upgrade_campaign_lease_stop.schema.json",
+   "sha256": "9805926fa0f3cb18a9568c3e42772fd7e1f02097a4afe1b9c1cb174585e8010b"
+  },
+  {
+   "path": "codex_upgrade_campaign_plan.schema.json",
+   "sha256": "d96e61d8025f11cbe0b33b99765007af949f3fc4660c083d31da4781d30bded2"
+  },
+  {
+   "path": "codex_upgrade_campaign_run.schema.json",
+   "sha256": "58ed3c57e03b061c3361c956a7ec575e06f39851398d266855a35431585bdbbe"
+  },
+  {
+   "path": "codex_upgrade_campaign_run_rehearsal_receipt.py",
+   "sha256": "b21f87b4b9ab4f744ee371f507c739f3af4e188ddca70a710cda1800b92f445e"
+  },
+  {
+   "path": "codex_upgrade_candidate_build.py",
+   "sha256": "0161382f4808257bdf996749e04d646e23bd9d1826be58eb8ba4c74314617c75"
+  },
+  {
+   "path": "codex_upgrade_candidate_build_parameters.schema.json",
+   "sha256": "e262696d993ec0de97eae9a65b9edfbee1956f8f4ac460ae0462890aab73e049"
+  },
+  {
+   "path": "codex_upgrade_candidate_build_receipt.schema.json",
+   "sha256": "217975c99b4b2f0e27f93048a5a49dcf3bbd5f0e6dae5fd69c1e2ce36e718a7c"
+  },
+  {
+   "path": "codex_upgrade_candidate_delivery_receipt.schema.json",
+   "sha256": "330b004f8ec6cce2665706ce7fa738f5eeecd973dc98b7637f7786a7844e43ac"
+  },
+  {
+   "path": "codex_upgrade_candidate_invalidation.schema.json",
+   "sha256": "4c388484c65264cd73afd40572855a199bdc7bd99f685c61eb97db8334342b1c"
+  },
+  {
+   "path": "codex_upgrade_candidate_invalidation_diagnosis.schema.json",
+   "sha256": "e0843e588a09db3c7d2ba2a48a38180e4c4a1e76b1cafdeba5f77d3c82578209"
+  },
+  {
+   "path": "codex_upgrade_candidate_readiness.py",
+   "sha256": "1e76d37b59c296d3ebb790dc290b7767a6d25012f44b37a44eb93a94e8894a38"
+  },
+  {
+   "path": "codex_upgrade_candidate_revision.schema.json",
+   "sha256": "87d630073106f154bdaf0def018f31aceea65ba3cc5d851ee9c870646942097a"
+  },
+  {
+   "path": "codex_upgrade_candidate_revision_commit.schema.json",
+   "sha256": "160e438a488a97de2f731a06c265e2bb5eaffb1e9646295ad0c1fe76ce388c2d"
+  },
+  {
+   "path": "codex_upgrade_candidate_revision_seal.schema.json",
+   "sha256": "20ec64d016a3ef4f9f2cf4de370b35fa54c9b5530e60a92e46dc73193abef5af"
+  },
+  {
+   "path": "codex_upgrade_capture_attempt.schema.json",
+   "sha256": "4bc8e2efdee1b09d79d6e638350502900475822b9e6b70084c46a3550f24073f"
+  },
+  {
+   "path": "codex_upgrade_capture_reservation.schema.json",
+   "sha256": "59322cba99f90ebf2a201dfcddc1565b5486be3a73e34d5de21b20b97a0f5433"
+  },
+  {
+   "path": "codex_upgrade_classification_candidate_reuse_transition.schema.json",
+   "sha256": "30d8eec48802ed0180f7c5eed0f5ba46edcb99a5b26eb1530b8c11b5b1653b2a"
+  },
+  {
+   "path": "codex_upgrade_client_adapter.py",
+   "sha256": "05985db7af0e924863398b9a5ed56691ed63ec60db5bb8f92bac09b99a2fdc9b"
+  },
+  {
+   "path": "codex_upgrade_client_binding.schema.json",
+   "sha256": "6cc4f6b08d4a9ce4ed32fbf9c238581963dc4bccba922ecb7ce27bd0d9a2aafc"
+  },
+  {
+   "path": "codex_upgrade_client_evidence.schema.json",
+   "sha256": "85935f9c1df0117985a6d9d2808005896de63a898527c5b5a55ed5f4be819a55"
+  },
+  {
+   "path": "codex_upgrade_control_epoch.schema.json",
+   "sha256": "4b9b71c2d2bde44d752809e59389db1df5f83649bc95b0775f9982e9ea9e1968"
+  },
+  {
+   "path": "codex_upgrade_control_epoch_runtime_repair.schema.json",
+   "sha256": "be36988d83b13e76ddf323692704a59d5da166c1117f1de8a88a3f31b164fa9f"
+  },
+  {
+   "path": "codex_upgrade_deadline_extension.schema.json",
+   "sha256": "b80ae498453acaad9332dbe2fa6c33b0a487df4629c2f8613b38b3f3e071f9da"
+  },
+  {
+   "path": "codex_upgrade_effective_results.schema.json",
+   "sha256": "884751b404f2a577f31368831bbc853592353e39686c3bb3fc03056e920f8165"
+  },
+  {
+   "path": "codex_upgrade_egress_pause.schema.json",
+   "sha256": "1aba617e90d4ead43429a91b16c3988a806833ce3cbca59ffd42a97ec93bb31b"
+  },
+  {
+   "path": "codex_upgrade_egress_transition.schema.json",
+   "sha256": "7abe30f219fe48741ac982f4b97b16a7c97c542b6079797bbda9aa6abd2dff21"
+  },
+  {
+   "path": "codex_upgrade_egress_transition_finish.schema.json",
+   "sha256": "c31492af9d914ca7ef7c93bd1c6dace0f3e888bb49f46cedf1fe4a99e3e3c79d"
+  },
+  {
+   "path": "codex_upgrade_environment_probe.py",
+   "sha256": "f859ddb4f94e75007c04dc2e87d1d4ab6162f06f727886ac081cca2e74e6e6a1"
+  },
+  {
+   "path": "codex_upgrade_evaluation_baseline.schema.json",
+   "sha256": "4b929c135d111edc51fed4efe78e5ee441f1af39d01da76f39ee8b7220560c08"
+  },
+  {
+   "path": "codex_upgrade_evaluation_baseline_abandon.schema.json",
+   "sha256": "a5f2cd813ff9dadf6db88ce02c2a59632e33ed1849f95d1d6e75f9e80f7ca6d9"
+  },
+  {
+   "path": "codex_upgrade_evaluation_baseline_authorization.schema.json",
+   "sha256": "2df40bea17ef2fb1d91780b85d8791af6988fbafdc91e088668a32c94a73926e"
+  },
+  {
+   "path": "codex_upgrade_evaluation_baseline_commit.schema.json",
+   "sha256": "2966038acad343e9bfd8fa7388d8c40045e9fd0bf5fb3bd4ed1089daed33818d"
+  },
+  {
+   "path": "codex_upgrade_evaluation_baseline_prepared.schema.json",
+   "sha256": "7669e10a7b0d8f58f6054aaa861e777bf99d920583b9ca309d2a0560ac6cbc9f"
+  },
+  {
+   "path": "codex_upgrade_evaluation_checkpoint.schema.json",
+   "sha256": "b555da90245cd0adf808175d1f2ed5070a8eb33742bcdfc96ec3ac38e6aee34e"
+  },
+  {
+   "path": "codex_upgrade_evaluation_failure_diagnosis.schema.json",
+   "sha256": "66adcd337aee19cd56909da71bb3e08b497c90dbe94a418b6b3da57ef7f7f02e"
+  },
+  {
+   "path": "codex_upgrade_evaluation_reevaluation.schema.json",
+   "sha256": "6f65e0ee4ad8d303c8ce3b1413988d7c7cd9c89d5a0ae9fd576f36d4ca19fc00"
+  },
+  {
+   "path": "codex_upgrade_evaluation_run.schema.json",
+   "sha256": "85e80553e2ebf88b1c3c334e8834d85b78585de4948e3a69ce359a122fff188f"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_145_0.json",
+   "sha256": "bc5b1282231a17d5f82ae147d1e416228d3353335f83fe72d5f86001f0d8180a"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_149_1.json",
+   "sha256": "c2218d92602442885ad394f9c095e0476fc3124c0c995b4bc8d740b7fb6587d9"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_151_0.json",
+   "sha256": "c12d984bfec6d5c0b746482eee54c0bb46a6baa726b21b419f536a989bae68ce"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_154_0.json",
+   "sha256": "7a4d2e31e733a4eca778375893f7da9d79191d5a5537c39e01e58ba329907a1f"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_156_1.json",
+   "sha256": "80b1e53033267c962238d288f931d2cfd18fe080d02f7e75d5976442512bed60"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_157_0.json",
+   "sha256": "61e1908c6c35a4dd6addad49094f6eb05fbbd5b90966d38418a6a93561dd6ac7"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_160_0.json",
+   "sha256": "fcacd96d2fbeb5ea7a046f7fa4f808d2c04ede92de17e8e442ebe8e63072df11"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_163_0.json",
+   "sha256": "209c192a20c42aa0c2b03ed39cf04f149fe6a6ef9e04bc2b39572473e6b580ed"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_164_0.json",
+   "sha256": "c3ed7b01c576f521ffb48249ed931e7c13c633d5d095284d60c98c67a5958deb"
+  },
+  {
+   "path": "codex_upgrade_evidence_labels_0_165_0.json",
+   "sha256": "1aa609a9985cc3737858abd892f43eab937de88b37c2f17518a40d96c70b1ed1"
+  },
+  {
+   "path": "codex_upgrade_evidence_manifest.py",
+   "sha256": "499e03f20cdf0becab76f98950aa1504c4c749ff9632cb332fcfd580d2bf0269"
+  },
+  {
+   "path": "codex_upgrade_evidence_permissions.py",
+   "sha256": "bbc277f3baa27e3651ac3f2c0b7b6666a9355f7c26fb026340edb37ae575058e"
+  },
+  {
+   "path": "codex_upgrade_gate_mapping.schema.json",
+   "sha256": "e520a4696d6c4bb08886e527dcd0092af0a731233da4947905fcc14c9a952710"
+  },
+  {
+   "path": "codex_upgrade_gate_plan.schema.json",
+   "sha256": "8c3f6300ef98a2a5062123975a27e6c3387cc9ac0cb2257c188c2db188682d4f"
+  },
+  {
+   "path": "codex_upgrade_gate_receipt.py",
+   "sha256": "80bf9603a75a8fede653d249becc8d98490ea3963faa3af42196a843d63c28f8"
+  },
+  {
+   "path": "codex_upgrade_gate_receipt.schema.json",
+   "sha256": "35dd63ba8e2419b902e490fa6f49799c80664a5048508cc6c9a4cb6f2cc07e5b"
+  },
+  {
+   "path": "codex_upgrade_gate_requirements.schema.json",
+   "sha256": "b883dd2774375d698635b2948c0000c02478a36a8b1c79a64112728377d849e1"
+  },
+  {
+   "path": "codex_upgrade_harden_evidence_permissions.py",
+   "sha256": "d3fa083b55d3f9109e15acc279406f58faadab65509bc7281a723b99be2679e8"
+  },
+  {
+   "path": "codex_upgrade_incremental_noop.schema.json",
+   "sha256": "4dcc7793952cfa353afc6e04beb1503890791ad991891993f14eff46eb2a5ea1"
+  },
+  {
+   "path": "codex_upgrade_interrupted_recovery_contract.schema.json",
+   "sha256": "f4bafbd985c41b44e1e8cf9399a0abeadb9533d6f2ad096804c5722392d25d40"
+  },
+  {
+   "path": "codex_upgrade_job_egress.schema.json",
+   "sha256": "41b8b413a116495d411aa275f98593541be35ee620276745dc2c22147b401066"
+  },
+  {
+   "path": "codex_upgrade_job_rehearsal_receipt.py",
+   "sha256": "3d6e8233e3720abbc8ce296048329378e222e839f67c3e806b96c271fdfefd2b"
+  },
+  {
+   "path": "codex_upgrade_job_rehearsal_receipt.schema.json",
+   "sha256": "fe43654f3dba6295526f435d4f222b95d115331a508487594967a0b2cfca39d1"
+  },
+  {
+   "path": "codex_upgrade_legacy_boundary.py",
+   "sha256": "c42154f29fa100090f5242f4a09ee05f2f5908b310bf18a6eb770f08e7e4f92c"
+  },
+  {
+   "path": "codex_upgrade_live_request_budget_extension.schema.json",
+   "sha256": "3e80cd1fbcd1e846f4b6a2be4e1638fee4601b43c025b144ac563d2664f184c4"
+  },
+  {
+   "path": "codex_upgrade_live_request_provenance.py",
+   "sha256": "cf247f40e34f1330893befba2468a656b39a54f89bfa7693d1f55fd65cba5744"
+  },
+  {
+   "path": "codex_upgrade_manifest_projection.schema.json",
+   "sha256": "ce63870bf8245d625795be8563fd89d79206216039cf02c2fc5cf0e618dd2514"
+  },
+  {
+   "path": "codex_upgrade_model_condition_receipt.schema.json",
+   "sha256": "70b061d7118ece3d83afd0a9585d1e57c069ee8576c23fe496f2b00d3f91f559"
+  },
+  {
+   "path": "codex_upgrade_observed_profile.schema.json",
+   "sha256": "7730f2c950239e994deaa5c1958733337bfb7020cda52a40c00679381fc0bcfd"
+  },
+  {
+   "path": "codex_upgrade_official_asset_receipt.py",
+   "sha256": "4d9b5427e420b0577d65284f90220a99b3addc70986b0e6f2fa9c0cb062206f3"
+  },
+  {
+   "path": "codex_upgrade_official_asset_receipt.schema.json",
+   "sha256": "c175c367d47a90dc6e4a4bf19791a243b4469568fb3b7d94f190d7dbb416ce14"
+  },
+  {
+   "path": "codex_upgrade_official_attempt_audit.py",
+   "sha256": "fe1fa748666b90d810d7b1972a18fba9013b7020ff000b29a68d32383ebceaee"
+  },
+  {
+   "path": "codex_upgrade_parent_start_failure.schema.json",
+   "sha256": "e76b74214ecad49db49fc9723b9f268a73af25a8536297885d0e31b99ee0d874"
+  },
+  {
+   "path": "codex_upgrade_policy_certification.py",
+   "sha256": "7578d7582447ba9293c24594a2c83752e69fc663739d5bc746375340d3481e2f"
+  },
+  {
+   "path": "codex_upgrade_pre_a3_certification.py",
+   "sha256": "8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7"
+  },
+  {
+   "path": "codex_upgrade_predecessor_control_replacement_import.schema.json",
+   "sha256": "8825a4bed638c700f3e5ee889eb7293ae4c4281455537c026a73ca7b4c94e00e"
+  },
+  {
+   "path": "codex_upgrade_predecessor_import.schema.json",
+   "sha256": "ddca62ae4a3809fe5e721996f112eb9569a723ec0a7323d2da531316221a86be"
+  },
+  {
+   "path": "codex_upgrade_predispatch_stop.py",
+   "sha256": "88f50d2d3971a3cb9b4c777cd360c62e15cf9d61e13c301f29abb2d831bb25a6"
+  },
+  {
+   "path": "codex_upgrade_project_ledger.py",
+   "sha256": "6bec6c17d2db583b3eb1042f7861ec3c376d6107e7f949e232a2806b2ec8bf95"
+  },
+  {
+   "path": "codex_upgrade_receipt_finalizer.py",
+   "sha256": "79caba651c23db95566a9f7bc342c390897a98bd0b3c6d4585bb17815676fb48"
+  },
+  {
+   "path": "codex_upgrade_reconciler.py",
+   "sha256": "a19751aef55d2b7b502a9160ac0b70f48ee61a1d6ca3df3341802f9ea730f8f8"
+  },
+  {
+   "path": "codex_upgrade_restoration_report.schema.json",
+   "sha256": "75f9d200bfff22da9805e53ba5c50b3381574761dff840a509c5dc117265dfd2"
+  },
+  {
+   "path": "codex_upgrade_root_cause.py",
+   "sha256": "7f56552c8cb0f99bc12a22b1e67f2101f096b8e3fc64de3eefdc3b41bf63a41b"
+  },
+  {
+   "path": "codex_upgrade_rule_assertion_template.schema.json",
+   "sha256": "672d1f96c121fe81b25fecda6a42358cb664ca761de3b8bd3236c382ea125ec7"
+  },
+  {
+   "path": "codex_upgrade_rule_assertions.schema.json",
+   "sha256": "b67b222d49581fcaa956faed6a00ba92227b0784438ff616bc546295990e0170"
+  },
+  {
+   "path": "codex_upgrade_rule_assertions_v2.schema.json",
+   "sha256": "2d9fce6dc612c96a3957bf4ea83ea7802a7eae178fd9e5430574e8d30f4a9812"
+  },
+  {
+   "path": "codex_upgrade_rule_migration.schema.json",
+   "sha256": "4004b3be4de808a4af30e72b1e37233c14ec2d96ea0432bc4a4bcfd850754a03"
+  },
+  {
+   "path": "codex_upgrade_rules_0_145_0.json",
+   "sha256": "ea92ec9c4bf05c12a8d36610530c5326bea31b932819f60397af1ed8a9751ad3"
+  },
+  {
+   "path": "codex_upgrade_rules_0_147_0.json",
+   "sha256": "81b53d878f2a86b9861c90b11fb2f696a5789c9b494833544add3b2a526f94a5"
+  },
+  {
+   "path": "codex_upgrade_rules_0_149_1.json",
+   "sha256": "9a685259e3437ffe0c2b74fe4cfed9de226ed98294fd724bdf2257cf0dfb1546"
+  },
+  {
+   "path": "codex_upgrade_rules_0_151_0.json",
+   "sha256": "527318710def0db14aa89c433fb0c7ca01fc679f4ea82a4a1b5ccb453cd51951"
+  },
+  {
+   "path": "codex_upgrade_rules_0_154_0.json",
+   "sha256": "f9d9c33edc1ab2e740e5d954b5911d00deeaf5e61abb2a237167df5250d11327"
+  },
+  {
+   "path": "codex_upgrade_rules_0_156_1.json",
+   "sha256": "8a63a5846b40001758ce2cf4b221b34e91177b2a8af11710f7248d8ecfc71d78"
+  },
+  {
+   "path": "codex_upgrade_rules_0_157_0.json",
+   "sha256": "7716a8905de88a690f55d75a5abcbd4cf8993e4a7389490e830980909240b4b3"
+  },
+  {
+   "path": "codex_upgrade_rules_0_160_0.json",
+   "sha256": "9e8db716fd1b63b20b5fa8cba1c1d1b0619c2ee4376ce48e77123ade227656b7"
+  },
+  {
+   "path": "codex_upgrade_rules_0_163_0.json",
+   "sha256": "b5fbfa0f63d1dcc4a91a7cbefa34171eb7f31acaa2d585bdebf93c2718a641d3"
+  },
+  {
+   "path": "codex_upgrade_rules_0_164_0.json",
+   "sha256": "e0fffb6e7be7959751dbb02f6cd267713654df17ff4fd6aa0caa1ac4c0dc7cba"
+  },
+  {
+   "path": "codex_upgrade_rules_0_165_0.json",
+   "sha256": "c2153dba2ea93d571e9490677d847bd38e82351d92fdac31b215298d63c8dd2a"
+  },
+  {
+   "path": "codex_upgrade_scenario_receipt.schema.json",
+   "sha256": "5618a4259ccbd03cbc87fba64679295efe010043c04c66b6864c4865aa19f52a"
+  },
+  {
+   "path": "codex_upgrade_scenarios.schema.json",
+   "sha256": "d35a5b0af74b990aa182316339834dc4276a657b9ee2b0fd9a9e0ae21c1107f4"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_145_0.json",
+   "sha256": "902f5437ff71ba809d283e45e3b62ad6c960c64d5f832cd5004f989e5a4eab30"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_147_0.json",
+   "sha256": "af78e419eb35279318bb8e9093c359046a5d11744ce974cf7185443a6e1125f0"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_149_1.json",
+   "sha256": "c1348e2fc5150ea4cafc469c52242d105d0245d50e5d219885a43f0ae5e48119"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_151_0.json",
+   "sha256": "add920587d3ce51a7f6918c537d5ecf5709c3efaddf57b57a81636c79149076a"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_154_0.json",
+   "sha256": "cbf52ac8b3dfb4157e1eb6db601a4c983777fee23e8678a23925493c792d9708"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_156_1.json",
+   "sha256": "867e9db3e71a5e48148bac21fad479d12cfc41bc5ca2e2908489cddc023dc6b9"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_157_0.json",
+   "sha256": "8d2f21fb605fc79b6d043bc8f59b33c4b33b4aca1d33c7b639c1814010829138"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_160_0.json",
+   "sha256": "c5f62da24a3bc22f279cf7c214077e7cb175e1017ee64b7ba299f57c6cce2ffa"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_163_0.json",
+   "sha256": "adb4793c467aee247f1874f488c9c48d0e5b02cbc64db130658029ab556a2f4f"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_164_0.json",
+   "sha256": "3fa5ca1b196c88c901850af2212d928b5cb3c2ead2e3ea5692eda10fde09b1b3"
+  },
+  {
+   "path": "codex_upgrade_scenarios_0_165_0.json",
+   "sha256": "a8720e164f623296bc14c90a24bcf377e500c2aebd8f6c61574d49688ee3f707"
+  },
+  {
+   "path": "codex_upgrade_seal_failure.schema.json",
+   "sha256": "617608ec566f7b85dd13ec1708364c827bdfdf2475fd58e9d34bb0b06c5ec77b"
+  },
+  {
+   "path": "codex_upgrade_seal_preview.schema.json",
+   "sha256": "399a4d20db8d9d5bf6cbbf88c2f4bd8d5a33ea112952988a37c77abcadbdc43f"
+  },
+  {
+   "path": "codex_upgrade_seal_rehearsal.py",
+   "sha256": "aa0100ca3fb1f00ccfcde37dac75e079fb2349b15eed258d1724875b078fb5e5"
+  },
+  {
+   "path": "codex_upgrade_stage_replay.schema.json",
+   "sha256": "b32f4c67077d805c8499be1404aadf3a357c56e350bcb26f2e4419d76410a5e5"
+  },
+  {
+   "path": "codex_upgrade_stage_result.schema.json",
+   "sha256": "8a02a3b089311764da6cc19e8b9aabee01a5c36fe3ef0de60ca1cf7a599c285d"
+  },
+  {
+   "path": "codex_upgrade_staging_abort.schema.json",
+   "sha256": "fe9be19eb3520097c99c502de105e300332e8d77eed624a26e1a20c8f4fe1532"
+  },
+  {
+   "path": "codex_upgrade_staging_commit_failure.schema.json",
+   "sha256": "5d706804497f102c77124f4ad37b7b51ced69a7f934a00b93790698a53b9446c"
+  },
+  {
+   "path": "codex_upgrade_supervisor.py",
+   "sha256": "90120f529b2ebc8c37077272c0f7f624dbdcfb33ab145c2dbab6af02f46a8a1f"
+  },
+  {
+   "path": "codex_upgrade_supervisor_campaign_activity.schema.json",
+   "sha256": "1fe3fdbaef33fbc517eaeee27723163470bbd8f917d2b5acca4a604d6e09a58c"
+  },
+  {
+   "path": "codex_upgrade_supervisor_campaign_finish.schema.json",
+   "sha256": "df88546cc345b9fe548fee4eeb0fa1b495bb0560350f261662aedc3f9b5be474"
+  },
+  {
+   "path": "codex_upgrade_supervisor_event.schema.json",
+   "sha256": "c8f88541f445ae417a9339c6e0fd28ea2a9f54e81940f31ed2961a6a6ff82734"
+  },
+  {
+   "path": "codex_upgrade_supervisor_heartbeat.schema.json",
+   "sha256": "396fe5b5c16bbf08bdfa0c5310f61caecbab8dc88cda0e868f17cf1ee3815f2a"
+  },
+  {
+   "path": "codex_upgrade_supervisor_minute.schema.json",
+   "sha256": "3202033e62d737188642dfb849f36c49331882d1067e20b37e9c771887bfd1b5"
+  },
+  {
+   "path": "codex_upgrade_supervisor_state.schema.json",
+   "sha256": "b7b31135375498515d9e5c61ef8840466c331ea453ccb1065a8873cca3a7e709"
+  },
+  {
+   "path": "codex_upgrade_supervisor_stop.schema.json",
+   "sha256": "33065e9ca36e4942ecd7887e68458ac22a70e19326d2ef3995d4b42ce778fd51"
+  },
+  {
+   "path": "codex_upgrade_supervisor_watchdog_heartbeat.schema.json",
+   "sha256": "b92feab6b2d08b980b917d444dad11bae7d52459fd935705c3001b535d539d8c"
+  },
+  {
+   "path": "codex_upgrade_time_reconciliation.py",
+   "sha256": "aa7c7af98e7efcea605906c90dbba9fe19d85ff13e195044afb27410445de581"
+  },
+  {
+   "path": "codex_upgrade_timing_ledger.py",
+   "sha256": "796e1e745205e56dc7db59bef5471ba15d20e04fe1d91a6fe35b353bc6516bd7"
+  },
+  {
+   "path": "codex_upgrade_timing_ledger.schema.json",
+   "sha256": "2109ce0d2933737db20b0e1a21c70ca31485e39022d86b9e0d87e785a23a3647"
+  },
+  {
+   "path": "codex_upgrade_tool_identity_policy.py",
+   "sha256": "7c7178121a8a09f5f95410ee37ef1d361c9aa89bf4981dee707170471aad7b6f"
+  },
+  {
+   "path": "codex_upgrade_vc0_closeout.py",
+   "sha256": "96c4940a6a17a482c6db952653e9e83f7ad52fde128d5b9b4f70bb4b28c51092"
+  },
+  {
+   "path": "codex_upgrade_vc_action_plan.schema.json",
+   "sha256": "5658920962f31e3eefbe23d00287c8ea96c1b26a614f30277b03a57a99bbe2e5"
+  },
+  {
+   "path": "codex_upgrade_vc_artifacts.py",
+   "sha256": "8908d250bcf49dd29123cd5ef5f5a85bdbac3008285a9885195e4aee7a02ebd1"
+  },
+  {
+   "path": "codex_upgrade_vc_batch.schema.json",
+   "sha256": "cdf4c0c6a4a5ca53682dfaa7d11b36dcab574a318818dae2179c1f76bf4c5295"
+  },
+  {
+   "path": "codex_upgrade_vc_checkpoint.schema.json",
+   "sha256": "d1f7a0a59abec0640322c50ec2f4241ed8ff33864eb2fa8aea55d021a7dab7cb"
+  },
+  {
+   "path": "codex_upgrade_vc_commit.schema.json",
+   "sha256": "1dadf158002f2ed643729236c006e5c54028e77f5ca6e8810f66d41e9dcffbea"
+  },
+  {
+   "path": "codex_upgrade_vc_receipt.py",
+   "sha256": "019f19b5cf6acf56e07b04981a9001e6b1ff33a3805a12da489928ce254661a5"
+  },
+  {
+   "path": "codex_upgrade_vc_receipt.schema.json",
+   "sha256": "2ab0835bfa99f03b1498b1862eea1aeb7bcb05dfdc74abd590dc4d2eb424a1b5"
+  },
+  {
+   "path": "codex_upgrade_vc_staging_marker.schema.json",
+   "sha256": "666ae1c9cf02cea2e787f088e0f50ef3e573d84b3d81213b4ee00bbd68caa154"
+  },
+  {
+   "path": "codex_upgrade_wire_transition.py",
+   "sha256": "4efefca0920c229b233ef814ec6ad356a7bf48984fd94b22d94494df33bfaa25"
+  },
+  {
+   "path": "codex_upgrade_zero_request_smoke.py",
+   "sha256": "91874b8005d9697cdfa5cafa34a03b57738d0346b351e17ba38907516cc9b142"
+  },
+  {
+   "path": "derive_official_observations.py",
+   "sha256": "69f56953c89e1f4015104ba321db36ecc2b41ab7bb906254402a7a58ce87d805"
+  },
+  {
+   "path": "drive_candidate_gateway_ws.py",
+   "sha256": "eeb34c9e479181e31b78d70fa83b2e52ed4a398397aac84cc304b329099e2503"
+  },
+  {
+   "path": "drive_claude_tui.py",
+   "sha256": "e8f11d99cb4fadc30eb646218c8acf8c7bf403f427b756658852d060299fc59e"
+  },
+  {
+   "path": "drive_codex_auth_refresh.py",
+   "sha256": "a1c3f5c6b58907457fbf45e027c79fe1560e71f17711fc61b944119aa67704b7"
+  },
+  {
+   "path": "drive_codex_compaction_reason.py",
+   "sha256": "61295cf361c1b2efb04e86a621402d91da627b009fcb039e50ad97f6ad52f2a6"
+  },
+  {
+   "path": "drive_codex_daemon.py",
+   "sha256": "cc829b3a3073c05e185e6a1930e56bc8bcb046563958f0f100b12ac494102b22"
+  },
+  {
+   "path": "drive_codex_file_image_edit.py",
+   "sha256": "5576ceafc413a9d3f3afd9e8695c1a64ab49fa0479f55dd9a5102bf079110c35"
+  },
+  {
+   "path": "drive_codex_memgen.py",
+   "sha256": "2682b539a6e88697e99f58b88358b257ee90c238f5a46f7c6d18a5087fe64ac6"
+  },
+  {
+   "path": "drive_codex_model_catalog.py",
+   "sha256": "d997c7f0f3a9a2abd7867b1216c1a5058c22ba51c15bb82a6ca4c619c2fcd7f9"
+  },
+  {
+   "path": "drive_codex_realtime.py",
+   "sha256": "6a22e99984e81fbeef9cbfb2c4e1b9e9a46ac230e62930fa3b1c40175ba03f24"
+  },
+  {
+   "path": "drive_codex_tui.py",
+   "sha256": "dc1c9302e7a1180a2b3b9c151a7d42d1926bc47d8986634175dc21201d118f44"
+  },
+  {
+   "path": "drive_codex_wham_consume.py",
+   "sha256": "a65926bfd43c2bb68b50669c81adf82fd599eca00d7af9a3fa18d5a400d204f5"
+  },
+  {
+   "path": "extract_capture_records.py",
+   "sha256": "49642dc8c7c5cbf66d0918bd3375be689e163d9f8035b1aad714dab51f8be9d4"
+  },
+  {
+   "path": "extract_claude_bundle.py",
+   "sha256": "26e4af4a04523ebb8234029896b81a87a167233ca637b5f52e5a853eb0c499af"
+  },
+  {
+   "path": "extract_compaction_reason.py",
+   "sha256": "9ca192f44bd504b7f50eb35472ee3e1650f6e87414441568d73b4bb13ee2ac35"
+  },
+  {
+   "path": "fixtures/claude_fw_f_v4_hook.py",
+   "sha256": "c910f02b1d16009038f7af4a55b40378302b94b381904b2887b85d934313d6db"
+  },
+  {
+   "path": "fixtures/claude_fw_f_v4_mcp_server.py",
+   "sha256": "598a61858f1c28faa3f06ad5b994e2f57d4fc22cda4898967dc8e74873ad4442"
+  },
+  {
+   "path": "h1_wire_probe.py",
+   "sha256": "c2b90046284c9e1caae44bc16f9ec2be4787544969e0ec7866048a049db7cd5b"
+  },
+  {
+   "path": "hooks/exact_bash_hook.py",
+   "sha256": "45a5c685bc0b347e9687694eeebe802f2a04c5256f4539f9aebb2728a5e3419d"
+  },
+  {
+   "path": "incremental_recovery.py",
+   "sha256": "c9f113d32a9c75f0333b437ea68e4ccd578bbda81bddcb7e5dc17c8145267ba7"
+  },
+  {
+   "path": "mitm_scenario_checkpoint.py",
+   "sha256": "878182e7bfe748c381285d4ddf09245e9e1c6625d05b72bf492c958a42e9116b"
+  },
+  {
+   "path": "model_condition_receipts.py",
+   "sha256": "18345f6aeba33137e2e31a4e546bf8d4c7f6d19edd836938bec02426bdd57c80"
+  },
+  {
+   "path": "pcap_clienthello.py",
+   "sha256": "85f82ad1dee151db82c411136e73eeb53ffa090aa03986f95b1f7ca70e6a5cf8"
+  },
+  {
+   "path": "post_run_secret_scan_receipt.py",
+   "sha256": "af062e03f0e45315562577c07580185232d48b7db13be36cc31cba7d0626c035"
+  },
+  {
+   "path": "prewarm_codex_home.py",
+   "sha256": "a39d72d6c966a8d012e5b2b7dd6c73d39d991f3b4a08933029e7f691f05dbdce"
+  },
+  {
+   "path": "production_activation_receipt.py",
+   "sha256": "ef971f5a7163fdf7d7b1b6b87c9af923cb9c0b66da9250a3f87aaa891c410a22"
+  },
+  {
+   "path": "production_activation_receipt.schema.json",
+   "sha256": "7d53ef96ef02fdceaef513a4c8a91cec3a0ffbf1bd64daaa487ca5aba2a429a5"
+  },
+  {
+   "path": "profile_rule_patches_0_151_0.json",
+   "sha256": "fc5b225ebb0ace8659aa4f599724e6197afbec9305e5296727414df853f748ce"
+  },
+  {
+   "path": "profile_rule_patches_0_154_0.json",
+   "sha256": "fb544467d6f49a87b6fb3c1f9320a3b0fcd95b4cce293505483a570296dd95ab"
+  },
+  {
+   "path": "profile_rule_patches_0_156_1.json",
+   "sha256": "53295335c7bc95685eaeb3c1d39d65ad77d466266f521102927f3975be4f89cc"
+  },
+  {
+   "path": "profile_rule_patches_0_157_0.json",
+   "sha256": "66598257ea26be8fffe656f616df2393485ce9ae16bb706150ab9c6631ec8b47"
+  },
+  {
+   "path": "profile_rule_patches_0_160_0.json",
+   "sha256": "0a657e62dfd1075fcc7bf7622228fa06600c41d30265cabe0b559f04e0847a94"
+  },
+  {
+   "path": "profile_rule_patches_0_163_0.json",
+   "sha256": "52c78562bd1478e40f8c67564a91c817a866161a141b1a3b4fb628935469af73"
+  },
+  {
+   "path": "profile_rule_patches_0_164_0.json",
+   "sha256": "4a38c6e2106504c1fcde68cf21d0536511da644dccf86c93f73ba7ca2a56144d"
+  },
+  {
+   "path": "profile_rule_patches_0_165_0.json",
+   "sha256": "ec8ecded83dfc85da00b1ca7bd5598d9534a1eefc54f2a021945adebef3fb0c8"
+  },
+  {
+   "path": "relay_extract.py",
+   "sha256": "a53e33ea490007060bf76b2eef3765565d30d2a50c676b7d87bdc3ab48a6e552"
+  },
+  {
+   "path": "root_cause_codes.json",
+   "sha256": "40462cad6ff324e5a03efb7b5595c6b96822ea0b0adf3fb8a92ede1fa8fca111"
+  },
+  {
+   "path": "run_candidate_aux_capture.sh",
+   "sha256": "9fb33019e28574d60f1b113d109f7bb0f16ce66113bf32565837c3a6127eabc7"
+  },
+  {
+   "path": "run_candidate_core_capture.sh",
+   "sha256": "4692534cc72adc52a23f8a9adb3a7678009302c14a9cfc4e6ad6b00b201e25fe"
+  },
+  {
+   "path": "run_candidate_trace_test.sh",
+   "sha256": "45902c5ca270552ddd19d6786a630db60a887d51fe81ba5f184f64309c3097d6"
+  },
+  {
+   "path": "run_claude_relay_scenario.sh",
+   "sha256": "6452bafccfcf73293bcd00323fa308bfc11ba640546d91faee075e477257d05b"
+  },
+  {
+   "path": "run_codex_compact_scenario.py",
+   "sha256": "3e25cff82cac704b5aa453937381355c73ba7b17cdbfe460fde86c2806de4977"
+  },
+  {
+   "path": "run_codex_scenario_target.py",
+   "sha256": "79d02148193bf3356eb1d55315cd74495148c42623d8578e476dc60dad6c582a"
+  },
+  {
+   "path": "run_h1_wire_probe.sh",
+   "sha256": "76537ba222b0f46ca9f94b17072a4223064e9d852f0660a8d863a2adc1d56488"
+  },
+  {
+   "path": "run_images_wire_probe.sh",
+   "sha256": "53dee5439cf8f5675340b24c96584eac96baf204b9a99ad527493388c3c73691"
+  },
+  {
+   "path": "run_official_codex_compact_capture.sh",
+   "sha256": "f6adc395c436b7662cf6e5f6523475e673fd45d7a5e14faa4baf7128ef29f3e2"
+  },
+  {
+   "path": "run_official_http_fallback_baseline.sh",
+   "sha256": "24ad1fea298ccb24b72da4ba7d22f08c13fc765d4cce397f71ce2bfef9995121"
+  },
+  {
+   "path": "run_official_relay_scenario.sh",
+   "sha256": "83f173c4676ae380753f2501db71ef3b55722597b1d9a82e03af1fb93682063d"
+  },
+  {
+   "path": "run_sub2api_direct_matrix.sh",
+   "sha256": "f08f083d2863d0876835098cfd7a7563358810bee3e3138bfcc5613a4214d4b7"
+  },
+  {
+   "path": "run_sub2api_openai_mitm_matrix.sh",
+   "sha256": "251ab5b35355765ed8720ce4c3d7a6b8fd4ee78a297b522da5718e00ccc1e9a0"
+  },
+  {
+   "path": "runtime_host_receipt.py",
+   "sha256": "5af6c6cd26b6815e67f72daaa229539451d29f13d4dd61e523c4192bbf65790a"
+  },
+  {
+   "path": "runtime_scripts/run_fingerprint_mitm_pair.sh",
+   "sha256": "f4220b83616a4e29ec6371902d48b3af7c2c951646b1c2557de7d8d677802941"
+  },
+  {
+   "path": "runtime_scripts/start_direct.sh",
+   "sha256": "286356bdcc705bb8a7166ba8883806fb1844e7d0eddbc2da1145df1f02990705"
+  },
+  {
+   "path": "runtime_scripts/start_mitm.sh",
+   "sha256": "0b291bb3a8b7a79ec6ab9c5811036129d26bc94de28b44fbac4ec7dbb3010be9"
+  },
+  {
+   "path": "runtime_scripts/stop_direct.sh",
+   "sha256": "c10d6814a4a932d3d66b31f26ccf0e7b32707ee6e093cdcfa01bdef056c234be"
+  },
+  {
+   "path": "runtime_scripts/stop_mitm.sh",
+   "sha256": "bc308546c95b509f9b12447224ee4695b78ebc37edc2d1f3bec1935625321d40"
+  },
+  {
+   "path": "scenario_receipts.py",
+   "sha256": "e8e352c077b37c84333222590a2bb04ab5c142988cd4de6e1473c2e2a321c0a2"
+  },
+  {
+   "path": "scrub_raw_bytes.py",
+   "sha256": "4574ea19b355565658cbf499573a2843429de0290531349d0242f653d8cf7726"
+  },
+  {
+   "path": "tool_identity_policy_v2.json",
+   "sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b"
+  },
+  {
+   "path": "upgrade_client_adapter.py",
+   "sha256": "267d6acbb607946fbed37fc17042c2505a5b4ace54ef09451acfd533c8fde2cc"
+  },
+  {
+   "path": "upgrade_control_plane.py",
+   "sha256": "e7ac512d33115c817d9e0d6257cb97d0790481d06c4b893b69248fb32d8d77ef"
+  },
+  {
+   "path": "upstream_byte_relay.py",
+   "sha256": "f8ed37185b38168c6ff642dc740ee17473eee82fc7b0cc64b7c56b1fcf553d9f"
+  }
+ ]
+}
