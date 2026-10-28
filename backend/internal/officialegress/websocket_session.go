@@ -217,6 +217,12 @@ func validateWebSocketFrameIdentity(base, current CodexIdentityFacts) error {
 		{"prompt-cache-key", base.PromptCacheKey, current.PromptCacheKey},
 	}
 	for _, field := range stable {
+		if field.name == "window" && base.WindowAdvances && current.WindowAdvances &&
+			sameWindowThread(field.base.Value, field.now.Value) {
+			// 窗口号随上下文压缩推进（画像 TurnMetadata.WindowTracking）：帧里的窗口号可以与建连时不同，
+			// 但线程部分必须不变，只允许 `<线程>:<窗口号>` 的数字后缀变化。
+			continue
+		}
 		if field.base != field.now {
 			return fmt.Errorf("WebSocket frame 更换了 invocation 冻结的 %s 身份", field.name)
 		}
@@ -225,6 +231,25 @@ func validateWebSocketFrameIdentity(base, current CodexIdentityFacts) error {
 		return errors.New("WebSocket frame 更换了 invocation 冻结的 user-agent suffix 身份")
 	}
 	return nil
+}
+
+// sameWindowThread 判断两个 `<线程>:<窗口号>` 窗口标识的线程部分相同且都带数字后缀。
+func sameWindowThread(left, right string) bool {
+	split := func(value string) (string, bool) {
+		index := strings.LastIndex(value, ":")
+		if index <= 0 || index == len(value)-1 {
+			return "", false
+		}
+		for _, r := range value[index+1:] {
+			if r < '0' || r > '9' {
+				return "", false
+			}
+		}
+		return value[:index], true
+	}
+	leftThread, leftOK := split(left)
+	rightThread, rightOK := split(right)
+	return leftOK && rightOK && leftThread == rightThread
 }
 
 func compileWebSocketFrame(

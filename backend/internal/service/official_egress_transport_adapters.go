@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,9 +14,15 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/wsframemerge"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 )
+
+// officialOpenAIWSCompressionThresholdBytes 是官方出站 WebSocket 的压缩门槛。官方客户端对每条
+// 数据消息都做 permessage-deflate（压缩位 RSV1 恒为 1，没有长度门槛），而 coder/websocket 默认只压缩
+// 不小于 128 字节的消息，小消息会以未压缩形态发出。门槛设为 1 即“非空消息一律压缩”。
+const officialOpenAIWSCompressionThresholdBytes = 1
 
 // officialEgressWebSocketRoundTripper 在 coder/websocket 生成握手请求后补齐
 // 官方 Codex 的压缩扩展提议；底层压缩协商和帧处理仍由 coder/websocket 负责。
@@ -199,7 +206,19 @@ func (r *officialEgressWebSocketRoundTripper) RoundTrip(req *http.Request) (*htt
 		) {
 		cloned.Header.Set("Sec-WebSocket-Extensions", officialOpenAIWSCompressionOffer)
 	}
-	return r.base.RoundTrip(cloned)
+	response, err := r.base.RoundTrip(cloned)
+	if err != nil || response == nil {
+		return response, err
+	}
+	// 握手成功（101）后，把底层读写连接包一层“写方向帧合并”：官方客户端一条消息只写一个 FIN=1 的数据帧，
+	// 而 coder/websocket 的压缩写路径会把一条消息拆成若干数据帧加一个空载荷 FIN 帧。包装只合并写出的
+	// 分片，读方向与关闭原样透传；失败的握手响应（非 101）不受影响。
+	if response.StatusCode == http.StatusSwitchingProtocols {
+		if connection, ok := response.Body.(io.ReadWriteCloser); ok {
+			response.Body = wsframemerge.Wrap(connection)
+		}
+	}
+	return response, nil
 }
 
 func (r *officialEgressWebSocketRoundTripper) CloseIdleConnections() {
@@ -798,6 +817,15 @@ func prepareOfficialCodexExecutorWebSocketFrame(
 			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
 		}
 	}
+	// 画像 ClientMetadata.DynamicKeys 声明时由编译器写入 client_metadata 的两个逐帧事实（未声明时它们不进入出站字节）。
+	if rootTurnID := strings.TrimSpace(ownedFields.Metadata["root_turn_id"]); rootTurnID != "" {
+		fact, err := officialegress.NewCodexIdentityValue(rootTurnID, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn)
+		if err != nil {
+			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
+		}
+		facts.RootTurnID = fact
+	}
+	facts.ResponsesLiteWS = strings.TrimSpace(ownedFields.Metadata[responsesLiteWSMetadataKey]) == "true"
 	turnState := strings.TrimSpace(ownedFields.Metadata["x-codex-turn-state"])
 	if turnState != "" {
 		facts.TurnState, err = officialegress.NewCodexTurnStateValue(turnState)

@@ -68,6 +68,8 @@ type officialOpenAIWSDerivedState struct {
 	// previous_response_id 续链时只发新增项，用户之前改的 effort 不在本帧 input 里，但 turn metadata 的 reasoning_effort
 	// 仍应是用户当前选择（见 windowReasoningEffortForFrame）。
 	windowReasoningEffort string
+	// windows 记录本下游会话跟踪到的上下文窗口号（画像 TurnMetadata.WindowTracking，见 official_egress_openai_ws_window.go）。
+	windows officialCodexWSWindowTracker
 }
 
 // windowReasoningEffortForFrame 返回本帧 turn metadata 应记录的、来自 configuration_update 的生效 effort（ok 为假表示本帧
@@ -213,12 +215,15 @@ func prepareOpenAIOfficialEgressWSContext(
 		}
 		identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
 			identity.turnMetadata, section,
-			officialCodexTurnMetadataExtension{
-				Model: officialOpenAIString(firstFrame, "model"),
-				ReasoningEffort: officialOpenAIEffectiveReasoningEffort(
-					firstFrame, officialOpenAIReasoningDefaultsFromContext(egressContext),
-				),
-			},
+			officialCodexWSHandshakeTurnMetadataExtension(
+				egressContext, identity.sessionID,
+				officialCodexTurnMetadataExtension{
+					Model: officialOpenAIString(firstFrame, "model"),
+					ReasoningEffort: officialOpenAIEffectiveReasoningEffort(
+						firstFrame, officialOpenAIReasoningDefaultsFromContext(egressContext),
+					),
+				},
+			),
 		)
 		if err != nil {
 			return err
@@ -813,7 +818,9 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	accessProgramsModified := normalizeOfficialCodexAccessPrograms(
 		payload,
 		officialCodexAccessProgramsSection(egressContext.ProfileMode()),
-		!isPrewarmFrame && officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+		// 压缩请求（compaction_trigger 增量帧）官方不带 access_programs，同预热帧一样不生成。
+		!isPrewarmFrame && !officialCodexWSIsCompactionRequest(egressContext, payload) &&
+			officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
 	)
 
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
@@ -1848,7 +1855,7 @@ func resolveOfficialOpenAIWSHistoricalTurnIDSkippingBase(
 		}
 		seed.WriteString("segment_json").WriteDigest(digest)
 	}
-	return generateOfficialStableUUIDV7(seed.Key()), nil
+	return generateOfficialStableTurnUUIDV7(seed.Key()), nil
 }
 
 func buildDerivedOfficialOpenAIWSFrameMetadata(
@@ -1903,6 +1910,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if err != nil {
 		return nil, "", err
 	}
+	// 画像声明跟踪上下文窗口时，窗口头与 turn metadata 里的窗口身份跟随客户端推进后的窗口号。
+	windowID, windowNumber, contextWindowID, windowTracked := officialCodexWSFrameWindow(
+		egressContext, windowID, sessionID,
+	)
 
 	generate, _ := payload["generate"].(bool)
 	prewarm := !generate && payload["generate"] != nil
@@ -1918,13 +1929,13 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		state.mu.Lock()
 		var seedErr error
 		if !preserveCurrentTurn && anchors.lastFound {
-			state.lastTurnID = generateOfficialStableUUIDV7(
+			state.lastTurnID = generateOfficialStableTurnUUIDV7(
 				newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
 					WriteString(sessionID).
 					WriteUserAnchor(anchors.last, true).
 					Key(),
 			)
-			state.lastTurnStartedAtMS = time.Now().UnixMilli()
+			state.lastTurnStartedAtMS = officialCodexTurnStartedAtMsOrNow(state.lastTurnID)
 		} else if state.lastTurnID == "" {
 			// 没有用户锚点时以整帧内容的 JSON 摘要做 seed。编码失败不能静默退化
 			// 成空 seed：那会让本会话此后所有帧共用同一个 Turn ID，而定型链路
@@ -1933,14 +1944,14 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 			if digestErr != nil {
 				seedErr = fmt.Errorf("构造 WebSocket Turn ID seed：%w", digestErr)
 			} else {
-				state.lastTurnID = generateOfficialStableUUIDV7(
+				state.lastTurnID = generateOfficialStableTurnUUIDV7(
 					newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
 						WriteString(sessionID).
 						WriteString("frame_json").
 						WriteDigest(digest).
 						Key(),
 				)
-				state.lastTurnStartedAtMS = time.Now().UnixMilli()
+				state.lastTurnStartedAtMS = officialCodexTurnStartedAtMsOrNow(state.lastTurnID)
 			}
 		}
 		turnID = state.lastTurnID
@@ -1964,6 +1975,12 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if !prewarm {
 		turnMetadata["turn_started_at_unix_ms"] = turnStartedAtMS
 	}
+	// WS 压缩请求：request_kind 是 compaction 并带 compaction 对象，不写 model／reasoning_effort／turn_trigger（见 official_egress_openai_ws_compaction.go）。
+	compactionMetadata, compactionRequest := officialCodexWSCompactionMetadata(egressContext, payload)
+	if compactionRequest {
+		turnMetadata["request_kind"] = "compaction"
+		turnMetadata["compaction"] = compactionMetadata
+	}
 	// 画像 TurnMetadata 节声明的新键：payload 已完成定型（reasoning 默认值已补齐）；
 	// prewarm 帧不属于某一轮，不写 turn_trigger。画像没有该节时不做任何改动。
 	extension := officialCodexTurnMetadataExtension{
@@ -1977,7 +1994,23 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		}
 		extension.ReasoningEffort = carried
 	}
-	if !prewarm {
+	if windowTracked {
+		extension.WindowNumber = &windowNumber
+		extension.ContextWindowID = contextWindowID
+	}
+	if compactionRequest {
+		extension.Model, extension.ReasoningEffort = "", ""
+	}
+	// 根线程的 agent_name 与根回合 id（画像 TurnMetadata.RootThreadKeys；子代理、guardian 与记忆合并线程不写）。
+	rootTurnID := ""
+	if officialCodexWSRootThread(egressContext) {
+		extension.AgentName = officialCodexRootAgentName
+		if !prewarm {
+			rootTurnID = turnID
+			extension.RootTurnID = turnID
+		}
+	}
+	if !prewarm && !compactionRequest {
 		conditional := egressContext.codexRuntimeState.ConditionalHeaders
 		extension.TurnTrigger = officialCodexTurnTrigger(
 			egressContext.codexRuntimeState.SurfaceID,
@@ -2013,6 +2046,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	}
 	if egressContext.responsesLite {
 		metadata[responsesLiteWSMetadataKey] = "true"
+	}
+	// 根线程的回合帧带根回合 id（预热帧没有回合；是否出站由画像 ClientMetadata.DynamicKeys 决定）。
+	if rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
 	}
 	return metadata, sessionID, nil
 }

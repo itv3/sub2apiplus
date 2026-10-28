@@ -1864,6 +1864,24 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	turnRetry := 0
 	turnPrevRecoveryTried := false
 	derivedUserTurnPrepared := 0
+	// 整段重放不重连（画像 WebSocketContinuation 节 ReplayOnSameConnection）：官方客户端换模型、压缩后新窗口、
+	// input 前缀不可复用或 configuration_update 合并时，在原连接上发不带 previous_response_id、不带 generate 的
+	// 全量帧，不重连也不补预热。画像声明该字段，且下游客户端在本会话内自己发过 generate=false 预热帧
+	// （证明它自己管理续链）时，这类帧由原上游连接原样承接；其余客户端沿用“新连接加预热加链”的归一化。
+	replayOnSameConnEnabled := false
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled && egressContext != nil &&
+		isDerivedOpenAIOfficialEgressWSContext(ctx) {
+		replayOnSameConnEnabled = officialCodexWebSocketReplayOnSameConnection(egressContext.ProfileMode())
+	}
+	clientOwnsChain := false
+	// turn-state 只在产生它的回合内回送（画像 TurnState 节 ResetOnNewTurn）：官方每个回合新建模型客户端会话，
+	// 新用户轮次的第一个请求不回送上一回合收到的值。画像声明时，网关对派生出站的新用户轮次同样先清空已保存的值。
+	turnStateResetOnNewTurn := false
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled && egressContext != nil &&
+		isDerivedOpenAIOfficialEgressWSContext(ctx) {
+		turnStateResetOnNewTurn = officialCodexTurnStateResetOnNewTurn(egressContext.ProfileMode())
+	}
+	lastFrameWasClientPrewarm := false
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
 	lastTurnWindowID := ""
@@ -2112,14 +2130,41 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		hasFunctionCallOutput := toolSignals.HasFunctionCallOutput
+		// 下游客户端自己发预热帧，说明它自己管理续链；之后它不带 previous_response_id 的全量帧是它自己的
+		// 重放决定（官方判定不能增量时的形态），不是第三方“每轮整段历史”。
+		if replayOnSameConnEnabled && openAIWSPayloadIsClientPrewarm(currentPayload) {
+			clientOwnsChain = true
+		}
+		frameIsClientPrewarm := openAIWSPayloadIsClientPrewarm(currentPayload)
+		if shouldResetOpenAIWSTurnStateOnNewTurn(turnStateResetOnNewTurn, turn, hasFunctionCallOutput, lastFrameWasClientPrewarm) {
+			turnState = ""
+		}
+		skipDerivedPrewarm := shouldReplayOnSameOpenAIWSConnection(
+			replayOnSameConnEnabled,
+			clientOwnsChain,
+			currentPayload,
+			currentPreviousResponseID,
+			hasFunctionCallOutput,
+		)
 		// Codex CLI 的每个新用户轮次都新建上游 WS，并先执行一轮
 		// generate=false 预热；工具结果续轮则继续使用同一条连接。
 		if isDerivedOpenAIOfficialEgressWSContext(ctx) &&
 			!hasFunctionCallOutput &&
 			currentPreviousResponseID == "" &&
 			derivedUserTurnPrepared != turn {
-			resetSessionLease(false)
-			forceFreshConn = true
+			if skipDerivedPrewarm {
+				// 官方客户端的整段重放：原连接、全量帧、不补预热。保留当前租约，本轮后面不再注入预热与链帧。
+				logOpenAIWSModeInfo(
+					"ingress_ws_client_replay_same_conn account_id=%d turn=%d conn_id=%s lease_reused=%v",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+					sessionLease != nil,
+				)
+			} else {
+				resetSessionLease(false)
+				forceFreshConn = true
+			}
 			derivedUserTurnPrepared = turn
 		}
 		// store=false + function_call_output 场景必须有续链锚点。
@@ -2474,6 +2519,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
+		// 定型之前的帧：重试要从它重新定型（见下面 retryIngressTurn 之后的说明）。
+		payloadBeforeFinalize := currentPayload
+		// 画像声明跟踪上下文窗口时，按客户端原帧自带的窗口号推进窗口身份（压缩之后客户端的窗口号加一）。
+		observeOfficialCodexWSClientWindow(ctx, currentOriginalPayload)
 		finalPayload, _, finalizeErr := prepareOpenAIOfficialEgressSemanticWSFrame(
 			ctx,
 			currentOriginalPayload,
@@ -2525,7 +2574,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			outboundPayload = toolContinuationPayload
 			outboundPayloadBytes = len(outboundPayload)
 		}
-		{
+		if !skipDerivedPrewarm {
 			prewarmPayload, shouldInject, prewarmBuildErr :=
 				buildDerivedOpenAIOfficialEgressWSPrewarmFrame(ctx, outboundPayload)
 			if prewarmBuildErr != nil {
@@ -2613,6 +2662,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				continue
 			}
 			if retryIngressTurn(relayErr, turn, connID) {
+				// 换新连接重试同一帧。此时 currentPayload 已是定型之后的帧（逐项 turn_id、基础指令、turn-state 等已由网关
+				// 写入），下一轮再拿它与客户端原帧做业务历史比对会被判成“被篡改”（1008，frame validation failed:
+				// input was modified）。所有可重试的帧（没有 previous_response_id 的全量帧；带续链锚点的严格亲和帧不重试）
+				// 都要退回定型之前的帧，让新连接上的帧与第一次由同一份输入定型。
+				currentPayload = payloadBeforeFinalize
+				currentPayloadBytes = len(payloadBeforeFinalize)
 				continue
 			}
 			finalErr := relayErr
@@ -2641,6 +2696,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnPrevRecoveryTried = false
 		lastTurnFinishedAt = time.Now()
 		lastTurnClean = true
+		lastFrameWasClientPrewarm = frameIsClientPrewarm
 		if hooks != nil && hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, result, nil)
 		}

@@ -107,6 +107,39 @@ type TurnMetadataSection struct {
 	// Responses 回合事实（非 Codex 客户端直接调图像接口）时，网关没有别的可信来源，就取这里登记的默认值。
 	// 缺省表示不补这几个键（旧画像行为，字节与摘要不变）。
 	SessionDefaults *TurnMetadataSessionDefaults `json:"SessionDefaults,omitempty"`
+	// WindowTracking：WS 回合元数据按官方跟踪上下文窗口。
+	//
+	// 官方客户端的上下文窗口由“窗口号”（x-codex-window-id 的 `<线程>:<窗口号>` 后缀，turn metadata 里的 window_id 与
+	// window_number）和“上下文窗口 id”（turn metadata 的 context_window_id，每个窗口一个 UUIDv7）标识；上下文压缩后
+	// 进入新窗口，窗口号加一、上下文窗口 id 换新，之后的请求与新建连接的握手都用新值。握手头只在建连时发出，所以复用
+	// 的连接上握手里仍是旧窗口号，新窗口号只出现在每帧 client_metadata 里。声明 true 后，网关在 WS 回合元数据里写入
+	// window_number 与 context_window_id，并跟随下游客户端自己的窗口号推进（压缩之后客户端帧里的窗口号加一）：帧里的
+	// x-codex-window-id、turn metadata 的 window_id／window_number／context_window_id，以及新建连接握手里的窗口头与
+	// turn metadata 都用推进后的值。缺省（false）表示旧行为：窗口号固定为 `:0`，不写这两个键。
+	// 声明时 Keys 必须包含 window_id、window_number、context_window_id。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	WindowTracking bool `json:"WindowTracking,omitempty"`
+	// WSCompactionRequests：WS 上的压缩请求（`compaction_trigger` 增量帧）按官方写元数据与请求体。
+	//
+	// 官方压缩请求是一帧 previous_response_id 加单项 `{"type":"compaction_trigger"}` 的增量帧：请求体不带 access_programs；
+	// turn metadata 的 request_kind 是 compaction，带 compaction{trigger,reason,implementation,phase,strategy}，不带
+	// model、reasoning_effort、turn_trigger（官方 0.165 实采）。声明 true 后网关对这类帧同样这样写；compaction 取值落在本节
+	// CompactionImplementations／CompactionPhases 闭集内（声明时 CompactionImplementations 必须含 responses_compaction_v2）。
+	// 缺省（false）表示旧行为：按普通业务帧处理（补 access_programs、request_kind=turn、写 model 与 reasoning_effort）。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
+	WSCompactionRequests bool `json:"WSCompactionRequests,omitempty"`
+	// RootThreadKeys：根线程回合写 agent_name 与 root_turn_id。
+	//
+	// 官方客户端的 turn metadata 里，agent_name 是线程的代理路径（根线程为 `/root`，握手与每帧都带），root_turn_id 是根回合的
+	// 回合 id（根线程上等于本回合的 turn_id，预热帧没有回合所以不带；官方 0.165 实采，TUI 与 exec 一致）。子代理、guardian
+	// 审阅与记忆合并线程的取值没有样本，网关不写。声明 true 后网关只对根线程写这两个键；声明时 Keys 必须包含 agent_name 与
+	// root_turn_id。缺省（false）表示旧行为：不写这两个键。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
+	RootThreadKeys bool `json:"RootThreadKeys,omitempty"`
 }
 
 // TurnMetadataSessionDefaults 是目标版本客户端默认会话模型的 turn metadata 取值，登记时取自该版本官方内置
@@ -133,6 +166,16 @@ type ClientMetadataSection struct {
 	// 引擎支持的闭集且不得为空串；存在时不能为空表。omitempty 保证未使用该字段的节
 	// 序列化形态与摘要不变。
 	KeyConditions map[string]ConditionKind `json:"KeyConditions,omitempty"`
+	// DynamicKeys：WS 帧里由客户端逐请求写入的动态键（排序去重，取值见 clientMetadataDynamicKeyKinds）。
+	//
+	// 官方 0.165 的 WS response.create 的 client_metadata 除身份键与常量外还带：root_turn_id（根回合 id，预热帧没有）、
+	// ws_request_header_x_openai_internal_codex_responses_lite（本请求的模型走 Lite 时为 "true"）、
+	// x-codex-ws-stream-request-start-ms（发送前一刻的 Unix 毫秒时间戳，每个 WS 请求都带，含预热帧）。这些键不是常量也不是
+	// 身份事实，编译器按本字段声明写入：root_turn_id 与 Lite 取自调用方提供的帧事实，时间戳由编译器在编译该帧时取当前时间。
+	// 缺省表示旧行为：client_metadata 只含身份键与常量。键不得与 Constants 重名。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写空列表会让同一份语义出现两种表示，因此校验要求列表非空。
+	DynamicKeys []string `json:"DynamicKeys,omitempty"`
 }
 
 // ConditionFor 返回常量键的写入条件：KeyConditions 覆盖优先，其余键取 Condition。
@@ -147,6 +190,17 @@ func (s ClientMetadataSection) ConditionFor(key string) ConditionKind {
 type TurnStateSection struct {
 	// ResetOnAccountOwnerChange：同一会话内上游账号 owner 变化时丢弃已保存的 turn-state 与 WS 续接状态。
 	ResetOnAccountOwnerChange bool `json:"ResetOnAccountOwnerChange"`
+	// ResetOnNewTurn：turn-state 只在产生它的那个回合内回送，新用户轮次开始时清空。
+	//
+	// 官方客户端每个回合新建一个模型客户端会话（核心 turn 流程里的 new_session），会话里保存 turn-state 的
+	// 单次写入容器随之换新：同一回合内的后续请求（工具结果续轮、压缩等）回送本回合已收到的值，新回合的第一个请求
+	// 不回送上一回合的值。例外：会话启动预热帧的响应里收到的值随“预热过的会话”交给第一个回合，所以紧跟预热帧的
+	// 第一个业务帧仍回送。节里声明 true 后，网关对派生出站的新用户轮次（不是工具结果续轮）同样清空已保存的值；
+	// 缺省（false）表示旧行为：保存的值在整个会话内回送给每个后续请求。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	ResetOnNewTurn bool `json:"ResetOnNewTurn,omitempty"`
 }
 
 // WebSocketRetrySection 声明 WS 可重试错误与降级预算。
@@ -163,6 +217,21 @@ type WebSocketRetrySection struct {
 type WebSocketContinuationSection struct {
 	// ResetOn：任一条件变化即新建 WS 并全量发送（排序去重，取值见 continuationResetKinds）。
 	ResetOn []string `json:"ResetOn"`
+	// ReplayOnSameConnection：声明官方客户端在“请求属性变化或输入前缀不再可复用”时的整段重放形态。
+	//
+	// 官方客户端每次发 WS 请求前先判断能否在上一次请求加其输出之上续链；不能时（换模型、工具目录或推理档位等
+	// 请求属性变化，上下文压缩后新窗口，input 不再以上次请求加输出为前缀，相邻 configuration_update 合并等）
+	// 在原连接上发一帧不带 previous_response_id、不带 generate 的全量 response.create：不重连、不补预热、
+	// permessage-deflate 上下文延续。只有认证代次、账号 owner 等连接键变化（见 ResetOn）或连接已断才会新建连接。
+	//
+	// 节里声明 true 后，执行层对“自己管理续链”的下游客户端（本会话内自己发过 generate=false 预热帧）发来的这类
+	// 全量帧，复用原上游连接并原样转发：不新建连接、不补预热帧、不把预热响应挂成 previous_response_id。
+	// 其余下游客户端（第三方，每个用户轮次都是整段历史）仍按旧方式归一成官方形态。
+	// 缺省（false）表示旧行为：全量帧一律由新连接承接并补预热。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	ReplayOnSameConnection bool `json:"ReplayOnSameConnection,omitempty"`
 }
 
 // ReasoningEffortSection 声明 reasoning.effort 的出站序列化。
@@ -369,6 +438,29 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 				return nil, fmt.Errorf("可选节 %s 的字段 IDScheme 存在时不得为空串", name)
 			}
 		}
+		// omitempty 的布尔字段同理不得显式写成 false：false 与缺省无法区分，规范化 JSON 却会省略它，
+		// 同一份语义于是对应两种官方摘要。声明该能力只能写 true，不声明就省略。
+		if name == SectionWebSocketContinuation {
+			if value, declared := fields["ReplayOnSameConnection"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 ReplayOnSameConnection 存在时必须为 true", name)
+			}
+		}
+		if name == SectionTurnMetadata {
+			if value, declared := fields["WindowTracking"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 WindowTracking 存在时必须为 true", name)
+			}
+			if value, declared := fields["WSCompactionRequests"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 WSCompactionRequests 存在时必须为 true", name)
+			}
+			if value, declared := fields["RootThreadKeys"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 RootThreadKeys 存在时必须为 true", name)
+			}
+		}
+		if name == SectionTurnState {
+			if value, declared := fields["ResetOnNewTurn"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 ResetOnNewTurn 存在时必须为 true", name)
+			}
+		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
@@ -421,6 +513,23 @@ func validateOptionalSection(name string, value any) error {
 		if err := requireSortedUnique("CompactionPhases", section.CompactionPhases, sectionTokenPattern); err != nil {
 			return err
 		}
+		if section.WindowTracking {
+			for _, key := range []string{"window_id", "window_number", "context_window_id"} {
+				if !slices.Contains(section.Keys, key) {
+					return fmt.Errorf("WindowTracking 存在时 Keys 必须包含 %s", key)
+				}
+			}
+		}
+		if section.RootThreadKeys {
+			for _, key := range []string{"agent_name", "root_turn_id"} {
+				if !slices.Contains(section.Keys, key) {
+					return fmt.Errorf("RootThreadKeys 存在时 Keys 必须包含 %s", key)
+				}
+			}
+		}
+		if section.WSCompactionRequests && !slices.Contains(section.CompactionImplementations, "responses_compaction_v2") {
+			return errors.New("WSCompactionRequests 存在时 CompactionImplementations 必须包含 responses_compaction_v2")
+		}
 		return validateTurnMetadataSessionDefaults(section)
 	case *ClientMetadataSection:
 		if len(section.Constants) == 0 {
@@ -445,6 +554,16 @@ func validateOptionalSection(name string, value any) error {
 				}
 				if condition == "" || !EngineSupportedEnumValues().Contains(EnumDomainConditionKind, string(condition)) {
 					return fmt.Errorf("KeyConditions 的条件未受支持: %q=%q", key, condition)
+				}
+			}
+		}
+		if section.DynamicKeys != nil {
+			if err := requireSortedUniqueKnown("DynamicKeys", section.DynamicKeys, clientMetadataDynamicKeyKinds); err != nil {
+				return err
+			}
+			for _, key := range section.DynamicKeys {
+				if _, collides := section.Constants[key]; collides {
+					return fmt.Errorf("DynamicKeys 与 Constants 重名: %s", key)
 				}
 			}
 		}
@@ -541,6 +660,32 @@ func validateOptionalSection(name string, value any) error {
 	default:
 		return fmt.Errorf("未知可选节类型: %s", name)
 	}
+}
+
+// clientMetadataDynamicKeyKinds 是 ClientMetadataSection.DynamicKeys 允许的取值全集。
+var clientMetadataDynamicKeyKinds = map[string]bool{
+	"root_turn_id": true,
+	"ws_request_header_x_openai_internal_codex_responses_lite": true,
+	"x-codex-ws-stream-request-start-ms":                       true,
+}
+
+// requireSortedUniqueKnown 要求列表非空、严格升序，且每个元素都在 known 里。
+func requireSortedUniqueKnown(field string, values []string, known map[string]bool) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%s 不能为空", field)
+	}
+	if !sort.StringsAreSorted(values) {
+		return fmt.Errorf("%s 必须排序", field)
+	}
+	for index, value := range values {
+		if !known[value] {
+			return fmt.Errorf("%s 含未知取值: %q", field, value)
+		}
+		if index > 0 && values[index-1] == value {
+			return fmt.Errorf("%s 含重复取值: %q", field, value)
+		}
+	}
+	return nil
 }
 
 // requireSortedUnique 要求列表非空、严格升序（即排序且无重复），元素满足可选的格式约束。

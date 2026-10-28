@@ -2015,7 +2015,7 @@ func deriveOfficialOpenAIHTTPIdentity(
 		)
 	}
 	// Turn 按末条用户消息稳定；没有用户文本时同一线程共用一个空锚点，与旧种子一致。
-	turnID := generateOfficialStableUUIDV7(
+	turnID := generateOfficialStableTurnUUIDV7(
 		newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
 			WriteString(threadID).
 			WriteUserAnchor(anchors.last, anchors.lastFound).
@@ -2029,10 +2029,15 @@ func deriveOfficialOpenAIHTTPIdentity(
 	}
 	windowID := threadID + ":0"
 
-	turnStartedAtUnixMS := resolveOfficialOpenAIHTTPTurnStart(
-		c,
-		fmt.Sprintf("%d|%s|%s", accountID, sessionID, turnID),
-	)
+	// 回合开始时间由 turn_id 无状态推出（内嵌毫秒加官方实采分布里的间隔），同一回合的重试与续轮自然一致。
+	// 只有 turn_id 推不出内嵌时间时才退回按回合登记的真实开始时间。
+	turnStartedAtUnixMS, startedFromTurnID := officialCodexTurnStartedAtMs(turnID)
+	if !startedFromTurnID {
+		turnStartedAtUnixMS = resolveOfficialOpenAIHTTPTurnStart(
+			c,
+			fmt.Sprintf("%d|%s|%s", accountID, sessionID, turnID),
+		)
+	}
 	turnMetadataValues := map[string]any{
 		"installation_id":         installationID,
 		"session_id":              sessionID,

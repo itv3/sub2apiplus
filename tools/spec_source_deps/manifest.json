@@ -68,7 +68,9 @@
         "tungstenite-openai-0.27.0/Cargo.toml": "d83cc5d81bfbf9c793e261be449cb3e115894e49b3d35d5ca7e7bce3d7190817",
         "tungstenite-openai-0.27.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "tungstenite-openai-0.27.0/LICENSE-MIT": "7fea0ee51a4ca5d5cea7464135fd55e8b09caf3a61da3d451ac8a22af95c033f",
-        "tungstenite-openai-0.27.0/src/handshake/client.rs": "9b7b6180e5203e44b58efcb66c8540e2599b305eb9a924c21c240ab2e7a28dfd"
+        "tungstenite-openai-0.27.0/src/extensions/compression/deflate/mod.rs": "fb38993d007bb48589b79b86225bb0d294e444951d55306fe227160d06c5c978",
+        "tungstenite-openai-0.27.0/src/handshake/client.rs": "9b7b6180e5203e44b58efcb66c8540e2599b305eb9a924c21c240ab2e7a28dfd",
+        "tungstenite-openai-0.27.0/src/protocol/mod.rs": "45a5364a7e6faa0ad0bc198f440faa88704dac0315459f1b07b06d71d26c8b82"
       }
     }
   ]

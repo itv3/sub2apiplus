@@ -142,7 +142,8 @@ func codexGateRequireBaseInstructionsMessage(
 	require.NotEmpty(t, threadID, "%s：线程 ID 缺失无法核对消息 id", where)
 	require.Equal(t, codexGateBaseInstructionsID(section.IDPrefix, threadID, text), item.Get("id").String(),
 		"%s：id 必须是前缀 + UUIDv5(UUIDv5(NAMESPACE_OID, thread_id), 正文)", where)
-	encodedText, err := json.Marshal(text)
+	// 官方 serde_json 不做 HTML 转义，帧里的 `<`、`>`、`&` 是字面量，期望值也不能转义。
+	encodedText, err := marshalNoHTMLEscape(text)
 	require.NoError(t, err)
 	require.Equal(t, `[{"type":"input_text","text":`+string(encodedText)+`}]`, item.Get("content").Raw,
 		"%s：正文必须原样出现在 content 的 input_text 里", where)

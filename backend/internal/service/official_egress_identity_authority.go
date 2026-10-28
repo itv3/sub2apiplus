@@ -360,7 +360,8 @@ func buildOfficialCodexIdentityFacts(
 		if !exists {
 			return ""
 		}
-		return strings.TrimSpace(field.Value())
+		// 画像声明跟踪上下文窗口时，窗口推进之后新建连接的握手用推进后的窗口号（其余字段原样）。
+		return officialCodexWSAdvancedRegisteredField(egressContext, name, strings.TrimSpace(field.Value()))
 	}
 	conditionalField := func(name string) string {
 		return strings.TrimSpace(runtimeState.ConditionalHeaders[strings.ToLower(name)])
@@ -504,6 +505,9 @@ func buildOfficialCodexIdentityFacts(
 			return officialegress.CodexIdentityFacts{}, err
 		}
 	}
+	// 画像声明跟踪上下文窗口：窗口号随压缩推进，不再作为跨 attempt 稳定的 invocation 身份绑定。
+	facts.WindowAdvances = hasEgressContext && egressContext.openAIWSDerived != nil &&
+		officialCodexTurnMetadataWindowTracking(egressContext.ProfileMode())
 	if err := completeOfficialCodexGeneratedIdentityFacts(
 		&facts, endpointID, identitySeed,
 		officialCodexFallbackTurnMetadataInput{
@@ -610,19 +614,19 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	}
 	needsResponsesSession := officialCodexEndpointUsesResponsesSession(endpointID)
 	needsTurnMetadata := needsResponsesSession || endpointID == officialCodexEndpointAlphaSearch
-	setGenerated := func(target *officialegress.CodexIdentityValue, suffix string, lifecycle officialegress.IdentityFactLifecycle) error {
+	// 兜底生成的标识一律取官方形态：installation 是 UUIDv4；会话与线程是同一个 UUIDv7（根线程 session＝thread）；
+	// window 是“线程 id:0”；回合是 UUIDv7；x-client-request-id 与线程 id 相同（官方实采 90 个请求全部如此）。
+	// 同一次调用的多次 attempt 必须拿到同一组值：UUIDv4 由 invocation seed 确定性派生，UUIDv7 走按调用的小缓存。
+	setGenerated := func(
+		target *officialegress.CodexIdentityValue,
+		generate func() string,
+		lifecycle officialegress.IdentityFactLifecycle,
+	) error {
 		if target.Value != "" {
 			return nil
 		}
-		sum := sha256.Sum256([]byte(identitySeed + "\x00" + suffix))
-		value := fmt.Sprintf(
-			"%s-%s-%s-%s-%s",
-			hex.EncodeToString(sum[0:4]), hex.EncodeToString(sum[4:6]),
-			hex.EncodeToString(sum[6:8]), hex.EncodeToString(sum[8:10]),
-			hex.EncodeToString(sum[10:16]),
-		)
 		generated, err := officialegress.NewCodexIdentityValue(
-			value, officialegress.IdentitySourceInvocation, lifecycle,
+			generate(), officialegress.IdentitySourceInvocation, lifecycle,
 		)
 		if err != nil {
 			return err
@@ -633,23 +637,27 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	if needsResponsesSession {
 		for _, field := range []struct {
 			target    *officialegress.CodexIdentityValue
-			suffix    string
+			generate  func() string
 			lifecycle officialegress.IdentityFactLifecycle
 		}{
-			{&facts.InstallationID, "installation", officialegress.IdentityLifecycleInvocation},
-			{&facts.SessionID, "session", officialegress.IdentityLifecycleSession},
-			{&facts.ThreadID, "thread", officialegress.IdentityLifecycleSession},
-			{&facts.WindowID, "window", officialegress.IdentityLifecycleSession},
-			{&facts.TurnID, "turn", officialegress.IdentityLifecycleTurn},
+			{&facts.InstallationID, func() string { return officialCodexInvocationUUIDV4(identitySeed, "installation") }, officialegress.IdentityLifecycleInvocation},
+			{&facts.SessionID, func() string { return officialCodexInvocationSessionID(identitySeed) }, officialegress.IdentityLifecycleSession},
+			{&facts.ThreadID, func() string { return facts.SessionID.Value }, officialegress.IdentityLifecycleSession},
+			{&facts.WindowID, func() string { return facts.ThreadID.Value + ":0" }, officialegress.IdentityLifecycleSession},
+			{&facts.TurnID, func() string { return officialCodexInvocationTurnID(identitySeed) }, officialegress.IdentityLifecycleTurn},
 		} {
-			if err := setGenerated(field.target, field.suffix, field.lifecycle); err != nil {
+			if err := setGenerated(field.target, field.generate, field.lifecycle); err != nil {
 				return err
 			}
 		}
 	}
 	if needsResponsesSession || endpointID == officialCodexEndpointFilesBlobUpload {
+		generateClientRequestID := func() string { return officialCodexInvocationUUIDV4(identitySeed, "client-request") }
+		if needsResponsesSession {
+			generateClientRequestID = func() string { return facts.ThreadID.Value }
+		}
 		if err := setGenerated(
-			&facts.ClientRequestID, "client-request", officialegress.IdentityLifecycleInvocation,
+			&facts.ClientRequestID, generateClientRequestID, officialegress.IdentityLifecycleInvocation,
 		); err != nil {
 			return err
 		}
