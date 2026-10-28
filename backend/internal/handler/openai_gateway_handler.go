@@ -211,8 +211,9 @@ func resolveOpenAIMessagesDispatchMappedModel(c *gin.Context, apiKey *service.AP
 	// composite 解析到 grok/CN/OpenCode 目标时调度级映射不适用（Group 级映射的
 	// gpt-5.x 默认值是 openai 专属,发给这些上游必错）,模型改写交给账号级 model_mapping。
 	if apiKey.Group.Platform == service.PlatformComposite && c != nil && c.Request != nil {
-		if platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context()); ok {
-			return messagesDispatchMappedModelForPlatform(apiKey, platform, requestedModel)
+		if platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context()); ok &&
+			(platform == service.PlatformGrok || service.IsMultiProtocolAPIKeyProvider(platform)) {
+			return ""
 		}
 	}
 	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
@@ -844,35 +845,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
-		// Composite 满载换号：首选平台抢不到槽位（只拿到排队计划）时，先按候选池的换号计划试其它平台，
-		// 都不行才回到原账号排队。只在尚无账号失败、非续链、非 compact、非生图时尝试，
-		// 绝不在上游失败之后跨平台重放（见 openai_gateway_composite_capacity.go）。
-		compositeTemporarySwap := false
-		if sw, switched := h.tryCompositeCapacitySwitch(c, apiKey, subscription, selection, reqLog, compositeCapacitySwitchParams{
-			Eligible: len(failedAccountIDs) == 0 && switchCount == 0 && previousResponseID == "" &&
-				!imageIntent && !legacyCompact && !nativeV2,
-			SessionHash: sessionHash,
-			Model:       forwardModel,
-			ModelFor: func(ctx context.Context, _ string) string {
-				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
-				return openAIChannelForwardModel(mapping, reqModel)
-			},
-			CapabilityFor: func(platform string) service.OpenAIEndpointCapability {
-				return openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, platform)
-			},
-			RequireCompact:       requireCompact,
-			UseUpstreamTokenCost: !imageIntent,
-		}); switched {
-			// 换平台后重算渠道映射、转发体与端点能力（映射按目标平台取配置）。
-			selection = sw.Selection
-			compositeTemporarySwap = sw.Temporary
-			requestPlatform = sw.Platform
-			requiredCapability = openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
-			channelMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-			forwardBody = openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
-			forwardModel = openAIChannelForwardModel(channelMapping, reqModel)
-			c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(c.Request.Context(), forwardModel, legacyCompact))
-		}
+		// Composite 满载换号（逻辑与逐变量说明见 openai_gateway_composite_entry.go），每轮必调一次。
+		selection = h.switchCompositeResponses(c, apiKey, subscription, reqLog, selection, &compositeResponsesSwitch{
+			Fresh: len(failedAccountIDs) == 0 && switchCount == 0, PreviousResponseID: previousResponseID, ImageIntent: imageIntent,
+			LegacyCompact: legacyCompact, NativeV2: nativeV2, NeedsResponses: needsResponses, RequireCompact: requireCompact,
+			SessionHash: sessionHash, ReqModel: reqModel, Body: body, Platform: &requestPlatform, Capability: &requiredCapability,
+			Mapping: &channelMapping, ForwardBody: &forwardBody, ForwardModel: &forwardModel,
+		})
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
 			reqLog.Debug("openai.account_selected_with_previous_response_id", zap.Int64("account_id", selection.Account.ID))
 		}
@@ -913,7 +892,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, compositeAcquireSessionHash(sessionHash, compositeTemporarySwap), selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1521,38 +1500,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
-		// Composite 满载换号（同 Responses 入口）：首选平台只拿到排队计划时先试候选池计划里的其它平台。
-		compositeTemporarySwap := false
-		if sw, switched := h.tryCompositeCapacitySwitch(c, apiKey, subscription, selection, reqLog, compositeCapacitySwitchParams{
-			Eligible:    len(failedAccountIDs) == 0 && switchCount == 0,
-			SessionHash: sessionHash,
-			Model:       currentRoutingModel,
-			ModelFor: func(_ context.Context, platform string) string {
-				// 调度级模型映射随目标平台变化：grok／多协议平台不适用分组的 Messages 调度映射。
-				if mapped := messagesDispatchMappedModelForPlatform(apiKey, platform, reqModel); mapped != "" {
-					return mapped
-				}
-				return routingModel
-			},
-			CapabilityFor: func(string) service.OpenAIEndpointCapability {
-				return service.OpenAIEndpointCapabilityChatCompletions
-			},
-			UseUpstreamTokenCost: true,
-		}); switched {
-			selection = sw.Selection
-			compositeTemporarySwap = sw.Temporary
-			requestPlatform = sw.Platform
-			// 换平台后按新平台重算调度级模型映射与渠道映射。
-			effectiveMappedModel = messagesDispatchMappedModelForPlatform(apiKey, sw.Platform, reqModel)
-			channelMappingMsg, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-		}
+		// Composite 满载换号（同 Responses 入口，见 openai_gateway_composite_entry.go）。
+		selection = h.switchCompositeMessages(c, apiKey, subscription, reqLog, selection, &compositeMessagesSwitch{
+			Fresh: len(failedAccountIDs) == 0 && switchCount == 0, SessionHash: sessionHash, ReqModel: reqModel, RoutingModel: routingModel,
+			CurrentRoutingModel: currentRoutingModel, Platform: &requestPlatform, EffectiveMappedModel: &effectiveMappedModel, Mapping: &channelMappingMsg,
+		})
 		account := selection.Account
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_messages.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, compositeAcquireSessionHash(sessionHash, compositeTemporarySwap), selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -2456,7 +2415,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 ) (func(), openAISlotAcquireResult) {
-	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil)
+	return h.acquireOpenAIAccountSlot(c, groupID, compositeSlotSessionHash(c, sessionHash), selection, reqStream, streamStarted, reqLog, nil)
 }
 
 type openAISlotErrorWriter func(status int, errType, code, message string)
