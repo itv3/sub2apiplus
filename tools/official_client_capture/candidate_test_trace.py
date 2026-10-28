@@ -355,8 +355,17 @@ FROZEN_MAPPING_SHA256 = (
 # 开始时间间隔 0～100 毫秒、根线程会话标识形态）；SPEC-WS-005 追加 5 条（A06 首个业务帧同样 3 条；A05／A06 的 response.create 消息无末尾换行、无 HTML 转义）。
 # 载荷审核：叶子只增不减，既有叶子逐字不变；验收契约分组仍 dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-WS-004 多 4 条、SPEC-BODY-003 多 3 条、
 # SPEC-WS-005 多 5 条，side_coverage 官方侧不变（A05、A06 本来就在）。摘要 de164a62… 变为 3c077732…。
+# 2026-10-29（0.165.0 登记：W3 第二批判据）：SPEC-BODY-008 的 scenario_ids 加 A20～A22 并追加 5 条判据（根线程回合帧的 root_turn_id、预热帧无 root_turn_id、
+# 每个 WS 请求带发送时间戳、Lite 请求带 Lite 标记、压缩请求帧无 access_programs，最后一条只绑 A21）；SPEC-BODY-004 追加 turn-state-new-turn-reset（新用户轮次
+# 首请求不回送上一回合的值，候选侧 turn_state_chain 事实 a05.turn-state-new-turn-reset）；SPEC-WS-005 追加 4 条窗口推进判据（A20／A22 窗口号恒 0，A21 压缩帧仍在
+# 旧窗口、压缩后的整段重放帧窗口号 1、其后主线帧保持 1）；SPEC-EP-021 的 scenario_ids 加 A21 并追加 5 条压缩请求帧 turn metadata 判据（request_kind=compaction、
+# 无 model／reasoning_effort／turn_trigger 键、compaction 子键顺序）；SPEC-BODY-009 的 scenario_ids 加 A05、A06、A20～A22 并追加 3 条根线程键判据。
+# 载荷逐项审核：43 条规则与 18 个场景条目数不变；既有 checks 逐字不变；仅上述 5 条规则变化，新增检查合计 18 条，其中 3 条规则的 scenario_ids 只在末尾追加；
+# 顶层字段（schema_version、codex_version、source_spec、source_spec_sha256、scenarios）逐字不变。画像文件摘要 3c077732… 变为 c53ed9ef…。
+# 窗口与压缩帧判据读 turn metadata 的结构摘要（relay_extract 的 shape._turn_metadata），并已用官方 0.165 客户端的真实采样帧逐条核对：官方样本全部通过，
+# 反例（窗口号不推进、压缩帧按普通回合处理、动态键缺失等）由单测的官方形态会话变形覆盖。
 FROZEN_PROFILE_SHA256 = (
-    "3c07773223385645a17926e9a459571a03e4126c0b435a0ca293043a61479661"
+    "c53ed9efb37b689a130c1e99ac741dbe07f12988da4288a048efdb7ba3407671"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

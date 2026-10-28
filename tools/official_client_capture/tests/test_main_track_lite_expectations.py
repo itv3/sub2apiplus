@@ -1103,6 +1103,30 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             "first-business-frame-session-ids-official-form",
             "message-no-trailing-newline",
             "message-no-html-escape",
+            "window-stays-zero-without-compaction",
+            "compaction-frame-in-old-window",
+            "window-advances-after-compaction",
+            "window-stays-advanced-after-compaction",
+        ],
+        "SPEC-BODY-004": ["turn-state-new-turn-reset"],
+        "SPEC-BODY-008": [
+            "ws-turn-frame-root-turn-id",
+            "ws-prewarm-frame-no-root-turn-id",
+            "ws-frame-request-start-ms",
+            "ws-frame-responses-lite-flag",
+            "ws-compaction-frame-no-access-programs",
+        ],
+        "SPEC-EP-021": [
+            "ws-compaction-frame-request-kind",
+            "ws-compaction-frame-no-model-key",
+            "ws-compaction-frame-no-reasoning-effort-key",
+            "ws-compaction-frame-no-turn-trigger-key",
+            "ws-compaction-frame-compaction-object",
+        ],
+        "SPEC-BODY-009": [
+            "ws-turn-frame-root-turn-id-key",
+            "ws-turn-frame-agent-name-key",
+            "ws-prewarm-frame-no-root-turn-id-key",
         ],
     }
     # 规则的 scenario_ids 变化（旧值必须是新值的前缀）。
@@ -1110,6 +1134,9 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         "SPEC-BODY-006": ["A03", "A04", "A05", "A06"],  # W1 的 WS 判据选 A05、A06，判据场景必须是规则场景的子集
         "SPEC-WS-004": ["A05", "A06"],  # W2 的一消息一帧判据选 A05、A06
         "SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"],
+        "SPEC-BODY-008": ["A03", "A04", "A05", "A06", "A20", "A21", "A22"],  # W3 第二批：A20～A22 的回合帧动态键
+        "SPEC-EP-021": ["A03", "A05", "A06", "A10", "A21"],  # 压缩请求帧的 turn metadata 判据只有 A21 有压缩
+        "SPEC-BODY-009": ["A04", "A05", "A06", "A20", "A21", "A22"],  # 根线程键判据选 A05、A06 与重放三场景的 WS 帧
     }
     ADDED_SCENARIOS_0165 = ["A20", "A21", "A22"]
 
@@ -1387,7 +1414,10 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         rule = next(item for item in self.profile["rules"] if item["rule_id"] == "SPEC-WS-005")
         self.assertEqual(rule["scenario_ids"], ["A05", "A06", "A20", "A21", "A22"])
         ids = [check["id"] for check in rule["checks"]]
-        self.assertEqual(ids[-10:-5], self.ADDED_CHECKS_0165["SPEC-WS-005"][:5])
+        added = self.ADDED_CHECKS_0165["SPEC-WS-005"]
+        self.assertEqual(ids[len(ids) - len(added):], added)
+        self.assertEqual(added[:5], ["replay-frame-no-previous-response-id", "replay-frame-no-generate", "replay-frame-carries-full-history",
+                                     "replay-no-second-warmup", "replay-same-connection"])
         profile_scenarios = {item["scenario_id"]: item for item in self.profile["scenarios"]}
         for scenario_id in self.REPLAY_SCENARIOS:
             self.assertEqual(profile_scenarios[scenario_id]["required_artifact_kinds"], ["relay_binary", "websocket_trace"])
@@ -1438,6 +1468,260 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             [self.replay_observation("A20", "replay", self.GOOD_REPLAY, thread="title")],
         ):
             self.assertFalse(self.run_replay_check("replay-frame-no-previous-response-id", observations))
+
+
+    # ---- W3 第二批：窗口推进、压缩请求帧的 turn metadata、根线程键、client_metadata 动态键、turn-state 新回合重置 ----
+    # 这一组用“官方形态的会话”端到端跑：请求体 → relay_extract.shape_top_level（摘要）→ 引擎按连接派生线程角色与重放帧标签
+    # → 清单里的检查。形态取自官方 0.165 客户端的真实采样（压缩续聊：预热、两轮、压缩帧、压缩后的整段重放帧与两轮，
+    # 标题线程各占一条连接）；负例是在同一会话上改一处，核对判据确实咬得住。
+
+    SESSION = "11111111-1111-7111-8111-111111111111"
+
+    def official_body(self, kind, *, window=0, first="message", model="gpt-6.1-sol", effort="low", thread="user",
+                      previous=True, lite=True, root_in_client_metadata=True, mutate=None):
+        """一个官方形态的 WS response.create 请求体（kind：prewarm／turn／compaction）。"""
+
+        turn_id = "22222222-2222-7222-8222-222222222222"
+        metadata = {
+            "installation_id": "i", "session_id": self.SESSION, "thread_id": self.SESSION, "agent_name": "/root",
+            "turn_id": "" if kind == "prewarm" else turn_id, "window_id": f"{self.SESSION}:{window}", "window_number": window,
+            "context_window_id": "33333333-3333-7333-8333-333333333333", "request_kind": kind, "history_initialization": "new",
+        }
+        if kind != "prewarm":
+            metadata["root_turn_id"] = turn_id
+        metadata["thread_source"] = thread
+        if kind == "turn":
+            metadata["turn_trigger"] = "user"
+        metadata.update({"sandbox": "none", "turn_started_at_unix_ms": 1})
+        if kind != "compaction":
+            metadata.update({"model": model, "reasoning_effort": effort})
+        else:
+            metadata["compaction"] = {"trigger": "manual", "reason": "user_requested", "implementation": "responses_compaction_v2",
+                                      "phase": "standalone_turn", "strategy": "memento"}
+        client_metadata = {"x-codex-turn-metadata": json.dumps(metadata), "x-codex-ws-stream-request-start-ms": "1793208577802"}
+        if kind != "prewarm" and root_in_client_metadata:
+            client_metadata["root_turn_id"] = turn_id
+        if lite:
+            client_metadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+        body = {"type": "response.create", "model": model, "client_metadata": client_metadata}
+        if kind == "prewarm":
+            body.update({"generate": False, "input": []})
+        elif kind == "compaction":
+            body.update({"previous_response_id": "resp_1", "input": [{"type": "compaction_trigger"}]})
+        else:
+            body["input"] = [{"type": first}, {"type": "message", "role": "user", "content": []}]
+            if previous:
+                body["previous_response_id"] = "resp_1"
+        if mutate is not None:
+            mutate(body, metadata)
+            body["client_metadata"]["x-codex-turn-metadata"] = json.dumps(metadata)
+        return body
+
+    def session_observations(self, scenario, bodies_by_connection):
+        """把各连接的请求体序列做成观测：摘要、引擎派生的线程角色与重放帧标签、握手记录。"""
+
+        observations = []
+        for connection, bodies in bodies_by_connection.items():
+            frames = [
+                {"frame_index": index, "opcode": "TEXT", "event_type": body["type"],
+                 "shape": relay_extract.shape_top_level(body)}
+                for index, body in enumerate(bodies)
+            ]
+            role, replay = candidate_rule_assertion.derive_connection_roles(frames)
+            for frame in frames:
+                labels = {"thread_role": role} if role else {}
+                if frame["frame_index"] in replay:
+                    labels["frame_role"] = "replay"
+                observations.append(candidate_rule_assertion.Observation(
+                    record_id=f"{scenario}-c{connection}-f{frame['frame_index']}", scenario_id=scenario, record_type="websocket_frame",
+                    artifact_path=f"relay/conn00{connection}.client_to_upstream.bin",
+                    evidence_paths=(f"relay/conn00{connection}.client_to_upstream.bin",), labels=labels,
+                    data={"event_type": frame["event_type"], "opcode": "TEXT", "frame_index": frame["frame_index"], "shape": frame["shape"]},
+                ))
+        return observations
+
+    def compact_session(self, **overrides):
+        """官方压缩续聊：主线程 预热、两轮、压缩帧、压缩后的整段重放帧与一轮；另有一条标题线程连接。"""
+
+        build = self.official_body
+        main = [
+            build("prewarm", previous=False),
+            build("turn", first="additional_tools"),
+            build("turn"),
+            build("compaction"),
+            build("turn", first="additional_tools", window=1, previous=False),
+            build("turn", window=1),
+        ]
+        title = [build("prewarm", model="gpt-5.6-luna", thread="thread_title", previous=False),
+                 build("turn", first="additional_tools", model="gpt-5.6-luna", thread="thread_title", previous=False)]
+        if "main" in overrides:
+            main = overrides["main"](main)
+        return self.session_observations("A21", {1: main, 2: title})
+
+    W3P2_BODY_008 = ("ws-turn-frame-root-turn-id", "ws-prewarm-frame-no-root-turn-id", "ws-frame-request-start-ms",
+                     "ws-frame-responses-lite-flag", "ws-compaction-frame-no-access-programs")
+    W3P2_EP_021 = ("ws-compaction-frame-request-kind", "ws-compaction-frame-no-model-key", "ws-compaction-frame-no-reasoning-effort-key",
+                   "ws-compaction-frame-no-turn-trigger-key", "ws-compaction-frame-compaction-object")
+    W3P2_BODY_009 = ("ws-turn-frame-root-turn-id-key", "ws-turn-frame-agent-name-key", "ws-prewarm-frame-no-root-turn-id-key")
+    W3P2_WS_005_A21 = ("compaction-frame-in-old-window", "window-advances-after-compaction", "window-stays-advanced-after-compaction")
+
+    def all_new_checks_hold(self, observations, *, rules=None) -> dict[str, bool]:
+        groups = {"SPEC-BODY-008": self.W3P2_BODY_008, "SPEC-EP-021": self.W3P2_EP_021, "SPEC-BODY-009": self.W3P2_BODY_009,
+                  "SPEC-WS-005": self.W3P2_WS_005_A21}
+        return {f"{rule}/{check}": self.run_check(rule, check, observations)
+                for rule, checks in groups.items() if rules is None or rule in rules for check in checks}
+
+    def test_official_shaped_compaction_session_satisfies_every_new_check(self) -> None:
+        results = self.all_new_checks_hold(self.compact_session())
+        self.assertEqual([name for name, ok in results.items() if not ok], [])
+        # 派生标签确实把压缩后的重放帧认了出来（前一业务帧是压缩请求），标题线程没有被算成主线程。
+        observations = self.compact_session()
+        replay = [item for item in observations if item.labels.get("frame_role") == "replay"]
+        self.assertEqual([(item.artifact_path, item.data["frame_index"]) for item in replay], [("relay/conn001.client_to_upstream.bin", 4)])
+        self.assertEqual({item.labels["thread_role"] for item in observations}, {"main", "title"})
+
+    def test_window_checks_reject_a_gateway_that_never_advances_the_window(self) -> None:
+        # 旧行为：窗口号固定为 0，压缩之后也不推进。
+        observations = self.compact_session(main=lambda frames: [self.rebuild_with_window(body, 0) for body in frames])
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-advances-after-compaction", observations))
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-stays-advanced-after-compaction", observations))
+        # 压缩帧本身仍在旧窗口这一条不受影响。
+        self.assertTrue(self.run_check("SPEC-WS-005", "compaction-frame-in-old-window", observations))
+
+    def rebuild_with_window(self, body, window):
+        metadata = json.loads(body["client_metadata"]["x-codex-turn-metadata"])
+        metadata["window_number"] = window
+        metadata["window_id"] = f"{self.SESSION}:{window}"
+        clone = json.loads(json.dumps(body))
+        clone["client_metadata"]["x-codex-turn-metadata"] = json.dumps(metadata)
+        return clone
+
+    def test_window_checks_reject_an_early_advance_and_an_unadvanced_replay(self) -> None:
+        # 压缩帧自己就写成新窗口：旧窗口判据失败。
+        early = self.compact_session(main=lambda frames: [*frames[:3], self.rebuild_with_window(frames[3], 1), *frames[4:]])
+        self.assertFalse(self.run_check("SPEC-WS-005", "compaction-frame-in-old-window", early))
+        # 重放帧停在旧窗口。
+        stale = self.compact_session(main=lambda frames: [*frames[:4], self.rebuild_with_window(frames[4], 0), frames[5]])
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-advances-after-compaction", stale))
+        # 其后的回合退回旧窗口：新窗口保持判据失败（只剩重放帧一个窗口号 1 的帧）。
+        regressed = self.compact_session(main=lambda frames: [*frames[:5], self.rebuild_with_window(frames[5], 0)])
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-stays-advanced-after-compaction", regressed))
+
+    def test_window_stays_zero_without_compaction_in_the_other_replay_scenarios(self) -> None:
+        build = self.official_body
+        model_switch = [build("prewarm", previous=False), build("turn", first="additional_tools"),
+                        build("turn", first="additional_tools", model="gpt-6-astra", previous=False)]
+        good = self.session_observations("A20", {1: model_switch})
+        self.assertTrue(self.run_check("SPEC-WS-005", "window-stays-zero-without-compaction", good))
+        # 换模型的整段重放被网关误当压缩推进了窗口。
+        advanced = self.session_observations("A20", {1: [*model_switch[:2], self.rebuild_with_window(model_switch[2], 1)]})
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-stays-zero-without-compaction", advanced))
+        # 标题线程的窗口号不归这条判据管；失败关闭：没有 A20、A22 主线帧时不得空过。
+        self.assertFalse(self.run_check("SPEC-WS-005", "window-stays-zero-without-compaction", self.compact_session()))
+
+    def test_compaction_frame_metadata_checks_reject_the_ordinary_turn_form(self) -> None:
+        # 旧行为：压缩帧按普通业务帧处理——request_kind=turn，带 model、reasoning_effort、turn_trigger，没有 compaction 对象。
+        def ordinary(frames):
+            def become_turn(body, metadata):
+                metadata["request_kind"] = "turn"
+                metadata.pop("compaction")
+                metadata.update({"model": "gpt-6.1-sol", "reasoning_effort": "low", "turn_trigger": "user"})
+            return [*frames[:3], self.official_body("compaction", mutate=become_turn), *frames[4:]]
+        observations = self.compact_session(main=ordinary)
+        for check in ("ws-compaction-frame-request-kind", "ws-compaction-frame-no-model-key", "ws-compaction-frame-no-reasoning-effort-key",
+                      "ws-compaction-frame-no-turn-trigger-key", "ws-compaction-frame-compaction-object"):
+            with self.subTest(check=check):
+                self.assertFalse(self.run_check("SPEC-EP-021", check, observations))
+        # compaction 子键顺序不对（取值不入摘要，键序是线上字节）。
+        def reordered(body, metadata):
+            metadata["compaction"] = dict(reversed(list(metadata["compaction"].items())))
+        shuffled = self.compact_session(main=lambda frames: [*frames[:3], self.official_body("compaction", mutate=reordered), *frames[4:]])
+        self.assertFalse(self.run_check("SPEC-EP-021", "ws-compaction-frame-compaction-object", shuffled))
+        # 失败关闭：没有压缩帧（A20 之类的会话）时不得空过。
+        self.assertFalse(self.run_check("SPEC-EP-021", "ws-compaction-frame-request-kind", self.session_observations("A21", {1: [self.official_body("prewarm", previous=False)]})))
+
+    def test_dynamic_key_checks_reject_missing_root_turn_id_timestamp_and_lite_flag(self) -> None:
+        def drop(key):
+            def mutate(frames):
+                clones = json.loads(json.dumps(frames))
+                for body in clones[1:]:
+                    body["client_metadata"].pop(key, None)
+                return clones
+            return mutate
+        cases = {
+            "root_turn_id": "ws-turn-frame-root-turn-id",
+            "x-codex-ws-stream-request-start-ms": "ws-frame-request-start-ms",
+            "ws_request_header_x_openai_internal_codex_responses_lite": "ws-frame-responses-lite-flag",
+        }
+        for key, check in cases.items():
+            with self.subTest(key=key):
+                self.assertFalse(self.run_check("SPEC-BODY-008", check, self.compact_session(main=drop(key))))
+        # 预热帧不该带 root_turn_id。
+        def prewarm_with_root(frames):
+            clones = json.loads(json.dumps(frames))
+            clones[0]["client_metadata"]["root_turn_id"] = "22222222-2222-7222-8222-222222222222"
+            return clones
+        self.assertFalse(self.run_check("SPEC-BODY-008", "ws-prewarm-frame-no-root-turn-id", self.compact_session(main=prewarm_with_root)))
+        # 压缩帧带 access_programs（旧行为：按普通业务帧补）。
+        def compaction_with_access(frames):
+            clones = json.loads(json.dumps(frames))
+            clones[3]["access_programs"] = {"cyber": "standard"}
+            return clones
+        self.assertFalse(self.run_check("SPEC-BODY-008", "ws-compaction-frame-no-access-programs", self.compact_session(main=compaction_with_access)))
+        # 标题线程不归主线程判据管：标题线程没有 root_turn_id 键也不影响（这里标题线程帧本来就带）。
+        self.assertTrue(self.run_check("SPEC-BODY-008", "ws-turn-frame-root-turn-id", self.compact_session()))
+
+    def test_compaction_access_programs_check_is_bound_to_the_compaction_scenario_only(self) -> None:
+        rule, check = self.check("SPEC-BODY-008", "ws-compaction-frame-no-access-programs")
+        self.assertEqual(check["select"]["scenario_ids"], ["A21"])
+        # 其余四条选 A20～A22；规则 scenario_ids 是它们的超集。
+        for check_id in self.W3P2_BODY_008[:4]:
+            _, item = self.check("SPEC-BODY-008", check_id)
+            self.assertEqual(item["select"]["scenario_ids"], ["A20", "A21", "A22"])
+        self.assertTrue({"A20", "A21", "A22"} <= set(rule["scenario_ids"]))
+
+    def test_root_thread_key_checks_read_the_turn_metadata_key_list(self) -> None:
+        def strip(key):
+            def mutate(body, metadata):
+                metadata.pop(key, None)
+            return mutate
+        def with_mutation(kind_index, key, **kwargs):
+            def build(frames):
+                frames = list(frames)
+                kind = ("prewarm", "turn", "turn", "compaction", "turn", "turn")[kind_index]
+                frames[kind_index] = self.official_body(kind, mutate=strip(key), **kwargs)
+                return frames
+            return build
+        # 回合帧缺 root_turn_id 键、缺 agent_name 键。
+        self.assertFalse(self.run_check("SPEC-BODY-009", "ws-turn-frame-root-turn-id-key",
+                                        self.compact_session(main=with_mutation(2, "root_turn_id"))))
+        self.assertFalse(self.run_check("SPEC-BODY-009", "ws-turn-frame-agent-name-key",
+                                        self.compact_session(main=with_mutation(0, "agent_name", previous=False))))
+        # 预热帧带了 root_turn_id 键。
+        def prewarm_with_root(frames):
+            def mutate(body, metadata):
+                metadata["root_turn_id"] = "x"
+            return [self.official_body("prewarm", previous=False, mutate=mutate), *frames[1:]]
+        self.assertFalse(self.run_check("SPEC-BODY-009", "ws-prewarm-frame-no-root-turn-id-key", self.compact_session(main=prewarm_with_root)))
+        # 失败关闭：没有任何带 turn metadata 的 WS 帧时不得空过。
+        for check in self.W3P2_BODY_009:
+            self.assertFalse(self.run_check("SPEC-BODY-009", check, []))
+
+    def test_turn_state_new_turn_reset_check(self) -> None:
+        def record(reason, channel, scenario="A05"):
+            return candidate_rule_assertion.Observation(
+                record_id="ts", scenario_id=scenario, record_type="turn_state_chain", artifact_path="trace", evidence_paths=("trace",),
+                labels={}, data={"reset_reason": reason, "return_channel": channel})
+        self.assertTrue(self.run_check("SPEC-BODY-004", "turn-state-new-turn-reset", [record("new_turn", "none")]))
+        # 新用户轮次首请求仍回送上一回合的值（旧行为）。
+        self.assertFalse(self.run_check("SPEC-BODY-004", "turn-state-new-turn-reset", [record("new_turn", "websocket_client_metadata")]))
+        # 失败关闭：没有 new_turn 记录（候选追踪没产出事实）时不得空过。
+        self.assertFalse(self.run_check("SPEC-BODY-004", "turn-state-new-turn-reset", [record("account_owner_changed", "none")]))
+        self.assertFalse(self.run_check("SPEC-BODY-004", "turn-state-new-turn-reset", []))
+        # 带 reset_reason 的记录不进“值保持不变／双通道”两条判据（它们只选没有 reset_reason 的链路）。
+        for check in ("turn-state-value-preserved", "turn-state-channels"):
+            _, item = self.check("SPEC-BODY-004", check)
+            self.assertEqual(item["select"]["where"], [{"operator": "absent", "path": "data.reset_reason"}])
 
 
 class CandidateA06FrameLabelsTests(unittest.TestCase):

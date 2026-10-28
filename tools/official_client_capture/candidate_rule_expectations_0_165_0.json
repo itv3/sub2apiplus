@@ -1493,6 +1493,129 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape._turn_metadata.window_number",
+            "value": 0
+          },
+          "description": "没有上下文压缩的会话里窗口号恒为 0：A20（换模型）与 A22（不支持 update 的模型改推理强度）的整段重放不推进窗口，所有主线帧 turn metadata 的 window_number 是 0",
+          "id": "window-stays-zero-without-compaction",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape._turn_metadata.window_number",
+            "value": 0
+          },
+          "description": "压缩请求帧本身仍在旧窗口：A21 里 input 首项 compaction_trigger 的主线帧 window_number 是 0（压缩完成后才进入新窗口）",
+          "id": "compaction-frame-in-old-window",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape._turn_metadata.window_number",
+            "value": 1
+          },
+          "description": "压缩之后进入新窗口：A21 里压缩后的整段重放帧（帧标签 frame_role=replay，由引擎按前一业务帧是压缩请求派生）turn metadata 的 window_number 是 1",
+          "id": "window-advances-after-compaction",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "replay"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_at_least",
+            "value": 2
+          },
+          "description": "新窗口号在之后的回合里保持：A21 压缩后至少两个主线业务帧（重放帧与其后的回合帧）的 window_number 是 1",
+          "id": "window-stays-advanced-after-compaction",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape._turn_metadata.window_number",
+                "value": 1
+              }
+            ]
+          }
         }
       ],
       "description": "response.create 字段遵循固定槽位和条件省略",
@@ -3122,6 +3245,28 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.return_channel",
+            "value": "none"
+          },
+          "description": "新用户轮次的第一个请求不回送上一回合的 turn-state（候选侧 turn_state_chain 记录以 reset_reason=new_turn 标出）",
+          "id": "turn-state-new-turn-reset",
+          "select": {
+            "record_type": "turn_state_chain",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.reset_reason",
+                "value": "new_turn"
+              }
+            ]
+          }
         }
       ],
       "description": "turn-state 从响应读取、保存并按下一请求传输形态回送；账号 owner 变化时清空",
@@ -3818,6 +3963,161 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.shape.client_metadata.root_turn_id",
+            "value": "str:<len=36>"
+          },
+          "description": "根线程的回合帧（含压缩帧与整段重放帧）client_metadata 带 root_turn_id（等于 turn_id 的 36 位 UUID）",
+          "id": "ws-turn-frame-root-turn-id",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "absent",
+                "path": "data.shape.generate"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.shape.client_metadata.root_turn_id"
+          },
+          "description": "预热帧没有回合，client_metadata 不带 root_turn_id",
+          "id": "ws-prewarm-frame-no-root-turn-id",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.generate",
+                "value": "bool:false"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.shape.client_metadata.x-codex-ws-stream-request-start-ms",
+            "value": "str:[0-9]{13}"
+          },
+          "description": "每个 WS 请求（含预热帧）client_metadata 带发送时间戳（13 位 Unix 毫秒）",
+          "id": "ws-frame-request-start-ms",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.client_metadata.ws_request_header_x_openai_internal_codex_responses_lite",
+            "value": "str:true"
+          },
+          "description": "Lite 模型的每个 WS 请求 client_metadata 带 ws_request_header_x_openai_internal_codex_responses_lite=true",
+          "id": "ws-frame-responses-lite-flag",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.shape.access_programs"
+          },
+          "description": "压缩请求（input 首项 compaction_trigger 的增量帧）不带 access_programs",
+          "id": "ws-compaction-frame-no-access-programs",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
         }
       ],
       "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；另带常量 mcp_attribution（guardian 审阅请求同样写入）",
@@ -3826,7 +4126,10 @@
         "A03",
         "A04",
         "A05",
-        "A06"
+        "A06",
+        "A20",
+        "A21",
+        "A22"
       ]
     },
     {
@@ -3907,12 +4210,104 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "root_turn_id"
+          },
+          "description": "根线程的回合帧（非预热）turn metadata 含 root_turn_id 键",
+          "id": "ws-turn-frame-root-turn-id-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06",
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "absent",
+                "path": "data.shape.generate"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "agent_name"
+          },
+          "description": "WS 帧 turn metadata 含 agent_name 键（根线程为 /root，预热帧与回合帧都带）",
+          "id": "ws-turn-frame-agent-name-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06",
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "root_turn_id"
+          },
+          "description": "预热帧没有回合，turn metadata 不含 root_turn_id 键",
+          "id": "ws-prewarm-frame-no-root-turn-id-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06",
+              "A20",
+              "A21",
+              "A22"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.generate",
+                "value": "bool:false"
+              }
+            ]
+          }
         }
       ],
       "description": "x-codex-turn-metadata 的键为画像 TurnMetadata.Keys（22 键）的有序子集，必含 0.156.1 起新增的 analytics_enabled、model、reasoning_effort、turn_trigger，0.163 起新增的 history_initialization 及网关既有键，默认配置 analytics_enabled=true",
       "rule_id": "SPEC-BODY-009",
       "scenario_ids": [
-        "A04"
+        "A04",
+        "A05",
+        "A06",
+        "A20",
+        "A21",
+        "A22"
       ]
     },
     {
@@ -4973,6 +5368,172 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape._turn_metadata.request_kind",
+            "value": "compaction"
+          },
+          "description": "WS 上的压缩请求帧（previous_response_id 加单项 compaction_trigger）turn metadata 的 request_kind 是 compaction",
+          "id": "ws-compaction-frame-request-kind",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "model"
+          },
+          "description": "压缩请求帧的 turn metadata 不带 model 键（官方实采：压缩帧元数据没有会话模型）",
+          "id": "ws-compaction-frame-no-model-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "reasoning_effort"
+          },
+          "description": "压缩请求帧的 turn metadata 不带 reasoning_effort 键",
+          "id": "ws-compaction-frame-no-reasoning-effort-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.shape._turn_metadata.keys",
+            "value": "turn_trigger"
+          },
+          "description": "压缩请求帧的 turn metadata 不带 turn_trigger 键（压缩不是用户回合的触发）",
+          "id": "ws-compaction-frame-no-turn-trigger-key",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape._turn_metadata.compaction_keys",
+            "value": [
+              "trigger",
+              "reason",
+              "implementation",
+              "phase",
+              "strategy"
+            ]
+          },
+          "description": "压缩请求帧的 turn metadata 带 compaction 对象，子键按官方顺序 trigger、reason、implementation、phase、strategy（只比键名与顺序，取值不入摘要）",
+          "id": "ws-compaction-frame-compaction-object",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape.input._first.type",
+                "value": "str:compaction_trigger"
+              }
+            ]
+          }
         }
       ],
       "description": "默认 manual/auto compaction 使用 Responses V2；0.156.1 起 legacy 分支删除，x-codex-beta-features 恒含 remote_compaction_v2",
@@ -4981,7 +5542,8 @@
         "A03",
         "A05",
         "A06",
-        "A10"
+        "A10",
+        "A21"
       ]
     },
     {
