@@ -715,6 +715,10 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	}
 	// 窗口号、上下文窗口 id 与根线程键（画像 WindowTracking／RootThreadKeys 声明时才写入）。
 	fillOfficialCodexHTTPTurnMetadataIdentityKeys(&httpExtension, identity)
+	// 压缩请求不写 model、reasoning_effort、turn_trigger（画像 HTTPCompactionRequests 声明时，见 official_egress_http_compaction.go）。
+	if officialCodexHTTPCompactionTurnMetadata(egressContext.ProfileMode(), identity.turnMetadata) {
+		httpExtension.Model, httpExtension.ReasoningEffort, httpExtension.TurnTrigger = "", "", ""
+	}
 	identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
 		identity.turnMetadata,
 		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata,
@@ -1096,7 +1100,9 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 	if normalizeOfficialCodexAccessPrograms(
 		payload,
 		officialCodexAccessProgramsSection(options.ProfileMode),
-		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+		// 压缩请求（画像 HTTPCompactionRequests 声明、input 带 compaction_trigger）官方不带 access_programs，不生成。
+		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel) &&
+			!officialCodexHTTPCompactionRequestBody(options.ProfileMode, payload),
 	) {
 		modified = true
 	}

@@ -131,6 +131,17 @@ type TurnMetadataSection struct {
 	//
 	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
 	WSCompactionRequests bool `json:"WSCompactionRequests,omitempty"`
+	// HTTPCompactionRequests：HTTP `/responses` 上的压缩请求（input 里带 `compaction_trigger`）按官方写元数据与请求体。
+	//
+	// 官方 0.165 的 HTTP 压缩请求（实采 HTTP 压缩续聊会话）与 WS 压缩帧一样：请求体不带 access_programs；turn metadata 的
+	// request_kind 是 compaction，带 compaction{trigger,reason,implementation,phase,strategy}（排在最后一个键），不带 model、
+	// reasoning_effort、turn_trigger。声明 true 后网关对 HTTP 上的压缩请求同样这样写；compaction 取值落在本节
+	// CompactionImplementations／CompactionPhases 闭集内（声明时 CompactionImplementations 必须含 responses_compaction_v2）。
+	// 缺省（false）表示旧行为：HTTP 压缩请求按普通回合请求处理（补 access_programs、写 model／reasoning_effort／turn_trigger）。
+	// 与 WSCompactionRequests 各自独立：WS 与 HTTP 是两条出站路径，画像按路径分别声明。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要逐字节不变；显式写 false 会让同一份语义出现两种表示，因此解码阶段拒绝。
+	HTTPCompactionRequests bool `json:"HTTPCompactionRequests,omitempty"`
 	// RootThreadKeys：根线程回合写 agent_name 与 root_turn_id。
 	//
 	// 官方客户端的 turn metadata 里，agent_name 是线程的代理路径（根线程为 `/root`，握手与每帧都带），root_turn_id 是根回合的
@@ -453,6 +464,9 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 			if value, declared := fields["WSCompactionRequests"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 WSCompactionRequests 存在时必须为 true", name)
 			}
+			if value, declared := fields["HTTPCompactionRequests"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 HTTPCompactionRequests 存在时必须为 true", name)
+			}
 			if value, declared := fields["RootThreadKeys"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 RootThreadKeys 存在时必须为 true", name)
 			}
@@ -530,6 +544,9 @@ func validateOptionalSection(name string, value any) error {
 		}
 		if section.WSCompactionRequests && !slices.Contains(section.CompactionImplementations, "responses_compaction_v2") {
 			return errors.New("WSCompactionRequests 存在时 CompactionImplementations 必须包含 responses_compaction_v2")
+		}
+		if section.HTTPCompactionRequests && !slices.Contains(section.CompactionImplementations, "responses_compaction_v2") {
+			return errors.New("HTTPCompactionRequests 存在时 CompactionImplementations 必须包含 responses_compaction_v2")
 		}
 		return validateTurnMetadataSessionDefaults(section)
 	case *ClientMetadataSection:

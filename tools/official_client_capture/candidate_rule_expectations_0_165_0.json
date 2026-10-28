@@ -5719,6 +5719,251 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape._turn_metadata.request_kind",
+            "value": "compaction"
+          },
+          "description": "HTTP 上的压缩请求（input 带 compaction_trigger）turn metadata 的 request_kind 是 compaction",
+          "id": "http-compaction-request-kind",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "model"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 model 键（官方实采：压缩请求元数据没有会话模型，与 WS 压缩帧一致）",
+          "id": "http-compaction-request-no-model-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "reasoning_effort"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 reasoning_effort 键",
+          "id": "http-compaction-request-no-reasoning-effort-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.shape._turn_metadata.keys",
+            "value": "turn_trigger"
+          },
+          "description": "HTTP 压缩请求的 turn metadata 不带 turn_trigger 键（压缩不是用户回合的触发）",
+          "id": "http-compaction-request-no-turn-trigger-key",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape._turn_metadata.compaction_keys",
+            "value": [
+              "trigger",
+              "reason",
+              "implementation",
+              "phase",
+              "strategy"
+            ]
+          },
+          "description": "HTTP 压缩请求的 turn metadata 带 compaction 对象，子键按官方顺序 trigger、reason、implementation、phase、strategy（只比键名与顺序，取值不入摘要）",
+          "id": "http-compaction-request-compaction-object",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.body.shape.access_programs"
+          },
+          "description": "HTTP 压缩请求体不带 access_programs（官方实采：主线程回合请求带、压缩请求不带，与 WS 压缩帧一致）",
+          "id": "http-compaction-request-no-access-programs",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
+              }
+            ]
+          }
         }
       ],
       "description": "默认 manual/auto compaction 使用 Responses V2；0.156.1 起 legacy 分支删除，x-codex-beta-features 恒含 remote_compaction_v2",

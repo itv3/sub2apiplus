@@ -377,3 +377,74 @@ func replayKeysIn(all []string, keys ...string) []string {
 	}
 	return out
 }
+
+// HTTP 压缩请求（画像 TurnMetadata.HTTPCompactionRequests）。官方 0.165 的 HTTP 压缩请求（c3 默认 provider、h2 无 WS 预热 provider 两份实采）：
+// turn metadata 的 request_kind 是 compaction，不带 model、reasoning_effort、turn_trigger，compaction 是最后一个键；
+// 请求体不带 access_programs（c3 里主线程回合请求带、压缩请求不带）。声明后出站字节与官方一致（除四个取决于本地配置的键）；
+// 不声明（上一版画像）时压缩请求按普通回合请求处理。
+func TestTargetProfileHTTPWireCompactionRequestMatchesOfficial(t *testing.T) {
+	mode := officialClientProfileModeActive
+	compactionMutate := func(payload map[string]any, _ map[string]any, turnMetadata map[string]any) {
+		input, _ := payload["input"].([]any)
+		payload["input"] = append(input, map[string]any{"type": "compaction_trigger"})
+		turnMetadata["request_kind"] = "compaction"
+		turnMetadata["compaction"] = map[string]any{
+			"trigger": "manual", "reason": "user_requested", "implementation": "responses_compaction_v2",
+			"phase": "standalone_turn", "strategy": "memento",
+		}
+	}
+	for _, name := range []string{"c3_http_compact_continue", "h2_http_probe_effort_compaction"} {
+		samples := loadCodex0165HTTPSession(t, name)
+		require.Len(t, samples, 7, name)
+		official := samples[4]
+		require.Equal(t, "compaction", official.RequestKind, name)
+		require.Equal(t, "compaction_trigger", official.InputTypes[len(official.InputTypes)-1], name)
+		tm := replayHTTPSampleTurnMetadata(official)
+		keys := replayObjectKeys(tm)
+		for _, absent := range []string{"model", "reasoning_effort", "turn_trigger"} {
+			require.NotContains(t, keys, absent, name+"：官方压缩请求的 turn metadata 不带 "+absent)
+		}
+		require.Equal(t, "compaction", keys[len(keys)-1], name+"：compaction 是最后一个键")
+		require.NotContains(t, official.TopLevelKeys, "access_programs", name+"：官方压缩请求体不带 access_programs")
+	}
+	// c3 里主线程回合请求带 access_programs，压缩请求不带。
+	c3 := loadCodex0165HTTPRequests(t)
+	require.Contains(t, c3[0].TopLevelKeys, "access_programs")
+	official := c3[4]
+	officialKeys := replaySubtract(replayObjectKeys(replayHTTPSampleTurnMetadata(official)), replayConfigDependentTurnMetadataKeys...)
+
+	forward := func(t *testing.T, mutate func(payload map[string]any, metadata map[string]any, turnMetadata map[string]any)) (turnMetadata gjson.Result, wire codexGateWireRequest) {
+		t.Helper()
+		server := startCodexGateWireServer(t, nil)
+		body, ingress := codexGateRootIngress(t, mutate)
+		wire = forwardTargetAwareHTTPWire(t, mode, server, ingress, body)
+		turnMetadata = gjson.Parse(gjson.GetBytes(wire.body, `client_metadata.x-codex-turn-metadata`).String())
+		return turnMetadata, wire
+	}
+
+	// 对照：上一版画像——压缩请求按普通回合请求处理。
+	legacyTM, legacyWire := forward(t, compactionMutate)
+	require.Equal(t, "compaction", legacyTM.Get("request_kind").String())
+	for _, key := range []string{"model", "reasoning_effort", "turn_trigger"} {
+		require.True(t, legacyTM.Get(key).Exists(), "上一版画像的压缩请求仍写 %s", key)
+	}
+	_, legacyTurnWire := forward(t, nil)
+	t.Logf("上一版画像：压缩请求体带 access_programs=%v，普通回合请求体带 access_programs=%v",
+		gjson.GetBytes(legacyWire.body, "access_programs").Exists(), gjson.GetBytes(legacyTurnWire.body, "access_programs").Exists())
+
+	withTargetProfileForWire(t, mode)
+	tm, wire := forward(t, compactionMutate)
+	require.Equal(t, "compaction", tm.Get("request_kind").String())
+	require.Equal(t, officialKeys, replayObjectKeys(tm), "压缩请求 turn metadata 的键集合与键序等于官方实采（除四个配置相关键）")
+	require.False(t, gjson.GetBytes(wire.body, "access_programs").Exists(), "压缩请求体不带 access_programs")
+	require.Equal(t, []string{"trigger", "reason", "implementation", "phase", "strategy"}, replayObjectKeys(tm.Get("compaction")))
+
+	// 普通回合请求不受影响：照常带 model、reasoning_effort、turn_trigger，access_programs 的有无与上一版画像一致。
+	turnTM, turnWire := forward(t, nil)
+	for _, key := range []string{"model", "reasoning_effort", "turn_trigger"} {
+		require.True(t, turnTM.Get(key).Exists(), "普通回合请求仍写 %s", key)
+	}
+	require.Equal(t, "turn", turnTM.Get("request_kind").String())
+	require.Equal(t, gjson.GetBytes(legacyTurnWire.body, "access_programs").Exists(), gjson.GetBytes(turnWire.body, "access_programs").Exists(),
+		"普通回合请求的 access_programs 有无与不声明时一致")
+}
