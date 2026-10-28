@@ -1,0 +1,48 @@
+{
+  "base_commit": "ed4fca0629d5ae1b4ac2638ae82a75addc12a84c",
+  "changed_path_count": 1,
+  "current_commit": "05c47bdc7e16004e545aa3d31146384936b81417",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7161,
+  "frozen_path_count": 2318,
+  "identity_sha256": "08eaf96bf81cb52ad28b8ace0e74068d7cd3dc9a15182bd797490a52d9d3b3df",
+  "issued_at_utc": "2026-10-28T06:26:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-merge-result-helpers-test-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_test_helpers_test.go",
+      "predecessor_sha256s": [
+        "f7fd15ff83f6ce86ea1af433a0ec86ac019a267190daa9a6cf1b78bdad98d709"
+      ],
+      "reason": "候选侧（T 系列）与收尾侧（晋升后修正）都改了冻结文件 official_egress_test_helpers_test.go，合并提交 6d99c2a90 自动合并出的两边改动并存的内容登记承接；前驱为收尾侧版本 f7fd15ff（已由 7e98b3c4f 的收据登记） path=backend/internal/service/official_egress_test_helpers_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01640-candidate-impl-r1-20261027-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "529ddbd4557ae9400f21a4a3e4a43fa29fa0242b4da3f3cdf8d073324bd85b28"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
