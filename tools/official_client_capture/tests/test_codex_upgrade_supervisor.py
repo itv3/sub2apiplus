@@ -3989,6 +3989,42 @@ raise SystemExit(9)
                     run_started_at_utc=str(state["started_at_utc"]),
                 )
 
+    def test_post_run_tooling_receipt_replay_survives_later_isolation_of_its_attempt(self) -> None:
+        """OPT-14：升级收据绑定的唯一等待收据 attempt 事后被环境隔离作废，复算历史收据仍得到当年的事实（失败时刻的分类不因后续隔离改写）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, _ledger_root, manifest, attempt_root = (
+                self._post_run_tooling_fixture(root, kilo_window_offset_seconds=-120.0)
+            )
+            returncode, payload, run_dir = self._run_post_run_tooling_parent(root, manifest, campaign_dir)
+            self.assertEqual(returncode, 1)
+            diagnostic = payload["actions"][0]["diagnostic"]
+            state = supervisor._read_state(run_dir)
+            arguments = dict(
+                campaign_id="campaign-closeout",
+                phase="VC-5",
+                action_id="prepare-candidate-assertion-bundle",
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+            )
+            stored = supervisor._validate_action_diagnostic(
+                run_dir / diagnostic["path"], run_dir=run_dir, **arguments
+            )
+            # 隔离收据在失败之后才出现，作废的正是收据绑定的那个 attempt。
+            self._write_invalidation_receipt(
+                campaign_dir, kind="environment", index=1, previous=None,
+                attempts=[{"phase": "candidate", "candidate_id": "cand-1", "attempt_id": attempt_root.name, "recovery_revision": None}],
+            )
+            effective, receipt = supervisor.effective_action_failure_class(
+                run_dir, stored, campaign_dir=campaign_dir, inner_manifest=manifest,
+                run_started_at_utc=str(state["started_at_utc"]), **arguments,
+            )
+            self.assertEqual(effective, "post-run-tooling")
+            self.assertTrue(receipt["recomputed"])
+            self.assertEqual(receipt["facts"]["attempt_id"], attempt_root.name)
+
     def test_post_run_tooling_rejects_run_with_kilo_requests(self) -> None:
         """本次父 run 内启动过 Kilo 窗口的失败不是零请求失败，仍按既有规则停线。"""
 
@@ -4090,6 +4126,139 @@ raise SystemExit(9)
             )
             self.assertTrue(accepted["qualifies"], accepted["reasons"])
             self.assertIsNone(accepted["facts"]["kilo_window_started_at_utc"])
+
+    def _write_invalidation_receipt(
+        self,
+        campaign_dir: Path,
+        *,
+        kind: str,
+        index: int,
+        previous: str | None,
+        attempts: list[dict[str, object]],
+        campaign_id: str = "campaign-closeout",
+    ) -> str:
+        """写一份与编排器同口径（目录、文件名、schema、成链、自摘要）的隔离收据，返回它的自摘要。"""
+
+        if kind == "environment":
+            directory, name = campaign_dir / "control" / "environment", f"isolation-{index:02d}.json"
+            receipt: dict[str, object] = {
+                "schema_version": "environment-isolation/v1",
+                "campaign_id": campaign_id,
+                "index": index,
+                "previous_isolation_sha256": previous,
+                "covered": [{"record": "campaign-marker"}],
+                "invalidated_attempts": attempts,
+            }
+            digest_key = "isolation_sha256"
+        else:
+            directory, name = campaign_dir / "control" / "evidence-conflict", f"quarantine-{index:02d}.json"
+            receipt = {
+                "schema_version": "evidence-conflict-quarantine/v1",
+                "campaign_id": campaign_id,
+                "index": index,
+                "previous_quarantine_sha256": previous,
+                "conflicts": [{"path": "x"}],
+                "attempts": attempts,
+            }
+            digest_key = "quarantine_sha256"
+        digest = hashlib.sha256(
+            json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        receipt[digest_key] = digest
+        self._write_json(directory / name, receipt)
+        return digest
+
+    def test_post_run_tooling_ignores_isolated_and_quarantined_attempts(self) -> None:
+        """OPT-14：等待收据的候选 attempt 不止一个时，被环境隔离作废、被证据根冲突隔离的旧 attempt 永不 seal，不再凑成“第二个”；
+        排除后一个都不剩时保持原计数（被隔离的唯一等待封存 attempt 仍是后处理失败的目标）；只有一个时根本不读收据；收据读不懂时失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, _ledger_root, manifest, attempt_root = self._post_run_tooling_fixture(root)
+            run_started = supervisor._epoch_to_utc(time.time())
+            attempt = json.loads((attempt_root / "attempt.json").read_text("utf-8"))
+            # 隔离之后重跑出的新 attempt 是夹具里的 attempt_root；旧的那个只剩 attempt.json（awaiting_receipts）。
+            stale = attempt_root.parent / "20260917T180000Z-0000000000000000"
+            self._write_json(stale / "attempt.json", {**attempt, "attempt_id": stale.name})
+
+            def facts() -> dict[str, object]:
+                return supervisor.post_run_tooling_facts(campaign_dir, manifest, run_started_at_utc=run_started)
+
+            ambiguous = facts()
+            self.assertTrue(any("恰好一个" in note for note in ambiguous["reasons"]), ambiguous["reasons"])
+            self.assertEqual(supervisor._invalidated_candidate_attempts(campaign_dir), set())
+
+            def ref(attempt_id: str, **extra: object) -> dict[str, object]:
+                return {"phase": "candidate", "candidate_id": "cand-1", "attempt_id": attempt_id, "recovery_revision": None, **extra}
+
+            # 1) 环境隔离作废：旧 attempt 不再计数，新 attempt 唯一，判据通过；事实不多出任何键。
+            self._write_invalidation_receipt(campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name)])
+            self.assertEqual(supervisor._invalidated_candidate_attempts(campaign_dir), {("cand-1", stale.name)})
+            accepted = facts()
+            self.assertTrue(accepted["qualifies"], accepted["reasons"])
+            self.assertEqual(accepted["facts"]["attempt_id"], attempt_root.name)
+            self.assertNotIn("excluded_attempts", accepted["facts"])
+
+            # 恢复段事实（recovery_revision 非空）只作废该段，原 attempt 仍按自身状态计数。
+            self._write_invalidation_receipt(campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name, recovery_revision=1)])
+            self.assertEqual(supervisor._invalidated_candidate_attempts(campaign_dir), set())
+            self.assertTrue(any("恰好一个" in note for note in facts()["reasons"]))
+
+            # 2) 证据根冲突隔离同理（条目不带 recovery_revision）。
+            (campaign_dir / "control" / "environment" / "isolation-01.json").unlink()
+            self._write_invalidation_receipt(
+                campaign_dir, kind="conflict", index=1, previous=None,
+                attempts=[{"phase": "candidate", "candidate_id": "cand-1", "attempt_id": stale.name, "disposition": "quarantined"}],
+            )
+            self.assertEqual(supervisor._invalidated_candidate_attempts(campaign_dir), {("cand-1", stale.name)})
+            self.assertTrue(facts()["qualifies"])
+            (campaign_dir / "control" / "evidence-conflict" / "quarantine-01.json").unlink()
+
+            # 3) 两个都被作废：排除后一个都不剩，保持原计数（2 个），仍然拒绝。
+            self._write_invalidation_receipt(
+                campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name), ref(attempt_root.name)]
+            )
+            both = facts()
+            self.assertFalse(both["qualifies"])
+            self.assertTrue(any("数为 2" in note for note in both["reasons"]), both["reasons"])
+
+            # 4) 只剩一个等待收据的 attempt 且它自己被作废：照旧计数、通过（修好接着跑第 24／28 项的既有口径）；
+            #    此时根本不读收据——哪怕收据文件是坏的，结果也与没有隔离时逐字相同。
+            (stale / "attempt.json").unlink()
+            stale.rmdir()
+            sole = facts()
+            self.assertTrue(sole["qualifies"], sole["reasons"])
+            self.assertEqual(sole["facts"]["attempt_id"], attempt_root.name)
+            (campaign_dir / "control" / "environment" / "isolation-01.json").write_text("not json\n", encoding="utf-8")
+            self.assertTrue(facts()["qualifies"])
+            (campaign_dir / "control" / "environment" / "isolation-01.json").unlink()
+
+            # 5) 失败关闭（两个等待收据的 attempt 时才会读收据）：自摘要被改、Campaign 不符、成链断裂、目录里有陌生条目，
+            #    都记为“不满足”而不是抛出或放行。
+            self._write_json(stale / "attempt.json", {**attempt, "attempt_id": stale.name})
+            path = campaign_dir / "control" / "environment" / "isolation-01.json"
+            self._write_invalidation_receipt(campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name)])
+            self.assertTrue(facts()["qualifies"])
+            good = json.loads(path.read_text("utf-8"))
+            self._write_json(path, {**good, "invalidated_attempts": []})
+            bad_digest = facts()
+            self.assertFalse(bad_digest["qualifies"])
+            self.assertTrue(any("自摘要" in note for note in bad_digest["reasons"]), bad_digest["reasons"])
+            self._write_invalidation_receipt(
+                campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name)], campaign_id="other-campaign"
+            )
+            foreign = facts()
+            self.assertFalse(foreign["qualifies"])
+            self.assertTrue(any("隔离收据" in note for note in foreign["reasons"]), foreign["reasons"])
+            self._write_invalidation_receipt(campaign_dir, kind="environment", index=1, previous=None, attempts=[ref(stale.name)])
+            self._write_invalidation_receipt(campaign_dir, kind="environment", index=2, previous="0" * 64, attempts=[])
+            self.assertFalse(facts()["qualifies"])
+            (campaign_dir / "control" / "environment" / "isolation-02.json").unlink()
+            self._write_json(campaign_dir / "control" / "evidence-conflict" / "notes.json", {"x": 1})
+            stray = facts()
+            self.assertFalse(stray["qualifies"])
+            self.assertTrue(any("非收据条目" in note for note in stray["reasons"]), stray["reasons"])
 
     @staticmethod
     def _canonical_action(campaign_dir: Path, item_id: str, *, attempt_id: str) -> dict[str, object]:

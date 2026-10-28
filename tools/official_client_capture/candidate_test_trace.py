@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_164_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_165_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_164_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_165_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -170,8 +170,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # official_egress_identity_authority.go、officialegress/compiler.go；映射只重绑这五份源码快照共 10 个叶子（http.go 5、ws.go 2、forward.go 1、
 # identity_authority.go 1、compiler.go 1），不改变测试、事实宇宙或规则语义。载荷逐项审核：383 个叶子里变化的 10 处全是 sha256 叶子，
 # 非 sha256 叶子 0 处变化；映射文件摘要 f0202513… 变为 6e1cedb0…。
+# 2026-10-29（0.165.0 版本登记）：目标版本升到 0.165.0，默认映射改指 candidate_test_fact_map_0_165_0.json；该文件由上一版映射（含上面历次源码快照重绑后的
+# 现状，摘要 6e1cedb0…）原样复制并替换版本号。载荷逐项审核：383 个叶子里唯一差异是 codex_version 一处，把新文件里的版本号换回后与上一版逐字节相同；
+# 测试、事实宇宙与源码快照不变（快照是否需要重绑，等 0.165.0 变更集改动映射已登记的生产源码后再逐个重绑）。映射文件摘要 6e1cedb0… 变为 f50b8c72…。
 FROZEN_MAPPING_SHA256 = (
-    "6e1cedb04ebd971102f49413c8e0a547f686e743a9e520709d237677a94162a1"
+    "f50b8c7254d05269c7487c3014aae8fd6c6203204ca080d339267e081efd3843"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -324,8 +327,16 @@ FROZEN_MAPPING_SHA256 = (
 # 其余逐字不变（8 行替换，无增删）；规则数、检查 ID、选择器、判据、验收契约一律不变。
 # 2026-10-28（0.164 升级收尾预备）：指南第二部分按 0.164.0 终态改写，第二章摘要由 ba36bf78… 变为 9cd05343…，本检查绑定的 0.164.0 期望清单摘要由 9e20778d… 变为 d721e240…，
 # 只改该清单 source_spec_sha256 一行（由收尾工具 codex_closeout.source_updates 计算），规则数、检查 ID、选择器、判据、验收契约一律不变。
+# 2026-10-29（0.165.0 版本登记）：目标版本升到 0.165.0，默认断言画像改指 candidate_rule_expectations_0_165_0.json；该文件由上一版画像的收尾后现状
+# （摘要 d721e240…）复制得到。载荷逐项审核（2473 个叶子，差异共 18 处，规则数 43、检查 ID、选择器、其余判据不变）：
+# ①版本号换新 12 处（codex_version 1、官方原始字节描述 2、UA 前缀／后缀 3、正则转义版本号 2、EP-006 query 值与描述 2、EP-013 query 值 1、A15 触发描述 1）；
+# ②上一版“从该版起”的行为起点表述改为不带版本号 4 处（WS-005 两条描述、EP-002 一条描述、EP-022 一条描述；目标断言画像校验拒绝任何含 baseline 版本字面量的字符串）；
+# ③SIM-06 共 2 处：SPEC-BODY-003 main-messages-keep-passthrough 的 assertion.value 由 0 改 1、description 改写，与 ARM64 批准画像 b2 逐字相同
+#   （A04 入站是第三方形态，网关不为第三方用户消息合成逐项 passthrough，每个请求恰有 1 条 message 无 passthrough；基础指令消息被剥离会变 2、开始合成会变 0，两者都失败）。
+# 验收契约现算仍为 23412204…（dual_wire=25／candidate_profile=18）。source_spec_sha256 仍是指南第二章当前摘要，指南第二部分换到 0.165.0 后由集成步骤重绑。
+# 摘要 d721e240… 变为 566d0881…。
 FROZEN_PROFILE_SHA256 = (
-    "d721e240365b35392ccbe595922241839910a4c6a7a1e7e6ebb6d9951c6bebca"
+    "566d0881d14973a9fac1e4e39ccfbfc7513be2c027d55c9f8887527dd4b03c40"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

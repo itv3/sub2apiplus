@@ -217,6 +217,35 @@ POST_RUN_TOOLING_MAX_JSON_BYTES = 4 * 1024 * 1024
 # environment_contaminated；Job 闭合后直到 seal 完成前 attempt.json 始终是
 # awaiting_receipts（客户端检查点记在 evidence/receipts 下，不改 attempt 状态）。
 POST_RUN_TOOLING_ATTEMPT_STATUSES = frozenset({"awaiting_receipts"})
+# OPT-14：被环境隔离作废、被证据根冲突隔离的 attempt 永不 seal、永不复用，attempt.json 却仍停在 awaiting_receipts；它们不得计入
+# “等待收据的候选 attempt”（否则隔离后重跑出的新 attempt 会和它凑成两个，后处理失败无法升级为 post-run-tooling）。
+# 这里与编排器 ``codex_upgrade._environment_isolations`` ／ ``_evidence_conflict_quarantines`` 同口径读取收据链（目录、文件名、schema、
+# 序号连续、previous 成链、自摘要、campaign_id 一致），监督器不导入编排器，所以自带一份最小读取；读不懂就抛 SupervisorError，
+# 调用方记为“不满足”（失败关闭：宁可不升级，也不在读不懂隔离事实时猜）。
+INVALIDATION_RECEIPT_SOURCES = (
+    {
+        "directory": ("control", "environment"),
+        "name": re.compile(r"^isolation-(\d{2,})\.json$"),
+        "schema": "environment-isolation/v1",
+        "digest_key": "isolation_sha256",
+        "previous_key": "previous_isolation_sha256",
+        "items_key": "invalidated_attempts",
+        # 环境隔离目录里别的文件名忽略；只有 attempt 级事实算（恢复段事实只作废该段，原 attempt 仍按自身状态处理）。
+        "ignore_other_names": True,
+        "attempt_level_only": True,
+    },
+    {
+        "directory": ("control", "evidence-conflict"),
+        "name": re.compile(r"^quarantine-(\d{2,})\.json$"),
+        "schema": "evidence-conflict-quarantine/v1",
+        "digest_key": "quarantine_sha256",
+        "previous_key": "previous_quarantine_sha256",
+        "items_key": "attempts",
+        # 证据根冲突隔离目录里不允许有收据之外的条目。
+        "ignore_other_names": False,
+        "attempt_level_only": False,
+    },
+)
 ACTION_DIAGNOSTIC_V3_FIELDS = frozenset(
     {
         "schema_version",
@@ -1522,6 +1551,69 @@ def _parse_rfc3339_utc(value: Any, label: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _invalidated_candidate_attempts(campaign_dir: Path) -> set[tuple[str, str]]:
+    """已被隔离作废的候选 attempt ``(candidate_id, attempt_id)``：环境隔离作废 ∪ 证据根冲突隔离（OPT-14）。
+
+    收据目录不存在即空集合（不读 campaign.json）。任何形态、成链、自摘要或 Campaign 身份不符都抛 SupervisorError。
+    """
+
+    invalidated: set[tuple[str, str]] = set()
+    campaign_id: Any = None
+    campaign_id_loaded = False
+    for source in INVALIDATION_RECEIPT_SOURCES:
+        directory = Path(campaign_dir).joinpath(*source["directory"])
+        if not directory.exists() and not directory.is_symlink():
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise SupervisorError(f"隔离收据目录不可信：{directory.name}")
+        indexed: list[tuple[int, Path]] = []
+        for child in directory.iterdir():
+            match = source["name"].fullmatch(child.name)
+            if match is None:
+                if source["ignore_other_names"]:
+                    continue
+                raise SupervisorError(f"隔离收据目录含非收据条目：{child.name}")
+            indexed.append((int(match.group(1)), child))
+        if not indexed:
+            continue
+        if not campaign_id_loaded:
+            campaign_id = _read_bounded_json(Path(campaign_dir) / "campaign.json", "Campaign 核心清单").get("campaign_id")
+            campaign_id_loaded = True
+        previous: str | None = None
+        for position, (index, path) in enumerate(sorted(indexed), start=1):
+            if index != position:
+                raise SupervisorError(f"隔离收据序号不连续：{path.name}")
+            receipt = _read_bounded_json(path, "隔离收据")
+            unsigned = {key: value for key, value in receipt.items() if key != source["digest_key"]}
+            # 与编排器 ``_fingerprint`` 同编码：紧凑分隔符、键排序、非 ASCII 原样。
+            fingerprint = hashlib.sha256(
+                json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            items = receipt.get(source["items_key"])
+            if (
+                receipt.get("schema_version") != source["schema"]
+                or receipt.get("campaign_id") != campaign_id
+                or receipt.get("index") != index
+                or receipt.get(source["previous_key"]) != previous
+                or not isinstance(items, list)
+                or receipt.get(source["digest_key"]) != fingerprint
+            ):
+                raise SupervisorError(f"隔离收据形态、成链或自摘要不一致：{path.name}")
+            previous = fingerprint
+            for item in items:
+                if not isinstance(item, Mapping):
+                    raise SupervisorError(f"隔离收据条目非法：{path.name}")
+                if source["attempt_level_only"] and item.get("recovery_revision") is not None:
+                    continue
+                if item.get("phase") != "candidate":
+                    continue
+                candidate_id, attempt_id = item.get("candidate_id"), item.get("attempt_id")
+                if not isinstance(candidate_id, str) or not isinstance(attempt_id, str) or not candidate_id or not attempt_id:
+                    raise SupervisorError(f"隔离收据 attempt 引用非法：{path.name}")
+                invalidated.add((candidate_id, attempt_id))
+    return invalidated
+
+
 def post_run_tooling_facts(
     campaign_dir: Path,
     inner_manifest: Mapping[str, Any],
@@ -1534,6 +1626,11 @@ def post_run_tooling_facts(
     只含稳定的机器事实（含判据文件的 SHA-256），供收据绑定与后续复算；
     ``reasons`` 只在不满足时给出，用于审计说明，不参与摘要。任何文件缺失或
     结构非法都记为不满足，而不是抛出——分类失败只意味着沿用原分类。
+
+    OPT-14：等待收据的候选 attempt 不止一个时，才去读环境隔离／证据根冲突隔离收据，把已被作废的旧 attempt 排除（见
+    ``_invalidated_candidate_attempts``）；排除后仍有 attempt 才采用排除结果。只有一个等待收据的 attempt 时一律不读收据、
+    照旧计数——它即使已被隔离作废，仍是后处理失败的目标（修好接着跑第 24／28 项：被隔离的等待封存 attempt 先对账再重跑）；
+    作废的 attempt 一个都不剩时同样保持原计数，所以这一改动只会让原先因“旧 attempt 凑成第二个”而被拒的情形通过。
     """
 
     reasons: list[str] = []
@@ -1653,6 +1750,13 @@ def post_run_tooling_facts(
                         awaiting.append(
                             (candidate_dir.name, attempt_root.name, attempt_root)
                         )
+            if len(awaiting) > 1:
+                # OPT-14：隔离作废之后重跑出新 attempt，旧 attempt 的 attempt.json 仍是 awaiting_receipts，会和新的凑成两个。
+                # 已被隔离作废的 attempt 永不 seal，排除后仍有 attempt 才采用排除结果（一个都不剩就保持原计数）。
+                invalidated_attempts = _invalidated_candidate_attempts(campaign_dir)
+                live = [item for item in awaiting if (item[0], item[1]) not in invalidated_attempts]
+                if live:
+                    awaiting = live
     except (OSError, SupervisorError) as error:
         return fail(f"候选 attempt 目录无法枚举：{error}")
     if len(awaiting) != 1:

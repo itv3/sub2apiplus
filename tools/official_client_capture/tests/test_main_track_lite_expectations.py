@@ -1,4 +1,4 @@
-"""0.163.0 起主线是 Lite 模型（0.164.0 沿用）：BODY-006 里原来依赖非 Lite 样本的两个检查已改写成主线 Lite 形态。
+"""0.163.0 起主线是 Lite 模型（其后各版沿用）：BODY-006 里原来依赖非 Lite 样本的两个检查已改写成主线 Lite 形态。
 
 这里用手造的 Lite／非 Lite 请求体样本跑改写后检查的正反例，并锁定 EP-001 的 nonlite-image-tool 保持原样的理由
 （它读候选侧 Go 追踪测试事实，不依赖官方主线样本）。声明本身与各处载荷的一致性见 test_main_track_models.py。
@@ -26,7 +26,7 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
     从真实 JSON 请求体生成，与官方证据派生的 data.body 同构。引擎用 candidate_rule_assertion 里
     评估规则时同样的选样与断言函数，选不到样本时断言失败关闭（all_* 要求至少一条命中）。
 
-    清单后缀写成类属性，0.164.0 由下面的子类复用同一组断言（0.164.0 清单由 0.163.0 终态复制，判据随差异报告改写时两份都要继续满足）。
+    清单后缀写成类属性，其后各版由下面的子类复用同一组断言（新清单由上一版终态复制，判据随差异报告改写时各份都要继续满足）。
     """
 
     MANIFEST_SUFFIX = "0_163_0"
@@ -214,7 +214,7 @@ class MainTrackLiteExpectationTests(unittest.TestCase):
 
 
 class Expectation0164WireChecksTests(unittest.TestCase):
-    """0.164.0 差异报告落进候选期望清单的新判据：手造观测跑正反例。
+    """0.164.0 差异报告落进候选期望清单的新判据：手造观测跑正反例（后缀写成类属性，0.165.0 由子类复用）。
 
     - SPEC-EP-002：OAuth 刷新体多一个 refresh_reason（键序 client_id, grant_type, refresh_reason, refresh_token，取值四选一）。
     这四条规则（EP-002、WS-005、BODY-003、EP-022）都含读内部记录类型的判据，整条是 candidate_profile，不在官方侧离线判据门里执行。
@@ -227,10 +227,12 @@ class Expectation0164WireChecksTests(unittest.TestCase):
     样本的 body 摘要由 relay_extract.summarize_body 从真实 JSON 生成，与官方证据派生的 data.body／data.shape 同构。
     """
 
+    MANIFEST_SUFFIX = "0_164_0"
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.profile = json.loads(
-            (TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8")
+            (TOOL_ROOT / f"candidate_rule_expectations_{cls.MANIFEST_SUFFIX}.json").read_text(encoding="utf-8")
         )
 
     def check(self, rule_id: str, check_id: str):
@@ -496,15 +498,46 @@ class Expectation0164WireChecksTests(unittest.TestCase):
             for check_id in self.PASSTHROUGH_WS_IDS
         }
 
+    # SIM-06：HTTP 的 main-messages-keep-passthrough 期望“恰好 1 条 message 无 passthrough”（A04 入站是第三方形态，网关只给自己合成的基础指令消息带
+    # passthrough，不为第三方用户消息合成，与 ARM64 批准画像 b2 一致）。官方形态入站（每个 message 都带 passthrough）在这条判据上因此是 0，不通过：
+    # 这条判据只服务 A04 的第三方入站，官方形态入站原样保留逐项 passthrough 由 Go 单测覆盖。WS 同名判据不变，仍要求 0。
+    SIM06_HTTP_ID = "main-messages-keep-passthrough"
+
     def test_official_form_passthrough_passes_http_and_ws(self) -> None:
         body = self.passthrough_body(self.official_input())
-        self.assertEqual(set(self.run_passthrough_http(body).values()), {True})
+        http = self.run_passthrough_http(body)
+        self.assertEqual({key for key, value in http.items() if not value}, {self.SIM06_HTTP_ID})
         self.assertEqual(set(self.run_passthrough_ws(body).values()), {True})
-        # 旧窗口续聊（r1 样本形态）：基础指令消息只有 content_item_kinds,content_item_metadata，旧历史项三键；仍通过。
+        # 旧窗口续聊（r1 样本形态）：基础指令消息只有 content_item_kinds,content_item_metadata，旧历史项三键；除 SIM-06 判据外仍通过。
         legacy = self.official_input()
         legacy[1] = {**self.passthrough_item("message", "developer", ("content_item_kinds", "content_item_metadata")), "id": self.V5_MSG}
         legacy[2] = self.passthrough_item("message", "user", ("turn_id", "create_time", "content_item_kinds"), turn_id=self.TURN_OLD)
-        self.assertEqual(set(self.run_passthrough_http(self.passthrough_body(legacy)).values()), {True})
+        legacy_http = self.run_passthrough_http(self.passthrough_body(legacy))
+        self.assertEqual({key for key, value in legacy_http.items() if not value}, {self.SIM06_HTTP_ID})
+
+    def test_sim06_third_party_inbound_has_exactly_one_message_without_passthrough(self) -> None:
+        """SIM-06：A04 第三方入站，网关只给基础指令消息带 passthrough，用户消息恰好 1 条没有——通过；
+        基础指令消息的 passthrough 也被剥离（变 2）或开始为第三方用户消息合成（变 0）都必须失败并重新审核。"""
+
+        def third_party(*, base_has_passthrough: bool, user_has_passthrough: bool) -> dict:
+            base = {"type": "message", "role": "developer", "id": self.V7_MSG, "content": []}
+            if base_has_passthrough:
+                base["internal_chat_message_metadata_passthrough"] = {key: ([] if key != "turn_id" else self.TURN_NOW) for key in self.FOUR_KEYS}
+            user = {"type": "message", "role": "user", "content": []}
+            if user_has_passthrough:
+                user["internal_chat_message_metadata_passthrough"] = {"turn_id": self.TURN_NOW}
+            items = [{"type": "additional_tools", "id": self.V7_AT, "role": "developer", "tools": []}, base, user]
+            return self.passthrough_body(items)
+
+        def verdict(body: dict) -> bool:
+            return self.run_check("SPEC-BODY-003", self.SIM06_HTTP_ID, [self.http_observation(body)])
+
+        self.assertTrue(verdict(third_party(base_has_passthrough=True, user_has_passthrough=False)))
+        self.assertFalse(verdict(third_party(base_has_passthrough=False, user_has_passthrough=False)))
+        self.assertFalse(verdict(third_party(base_has_passthrough=True, user_has_passthrough=True)))
+        # 判据值本身就是 1（与批准画像 b2 逐字一致，不是 0）。
+        _, check = self.check("SPEC-BODY-003", self.SIM06_HTTP_ID)
+        self.assertEqual(check["assertion"]["value"], 1)
 
     def test_stripped_passthrough_fails(self) -> None:
         """网关把逐项 passthrough 整体剥离（保真失败）：message 不带 passthrough，保真判据与键序、turn_id 判据都红。"""
@@ -820,6 +853,113 @@ class MainTrackLiteExpectation0164Tests(MainTrackLiteExpectationTests):
     """0.164.0 候选期望清单（由 0.163.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
 
     MANIFEST_SUFFIX = "0_164_0"
+
+
+class MainTrackLiteExpectation0165Tests(MainTrackLiteExpectationTests):
+    """0.165.0 候选期望清单（由 0.164.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
+
+    MANIFEST_SUFFIX = "0_165_0"
+
+
+class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
+    """0.165.0 候选期望清单复用 0.164.0 差异报告落下的全部判据正反例（含 SIM-06 对齐批准画像 b2 之后的 BODY-003 口径）。
+
+    清单由 0.164.0 终态复制：与上一版相比，把版本号换回后只有四条检查的描述文字不同（“从该版起”的行为起点表述改成不带版本号的说法，
+    目标断言画像校验拒绝任何含 baseline 版本字面量的字符串），判据本身、选择器、检查 ID 一律不变。
+    """
+
+    MANIFEST_SUFFIX = "0_165_0"
+
+    def test_other_rules_are_untouched_by_the_increment(self) -> None:
+        raw = (TOOL_ROOT / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8")
+        # 目标断言画像里不得出现 baseline 版本字面量。
+        self.assertNotIn("0.164.0", raw)
+        self.assertNotIn(r"0\\.164\\.0", raw)
+        reverted = json.loads(raw.replace("0.165.0", "0.164.0").replace(r"0\\.165\\.0", r"0\\.164\\.0"))
+        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_164_0.json").read_text(encoding="utf-8"))
+        self.assertEqual({k: v for k, v in reverted.items() if k != "rules"}, {k: v for k, v in old.items() if k != "rules"})
+        self.assertEqual(len(reverted["rules"]), len(old["rules"]))
+        differences = []
+        for new_rule, old_rule in zip(reverted["rules"], old["rules"]):
+            self.assertEqual(new_rule["rule_id"], old_rule["rule_id"])
+            self.assertEqual(
+                {k: v for k, v in new_rule.items() if k != "checks"}, {k: v for k, v in old_rule.items() if k != "checks"},
+                new_rule["rule_id"],
+            )
+            self.assertEqual([c["id"] for c in new_rule["checks"]], [c["id"] for c in old_rule["checks"]], new_rule["rule_id"])
+            for new_check, old_check in zip(new_rule["checks"], old_rule["checks"]):
+                if new_check != old_check:
+                    keys = sorted(k for k in set(new_check) | set(old_check) if new_check.get(k) != old_check.get(k))
+                    differences.append((new_rule["rule_id"], new_check["id"], tuple(keys)))
+        self.assertEqual(
+            sorted(differences),
+            [
+                ("SPEC-EP-002", "oauth-refresh-body-keys", ("description",)),
+                ("SPEC-EP-022", "image-header-order", ("description",)),
+                ("SPEC-WS-005", "first-business-frame-carries-prefix", ("description",)),
+                ("SPEC-WS-005", "warmup-input-empty", ("description",)),
+            ],
+        )
+        # SIM-06 在两份清单里都已对齐批准画像 b2：BODY-003 main-messages-keep-passthrough 期望 1。
+        for document in (old, reverted):
+            body003 = next(rule for rule in document["rules"] if rule["rule_id"] == "SPEC-BODY-003")
+            check = next(item for item in body003["checks"] if item["id"] == "main-messages-keep-passthrough")
+            self.assertEqual(check["assertion"]["value"], 1)
+
+
+class CandidateA06FrameLabelsTests(unittest.TestCase):
+    """证据标签里每个 A06 ``frame_labels`` 索引都必须落在真实候选帧布局的 response.create 起始帧上。
+
+    背景：上一版登记时标签写成索引 1，候选网关向上游发出的压缩消息被拆成多个分片帧，预热消息占原始帧 0 至 6，
+    首个业务消息的起始帧其实是 7；手造观测的单测从不核对标签声明与真实分片布局，所以登记全绿、实采才暴露。
+    这里用真实候选实采的帧布局夹具（只记帧序号、事件类型、fin、分片数）核对：标签索引落在续帧上（没有 event_type）会让
+    选择器命中 0 条，封存预检才拒绝——这条测试把拒绝提前到登记阶段。
+    """
+
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "candidate_a06_ws_frames_0164.json"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.frames = {item["frame_index"]: item for item in json.loads(cls.FIXTURE.read_text(encoding="utf-8"))["frames"]}
+
+    def a06_frame_labels(self, path: Path) -> dict[str, dict[str, str]]:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        found = [
+            rule["frame_labels"]
+            for entry in document["entries"]
+            if entry["job_id"] == "candidate-frozen-core"
+            for rule in entry["rules"]
+            if "A06" in rule.get("scenario_ids", []) and "frame_labels" in rule
+        ]
+        self.assertEqual(len(found), 1, path.name)
+        return found[0]
+
+    def test_fixture_is_a_real_fragmented_layout(self) -> None:
+        starts = sorted(index for index, item in self.frames.items() if item["event_type"] == "response.create")
+        self.assertEqual(starts, [0, 7, 14])
+        # 每条消息的分片数与起始帧间距一致，最后一个分片带 fin。
+        self.assertEqual([self.frames[index]["message_fragment_count"] for index in starts], [7, 7, 3])
+        self.assertTrue(self.frames[6]["fin"] and self.frames[13]["fin"] and self.frames[16]["fin"])
+
+    def test_every_labeled_index_is_a_response_create_start_frame(self) -> None:
+        for suffix in ("0_164_0", "0_165_0"):
+            with self.subTest(suffix=suffix):
+                labels = self.a06_frame_labels(TOOL_ROOT / f"codex_upgrade_evidence_labels_{suffix}.json")
+                self.assertEqual({key: value["frame_role"] for key, value in labels.items()}, {"0": "warmup", "7": "first_business"})
+                for key in labels:
+                    frame = self.frames[int(key)]
+                    self.assertEqual(frame["event_type"], "response.create", f"frame_labels[{key}] 落在续帧上，选择器会命中 0 条")
+                # 首个业务消息紧接在预热消息最后一个分片之后开始：起始帧 = 预热起始帧 + 预热消息的分片数。
+                warmup, business = int(next(k for k, v in labels.items() if v["frame_role"] == "warmup")), int(
+                    next(k for k, v in labels.items() if v["frame_role"] == "first_business")
+                )
+                self.assertEqual(business, warmup + self.frames[warmup]["message_fragment_count"])
+
+    def test_a_label_on_a_continuation_frame_is_detected(self) -> None:
+        """上一版登记的错误写法（first_business 绑在索引 1）在这份真实布局上必须被识别为落在续帧上。"""
+
+        self.assertIsNone(self.frames[1]["event_type"])
+        self.assertNotEqual(self.frames[1]["event_type"], "response.create")
 
 
 if __name__ == "__main__":
