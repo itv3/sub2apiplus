@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,21 +18,24 @@ func TestCompositeAcquireSessionHash(t *testing.T) {
 	require.Equal(t, "", compositeAcquireSessionHash("abc", true), "临时借用不带会话哈希，避免改写粘性绑定")
 }
 
-func TestMessagesDispatchMappedModelForPlatform(t *testing.T) {
+func TestMessagesDispatchMappedModelInCtx(t *testing.T) {
 	group := &service.Group{Platform: service.PlatformComposite, MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{OpusMappedModel: "gpt-5.5"}}
 	apiKey := &service.APIKey{Group: group}
-	// 多协议平台与 grok 不适用分组的 Messages 调度映射。
-	require.Equal(t, "", messagesDispatchMappedModelForPlatform(apiKey, service.PlatformGrok, "claude-opus-4"))
-	require.Equal(t, "", messagesDispatchMappedModelForPlatform(apiKey, service.PlatformDeepseek, "claude-opus-4"))
-	require.Equal(t, "gpt-5.5", messagesDispatchMappedModelForPlatform(apiKey, service.PlatformOpenAI, "claude-opus-4"))
-	require.Equal(t, "", messagesDispatchMappedModelForPlatform(nil, service.PlatformOpenAI, "claude-opus-4"))
-
-	// 上游原样的 resolveOpenAIMessagesDispatchMappedModel 与上面的满载换号用实现口径一致（逐平台对照见 openai_gateway_composite_entry_test.go）。
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformDeepseek))
+	inPlatform := func(platform string) context.Context {
+		return service.WithResolvedTargetPlatform(context.Background(), platform)
+	}
+	// 多协议平台与 grok 不适用分组的 Messages 调度映射。
+	require.Equal(t, "", messagesDispatchMappedModelInCtx(c, inPlatform(service.PlatformGrok), apiKey, "claude-opus-4"))
+	require.Equal(t, "", messagesDispatchMappedModelInCtx(c, inPlatform(service.PlatformDeepseek), apiKey, "claude-opus-4"))
+	require.Equal(t, "gpt-5.5", messagesDispatchMappedModelInCtx(c, inPlatform(service.PlatformOpenAI), apiKey, "claude-opus-4"))
+	require.Equal(t, "", messagesDispatchMappedModelInCtx(c, inPlatform(service.PlatformOpenAI), nil, "claude-opus-4"))
+
+	// 与上游函数在对应上下文下的结果一致（全平台、两种分组的逐项对照见 openai_gateway_composite_entry_test.go）。
+	c.Request = c.Request.WithContext(inPlatform(service.PlatformDeepseek))
 	require.Equal(t, "", resolveOpenAIMessagesDispatchMappedModel(c, apiKey, "claude-opus-4"))
-	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformOpenAI))
+	c.Request = c.Request.WithContext(inPlatform(service.PlatformOpenAI))
 	require.Equal(t, "gpt-5.5", resolveOpenAIMessagesDispatchMappedModel(c, apiKey, "claude-opus-4"))
 }
 

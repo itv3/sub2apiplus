@@ -23,7 +23,7 @@ package handler
 
 import (
 	"context"
-	"strings"
+	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -66,20 +66,23 @@ func (h *OpenAIGatewayHandler) compositeMappingResolverFor(apiKey *service.APIKe
 	}
 }
 
-// messagesDispatchMappedModelForPlatform 返回 Anthropic Messages 入口在某个目标平台下的调度级模型映射。
-// composite 分组解析到 grok 或多协议 API Key 供应商时，分组的 Messages 调度映射（gpt-5.x 默认值）
-// 是 openai 专属，发给这些上游必错，模型改写交给账号级 model_mapping，返回空串；
-// 其它平台沿用分组配置。口径与 resolveOpenAIMessagesDispatchMappedModel 在 composite 分组下按
-// 上下文目标平台取值时完全一致（该函数保持上游原样，不改走本函数；一致性由单测逐平台对照守住）。
-func messagesDispatchMappedModelForPlatform(apiKey *service.APIKey, platform, requestedModel string) string {
-	if apiKey == nil || apiKey.Group == nil {
-		return ""
+// messagesDispatchMappedModelInCtx 按"目标平台已写入 ctx"的口径计算 Anthropic Messages 入口的调度级模型映射，
+// 供满载换号在备选平台的上下文（ctx，带 WithResolvedTargetPlatform 写入的目标平台）里取值。
+//
+// 做法：直接调用上游函数 resolveOpenAIMessagesDispatchMappedModel，不再复制它的判断逻辑，
+// 这样上游以后改它的条件或新增平台，这里自动跟随，不会出现"编译过、测试过、行为变了"。
+// 上游函数只读取 c.Request.Context()，所以用一个只带"请求副本 + 目标上下文"的临时 gin.Context 调用；
+// 请求副本取自真实请求（c.Request.WithContext(ctx)），上游函数以后若多读请求字段也不会读到空值。
+// c 或 c.Request 为空时退回空请求，上游函数同样只会读到 ctx。
+func messagesDispatchMappedModelInCtx(c *gin.Context, ctx context.Context, apiKey *service.APIKey, requestedModel string) string {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if apiKey.Group.Platform == service.PlatformComposite &&
-		(platform == service.PlatformGrok || service.IsMultiProtocolAPIKeyProvider(platform)) {
-		return ""
+	req := &http.Request{}
+	if c != nil && c.Request != nil {
+		req = c.Request
 	}
-	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
+	return resolveOpenAIMessagesDispatchMappedModel(&gin.Context{Request: req.WithContext(ctx)}, apiKey, requestedModel)
 }
 
 // ---------------------------------------------------------------------------
@@ -170,14 +173,15 @@ type compositeMessagesSwitch struct {
 	Mapping              *service.ChannelMappingResult
 }
 
-// params 构造换号参数：调度级模型映射随目标平台变化，grok 与多协议平台不适用分组的 Messages 调度映射。
-func (st *compositeMessagesSwitch) params(apiKey *service.APIKey) compositeCapacitySwitchParams {
+// params 构造换号参数：调度级模型映射随目标平台变化，grok 与多协议平台不适用分组的 Messages 调度映射
+// （判断在上游函数里，按 ModelFor 收到的上下文里的目标平台取值，见 messagesDispatchMappedModelInCtx）。
+func (st *compositeMessagesSwitch) params(c *gin.Context, apiKey *service.APIKey) compositeCapacitySwitchParams {
 	return compositeCapacitySwitchParams{
 		Eligible:    st.Fresh,
 		SessionHash: st.SessionHash,
 		Model:       st.CurrentRoutingModel,
-		ModelFor: func(_ context.Context, platform string) string {
-			if mapped := messagesDispatchMappedModelForPlatform(apiKey, platform, st.ReqModel); mapped != "" {
+		ModelFor: func(ctx context.Context, _ string) string {
+			if mapped := messagesDispatchMappedModelInCtx(c, ctx, apiKey, st.ReqModel); mapped != "" {
 				return mapped
 			}
 			return st.RoutingModel
@@ -193,7 +197,8 @@ func (st *compositeMessagesSwitch) params(apiKey *service.APIKey) compositeCapac
 func (st *compositeMessagesSwitch) apply(c *gin.Context, apiKey *service.APIKey, sw *service.CompositeCapacitySwitch, resolve compositeMappingResolver) *service.AccountSelectionResult {
 	setCompositeTemporarySwap(c, sw.Temporary)
 	*st.Platform = sw.Platform
-	*st.EffectiveMappedModel = messagesDispatchMappedModelForPlatform(apiKey, sw.Platform, st.ReqModel)
+	// 此时 c.Request 的上下文已是换号后的新上下文（带目标平台），与改造前内联代码取法一致。
+	*st.EffectiveMappedModel = resolveOpenAIMessagesDispatchMappedModel(c, apiKey, st.ReqModel)
 	*st.Mapping = resolve(c.Request.Context())
 	return sw.Selection
 }
@@ -201,7 +206,7 @@ func (st *compositeMessagesSwitch) apply(c *gin.Context, apiKey *service.APIKey,
 // switchCompositeMessages 是 Messages 入口每轮选号后的唯一接入点，返回值语义同 switchCompositeResponses。
 func (h *OpenAIGatewayHandler) switchCompositeMessages(c *gin.Context, apiKey *service.APIKey, subscription *service.UserSubscription, reqLog *zap.Logger, selection *service.AccountSelectionResult, st *compositeMessagesSwitch) *service.AccountSelectionResult {
 	setCompositeTemporarySwap(c, false)
-	sw, switched := h.tryCompositeCapacitySwitch(c, apiKey, subscription, selection, reqLog, st.params(apiKey))
+	sw, switched := h.tryCompositeCapacitySwitch(c, apiKey, subscription, selection, reqLog, st.params(c, apiKey))
 	if !switched {
 		return selection
 	}
