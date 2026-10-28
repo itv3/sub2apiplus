@@ -1397,6 +1397,59 @@ class CaptureLifecycleTest(unittest.TestCase):
             self.assertEqual(summary["attempt_id"], newer_id)
             self.assertEqual(summary["status"], "awaiting_receipts")
 
+    def test_invalidated_attempt_half_written_kilo_checkpoint_does_not_block_status(self) -> None:
+        """OPT-14：seal 失败后被环境隔离作废（或证据根冲突隔离）的 attempt 留下半成品 Kilo 后检查点（有探针清单、无恢复收据）。
+        它仍是最近 attempt、仍带作废标记（状态机据此指引 reconcile-attempt 与 resume --rerun-failed），但检查点材料不读不校验，
+        摘要不再因为“检查点材料不完整”抛错；没被作废的 attempt 遇到同样的半成品照旧失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign_dir = Path(temporary) / "campaign"
+            attempts_root = campaign_dir / "candidates" / "cand-1" / "attempts"
+            attempts_root.mkdir(parents=True, mode=0o700)
+            attempt_id = "20261027T223459Z-70f71ece35b0020e"
+            attempt_root = attempts_root / attempt_id
+            attempt_root.mkdir(mode=0o700)
+            (attempt_root / "attempt.json").write_text("{}\n", encoding="utf-8")
+            evidence_root = attempt_root / "evidence"
+            half_baked = evidence_root / "environment" / "client-after"
+            half_baked.mkdir(parents=True, mode=0o700)
+            (half_baked / "probe-manifest.json").write_text("{}\n", encoding="utf-8")
+            reservation = {"run_nonce": "3" * 64, "started_at_utc": "2026-10-27T22:34:59.100000Z"}
+
+            def summary_with(invalidated: set[tuple[str, str | None, str]]) -> dict[str, object] | None:
+                with (
+                    mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value=reservation),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_load_capture_attempt",
+                        return_value=(
+                            attempt_root,
+                            {
+                                "status": "awaiting_receipts",
+                                "run_nonce": reservation["run_nonce"],
+                                "started_at_utc": reservation["started_at_utc"],
+                                "environment": {"evidence_root": str(evidence_root)},
+                            },
+                        ),
+                    ),
+                    mock.patch.object(codex_upgrade, "_rerun_all_invalidated_attempts", return_value=invalidated),
+                    mock.patch.object(codex_upgrade, "_isolation_invalidated_attempts", return_value=invalidated),
+                ):
+                    return codex_upgrade._latest_attempt_summary(campaign_dir, "candidate", "cand-1")
+
+            # 没被作废：半成品检查点照旧失败关闭（本来的保护不变）。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Kilo 后检查点材料不完整或不可信"):
+                summary_with(set())
+            # 被作废：不读检查点，摘要照常返回并带作废标记。
+            summary = summary_with({("candidate", "cand-1", attempt_id)})
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["attempt_id"], attempt_id)
+            self.assertTrue(summary["isolation_invalidated"])
+            self.assertIsNone(summary["client_checkpoint_at_utc"])
+            # 同一目录的别的 attempt 被作废不影响这个 attempt 的校验。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Kilo 后检查点材料不完整或不可信"):
+                summary_with({("candidate", "cand-1", "20261027T000000Z-ffffffffffffffff")})
+
     def test_interrupted_reservation_is_fail_closed_without_empty_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

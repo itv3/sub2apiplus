@@ -30206,8 +30206,17 @@ def _latest_attempt_summary(
     *,
     _manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """返回指定抓包边界最近一个可验证 attempt 的摘要。"""
+    """返回指定抓包边界最近一个可验证 attempt 的摘要。
 
+    OPT-14：已被环境隔离作废、被证据根冲突隔离的 attempt 永不 seal、永不复用，它留下的半成品 Kilo 后检查点
+    （seal 失败时先写下的探针清单，没有恢复收据）不参与摘要——不读取、不校验，``client_checkpoint_at_utc`` 记为空。
+    否则隔离之后的 status／resume 会被它自己留下的材料卡死（“Kilo 后检查点材料不完整或不可信”）。该 attempt 仍照常
+    作为最近 attempt 返回并带 ``isolation_invalidated``／``evidence_conflict_quarantine`` 标记：状态机据此指引
+    reconcile-attempt 与 resume --rerun-failed，不能把它整个跳过（跳过后会错指向全新的 capture-candidate）。
+    """
+
+    # 一次读出被作废／隔离的 attempt 集合（phase, candidate_id, attempt_id）；收据链不可信时与下方各标记一样直接抛错。
+    rerun_all_invalidated = _rerun_all_invalidated_attempts(campaign_dir)
     for path, reservation in _ordered_capture_attempts(
         campaign_dir,
         phase,
@@ -30236,7 +30245,7 @@ def _latest_attempt_summary(
             _verified_campaign_manifest=_manifest,
         )
         client_checkpoint_at: str | None = None
-        if phase == "candidate":
+        if phase == "candidate" and (phase, candidate_id, path.name) not in rerun_all_invalidated:
             environment = attempt.get("environment")
             evidence_root = Path(
                 str(environment.get("evidence_root", ""))
