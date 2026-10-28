@@ -1115,6 +1115,7 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             "ws-frame-request-start-ms",
             "ws-frame-responses-lite-flag",
             "ws-compaction-frame-no-access-programs",
+            "http-turn-request-root-turn-id",  # HTTP 回合请求 client_metadata 带 root_turn_id（W3 第三轮）
         ],
         "SPEC-EP-021": [
             "ws-compaction-frame-request-kind",
@@ -1122,11 +1123,23 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             "ws-compaction-frame-no-reasoning-effort-key",
             "ws-compaction-frame-no-turn-trigger-key",
             "ws-compaction-frame-compaction-object",
+            # HTTP 压缩请求的 turn metadata 与请求体（W3 第五轮，画像 TurnMetadata.HTTPCompactionRequests）
+            "http-compaction-request-kind",
+            "http-compaction-request-no-model-key",
+            "http-compaction-request-no-reasoning-effort-key",
+            "http-compaction-request-no-turn-trigger-key",
+            "http-compaction-request-compaction-object",
+            "http-compaction-request-no-access-programs",
         ],
         "SPEC-BODY-009": [
             "ws-turn-frame-root-turn-id-key",
             "ws-turn-frame-agent-name-key",
             "ws-prewarm-frame-no-root-turn-id-key",
+            # HTTP 回合请求 turn metadata 的根线程键与窗口键（W3 第四轮）
+            "http-turn-request-agent-name-key",
+            "http-turn-request-root-turn-id-key",
+            "http-turn-request-window-number-key",
+            "http-turn-request-context-window-id-key",
         ],
     }
     # 规则的 scenario_ids 变化（旧值必须是新值的前缀）。
@@ -1136,7 +1149,8 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         "SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"],
         "SPEC-BODY-008": ["A03", "A04", "A05", "A06", "A20", "A21", "A22"],  # W3 第二批：A20～A22 的回合帧动态键
         "SPEC-EP-021": ["A03", "A05", "A06", "A10", "A21"],  # 压缩请求帧的 turn metadata 判据只有 A21 有压缩
-        "SPEC-BODY-009": ["A04", "A05", "A06", "A20", "A21", "A22"],  # 根线程键判据选 A05、A06 与重放三场景的 WS 帧
+        # 根线程键判据选 A05、A06 与重放三场景的 WS 帧；HTTP turn metadata 四键判据选 A03、A04，判据场景必须是规则场景的子集，所以追加 A03。
+        "SPEC-BODY-009": ["A04", "A05", "A06", "A20", "A21", "A22", "A03"],
     }
     ADDED_SCENARIOS_0165 = ["A20", "A21", "A22"]
 
