@@ -2681,6 +2681,13 @@
    "owner": "shared",
    "rule": "default-shared"
   },
+  "test_egress_ctl": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
   "test_engineering_root_disk_policy": {
    "claude_plan": "run",
    "codex_plan": "run",

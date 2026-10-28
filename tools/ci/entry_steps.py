@@ -8,7 +8,7 @@
 
 输入分七类（方案 E2-05）：参数（本步骤实际读的键和值，不是整份参数文件）、受管工具（五摘要、具体文件或整树）、测试与
 夹具、文档、命令与驱动（命令字面量、本步骤用到的驱动文件）、上游产物（前序步骤记录里的产物摘要、最新部署收据、
-其他前序产物）、环境（内核、Python、Go、node、容器镜像、二进制、录制数据、出口策略）。输入范围拿不准的一律从宽
+其他前序产物）、环境（内核、Python、Go、node、容器镜像、二进制、录制数据；出口策略不在其中，见 environment-p0 步骤的注释）。输入范围拿不准的一律从宽
 （方案 D3），由读集审计（E3-04）收窄。
 
 判定（``evaluate``）按步骤表的依赖顺序逐步进行：
@@ -370,13 +370,16 @@ def build_steps(client: str) -> tuple[Step, ...]:
         Step("ledger", "计时账本", "post_ledger", ledger=True, inputs=(
             *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS", *purpose_params),
         ), products=(Product("ledger", "{ENTRY_ROOT}/control/{UP}-timing-ledger/ledger.json"),)),
-        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。
+        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、目标客户端）。
+        # 不再把 /etc/sub2api-egress/policy.json 整份文件当输入：出口由老板自行指定、想换就换，换策略不得让入口步骤
+        # 失效（未建 Formal 会判重做，已建账本会判阻塞）。保护不因此变弱：守护是否在位、出口是否等于策略，由两处
+        # 实时核对——每次入口都跑的 entry-preflight（guard.sh 的 egress-check），以及本步骤真正执行时的采集器
+        # （collect 前后各调用一次 require_runtime_egress）；两处都不依赖这里的输入摘要。
         Step("environment-p0", "ARM64 环境收据（p0）", "post_ledger", inputs=(
             *_params("UP", "TARGET_VERSION"),
             *_managed_files(*spec["environment_receipt_files"]),
             *_drivers("stage1.sh"), *common_driver,
             *_env("hostname", "arch"), *_containers("capture-cli", "sub2apiplus"),
-            Input("environment", "file", "/etc/sub2api-egress/policy.json"),
             Input("environment", "file", host_binary),
         ), products=(Product("receipt"),)),
         Step("ledger-checkpoint", "账本 checkpoint", "post_ledger", upstream=("ledger",), inputs=(

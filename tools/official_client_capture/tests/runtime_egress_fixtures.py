@@ -25,6 +25,22 @@ from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
 
+# ---------------------------------------------------------------------------------------------
+# 测试里一切“出口 IP”的唯一来源。
+#
+# 真实出口由运维在 ``/etc/sub2api-egress/policy.json`` 里指定，老板想换就换，不属于工具、测试或文档；这里的值是
+# 公网上随手挑的、不属于任何一台自有机器的全局单播地址，只用来让夹具、隔离网络命名空间拓扑和断言有值可用。
+# 其余测试文件一律从本模块引用，不再自己写地址字面量（反向守卫也由这些常量派生，见 test_codex_runtime_egress）。
+# ``tests/fixtures/runtime_egress_policy.json`` 是静态数据、不能引用常量，其中的取值必须与下面一致，
+# 由 test_codex_runtime_egress 的一致性用例逐项核对；改常量时两处一起改。
+# ---------------------------------------------------------------------------------------------
+FIXTURE_EXIT_IPV4 = "1.0.0.102"
+"""夹具策略的 ``allowed_public_ipv4[0]``，同时是出口节点的端点地址（端点与最终 SNAT 地址可以不同，夹具里取同一个）。"""
+FIXTURE_ORIGIN_IPV4 = "8.8.4.102"
+"""夹具策略里源端节点的公网端点地址。"""
+FIXTURE_ALTERNATE_EXIT_IPV4S = ("1.0.0.1", "1.0.0.2")
+"""等价性测试里“用户改选出口”所换成的其他取值；与 ``FIXTURE_EXIT_IPV4`` 互不相同。"""
+
 
 @contextlib.contextmanager
 def isolated_runtime_egress_paths() -> Iterator[Path]:

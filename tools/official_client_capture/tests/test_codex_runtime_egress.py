@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import copy
 import argparse
+import ipaddress
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -27,6 +29,7 @@ from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture.tests import control_receipt_fixtures
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 def policy_fixture():
@@ -778,11 +781,43 @@ class RuntimeEgressReviewFixTests(unittest.TestCase):
         source = Path(deploy.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-        forbidden = ("wg1", "51830", "fixed-bwg", "0.154.0", "144.34.230.210", "69.63.195.102", "BWG", "DMIT")
+        # 服务商名、隧道端口、旧版本号，以及夹具里的全部出口地址都不许出现在部署预检里；另外任何写死的公网 IPv4 字面量一律不许：
+        # 出口由运维策略指定，换 IP 不改代码。这里不再列举任何真实出口地址（老板的出口不进代码、测试与文档），用“全局单播地址”这一形态判据代替。
+        forbidden = ("wg1", "51830", "fixed-bwg", "0.154.0", "BWG", "DMIT",
+                     runtime_egress_fixtures.FIXTURE_EXIT_IPV4, runtime_egress_fixtures.FIXTURE_ORIGIN_IPV4,
+                     *runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S)
         for name in ("_preflight", "_post_switch_verify", "egress_wireguard_observation", "verify_runtime_egress"):
             literals = [node.value for node in ast.walk(functions[name]) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
             with self.subTest(function=name):
                 self.assertFalse([item for item in literals for word in forbidden if word in item])
+                self.assertFalse([item for item in literals if _global_ipv4_tokens(item)])
+
+    def test_fixture_policy_json_matches_the_central_egress_constants(self):
+        """静态夹具 JSON 不能引用常量，必须与 runtime_egress_fixtures 的唯一来源逐项一致；常量本身须是互不相同的全局单播地址。"""
+
+        policy = policy_fixture()
+        self.assertEqual(policy["allowed_public_ipv4"], [runtime_egress_fixtures.FIXTURE_EXIT_IPV4])
+        self.assertEqual(policy["nodes"]["exit"]["endpoint"]["ipv4"], runtime_egress_fixtures.FIXTURE_EXIT_IPV4)
+        self.assertEqual(policy["nodes"]["origin"]["endpoint"]["ipv4"], runtime_egress_fixtures.FIXTURE_ORIGIN_IPV4)
+        values = (runtime_egress_fixtures.FIXTURE_EXIT_IPV4, runtime_egress_fixtures.FIXTURE_ORIGIN_IPV4,
+                  *runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S)
+        self.assertEqual(len(set(values)), len(values))
+        for value in values:
+            self.assertTrue(ipaddress.IPv4Address(value).is_global, value)
+        arm.validate_egress_policy(policy)
+
+
+def _global_ipv4_tokens(text):
+    """字符串里形如 a.b.c.d 的全局单播 IPv4 记号；私网、保留地址（隧道、内网依赖等）不算。"""
+
+    found = []
+    for token in re.findall(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.])", text):
+        try:
+            if ipaddress.IPv4Address(token).is_global:
+                found.append(token)
+        except ValueError:
+            continue
+    return found
 
 
 class EgressSupervisorTests(unittest.TestCase):

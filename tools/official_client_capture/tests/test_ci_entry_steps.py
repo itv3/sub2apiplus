@@ -12,6 +12,7 @@ B5a-10：``deploy-check`` 核对本轮客户端之外每个已纳管客户端的
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -23,6 +24,9 @@ from pathlib import Path
 from unittest import mock
 
 from tools.ci import entry_steps as es
+from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
+from tools.official_client_capture.tests import runtime_egress_fixtures
+from tools.official_client_capture.tests import test_codex_runtime_egress as egress_tests
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HEADING = "# 第二部分 Codex CLI 客户端规则画像"
@@ -498,6 +502,151 @@ class EntryStepsRuleTests(EntryStepsTestCase):
         self.assertEqual(failed["products"][0]["sha256"], es.MISSING)
         es.begin(step, ctx)
         self.assertEqual(es.finish(step, ctx, status="failed", products={})["products"], [], "记失败时拿不到坐标的产物就不记")
+
+
+EGRESS_POLICY_PATH = "/etc/sub2api-egress/policy.json"
+
+
+class EgressPolicyIsNotAStepInputTests(unittest.TestCase):
+    """出口由老板指定、想换就换：换策略不得让任何入口步骤失效或被判阻塞，工具与出口值不再有联系。
+
+    入口编排器原先把 ``/etc/sub2api-egress/policy.json`` 整份文件当 ``environment-p0`` 的输入。这里把该路径重定向到
+    临时文件，先在“策略 A”下把全部步骤记成通过，再换成“策略 B”（换出口地址、授权人、revision）重新判定：
+    所有步骤的判定与原因必须与换之前逐项相同。若有人把策略文件重新登记成输入，这些用例会失败。
+    """
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name).resolve()
+        self.policy_file = root / "policy.json"
+        self.write_policy(runtime_egress_fixtures.FIXTURE_EXIT_IPV4, revision=1)
+        self.read_paths: list[str] = []
+        real = es._file_entry
+
+        def redirected(item: es.Input, path: Path) -> dict:
+            # 只把准入策略的真实位置换成临时文件；其余输入照常解析。记下所有被读过的路径供断言。
+            self.read_paths.append(str(path))
+            return real(item, self.policy_file if str(path) == EGRESS_POLICY_PATH else path)
+
+        patcher = mock.patch.object(es, "_file_entry", redirected)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.fx = Fixture(root / "fx")
+        self.fx.record_all()
+
+    def write_policy(self, address: str, *, revision: int) -> None:
+        policy = {"allowed_public_ipv4": [address], "revision": revision,
+                  "nodes": {"exit": {"endpoint": {"ipv4": address, "port": 51832}}},
+                  "authorization": {"actor": f"操作员{revision}", "reason": "更换指定出口"}}
+        self.policy_file.write_text(json.dumps(policy, sort_keys=True) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def states(result: dict) -> list[tuple]:
+        return [(step["step_id"], step["decision"], tuple(step["reasons"])) for step in result["steps"]]
+
+    def test_no_step_of_any_client_declares_the_egress_policy_as_an_input(self) -> None:
+        for client in es.CT.CLIENTS:
+            for step in es.STEPS_BY_CLIENT[client]:
+                for item in step.inputs:
+                    with self.subTest(client=client, step=step.step_id, input=item.name):
+                        self.assertNotIn("sub2api-egress", str(item.arg))
+
+    def test_changing_the_designated_exit_changes_no_step_state(self) -> None:
+        before = self.fx.evaluate()
+        self.assertEqual((_by(before, "run"), es.exit_code(before)), (set(), 0))
+        for revision, address in enumerate((*runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S,
+                                            runtime_egress_fixtures.FIXTURE_EXIT_IPV4), 2):
+            self.write_policy(address, revision=revision)
+            with self.subTest(address=address):
+                after = self.fx.evaluate()
+                self.assertEqual(self.states(after), self.states(before))
+                self.assertEqual((_by(after, "run"), _by(after, "blocked"), es.exit_code(after)), (set(), set(), 0))
+        self.assertNotIn(EGRESS_POLICY_PATH, self.read_paths, "入口步骤判定不得读取出口策略文件")
+
+    def test_removing_the_policy_file_changes_no_step_state_either(self) -> None:
+        before = self.states(self.fx.evaluate())
+        self.policy_file.unlink()
+        self.assertEqual(self.states(self.fx.evaluate()), before)
+
+    def test_a_built_formal_is_not_blocked_by_a_policy_change(self) -> None:
+        _write(self.fx.data / "evidence" / "campaigns" / self.fx.params["NEW"] / "campaign.json", "{}\n")
+        ctx = self.fx.ctx()
+        self.assertTrue(es.formal_built(ctx))
+        before = es.evaluate(ctx, is_formal_built=True)
+        self.write_policy(runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S[0], revision=9)
+        after = es.evaluate(self.fx.ctx(), is_formal_built=True)
+        self.assertEqual(self.states(after), self.states(before))
+        self.assertEqual((_by(after, "blocked"), es.exit_code(after)), (set(), 0))
+
+    def test_the_protection_does_not_depend_on_this_input(self) -> None:
+        """保护不因收窄输入而变弱：实时核对在两处，且都不经过步骤输入摘要——
+
+        ``entry-preflight`` 是每次入口都执行的实时步骤，它调用的 ``guard.sh pre-plan`` 带 ``egress-check``，不通过即停止派发；
+        ``environment-p0`` 真正执行时由采集器在 collect 前后各调用一次实时准入。
+        """
+
+        self.assertTrue(es.STEP_BY_ID["entry-preflight"].live)
+        guard = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "guard.sh").read_text(encoding="utf-8")
+        line = next(item for item in guard.splitlines() if "egress-check" in item and "python3" in item)
+        self.assertIn("exit 1", line)
+        preflight = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-preflight.sh").read_text(encoding="utf-8")
+        self.assertIn('bash "$DRV/guard.sh" pre-plan', preflight)
+        orchestrator = (REPO_ROOT / "tools" / "ci" / "entry_orchestrator.py").read_text(encoding="utf-8")
+        self.assertIn('"collect", "--evidence-root"', orchestrator)
+
+
+class P0AdmissionStillFailsClosedTests(unittest.TestCase):
+    """入口不再把策略文件当输入之后，P0 与入口检查用的实时准入照样失败关闭：守护不在位、策略被改而没重装、
+    出口观测不等于策略、状态过期，都拒绝（``require_runtime_egress`` 是 ``egress-check`` 与 ``collect`` 的共同入口）。"""
+
+    def admission(self, *, policy: dict | None, status: dict | None) -> dict:
+        snapshot = egress_tests.runtime_fixture()
+        policy = snapshot["policy"] if policy is None else policy
+        status = snapshot["runtime"] if status is None else status
+        with runtime_egress_fixtures.isolated_runtime_egress_paths() as absent:
+            absent.mkdir()
+            (absent / "boot_id").write_text(status["boot_id"] + "\n", encoding="ascii")
+            with mock.patch.object(arm, "load_egress_policy", return_value=policy), \
+                    mock.patch.object(arm, "_read_egress_runtime_json", return_value=status):
+                return arm.require_runtime_egress()
+
+    def test_compliant_guard_is_admitted(self) -> None:
+        self.assertEqual(self.admission(policy=None, status=None)["policy_sha256"],
+                         egress_tests.runtime_fixture()["policy_sha256"])
+
+    def test_policy_edited_without_reinstall_is_rejected(self) -> None:
+        policy = copy.deepcopy(egress_tests.runtime_fixture()["policy"])
+        policy["allowed_public_ipv4"] = [runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S[0]]
+        policy["revision"] += 1
+        with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "运行时出口准入拒绝"):
+            self.admission(policy=policy, status=None)
+
+    def test_observed_exit_outside_the_policy_is_rejected(self) -> None:
+        snapshot = egress_tests.runtime_fixture()
+        policy = copy.deepcopy(snapshot["policy"])
+        policy["allowed_public_ipv4"] = [runtime_egress_fixtures.FIXTURE_ALTERNATE_EXIT_IPV4S[0]]
+        status = copy.deepcopy(snapshot["runtime"])
+        status["policy_sha256"] = arm.egress_policy_sha256(policy)   # 状态与策略互相一致，只有观测到的出口不在允许集里
+        with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "出口未通过独立验证|运行时出口准入拒绝"):
+            self.admission(policy=policy, status=status)
+
+    def test_expired_lease_is_rejected(self) -> None:
+        status = copy.deepcopy(egress_tests.runtime_fixture()["runtime"])
+        status["valid_until_monotonic_ns"] = 1
+        with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "运行时出口准入拒绝"):
+            self.admission(policy=None, status=status)
+
+    def test_missing_guard_fails_egress_check_and_collect(self) -> None:
+        with runtime_egress_fixtures.isolated_runtime_egress_paths(), \
+                mock.patch.object(arm.platform, "machine", return_value="aarch64"), \
+                tempfile.TemporaryDirectory() as directory, \
+                contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(arm.main(["egress-check"]), 1)
+            self.assertEqual(arm.main(["collect", "--evidence-root", directory, "--output", "facts.json", "--phase", "p0",
+                                       "--subject-id", "x", "--rust-tls-codex-version", "1.2.3"]), 1)
+            self.assertFalse((Path(directory) / "facts.json").exists())
+        self.assertEqual(errors.getvalue().count("运行时出口准入拒绝"), 2)
 
 
 class EntryStepsTableAndCliTests(unittest.TestCase):

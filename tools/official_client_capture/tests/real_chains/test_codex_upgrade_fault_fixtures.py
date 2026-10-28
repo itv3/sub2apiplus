@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import copy
+import ipaddress
 import os
 import shutil
 import signal
@@ -33,11 +34,27 @@ from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.tests import evaluation_chain_driver as driver
 from tools.official_client_capture.tests import managed_tree_copy
+from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture.tests import test_codex_upgrade as upgrade_tests
 from tools.official_client_capture.tests import test_codex_upgrade_evidence_integrity as integrity_tests
 from tools.official_client_capture.tests import test_codex_upgrade_timing_ledger as timing_tests
 from tools.official_client_capture.tests import test_codex_runtime_egress as egress_tests
 
+
+
+# 隔离网络命名空间拓扑里的“公网”地址：全部取自 runtime_egress_fixtures 的唯一来源，不写真实出口。
+# 网关取各自 /24 的 .1，“错误出口”取出口地址的下一个地址（同一 /24，用来演示 SNAT 到非授权地址）。
+ORIGIN_WAN_IP = runtime_egress_fixtures.FIXTURE_ORIGIN_IPV4
+EXIT_WAN_IP = runtime_egress_fixtures.FIXTURE_EXIT_IPV4
+
+
+def _gateway_of(address: str) -> str:
+    return ".".join(address.split(".")[:3]) + ".1"
+
+
+ORIGIN_GATEWAY = _gateway_of(ORIGIN_WAN_IP)
+EXIT_GATEWAY = _gateway_of(EXIT_WAN_IP)
+EXIT_WRONG_IP = str(ipaddress.IPv4Address(EXIT_WAN_IP) + 1)
 
 
 def _driver_test_modules():
@@ -537,8 +554,8 @@ class RuntimeEgressKernelTests(unittest.TestCase):
         self.policy = json.loads((Path(__file__).parents[1] / "fixtures/runtime_egress_policy.json").read_text())
         self.policy["nodes"]["origin"]["interface"] = "wg-test"
         self.policy["nodes"]["exit"]["interface"] = "wg-test"
-        self.policy["nodes"]["origin"]["endpoint"]["ipv4"] = "213.35.102.31"
-        self.policy["nodes"]["exit"]["endpoint"]["ipv4"] = "69.63.195.102"
+        self.policy["nodes"]["origin"]["endpoint"]["ipv4"] = ORIGIN_WAN_IP
+        self.policy["nodes"]["exit"]["endpoint"]["ipv4"] = EXIT_WAN_IP
         self.ns = {}
         for index, role in enumerate(("origin", "exit", "wan", "app", "capture", "database", "proxy")):
             name = f"r15{os.getpid()}n{index}"
@@ -552,7 +569,7 @@ class RuntimeEgressKernelTests(unittest.TestCase):
             self.inside(role, "sysctl", "-w", "net.ipv4.conf.all.arp_ignore=1")
             self.inside(role, "sysctl", "-w", "net.ipv4.conf.all.arp_announce=2")
         for role, bridge, mac, addresses in (("origin", "br0", "02:15:00:00:00:01", ["172.31.200.1/24"]),
-                                              ("wan", "brw", "02:15:00:00:00:02", ["213.35.102.1/24", "69.63.195.1/24"])):
+                                              ("wan", "brw", "02:15:00:00:00:02", [ORIGIN_GATEWAY + "/24", EXIT_GATEWAY + "/24"])):
             # 网桥显式固定 MAC：未设置时 Linux 取全部端口中最小的 MAC，后续加入端口（附加网卡夹具）可能
             # 改变网桥 MAC，使容器已缓存的网关邻居失效，造成与出口判定无关的间歇丢包。Docker 网桥同样是固定 MAC。
             self.inside(role, "ip", "link", "add", bridge, "address", mac, "type", "bridge")
@@ -560,10 +577,10 @@ class RuntimeEgressKernelTests(unittest.TestCase):
             for address in addresses:
                 self.inside(role, "ip", "addr", "add", address, "dev", bridge)
         self.link_index = 0
-        self.edge("origin", "eth0", "213.35.102.31/24", "wan", "wan_origin", "brw")
-        self.edge("exit", "eth0", "69.63.195.102/24", "wan", "wan_exit", "brw")
-        self.edge("exit", "eth1", "69.63.195.103/24", "wan", "wan_wrong", "brw")
-        for role, gateway in (("origin", "213.35.102.1"), ("exit", "69.63.195.1")):
+        self.edge("origin", "eth0", ORIGIN_WAN_IP + "/24", "wan", "wan_origin", "brw")
+        self.edge("exit", "eth0", EXIT_WAN_IP + "/24", "wan", "wan_exit", "brw")
+        self.edge("exit", "eth1", EXIT_WRONG_IP + "/24", "wan", "wan_wrong", "brw")
+        for role, gateway in (("origin", ORIGIN_GATEWAY), ("exit", EXIT_GATEWAY)):
             self.inside(role, "ip", "route", "add", "default", "via", gateway, "dev", "eth0")
         for index, role in enumerate(("app", "capture", "database", "proxy"), 2):
             self.edge(role, "eth0", f"172.31.200.{index}/24", "origin", "v_" + role, "br0")
@@ -761,7 +778,7 @@ for line in sys.stdin:
     def assert_no_unauthorized_packets(self):
         rows = [json.loads(line) for line in (self.root / "wan-received.jsonl").read_text().splitlines()]
         self.assertTrue(rows)
-        self.assertEqual({row["peer"] for row in rows}, {"69.63.195.102"})
+        self.assertEqual({row["peer"] for row in rows}, {EXIT_WAN_IP})
         self.assertFalse(self.errors, self.errors)
 
     def test_r15_isolated_kernel_failure_and_recovery_chain(self):
@@ -793,16 +810,16 @@ for line in sys.stdin:
         self.assertFalse(self.request("app", "fd15::5", 7890))
         # 源宿主路由误改：新旧连接每包仍由实际出接口检查拦截。
         self.assertTrue(self.request("app", held=held))
-        self.inside("origin", "ip", "route", "replace", "default", "via", "213.35.102.1", "dev", "eth0", "table", "51832")
+        self.inside("origin", "ip", "route", "replace", "default", "via", ORIGIN_GATEWAY, "dev", "eth0", "table", "51832")
         self.assertFalse(self.request("app", held=held))
         self.assertFalse(self.request("app"))
         self.inside("origin", "ip", "route", "replace", "default", "dev", "wg-test", "table", "51832")
         self.assertTrue(self.request("app"))
         # 出口宿主路由与提前 SNAT 被晚期检查拒绝；故障期间公网端没有非授权源包。
-        self.inside("exit", "ip", "route", "add", "84.1.1.1/32", "via", "69.63.195.1", "dev", "eth1")
+        self.inside("exit", "ip", "route", "add", "84.1.1.1/32", "via", EXIT_GATEWAY, "dev", "eth1")
         self.assertFalse(self.request("app"))
         self.inside("exit", "ip", "route", "del", "84.1.1.1/32")
-        self.inside("exit", "nft", "-f", "-", input_text='table ip r15_fault {\n chain corrupt { type nat hook postrouting priority 80; ip saddr 10.79.32.1 snat to 69.63.195.103; }\n}\n')
+        self.inside("exit", "nft", "-f", "-", input_text='table ip r15_fault {\n chain corrupt { type nat hook postrouting priority 80; ip saddr 10.79.32.1 snat to ' + EXIT_WRONG_IP + '; }\n}\n')
         self.assertFalse(self.request("capture"))
         self.inside("exit", "nft", "delete", "table", "ip", "r15_fault")
         self.assertTrue(self.request("capture"))
@@ -835,19 +852,19 @@ for line in sys.stdin:
         peer = self.policy["nodes"]["exit"]["public_key"]
         origin_peer = self.policy["nodes"]["origin"]["public_key"]
         self.inside("exit", "wg", "set", "wg-test", "peer", origin_peer, "persistent-keepalive", "0")
-        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", "69.63.195.103:51832")
+        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", EXIT_WRONG_IP + ":51832")
         self.assertFalse(self.request("app"))
-        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", "69.63.195.102:51832")
+        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", EXIT_WAN_IP + ":51832")
         self.inside("exit", "wg", "set", "wg-test", "peer", origin_peer, "persistent-keepalive", "1")
         # 错公钥没有可用握手，也不得通过原有连接回退到直连。
         wrong_private = self.command("wg", "genkey")
         wrong_peer = self.command("wg", "pubkey", input_text=wrong_private + "\n")
         self.inside("origin", "wg", "set", "wg-test", "peer", peer, "remove")
-        self.inside("origin", "wg", "set", "wg-test", "peer", wrong_peer, "endpoint", "69.63.195.102:51832", "allowed-ips", "0.0.0.0/0")
+        self.inside("origin", "wg", "set", "wg-test", "peer", wrong_peer, "endpoint", EXIT_WAN_IP + ":51832", "allowed-ips", "0.0.0.0/0")
         self.assertFalse(self.request("app", held=held))
         self.assertFalse(self.request("capture"))
         self.inside("origin", "wg", "set", "wg-test", "peer", wrong_peer, "remove")
-        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", "69.63.195.102:51832", "allowed-ips", "0.0.0.0/0", "persistent-keepalive", "1")
+        self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", EXIT_WAN_IP + ":51832", "allowed-ips", "0.0.0.0/0", "persistent-keepalive", "1")
         self.inside("origin", "ip", "link", "set", "wg-test", "down")
         self.assertFalse(self.request("app"))
         self.inside("origin", "ip", "link", "set", "wg-test", "up")
