@@ -10,6 +10,7 @@ pcap、relay 原始字节或结构化 trace。成功输出由统一升级编排�
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import re
@@ -664,6 +665,143 @@ def validate_environment_probe_sni(value: Any, description: str) -> list[str]:
     return list(value)
 
 
+# ---------------------------------------------------------------------------
+# 帧级标签的选择键（artifact.frame_labels 的键）
+#
+# 历史上只有一种写法：键是 WebSocket 原始帧序号（``"7"``）。它假定“一条 WS 消息＝一个帧”，官方客户端
+# 恰好如此，候选网关却把压缩写入的消息拆成多个帧（分片），同一条消息的首帧序号因此随分片数漂移：
+# 上一版候选 A06 预热消息占 7 帧，声明里写的“帧索引 1”落在预热消息的续帧上，选择器命中 0 条，
+# 直到封存预览才暴露，登记阶段的手造观测看不出来。
+#
+# 现在键有三种写法，同一份声明里可以混用；旧写法语义不变（已封存证据的重放与重新编目结果逐字相同）：
+#
+#   ``"7"``                       原始帧序号（旧写法）。
+#   ``"message:N"``               第 N 条（0 起）WS 数据消息的起始帧。数据消息指 TEXT／BINARY 帧；
+#                                 续帧（CONT）与控制帧（CLOSE／PING／PONG）不计数。
+#   ``"event:<类型>:N"``          第 N 条（0 起）事件类型为 ``<类型>`` 的 WS 数据消息的起始帧，
+#                                 类型取起始帧 ``data.event_type``（消息体顶层 ``type`` 字段）。
+#
+# 标签只贴在消息的起始帧上（只有起始帧带 event_type 与 shape，续帧没有判据可读的事实），
+# 与旧写法“一个键贴一个帧”一致。选择键只依赖消息的结构身份（第几条、什么事件类型），
+# 不依赖被判据验证的属性（消息体字段取值），因此不违反“标签来自声明、不按被测内容反推”的边界。
+#
+# 失败关闭：选择键没有命中任何消息时报错（与旧写法“引用了不存在的帧”同义）；两个键落到同一帧且给同一标签名
+# 不同取值时报错；取值相同则合并。
+# ---------------------------------------------------------------------------
+
+_FRAME_LABEL_ORDINAL = r"(?:0|[1-9][0-9]*)"
+FRAME_LABEL_EVENT_TYPE_PATTERN = r"[A-Za-z0-9_.-]{1,64}"
+# 与 candidate_capture_manifest.schema.json 的 frame_labels.propertyNames.pattern 逐字一致（测试核对）。
+FRAME_LABEL_SELECTOR_PATTERN = (
+    rf"^({_FRAME_LABEL_ORDINAL}"
+    rf"|message:{_FRAME_LABEL_ORDINAL}"
+    rf"|event:{FRAME_LABEL_EVENT_TYPE_PATTERN}:{_FRAME_LABEL_ORDINAL})$"
+)
+_FRAME_LABEL_SELECTOR_RE = re.compile(
+    rf"(?:(?P<frame>{_FRAME_LABEL_ORDINAL})"
+    rf"|message:(?P<message>{_FRAME_LABEL_ORDINAL})"
+    rf"|event:(?P<event_type>{FRAME_LABEL_EVENT_TYPE_PATTERN}):(?P<event_ordinal>{_FRAME_LABEL_ORDINAL}))"
+)
+# WS 数据消息的起始帧操作码名（见 relay_extract.WS_OPCODES）。
+WS_DATA_MESSAGE_OPCODES = frozenset({"TEXT", "BINARY"})
+
+
+def parse_frame_label_selector(key: Any) -> tuple[Any, ...] | None:
+    """解析一个 frame_labels 键；非法返回 None。
+
+    返回 ``("frame", 帧序号)``、``("message", 消息序号)`` 或 ``("event", 事件类型, 该类型内序号)``。
+    """
+
+    if not isinstance(key, str):
+        return None
+    matched = _FRAME_LABEL_SELECTOR_RE.fullmatch(key)
+    if matched is None:
+        return None
+    if matched.group("frame") is not None:
+        return ("frame", int(matched.group("frame")))
+    if matched.group("message") is not None:
+        return ("message", int(matched.group("message")))
+    return ("event", matched.group("event_type"), int(matched.group("event_ordinal")))
+
+
+def resolve_frame_label_selectors(
+    frame_labels: Mapping[str, Mapping[str, str]],
+    frames: Sequence[Mapping[str, Any]],
+    artifact_path: str,
+) -> dict[int, dict[str, str]]:
+    """把 frame_labels 的各种选择键落到具体帧序号，返回“帧序号 → 合并后的标签”。
+
+    ``frames`` 是该 artifact 的全部 WebSocket 帧事实（按出现顺序，每项含 ``frame_index``、``opcode``，
+    起始帧另含 ``event_type``）。只含旧写法（原始帧序号）的声明，结果与逐帧 ``frame_labels.get(str(序号))``
+    完全相同。任何选择键没命中帧、或标签冲突都抛 ``AssertionConfigurationError``。
+    """
+
+    frame_indexes: list[int] = []
+    message_starts: list[int] = []
+    event_starts: dict[str, list[int]] = {}
+    for frame in frames:
+        index = frame.get("frame_index")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        frame_indexes.append(index)
+        if frame.get("opcode") in WS_DATA_MESSAGE_OPCODES:
+            message_starts.append(index)
+            event_type = frame.get("event_type")
+            if isinstance(event_type, str) and event_type:
+                event_starts.setdefault(event_type, []).append(index)
+    seen_indexes = set(frame_indexes)
+
+    resolved: dict[int, dict[str, str]] = {}
+    origin: dict[tuple[int, str], str] = {}
+    missing_frames: list[int] = []
+    missing_selectors: list[str] = []
+    for key, values in frame_labels.items():
+        parsed = parse_frame_label_selector(key)
+        if parsed is None:
+            raise AssertionConfigurationError(
+                f"artifact frame_labels 索引非法：{artifact_path}: {key!r}"
+            )
+        target: int | None
+        if parsed[0] == "frame":
+            target = parsed[1] if parsed[1] in seen_indexes else None
+            if target is None:
+                missing_frames.append(parsed[1])
+                continue
+        else:
+            if parsed[0] == "message":
+                candidates = message_starts
+                ordinal = parsed[1]
+            else:
+                candidates = event_starts.get(parsed[1], [])
+                ordinal = parsed[2]
+            target = candidates[ordinal] if ordinal < len(candidates) else None
+            if target is None:
+                missing_selectors.append(key)
+                continue
+        merged = resolved.setdefault(target, {})
+        for name, value in values.items():
+            if name in merged and merged[name] != value:
+                raise AssertionConfigurationError(
+                    f"artifact frame_labels 标签冲突：{artifact_path}: 帧 {target} 的标签 {name} "
+                    f"被 {origin[(target, name)]!r} 与 {key!r} 给成不同取值"
+                )
+            merged[name] = value
+            origin.setdefault((target, name), key)
+    if missing_frames:
+        raise AssertionConfigurationError(
+            f"artifact frame_labels 引用了不存在的 WebSocket 帧："
+            f"{artifact_path}: {sorted(missing_frames)}"
+        )
+    if missing_selectors:
+        raise AssertionConfigurationError(
+            f"artifact frame_labels 引用了不存在的 WebSocket 帧：{artifact_path}: "
+            f"选择键 {missing_selectors} 没有命中任何消息"
+            f"（该 artifact 共 {len(message_starts)} 条数据消息、"
+            f"事件类型分布 {{{', '.join(f'{k}: {len(v)}' for k, v in sorted(event_starts.items()))}}}）"
+        )
+    return resolved
+
+
 def _validate_capture_manifest(
     value: Any,
     expected_codex_version: str = CODEX_VERSION,
@@ -763,9 +901,8 @@ def _validate_capture_manifest(
                     f"artifacts[{index}].frame_labels 必须是非空对象"
                 )
             for frame_index, values in frame_labels.items():
-                if not isinstance(frame_index, str) or not re.fullmatch(
-                    r"0|[1-9]\d*", frame_index
-                ):
+                # 键可以是原始帧序号（旧写法），也可以是 message:N／event:<类型>:N（见上文选择键说明）。
+                if parse_frame_label_selector(frame_index) is None:
                     raise AssertionConfigurationError(
                         f"artifacts[{index}].frame_labels 索引非法：{frame_index!r}"
                     )
@@ -946,10 +1083,19 @@ def _h1_observations(
         header_end = payload.find(b"\r\n\r\n")
         if header_end >= 0:
             parsed_frames = parse_ws_frames(payload[header_end + 4 :])
+            # 先把各种选择键（原始帧序号／消息序号／事件类型序号）落到具体帧，再逐帧叠加。
+            labels_by_frame = resolve_frame_label_selectors(
+                frame_labels,
+                [
+                    {**frame, "frame_index": position}
+                    for position, frame in enumerate(parsed_frames)
+                ],
+                artifact_path,
+            )
             for frame_index, frame in enumerate(parsed_frames):
                 # 帧级标签只叠加到派生事实；原始 relay 字节始终保持只读。
                 observation_labels = dict(labels)
-                observation_labels.update(frame_labels.get(str(frame_index), {}))
+                observation_labels.update(labels_by_frame.get(frame_index, {}))
                 for scenario_id in scenario_ids:
                     observations.append(
                         Observation(
@@ -968,16 +1114,9 @@ def _h1_observations(
                             },
                         )
                     )
-    missing_frame_indexes = sorted(
-        int(frame_index)
-        for frame_index in frame_labels
-        if int(frame_index) >= len(parsed_frames)
-    )
-    if missing_frame_indexes:
-        raise AssertionConfigurationError(
-            f"artifact frame_labels 引用了不存在的 WebSocket 帧："
-            f"{artifact_path}: {missing_frame_indexes}"
-        )
+    if frame_labels and not parsed_frames:
+        # 没有 WebSocket 帧（不是升级请求）却声明了帧级标签：与逐帧引用不存在的帧同义。
+        resolve_frame_label_selectors(frame_labels, [], artifact_path)
     return observations
 
 
@@ -1013,7 +1152,9 @@ def _trace_observations(
     frame_labels: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[Observation]:
     frame_labels = frame_labels or {}
-    seen_frame_indexes: set[int] = set()
+    # 逐条记录先按基础标签收集，帧级标签要等全部帧事实齐了才能解析（选择键可能按消息序号、事件类型序号命中）。
+    pending: list[tuple[Observation, int | None]] = []
+    frame_facts: list[Mapping[str, Any]] = []
     observations: list[Observation] = []
     for index, record in enumerate(_structured_records(path, parser)):
         if not isinstance(record, dict):
@@ -1075,33 +1216,34 @@ def _trace_observations(
         evidence_paths = tuple(dict.fromkeys([artifact_path, *source_artifacts]))
         # 帧级标签与 _h1_observations 同语义：只叠加到 websocket_frame 事实，
         # 帧索引取派生记录 data 内的 frame_index。
-        observation_labels = dict(labels)
+        frame_index: int | None = None
         if record_type == "websocket_frame":
-            frame_index = data.get("frame_index")
-            if isinstance(frame_index, int) and not isinstance(frame_index, bool):
-                seen_frame_indexes.add(frame_index)
-                observation_labels.update(frame_labels.get(str(frame_index), {}))
-        observations.append(
-            Observation(
-                record_id=record_id,
-                scenario_id=scenario_id,
-                record_type=record_type,
-                artifact_path=artifact_path,
-                evidence_paths=evidence_paths,
-                labels=observation_labels,
-                data=data,
+            candidate_index = data.get("frame_index")
+            if isinstance(candidate_index, int) and not isinstance(candidate_index, bool):
+                frame_index = candidate_index
+                frame_facts.append(data)
+        pending.append(
+            (
+                Observation(
+                    record_id=record_id,
+                    scenario_id=scenario_id,
+                    record_type=record_type,
+                    artifact_path=artifact_path,
+                    evidence_paths=evidence_paths,
+                    labels=dict(labels),
+                    data=data,
+                ),
+                frame_index,
             )
         )
-    missing_frame_indexes = sorted(
-        int(frame_index)
-        for frame_index in frame_labels
-        if int(frame_index) not in seen_frame_indexes
-    )
-    if missing_frame_indexes:
-        raise AssertionConfigurationError(
-            f"artifact frame_labels 引用了不存在的 WebSocket 帧："
-            f"{artifact_path}: {missing_frame_indexes}"
-        )
+    # 选择键（原始帧序号／消息序号／事件类型序号）落到具体帧；没命中任何帧即失败关闭。
+    labels_by_frame = resolve_frame_label_selectors(frame_labels, frame_facts, artifact_path)
+    for observation, frame_index in pending:
+        if frame_index is not None and frame_index in labels_by_frame:
+            observation = dataclasses.replace(
+                observation, labels={**observation.labels, **labels_by_frame[frame_index]}
+            )
+        observations.append(observation)
     if not observations:
         raise AssertionConfigurationError(f"结构化 trace 为空：{artifact_path}")
     return observations

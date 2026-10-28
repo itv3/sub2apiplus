@@ -94,7 +94,8 @@
             "type": "object",
             "minProperties": 1,
             "propertyNames": {
-              "pattern": "^(0|[1-9][0-9]*)$"
+              "description": "原始帧序号（旧写法）、message:N（第 N 条数据消息的起始帧）或 event:<事件类型>:N（第 N 条该类型消息的起始帧）；与 candidate_rule_assertion.FRAME_LABEL_SELECTOR_PATTERN 逐字一致。",
+              "pattern": "^((?:0|[1-9][0-9]*)|message:(?:0|[1-9][0-9]*)|event:[A-Za-z0-9_.-]{1,64}:(?:0|[1-9][0-9]*))$"
             },
             "additionalProperties": {
               "type": "object",

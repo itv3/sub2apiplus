@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import candidate_rule_assertion
 from tools.official_client_capture.candidate_rule_assertion import (
     AssertionConfigurationError,
     Observation,
@@ -291,9 +292,15 @@ class CandidateRuleExpectationTest(unittest.TestCase):
         artifact_schema = capture_schema["properties"]["artifacts"]["items"]
         frame_labels_schema = artifact_schema["properties"]["frame_labels"]
         self.assertEqual(frame_labels_schema["type"], "object")
+        # 键除了原始帧序号（旧写法），还可以是 message:N／event:<类型>:N；schema 与解析器用同一份正则文本。
         self.assertEqual(
             frame_labels_schema["propertyNames"]["pattern"],
-            "^(0|[1-9][0-9]*)$",
+            candidate_rule_assertion.FRAME_LABEL_SELECTOR_PATTERN,
+        )
+        self.assertEqual(
+            frame_labels_schema["propertyNames"]["pattern"],
+            "^((?:0|[1-9][0-9]*)|message:(?:0|[1-9][0-9]*)"
+            "|event:[A-Za-z0-9_.-]{1,64}:(?:0|[1-9][0-9]*))$",
         )
         # 帧级标签的两条合法路径：直接解析原始字节（h1_request_stream），或候选侧
         # 走 opaque+derive 后由派生 jsonl 承载帧观测（observation_jsonl）。
