@@ -1073,7 +1073,7 @@ def rehearsal_job_probe(job: Any, configuration: Mapping[str, Any], *, component
 
 
 def rehearsal_container_facts(configuration: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Codex 画像：Job 依赖的五个容器的运行状态与身份。"""
+    """Codex 画像：Job 依赖的五个容器的运行状态与身份（keeper 不存在时如实记未部署）。"""
 
     return _container_facts(configuration)
 
@@ -1105,14 +1105,31 @@ def rehearsal_producer() -> dict[str, str]:
 
 
 def rehearsal_validate_containers(containers: Any, contract: Mapping[str, Any]) -> None:
-    """Codex 画像：facts 的容器集合必须正好覆盖执行合同登记的五个容器，且都在运行。"""
+    """Codex 画像：facts 的容器集合必须正好覆盖执行合同登记的五个容器，且都在运行；keeper 已下线，可如实记为未部署。"""
 
     configuration = contract["configuration"]
     expected_containers = sorted({str(configuration[field]) for field in CODEX_CONTAINER_FIELDS})
     if not isinstance(containers, list):
         raise JobRehearsalReceiptError("containers 必须是数组")
     container_names: list[str] = []
+    # 允许缺席的只有 keeper：它的条目可以是 {"name", "deployed": false}（名字必须是合同里
+    # 登记的 keeper 容器，且不与别的必需容器同名）；其余容器仍必须是在跑的完整四键条目。
+    keeper_name = str(configuration.get("keeper_container", ""))
+    keeper_may_be_absent = keeper_name not in {
+        str(configuration[field])
+        for field in CODEX_CONTAINER_FIELDS
+        if field != "keeper_container"
+    }
     for item in containers:
+        if (
+            keeper_may_be_absent
+            and isinstance(item, dict)
+            and set(item) == {"name", "deployed"}
+        ):
+            if item.get("deployed") is not False or item.get("name") != keeper_name:
+                raise JobRehearsalReceiptError("容器未部署条目只允许 keeper 且 deployed 必须为 false")
+            container_names.append(keeper_name)
+            continue
         current = _expect(
             item, {"name", "container_id", "image_id", "running"}, "containers"
         )
@@ -1608,19 +1625,67 @@ CODEX_CONTAINER_FIELDS = (
 )
 
 
+# Codex Job 五个依赖容器里允许缺席的字段。keeper（账号保活容器）已下线不再部署，
+# Job 演练不再强求它在跑；其余四个容器缺席或没在跑仍然失败关闭。
+OPTIONAL_CONTAINER_FIELDS = frozenset({"keeper_container"})
+# docker inspect 在容器不存在时的固定报错片段（只用于识别缺席，不把 stderr 当结论）。
+_CONTAINER_MISSING_RE = re.compile(r"No such (?:object|container)", re.IGNORECASE)
+
+
+def _optional_container_missing(name: str) -> bool:
+    """可选容器是否确实不存在：只认 docker 明确报告 No such object／container。
+
+    守护进程不可达、超时等其它失败原样抛出，不会被当成「未部署」。
+    """
+
+    try:
+        _run(["docker", "inspect", name], "Job 依赖可选容器存在性探针")
+    except JobRehearsalReceiptError as error:
+        if _CONTAINER_MISSING_RE.search(str(error)):
+            return True
+        raise
+    return False
+
+
 def _container_facts(
     configuration: Mapping[str, Any],
     fields: Iterable[str] = CODEX_CONTAINER_FIELDS,
 ) -> list[dict[str, Any]]:
-    """Job 依赖容器的运行状态与身份；``fields`` 缺省为 Codex 的五个容器字段（B2-10 起 Claude 画像传两个采集容器）。"""
+    """Job 依赖容器的运行状态与身份；``fields`` 缺省为 Codex 的五个容器字段（B2-10 起 Claude 画像传两个采集容器）。
 
-    names = sorted(
+    五个容器都在场时与改造前完全一致（一次 ``docker inspect``、每项四键）。可选容器
+    （``OPTIONAL_CONTAINER_FIELDS``，目前只有 keeper）在 ``docker inspect`` 明确报告不存在时，
+    如实记为 ``{"name": …, "deployed": false}``，其余容器仍必须全部在跑。
+    """
+
+    field_list = list(fields)
+    names = sorted({str(configuration[field]) for field in field_list})
+    # 与必需容器同名的可选字段按必需处理（不放宽）。
+    required_names = {
+        str(configuration[field])
+        for field in field_list
+        if field not in OPTIONAL_CONTAINER_FIELDS
+    }
+    optional_names = sorted(
         {
             str(configuration[field])
-            for field in fields
+            for field in field_list
+            if field in OPTIONAL_CONTAINER_FIELDS
         }
+        - required_names
     )
-    raw = _run(["docker", "inspect", *names], "Job 依赖容器状态探针")
+    undeployed: list[str] = []
+    try:
+        raw = _run(["docker", "inspect", *names], "Job 依赖容器状态探针")
+    except JobRehearsalReceiptError:
+        if not optional_names:
+            raise
+        undeployed = [name for name in optional_names if _optional_container_missing(name)]
+        if not undeployed:
+            raise
+        names = [name for name in names if name not in undeployed]
+        # 其余容器必须全部在场；这里再失败就原样失败，不再放宽。
+        raw = _run(["docker", "inspect", *names], "Job 依赖容器状态探针")
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
@@ -1650,6 +1715,7 @@ def _container_facts(
                 "running": True,
             }
         )
+    output.extend({"name": name, "deployed": False} for name in undeployed)
     return sorted(output, key=lambda item: item["name"])
 
 

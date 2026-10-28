@@ -740,7 +740,18 @@ chmod 0600 "$runtime_host"/restore/*
 service_container_id_before=$(docker inspect -f '{{.Id}}' "$service_container")
 original_hosts_hash=$(sha256sum "$runtime_host/restore/hosts.before" | awk '{print $1}')
 original_ca_hash=$(sha256sum "$runtime_host/restore/ca-certificates.before" | awk '{print $1}')
-keeper_was_running=$(docker inspect -f '{{.State.Running}}' "$keeper_container")
+# keeper（账号保活容器）已下线不再部署：容器不存在就如实视为未部署（keeper_was_running=false），
+# 后面的停、启、恢复核验自然全部跳过；在场时与以往完全一致（读运行状态，在跑则先停、退出时按原状态恢复）。
+# 只认 docker 明确报告 No such object／container；守护进程不可达等其它失败照旧失败退出。
+if keeper_probe=$(docker inspect -f '{{.State.Running}}' "$keeper_container" 2>&1); then
+  keeper_was_running=$keeper_probe
+elif [[ $keeper_probe == *"No such object"* || $keeper_probe == *"No such container"* ]]; then
+  keeper_was_running=false
+  echo "keeper 容器不存在（未部署），跳过停启：$keeper_container" >&2
+else
+  echo "无法读取 keeper 容器状态：$keeper_probe" >&2
+  exit 1
+fi
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [[ ! $service_container_id_before =~ ^[0-9a-f]{64}$ || ! $keeper_was_running =~ ^(true|false)$ ]]; then
   echo "无法读取服务容器 ID 或 keeper 运行状态（快照阶段，尚未修改任何东西）。" >&2
