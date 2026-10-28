@@ -1,0 +1,65 @@
+{
+  "base_commit": "d715a3a9b159895cbe4c82f245813b7dd913a00d",
+  "changed_path_count": 3,
+  "current_commit": "2eef5e27e4d2a66aaba907268f9756b81448d129",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7122,
+  "frozen_path_count": 2318,
+  "identity_sha256": "77434d95f6c5325173581b6d3289f949e1470a03aa07096a55af600fa1e1b3eb",
+  "issued_at_utc": "2026-10-28T00:09:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0164-label-first-business-frame-index-20261028-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "d96eb962052d4aaf773d861e26c4ba1e5936f870c4f0a8b032c8cf67c19b8f02"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（codex-0164-label-first-business-frame-index-20261028）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-guide-chain-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-merge-align-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-assertion-desc-no-baseline-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-probe-no-daemon-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7b2464491572632a0bd9d6fa901b901bd2070a27dd24854d56729b03cc6f6db4"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_evidence_labels_0_164_0.json",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_164_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
