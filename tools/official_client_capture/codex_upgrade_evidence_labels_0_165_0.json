@@ -2246,8 +2246,7 @@
             "transport": "http",
             "track": "main",
             "mode": "lite",
-            "provider": "openai_oauth",
-            "ws_prewarm": "none"
+            "provider": "openai_oauth"
           },
           "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），主线模型（Lite 模型）；GET 无 body，不标 body_length/compression。"
         },
@@ -2298,7 +2297,29 @@
           "rationale": "账号特性切换会重启服务并先产生一条 models GET，因此第 2 个 POST 是 conn004：set_account_features us false 将账号 extra 的 official_codex_enforce_residency 置 us，residency=us 由该采集参数与驱动轮次共同推出，供 HDR-002 residency 正例选样。"
         },
         {
-          "glob": "scenarios/A04/relay/conn00[67].client_to_upstream.bin",
+          "glob": "scenarios/A04/relay/conn006.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "lite",
+            "residency": "unset",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动第 3 个 POST 是 memgen 条件头轮（memory_consolidation，set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与主线 body 判据。不标 ws_prewarm：官方对记忆合并会话关闭 reasoning_effort_override，网关也不为它合成 configuration_update，不属于“首轮必带 update”的样本。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn007.client_to_upstream.bin",
           "scenario_ids": [
             "A04"
           ],
@@ -2318,7 +2339,7 @@
             "provider": "openai_oauth",
             "ws_prewarm": "none"
           },
-          "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与主线 body 判据。"
+          "rationale": "驱动第 4 个 POST 是 parent-thread 条件头轮（普通子代理，set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与主线 body 判据。ws_prewarm=none：第三方入站走网关 HTTP 出站，没有 WS 预热，普通子代理照常合成 configuration_update。"
         },
         {
           "glob": "scenarios/A04/relay/conn008.client_to_upstream.bin",

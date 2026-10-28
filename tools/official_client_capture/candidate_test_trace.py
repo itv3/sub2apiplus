@@ -344,8 +344,12 @@ FROZEN_MAPPING_SHA256 = (
 # 标了 ws_prewarm=none 的 A04 HTTP 首轮带 configuration_update；A05／A06 的 response.create 帧不带），scenario_ids 补 A06（判据场景须是规则场景的子集）；证据标签声明
 # 给官方 http-response／http-response-plain 与候选 A04 非数字档位 HTTP 入站标 ws_prewarm=none。载荷审核：叶子只增不减，既有叶子逐字不变；验收契约分组仍
 # dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-BODY-006 多 4 条。摘要 6dec5ff5… 变为 de164a62…。
+# 2026-10-29（0.165.0 第二轮登记，W2 出站保真度）：SPEC-WS-004 的 scenario_ids 补 A06 并追加 4 条一消息一帧判据；SPEC-BODY-003 追加 3 条（A04 HTTP：回合 id 官方位布局、
+# 开始时间间隔 0～100 毫秒、根线程会话标识形态）；SPEC-WS-005 追加 5 条（A06 首个业务帧同样 3 条；A05／A06 的 response.create 消息无末尾换行、无 HTML 转义）。
+# 载荷审核：叶子只增不减，既有叶子逐字不变；验收契约分组仍 dual_wire=25／candidate_profile=18，expected_check_ids 只有 SPEC-WS-004 多 4 条、SPEC-BODY-003 多 3 条、
+# SPEC-WS-005 多 5 条，side_coverage 官方侧不变（A05、A06 本来就在）。摘要 de164a62… 变为 3c077732…。
 FROZEN_PROFILE_SHA256 = (
-    "de164a6292d97ae581b156ecac20ee08fb2d9a46b3dbaf32b2593c66853e7457"
+    "3c07773223385645a17926e9a459571a03e4126c0b435a0ca293043a61479661"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -797,12 +797,104 @@
           "select": {
             "record_type": "websocket_compression_context"
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.message_fragment_count",
+            "value": 1
+          },
+          "description": "每条 TEXT 数据消息在线上是单个帧（官方整条压缩后写单帧，不分片）：message_fragment_count 恒为 1",
+          "id": "text-message-single-frame",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.opcode",
+                "value": "TEXT"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.fin",
+            "value": true
+          },
+          "description": "TEXT 帧自身 FIN=1（不是分片首帧）",
+          "id": "text-frame-fin",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.opcode",
+                "value": "TEXT"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_equal",
+            "value": 0
+          },
+          "description": "客户端写出的帧里没有续帧（CONT）：一消息一帧",
+          "id": "no-continuation-frames",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.opcode",
+                "value": "CONT"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.rsv1_deflate",
+            "value": true
+          },
+          "description": "所有 TEXT 业务帧 RSV1 置位（官方不论大小都压缩；原 compressed-text-rsv1 只选已压缩的帧，漏掉未压缩的小消息）",
+          "id": "all-text-frames-compressed",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.opcode",
+                "value": "TEXT"
+              }
+            ]
+          }
         }
       ],
       "description": "WS 业务帧使用 permessage-deflate、RSV1 与连接级上下文接管",
       "rule_id": "SPEC-WS-004",
       "scenario_ids": [
-        "A05"
+        "A05",
+        "A06"
       ]
     },
     {
@@ -1271,6 +1363,133 @@
                 "operator": "equal",
                 "path": "labels.thread_role",
                 "value": "main"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.client_turn_id_form",
+            "value": "uuidv7"
+          },
+          "description": "出站 client_metadata.turn_id 是官方位布局的 UUIDv7：哈希排成的 8-4-4-4-12 或 google/uuid 风格的 v7 都失败",
+          "id": "first-business-frame-client-turn-id-form",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.client_turn_started_gap_ok",
+            "value": true
+          },
+          "description": "turn_started_at_unix_ms 比 turn_id 内嵌毫秒晚 0～100 毫秒（官方实采 0～4 毫秒，只有一个 29 毫秒离群值；上限留宽）",
+          "id": "first-business-frame-turn-started-gap",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._passthrough.client_session_ids_ok",
+            "value": true
+          },
+          "description": "根线程的会话标识形态：session_id 是官方位布局 UUIDv7 且等于 thread_id，x-codex-window-id 是 thread_id:0",
+          "id": "first-business-frame-session-ids-official-form",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "first_business"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.message_ends_with_newline",
+            "value": false
+          },
+          "description": "response.create 消息不以换行结尾（官方 serde_json::to_string）；候选网关沿用 wsjson.Write 风格时每条消息末尾多一个 0x0a",
+          "id": "message-no-trailing-newline",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.message_has_html_escape",
+            "value": false
+          },
+          "description": "response.create 消息里没有 \\u003c、\\u003e、\\u0026（及 \\u2028、\\u2029）转义：官方按字面量写出。A06 的用户消息带 <、>、& 才有区分力；用户原文本身含这些转义序列时会误报，A05／A06 的提示词不含",
+          "id": "message-no-html-escape",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
               }
             ]
           }
@@ -2699,6 +2918,114 @@
           },
           "description": "出站 client_metadata.turn_id 等于 client_metadata[\"x-codex-turn-metadata\"] 里的 turn_id（官方请求里恒等；HTTP 上网关曾对两者分别派生，W1b cbdf22345 让 turn_id 取自登记的 turn metadata）",
           "id": "main-client-turn-id-matches-turn-metadata",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.client_turn_id_form",
+            "value": "uuidv7"
+          },
+          "description": "出站 client_metadata.turn_id 是官方位布局的 UUIDv7（rand_a 第 2、3 位为 0）：哈希排成的 8-4-4-4-12 或 google/uuid 风格的 v7（rand_a 第 2、3 位非零）都失败",
+          "id": "main-client-turn-id-form",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.client_turn_started_gap_ok",
+            "value": true
+          },
+          "description": "turn_started_at_unix_ms 比 turn_id 内嵌毫秒晚 0～100 毫秒（官方实采 143 个回合，0～4 毫秒，只有一个 29 毫秒离群值；上限留宽）",
+          "id": "main-turn-started-gap",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "data.body.shape.input._types_count.compaction_trigger"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.input._passthrough.client_session_ids_ok",
+            "value": true
+          },
+          "description": "根线程的会话标识形态：session_id 是官方位布局 UUIDv7 且等于 thread_id，x-codex-window-id 是 thread_id:0（子代理线程与压缩后的新窗口不满足，所以只在 A04 主线样本上启用）",
+          "id": "main-session-ids-official-form",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [

@@ -1486,12 +1486,15 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
     # 同理：主线是 Lite 模型时，依赖自动压缩阈值的主线作业沿用 Lite 轨的 COMPACT_TOKEN_LIMIT（0.163.0 起）。
     DECLARED_THRESHOLD_KEYS: tuple[str, ...] = ()
 
+    # 其后版本的清单为承接新判据才在已有作业上加的可选环境变量（旧清单没有，脚本侧缺省行为不变），与旧清单比较时抹掉。
+    ADDED_ENV_KEYS: tuple = ()
+
     def comparable_steps(self, steps: list) -> list:
         """去掉声明驱动的环境变量镜像与阈值之后的步骤，供与旧清单逐字比较。"""
 
         result = copy.deepcopy(steps)
         for step in result:
-            for key in (*self.DECLARED_MIRROR_KEYS, *self.DECLARED_THRESHOLD_KEYS):
+            for key in (*self.DECLARED_MIRROR_KEYS, *self.DECLARED_THRESHOLD_KEYS, *self.ADDED_ENV_KEYS):
                 step["environment"].pop(key, None)
             if self.DECLARED_MIRROR_KEYS:
                 # 命令里内嵌的 --expect-use-responses-lite（official-core 的 /models 补采脚本）同样随主线声明变化；
@@ -1880,6 +1883,8 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
     UNIT_CAMPAIGN_ID = "c01650-unit"
     DIRECTED_JOBS = NEW_OFFICIAL_JOBS | NEW_0163_JOBS | NEW_0165_JOBS
     NEW_JOBS_SINCE_0160 = NEW_0163_JOBS | NEW_0165_JOBS
+    # A06 用户消息的 HTML 探针文字（官方 ws-default 与候选 frozen-core 作业）。
+    ADDED_ENV_KEYS = ("PROMPT_HTML_PROBE",)
 
     EXPECTED_0165 = {
         # 作业: (场景, SCENARIO, 额外环境, covers)
@@ -1943,6 +1948,25 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
         # 没有任何中继受控开关：改设置与重放都是客户端自己的行为，请求字节全部转发生产。
         for job_id in NEW_0165_JOBS:
             self.assertFalse([key for key in self.environment(job_id) if key.startswith("RELAY_")], job_id)
+
+    def test_0165_a06_user_messages_carry_html_probe_text_only_in_the_0165_manifest(self) -> None:
+        """SPEC-WS-005 的“消息里不做 HTML 转义”判据要有区分力：0.165 清单里官方 ws-default 与候选 frozen-core 作业带 PROMPT_HTML_PROBE
+        （含 <、>、&）；0.164 清单不带；脚本侧只是可选支持，缺省行为不变。"""
+
+        for job_id in ("official-relay-ws-default", "candidate-frozen-core"):
+            probe = self.environment(job_id)["PROMPT_HTML_PROBE"]
+            for character in "<>&":
+                self.assertIn(character, probe, job_id)
+        previous = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_164_0.json").read_text(encoding="utf-8"))
+        for job in previous["capture_jobs"]:
+            for step in job["steps"]:
+                self.assertNotIn("PROMPT_HTML_PROBE", step["environment"], job["id"])
+        official = (TOOL_ROOT / "run_official_relay_scenario.sh").read_text(encoding="utf-8")
+        self.assertIn('prompt="请只回复 OK，不要做任何其他事。${PROMPT_HTML_PROBE:-}" ;;', official)
+        candidate = (TOOL_ROOT / "run_candidate_core_capture.sh").read_text(encoding="utf-8")
+        self.assertIn('a06_user_text="candidate core probe${PROMPT_HTML_PROBE:-}"', candidate)
+        self.assertEqual(candidate.count('CANDIDATE_BODY_USER_TEXT="$a06_user_text" write_request_body'), 2)
+        self.assertIn('os.environ.get("CANDIDATE_BODY_USER_TEXT") or "candidate core probe"', candidate)
 
     def test_0165_effort_jobs_have_official_label_entries(self) -> None:
         """5 个作业各有一条官方证据标签：relay 原始字节经 h1_request_stream 派生（WS 用 websocket_trace，HTTP 用 process_trace），variant 各不相同。"""

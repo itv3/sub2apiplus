@@ -640,6 +640,37 @@ class ConnectionRolesTest(unittest.TestCase):
         ]
         self.assertFalse(evaluate(reconnected)["replay-same-connection"])
 
+    def test_message_form_checks_end_to_end_from_raw_streams(self) -> None:
+        """原始 WS 字节 → 摘要器的 message_ends_with_newline／message_has_html_escape → 0.165.0 清单里的两条消息形态判据。
+
+        官方形态（serde_json 序列化原样、<、>、& 按字面量）通过；候选旧写法（末尾多一个换行、HTML 转义成 \\u003c）逐条被拒。"""
+
+        profile = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8"))
+        rule = next(item for item in profile["rules"] if item["rule_id"] == "SPEC-WS-005")
+        checks = {check["id"]: check for check in rule["checks"]}
+
+        def verdicts(stream: bytes) -> dict:
+            observations = self.observations(stream, scenario="A06")
+            out = {}
+            for check_id in ("message-no-trailing-newline", "message-no-html-escape"):
+                selected = cra._select_observations(observations, checks[check_id]["select"], rule["scenario_ids"])
+                out[check_id] = cra._evaluate_assertion(selected, checks[check_id]["assertion"])[0]
+            return out
+
+        def frame(text: str, *, newline: bool = False, escape: bool = False) -> bytes:
+            body = {"type": "response.create", "model": "m1", "input": [{"type": "message", "content": text}]}
+            payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            if escape:
+                payload = payload.replace(b"<", b"\\u003c").replace(b">", b"\\u003e").replace(b"&", b"\\u0026")
+            return masked_text_frame(payload + (b"\n" if newline else b""), fin=True, opcode=0x1)
+
+        probe = "请只回复 OK。 对照记号：<probe> & </probe> 1 < 2 > 0"
+        self.assertEqual(verdicts(frame(probe)), {"message-no-trailing-newline": True, "message-no-html-escape": True})
+        self.assertEqual(verdicts(frame(probe, newline=True)), {"message-no-trailing-newline": False, "message-no-html-escape": True})
+        self.assertEqual(verdicts(frame(probe, escape=True)), {"message-no-trailing-newline": True, "message-no-html-escape": False})
+        # 不带 <、>、& 的消息对转义判据没有区分力（官方与旧候选都通过）——这正是 A06 提示词要带 PROMPT_HTML_PROBE 的原因。
+        self.assertTrue(verdicts(frame("请只回复 OK。", escape=True))["message-no-html-escape"])
+
     def test_derive_connection_roles_directly(self) -> None:
         """函数层：没有 turn metadata、没有帧的连接不产生角色。"""
 

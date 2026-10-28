@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import unittest
 from pathlib import Path
@@ -810,6 +811,10 @@ class InputPassthroughSummaryTests(unittest.TestCase):
             "turn_id_forms": ["uuid"],
             "tail_turn_id_matches_client": True,
             "client_turn_id_matches_turn_metadata": True,
+            # 并入的 turn_id_wire_summary：测试用的 TURN_A 是官方位布局 UUIDv7；夹具的 turn metadata 里没有开始时间、client_metadata 里没有会话标识，两个布尔取不到即 False。
+            "client_turn_id_form": "uuidv7",
+            "client_turn_started_gap_ok": False,
+            "client_session_ids_ok": False,
         })
 
     def test_stripped_or_inconsistent_requests_are_visible(self) -> None:
@@ -848,6 +853,125 @@ class InputPassthroughSummaryTests(unittest.TestCase):
         # 空 input、没有对象项的 input、没有 input 都不产生 _passthrough。
         for empty in ({"input": []}, {"input": ["x"]}, {"model": "m"}):
             self.assertNotIn("_passthrough", json.dumps(relay_extract.shape_top_level(empty)))
+
+
+class TurnIdWireSummaryTests(unittest.TestCase):
+    """relay_extract.turn_id_wire_summary（0.165.0 登记新增，W2）：回合 id、开始时间间隔与会话标识的官方位布局摘要。"""
+
+    # 官方位布局 UUIDv7：版本 7、变体 10、rand_a（第三组去版本位的 3 位十六进制）第 2、3 位为 0；毫秒时间戳取第一组与第二组。
+    OFFICIAL = "01a17935-c8dc-7cb2-8b5b-c9b98611bb03"
+    EMBEDDED_MS = int("01a17935c8dc", 16)
+    # google/uuid 风格的 v7：rand_a 是亚毫秒时间，第 2、3 位非零（这里 0x7ff：低两位 11）。
+    GOOGLE_STYLE = "01a17935-c8dc-7fff-8b5b-c9b98611bb03"
+    HASHED = "0123456789ab-cdef".replace("-", "")[:8] + "-1111-2222-3333-444455556666"
+    ROOT = "11111111-1111-7111-8111-111111111111"
+
+    def summary(self, turn_id, *, gap=2, request_kind="turn", session=None, thread=None, window=None, drop_started=False) -> dict:
+        thread = thread or session or self.ROOT
+        metadata = {"turn_id": turn_id, "request_kind": request_kind}
+        if not drop_started and gap is not None and isinstance(turn_id, str) and turn_id[:8].isalnum() and len(turn_id) == 36:
+            metadata["turn_started_at_unix_ms"] = int(turn_id.replace("-", "")[:12], 16) + gap
+        client_metadata = {
+            "turn_id": turn_id,
+            "session_id": session or self.ROOT,
+            "thread_id": thread,
+            "x-codex-window-id": window if window is not None else f"{thread}:0",
+            "x-codex-turn-metadata": json.dumps(metadata),
+        }
+        return relay_extract.turn_id_wire_summary(client_metadata)
+
+    def test_official_layout_turn_id_with_a_short_gap_passes(self) -> None:
+        for gap in (0, 1, 4, 100):
+            with self.subTest(gap=gap):
+                result = self.summary(self.OFFICIAL, gap=gap)
+                self.assertEqual(result["client_turn_id_form"], "uuidv7")
+                self.assertTrue(result["client_turn_started_gap_ok"])
+        self.assertTrue(self.summary(self.OFFICIAL)["client_session_ids_ok"])
+
+    def test_gap_outside_zero_to_one_hundred_milliseconds_fails(self) -> None:
+        for gap in (-1, 101, 5000):
+            with self.subTest(gap=gap):
+                self.assertFalse(self.summary(self.OFFICIAL, gap=gap)["client_turn_started_gap_ok"])
+        # 取不到开始时间：失败关闭。
+        self.assertFalse(self.summary(self.OFFICIAL, drop_started=True)["client_turn_started_gap_ok"])
+
+    def test_wrong_layouts_are_distinguished(self) -> None:
+        self.assertEqual(self.summary(self.GOOGLE_STYLE)["client_turn_id_form"], "uuidv7_layout")
+        self.assertEqual(self.summary(self.HASHED)["client_turn_id_form"], "uuid_other")
+        self.assertEqual(self.summary("not-a-uuid")["client_turn_id_form"], "other")
+        # 回合 id 不是官方位布局时，开始时间间隔也只对 v7 回合 id 有意义；哈希形态取不到。
+        self.assertFalse(self.summary(self.HASHED)["client_turn_started_gap_ok"])
+
+    def test_prewarm_frames_have_an_empty_turn_id_and_pass(self) -> None:
+        result = self.summary("", request_kind="prewarm", drop_started=True)
+        self.assertEqual((result["client_turn_id_form"], result["client_turn_started_gap_ok"]), ("prewarm", True))
+        # 空 turn_id 但不是预热：形态 other，间隔不通过。
+        other = self.summary("", request_kind="turn", drop_started=True)
+        self.assertEqual((other["client_turn_id_form"], other["client_turn_started_gap_ok"]), ("other", False))
+
+    def test_session_ids_are_root_thread_in_window_zero(self) -> None:
+        self.assertTrue(self.summary(self.OFFICIAL)["client_session_ids_ok"])
+        # 子代理：thread_id 与 session_id 不同；压缩后的新窗口 :1；会话标识不是官方位布局；窗口号不是 thread_id:0。
+        self.assertFalse(self.summary(self.OFFICIAL, thread="22222222-2222-7222-8222-222222222222")["client_session_ids_ok"])
+        self.assertFalse(self.summary(self.OFFICIAL, window=f"{self.ROOT}:1")["client_session_ids_ok"])
+        self.assertFalse(self.summary(self.OFFICIAL, session=self.GOOGLE_STYLE, thread=self.GOOGLE_STYLE)["client_session_ids_ok"])
+        self.assertFalse(self.summary(self.OFFICIAL, window="other:0")["client_session_ids_ok"])
+        self.assertEqual(relay_extract.turn_id_wire_summary(None), {
+            "client_turn_id_form": "other", "client_turn_started_gap_ok": False, "client_session_ids_ok": False})
+
+    def test_summary_is_part_of_the_input_passthrough_summary_and_carries_no_identifiers(self) -> None:
+        body = {
+            "type": "response.create",
+            "input": [{"type": "message", "role": "user", "content": []}],
+            "client_metadata": {
+                "turn_id": self.OFFICIAL, "session_id": self.ROOT, "thread_id": self.ROOT, "x-codex-window-id": f"{self.ROOT}:0",
+                "x-codex-turn-metadata": json.dumps({"turn_id": self.OFFICIAL, "turn_started_at_unix_ms": self.EMBEDDED_MS + 3}),
+            },
+        }
+        shape = relay_extract.shape_top_level(body)
+        passthrough = shape["input"]["_passthrough"]
+        self.assertEqual(
+            (passthrough["client_turn_id_form"], passthrough["client_turn_started_gap_ok"], passthrough["client_session_ids_ok"]),
+            ("uuidv7", True, True),
+        )
+        serialized = json.dumps(shape)
+        for identifier in (self.OFFICIAL, self.ROOT):
+            self.assertNotIn(identifier, serialized)
+
+
+class WsMessageFormSummaryTests(unittest.TestCase):
+    """WS 消息原文的两个形态结论（0.165.0 登记新增，W2）：不以换行结尾、没有 HTML 转义（官方 serde_json::to_string 的写法）。"""
+
+    @staticmethod
+    def frames(payload: bytes) -> list[dict]:
+        import struct
+
+        mask = b"\x11\x22\x33\x44"
+        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        head = bytes([0x81])
+        if len(payload) <= 125:
+            frame = head + bytes([0x80 | len(payload)]) + mask + masked
+        else:
+            frame = head + bytes([0x80 | 126]) + struct.pack(">H", len(payload)) + mask + masked
+        return relay_extract.parse_ws_frames(frame)
+
+    def message(self, text: str, *, newline: bool = False) -> dict:
+        payload = json.dumps({"type": "response.create", "input": [{"type": "message", "content": text}]}, ensure_ascii=False).encode("utf-8")
+        return self.frames(payload + (b"\n" if newline else b""))[0]
+
+    def test_official_form_has_neither_trailing_newline_nor_escape(self) -> None:
+        frame = self.message("提示 <tag> & 1 > 0")
+        self.assertIs(frame["message_ends_with_newline"], False)
+        self.assertIs(frame["message_has_html_escape"], False)
+
+    def test_trailing_newline_is_detected(self) -> None:
+        self.assertIs(self.message("x", newline=True)["message_ends_with_newline"], True)
+
+    def test_html_escapes_are_detected_in_any_case(self) -> None:
+        for escape in ("\\u003c", "\\u003e", "\\u0026", "\\u003C", "\\u2028", "\\u2029"):
+            with self.subTest(escape=escape):
+                payload = ('{"type":"response.create","input":"a' + escape + 'b"}').encode("utf-8")
+                self.assertIs(self.frames(payload)[0]["message_has_html_escape"], True)
 
 
 class TurnMetadataSummaryTests(unittest.TestCase):
@@ -913,6 +1037,8 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
     ]
     # 规则新增的检查（追加在原检查之后，按此顺序）。
     ADDED_CHECKS_0165 = {
+        "SPEC-BODY-003": ["main-client-turn-id-form", "main-turn-started-gap", "main-session-ids-official-form"],
+        "SPEC-WS-004": ["text-message-single-frame", "text-frame-fin", "no-continuation-frames", "all-text-frames-compressed"],
         "SPEC-BODY-006": [
             "numeric-effort-http-no-configuration-update",
             "numeric-effort-ws-no-configuration-update",
@@ -925,11 +1051,17 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             "replay-frame-carries-full-history",
             "replay-no-second-warmup",
             "replay-same-connection",
+            "first-business-frame-client-turn-id-form",
+            "first-business-frame-turn-started-gap",
+            "first-business-frame-session-ids-official-form",
+            "message-no-trailing-newline",
+            "message-no-html-escape",
         ],
     }
     # 规则的 scenario_ids 变化（旧值必须是新值的前缀）。
     SCENARIO_IDS_0165 = {
         "SPEC-BODY-006": ["A03", "A04", "A05", "A06"],  # W1 的 WS 判据选 A05、A06，判据场景必须是规则场景的子集
+        "SPEC-WS-004": ["A05", "A06"],  # W2 的一消息一帧判据选 A05、A06
         "SPEC-WS-005": ["A05", "A06", "A20", "A21", "A22"],
     }
     ADDED_SCENARIOS_0165 = ["A20", "A21", "A22"]
@@ -1069,11 +1201,94 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             [("candidate", "candidate-frozen-core"), ("official", "official-relay-http-response"), ("official", "official-relay-http-response-plain")],
         )
         self.assertEqual({scenarios for _, _, scenarios in marked}, {("A04",)})
+        # 候选 A04 里只有真正经网关 HTTP 出站合成 update 的 POST 才标：baseline（conn002）、residency-us（conn004）、parent-thread（conn007）；
+        # 启动期 models GET（conn001／3／5）与记忆合并 memgen（conn006，官方与网关都不为它启用 effort 覆盖）不标。
+        candidate_globs = sorted(
+            rule["glob"].rsplit("/", 1)[-1]
+            for entry in document["entries"] if entry["job_id"] == "candidate-frozen-core"
+            for rule in entry["rules"] if rule["labels"].get("ws_prewarm") == "none"
+        )
+        self.assertEqual(candidate_globs, ["conn002.client_to_upstream.bin", "conn004.client_to_upstream.bin", "conn007.client_to_upstream.bin"])
         for entry in document["entries"]:
             for rule in entry["rules"]:
                 if rule["labels"].get("ws_prewarm") == "none":
                     self.assertEqual(rule["labels"].get("transport"), "http")
                     self.assertNotIn("reasoning_effort_config", rule["labels"])
+
+    # ---- W2：一消息一帧、回合 id／会话标识的官方位布局、消息形态（SPEC-WS-004／BODY-003／WS-005） ----
+
+    @staticmethod
+    def text_frame(scenario="A06", **data):
+        return candidate_rule_assertion.Observation(
+            record_id=f"{scenario}-text",
+            scenario_id=scenario,
+            record_type="websocket_frame",
+            artifact_path="relay/conn001.client_to_upstream.bin",
+            evidence_paths=("relay/conn001.client_to_upstream.bin",),
+            labels={},
+            data={"opcode": "TEXT", "event_type": "response.create", "fin": True, "rsv1_deflate": True, "message_fragment_count": 1, **data},
+        )
+
+    def test_one_message_one_frame_checks_accept_official_frames_and_reject_fragmentation(self) -> None:
+        ids = self.ADDED_CHECKS_0165["SPEC-WS-004"]
+        official = [self.text_frame("A05"), self.text_frame("A06")]
+        for check_id in ids[:2] + ids[3:]:
+            self.assertTrue(self.run_check("SPEC-WS-004", check_id, official), check_id)
+        # 没有续帧：count_equal 0，官方形态下选择为空也成立（续帧本来就不存在）。
+        self.assertTrue(self.run_check("SPEC-WS-004", "no-continuation-frames", official))
+        # 候选旧写法：一条消息拆成 7 个分片帧（首帧 fin=false、消息分片数 7），其余是 CONT 续帧；小消息还没压缩。
+        fragmented = [self.text_frame(fin=False, message_fragment_count=7)] + [
+            self.text_frame(opcode="CONT", event_type=None, fin=index == 5, rsv1_deflate=False) for index in range(6)
+        ]
+        self.assertFalse(self.run_check("SPEC-WS-004", "text-message-single-frame", fragmented))
+        self.assertFalse(self.run_check("SPEC-WS-004", "text-frame-fin", fragmented))
+        self.assertFalse(self.run_check("SPEC-WS-004", "no-continuation-frames", fragmented))
+        self.assertFalse(self.run_check("SPEC-WS-004", "all-text-frames-compressed", [self.text_frame(rsv1_deflate=False)]))
+        # 失败关闭：选不到任何 TEXT 帧时不得空过。
+        self.assertFalse(self.run_check("SPEC-WS-004", "text-message-single-frame", []))
+
+    def test_turn_id_session_and_gap_checks_read_the_summary_fields(self) -> None:
+        fields = {
+            "main-client-turn-id-form": ("client_turn_id_form", "uuidv7", "uuidv7_layout"),
+            "main-turn-started-gap": ("client_turn_started_gap_ok", True, False),
+            "main-session-ids-official-form": ("client_session_ids_ok", True, False),
+        }
+        for check_id, (field, good, bad) in fields.items():
+            with self.subTest(check_id=check_id):
+                def observation(value):
+                    return candidate_rule_assertion.Observation(
+                        record_id="A04-http", scenario_id="A04", record_type="http_request",
+                        artifact_path="relay/conn002.client_to_upstream.bin", evidence_paths=("relay/conn002.client_to_upstream.bin",),
+                        labels={"mode": "lite"},
+                        data={"method": "POST", "path": "/backend-api/codex/responses",
+                              "body": {"shape": {"input": {"_passthrough": {field: value}}}}},
+                    )
+                self.assertTrue(self.run_check("SPEC-BODY-003", check_id, [observation(good)]))
+                self.assertFalse(self.run_check("SPEC-BODY-003", check_id, [observation(bad)]))
+                self.assertFalse(self.run_check("SPEC-BODY-003", check_id, []))
+        for check_id, (field, good, bad) in {
+            "first-business-frame-client-turn-id-form": ("client_turn_id_form", "uuidv7", "uuid_other"),
+            "first-business-frame-turn-started-gap": ("client_turn_started_gap_ok", True, False),
+            "first-business-frame-session-ids-official-form": ("client_session_ids_ok", True, False),
+        }.items():
+            with self.subTest(check_id=check_id):
+                def frame(value):
+                    item = self.text_frame(shape={"input": {"_passthrough": {field: value}}})
+                    return dataclasses.replace(item, labels={"frame_role": "first_business"})
+                self.assertTrue(self.run_check("SPEC-WS-005", check_id, [frame(good)]))
+                self.assertFalse(self.run_check("SPEC-WS-005", check_id, [frame(bad)]))
+
+    def test_message_form_checks_reject_trailing_newline_and_escapes(self) -> None:
+        clean = [self.text_frame("A05", message_ends_with_newline=False, message_has_html_escape=False),
+                 self.text_frame("A06", message_ends_with_newline=False, message_has_html_escape=False)]
+        self.assertTrue(self.run_check("SPEC-WS-005", "message-no-trailing-newline", clean))
+        self.assertTrue(self.run_check("SPEC-WS-005", "message-no-html-escape", clean))
+        newline = [*clean, self.text_frame(message_ends_with_newline=True, message_has_html_escape=False)]
+        escaped = [*clean, self.text_frame(message_ends_with_newline=False, message_has_html_escape=True)]
+        self.assertFalse(self.run_check("SPEC-WS-005", "message-no-trailing-newline", newline))
+        self.assertFalse(self.run_check("SPEC-WS-005", "message-no-html-escape", escaped))
+        # 字段缺失（旧摘要器产出的观测）不得放行。
+        self.assertFalse(self.run_check("SPEC-WS-005", "message-no-trailing-newline", [self.text_frame()]))
 
     # ---- W3：WS 整段重放不重连（SPEC-WS-005，A20～A22；线程角色与重放帧标签由引擎派生，这里手造带标签的观测跑正反例） ----
 
@@ -1125,7 +1340,7 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
         rule = next(item for item in self.profile["rules"] if item["rule_id"] == "SPEC-WS-005")
         self.assertEqual(rule["scenario_ids"], ["A05", "A06", "A20", "A21", "A22"])
         ids = [check["id"] for check in rule["checks"]]
-        self.assertEqual(ids[-5:], self.ADDED_CHECKS_0165["SPEC-WS-005"])
+        self.assertEqual(ids[-10:-5], self.ADDED_CHECKS_0165["SPEC-WS-005"][:5])
         profile_scenarios = {item["scenario_id"]: item for item in self.profile["scenarios"]}
         for scenario_id in self.REPLAY_SCENARIOS:
             self.assertEqual(profile_scenarios[scenario_id]["required_artifact_kinds"], ["relay_binary", "websocket_trace"])
@@ -1135,7 +1350,7 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
 
     def test_replay_checks_pass_on_official_shaped_replay_and_ignore_the_title_thread(self) -> None:
         observations = self.good_replay_observations()
-        for check_id in self.ADDED_CHECKS_0165["SPEC-WS-005"]:
+        for check_id in self.ADDED_CHECKS_0165["SPEC-WS-005"][:5]:
             with self.subTest(check_id=check_id):
                 rule, check = self.check("SPEC-WS-005", check_id)
                 matched = candidate_rule_assertion._select_observations(observations, check["select"], rule["scenario_ids"])

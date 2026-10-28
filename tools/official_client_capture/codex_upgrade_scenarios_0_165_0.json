@@ -3335,7 +3335,8 @@
             "RUN_ID": "{campaign_id}-official-ws-default",
             "SCENARIO": "ws-default",
             "REQUIRE_REQUEST_METHOD": "GET",
-            "REQUIRE_REQUEST_PATH": "/backend-api/wham/accounts/check"
+            "REQUIRE_REQUEST_PATH": "/backend-api/wham/accounts/check",
+            "PROMPT_HTML_PROBE": " 对照记号：<probe> & </probe> 1 < 2 > 0"
           },
           "timeout_seconds": 1800
         }
@@ -5830,7 +5831,8 @@
             "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-frozen-core",
             "MAIN_MODEL": "{model}",
-            "LITE_MODEL": "{lite_model}"
+            "LITE_MODEL": "{lite_model}",
+            "PROMPT_HTML_PROBE": " 对照记号：<probe> & </probe> 1 < 2 > 0"
           },
           "timeout_seconds": 5400
         }

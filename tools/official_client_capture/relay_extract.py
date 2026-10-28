@@ -295,6 +295,64 @@ def turn_metadata_summary(client_metadata) -> dict | None:
     return {"thread_source": source if source in THREAD_SOURCES else "other"}
 
 
+# 回合 id、会话标识的官方位布局摘要（0.165.0 登记新增，W2）。官方 turn_id、session_id、thread_id 等都是 ``Uuid::now_v7()``，该库的编码使 ``rand_a``
+# （第三组去掉版本位的 3 个十六进制位）的第 2、3 位恒为 0；google/uuid 风格的 v7（rand_a 是亚毫秒时间）这两位只有约 25% 为 0，哈希排成的 8-4-4-4-12
+# 形态更不是 v7。这是一个廉价且稳定的区分特征，判据据此区分官方位布局。回合开始时间 ``turn_started_at_unix_ms`` 是任务启动时读的系统时钟，比
+# ``turn_id`` 内嵌毫秒晚 0～4 毫秒（官方实采 143 个回合，只有一个 29 毫秒离群值，来自采集机争用 CPU），上限留宽到 100 毫秒以免真实环境偶发长间隔误报。
+# 只记枚举与布尔结论，不记任何 UUID。
+_TURN_ID_V7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+TURN_START_GAP_MIN_MS = 0
+TURN_START_GAP_MAX_MS = 100
+
+
+def uuidv7_official_layout(value) -> bool:
+    """是官方位布局的 UUIDv7（版本 7、变体 10、rand_a 第 2、3 位为 0）。"""
+
+    return (
+        isinstance(value, str)
+        and _TURN_ID_V7_RE.match(value) is not None
+        and (int(value.split("-")[2][1:], 16) >> 2) & 3 == 0
+    )
+
+
+def turn_id_wire_summary(client_metadata) -> dict:
+    """出站 client_metadata 的当前回合 id 形态、开始时间间隔与会话标识形态。
+
+    - ``client_turn_id_form``：``uuidv7``（官方位布局）、``uuidv7_layout``（是 v7 但位布局不是官方的）、``uuid_other``（规范 UUID 但不是 v7，
+      例如哈希排成的形态）、``prewarm``（预热帧：turn_id 为空串且 request_kind=prewarm）、``other``；
+    - ``client_turn_started_gap_ok``：turn_started_at_unix_ms 与 turn_id 内嵌毫秒之差在 0～TURN_START_GAP_MAX_MS 内（预热帧视为通过；取不到为 False，失败关闭）；
+    - ``client_session_ids_ok``：根线程形态——session_id 是官方位布局 UUIDv7、等于 thread_id，且 x-codex-window-id 是 ``<thread_id>:0``。
+      子代理线程（thread_id 与 session_id 不同）与压缩后的新窗口（:1）不满足，判据只选根线程场景。
+    """
+
+    out = {"client_turn_id_form": "other", "client_turn_started_gap_ok": False, "client_session_ids_ok": False}
+    if not isinstance(client_metadata, dict):
+        return out
+    session_id, thread_id = client_metadata.get("session_id"), client_metadata.get("thread_id")
+    out["client_session_ids_ok"] = bool(
+        uuidv7_official_layout(session_id)
+        and session_id == thread_id
+        and client_metadata.get("x-codex-window-id") == f"{thread_id}:0"
+    )
+    turn_id = client_metadata.get("turn_id")
+    if isinstance(turn_id, str):
+        if _TURN_ID_V7_RE.match(turn_id):
+            out["client_turn_id_form"] = "uuidv7" if uuidv7_official_layout(turn_id) else "uuidv7_layout"
+        elif _TURN_ID_RE.match(turn_id):
+            out["client_turn_id_form"] = "uuid_other"
+    meta = _turn_metadata_object(client_metadata)
+    if turn_id == "" and meta is not None and meta.get("request_kind") == "prewarm":
+        out["client_turn_id_form"] = "prewarm"
+        out["client_turn_started_gap_ok"] = True
+        return out
+    if meta is not None and isinstance(turn_id, str) and meta.get("turn_id") == turn_id:
+        started = meta.get("turn_started_at_unix_ms")
+        if _TURN_ID_V7_RE.match(turn_id) and isinstance(started, int) and not isinstance(started, bool):
+            gap = started - int(turn_id.replace("-", "")[:12], 16)
+            out["client_turn_started_gap_ok"] = TURN_START_GAP_MIN_MS <= gap <= TURN_START_GAP_MAX_MS
+    return out
+
+
 def input_passthrough_summary(items, client_metadata) -> dict | None:
     """``input`` 数组逐项 passthrough 的形态摘要；``input`` 里没有任何对象项时返回 None。
 
@@ -303,7 +361,8 @@ def input_passthrough_summary(items, client_metadata) -> dict | None:
     - ``turn_id_forms``：项级 turn_id 的形态（去重、字典序）``uuid``（规范小写 UUID）或 ``other``（不是字符串或不规范）；
     - ``tail_turn_id_matches_client``：最后一个带 turn_id 的项（请求尾部总属于当前回合）的 turn_id 是否等于 ``client_metadata.turn_id``；
     - ``client_turn_id_matches_turn_metadata``：``client_metadata.turn_id`` 是否等于 ``client_metadata["x-codex-turn-metadata"]`` 里的 turn_id。
-    后两个布尔值在任一侧取不到时为 False（判据要求 True，取不到即失败关闭）。
+    这两个布尔值在任一侧取不到时为 False（判据要求 True，取不到即失败关闭）。另并入 ``turn_id_wire_summary`` 的三个字段
+    （``client_turn_id_form``、``client_turn_started_gap_ok``、``client_session_ids_ok``）。
     """
 
     key_orders: set[str] = set()
@@ -339,6 +398,7 @@ def input_passthrough_summary(items, client_metadata) -> dict | None:
     client_ok = isinstance(client_turn_id, str) and bool(client_turn_id)
     limit = INPUT_PASSTHROUGH_SUMMARY_LIMIT
     return {
+        **turn_id_wire_summary(client_metadata),
         "key_orders": "|".join(sorted(key_orders)[:limit]),
         "assistant_key_orders": "|".join(sorted(assistant_orders)[:limit]),
         "carrier_types": sorted(carrier_types)[:limit],
@@ -518,6 +578,14 @@ def parse_ws_frames(data: bytes) -> list[dict]:
                     entry["shape"] = shape_top_level(obj)
             except ValueError:
                 entry["note"] = "非 JSON TEXT 消息"
+        if "note" not in entry:
+            # 消息原文（解压后的完整字节）的两个形态结论：官方 serde_json::to_string 既不加末尾换行，也不转义 <、>、&、U+2028／U+2029
+            # （按字面量写出）；网关若沿用带换行、带 HTML 转义的 Go 编码器，这里就是 True。只记布尔，不记内容。
+            entry["message_ends_with_newline"] = raw.endswith(b"\n")
+            lowered = raw.lower()
+            entry["message_has_html_escape"] = any(
+                token in lowered for token in (b"\\u003c", b"\\u003e", b"\\u0026", b"\\u2028", b"\\u2029")
+            )
         entry["message_complete"] = True
         entry["message_fragment_count"] = message_fragment_count
         entry["message_payload_length"] = len(message_payload)

@@ -1028,7 +1028,9 @@ case "$scenario" in
   ws-default)
     # SPEC-WS-002 默认线序必须来自没有 runtime_metrics 等条件 feature 的独立样本。
     # 只执行普通 WS turn，不注入头、不切 provider、不改 feature。
-    prompt='请只回复 OK，不要做任何其他事。' ;;
+    # PROMPT_HTML_PROBE（可选，缺省为空）：给提示词追加一段含 <、>、& 的文字。SPEC-WS-005 的“消息里不做 HTML 转义”判据要有区分力，
+    # 官方消息里得真有这三个字符：官方 serde_json 按字面量写出，网关若误用带转义的编码器就会写成 \u003c 一类。
+    prompt="请只回复 OK，不要做任何其他事。${PROMPT_HTML_PROBE:-}" ;;
   legacy-compact-beta)
     # SPEC-EP-014 legacy-beta-slot 的 beta 样本：第三槽为 x-codex-beta-features。
     #

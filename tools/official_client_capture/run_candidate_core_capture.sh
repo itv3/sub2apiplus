@@ -955,7 +955,8 @@ turn_metadata = json.dumps(metadata, separators=(",", ":"))
 payload = {
     "model": model,
     "instructions": "候选核心抓包固定指令",
-    "input": [{"type": "message", "role": "user", "content": "candidate core probe"}],
+    # CANDIDATE_BODY_USER_TEXT（可选）：调用方在子 shell 里显式导出时才替换用户消息文本（A06 的 HTML 转义判据用），其余请求体保持不变。
+    "input": [{"type": "message", "role": "user", "content": os.environ.get("CANDIDATE_BODY_USER_TEXT") or "candidate core probe"}],
     "tools": [{
         "type": "function",
         "name": "read_file",
@@ -1326,8 +1327,11 @@ stop_capture
 # 真实业务 response.id。上游依次出现预热、首轮业务和前缀复用续轮三帧。
 start_capture A06
 trigger_root="$work_dir/scenarios/A06/trigger"
-write_request_body "$trigger_root/first.json" "$main_model" non_lite a06-first
-write_request_body "$trigger_root/continuation.json" "$main_model" non_lite a06-continuation
+# PROMPT_HTML_PROBE（可选，缺省为空）：A06 的两条用户消息追加一段含 <、>、& 的文字，与官方 ws-default 作业同一段，
+# 让 SPEC-WS-005 的“消息里不做 HTML 转义”判据在候选侧有区分力。
+a06_user_text="candidate core probe${PROMPT_HTML_PROBE:-}"
+CANDIDATE_BODY_USER_TEXT="$a06_user_text" write_request_body "$trigger_root/first.json" "$main_model" non_lite a06-first
+CANDIDATE_BODY_USER_TEXT="$a06_user_text" write_request_body "$trigger_root/continuation.json" "$main_model" non_lite a06-continuation
 prepare_a06_bodies "$trigger_root/first.json" "$trigger_root/continuation.json"
 run_response_ws_session \
   "$trigger_root/first.json" \
