@@ -160,11 +160,36 @@ def locate_evidence(path: Path) -> EvidenceSet:
     )
 
 
+def localized_root(directory: Path, work_dir: Path, notes: list[str]) -> Path:
+    """模型条件收据（``model-condition-receipt.json``）里记着采集时证据根的绝对路径，编目器按它核对；离线副本在别的路径，
+    直接编目会报“evidence_root 不一致”。有这种收据的根拷到工作目录，只把收据里的 ``evidence_root`` 改成副本的真实路径
+    （其余字段与各绑定摘要原样，原证据不动），其余根原地使用。"""
+
+    receipt = directory / "model-condition-receipt.json"
+    if not receipt.is_file():
+        return directory
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return directory
+    if not isinstance(payload, dict) or payload.get("evidence_root") == str(directory.resolve()):
+        return directory
+    copy = work_dir / "localized-roots" / directory.name
+    if not copy.exists():
+        shutil.copytree(directory, copy)
+        copied = copy / "model-condition-receipt.json"
+        payload["evidence_root"] = str(copy.resolve())
+        copied.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        notes.append(f"证据根 {directory.name} 的模型条件收据按离线副本路径改写 evidence_root（其余字段不变）")
+    return copy
+
+
 def job_roots_for_side(
     evidence: EvidenceSet,
     declaration: Mapping[str, Any],
     side: str,
     roots_dir: Path | None,
+    work_dir: Path,
 ) -> tuple[dict[str, list[tuple[str, Path]]], dict[str, Path], list[str]]:
     """job → [(inventory 前缀, 证据根目录)]；返回 (job_roots, 源根名→目录, 说明)。
 
@@ -195,6 +220,7 @@ def job_roots_for_side(
             directory = roots_dir / name if roots_dir is not None and (roots_dir / name).is_dir() else evidence.bundle_dir / name
             if not directory.is_dir():
                 raise PreviewInputError(f"证据根目录不存在：{directory}")
+            directory = localized_root(directory, work_dir, notes)
             job_roots.setdefault(job_id, []).append((name, directory))
             source_roots[name] = directory
     missing = sorted(declared_jobs - set(job_roots))
@@ -227,7 +253,7 @@ def rebuild_bundle(
     work_dir: Path,
     roots_dir: Path | None,
 ) -> Rebuilt:
-    job_roots, source_roots, notes = job_roots_for_side(evidence, declaration, side, roots_dir)
+    job_roots, source_roots, notes = job_roots_for_side(evidence, declaration, side, roots_dir, work_dir)
     built = catalog_module.build_catalog(declaration, job_roots, side=side)
     bundle_dir = work_dir / assertion_gate.BUNDLE_DIR_NAME
     bundle_module.build_bundle(source_roots, built["bundle_plan"]["entries"], bundle_dir)

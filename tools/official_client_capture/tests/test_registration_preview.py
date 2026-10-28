@@ -325,6 +325,37 @@ class CommandLineTest(PreviewCase):
         self.assertTrue(err)
 
 
+class LocalizedRootTest(unittest.TestCase):
+    """模型条件收据记着采集时证据根的绝对路径；离线副本换了路径，编目前要把副本里的 evidence_root 改成副本路径。"""
+
+    def test_receipt_root_is_rewritten_in_a_work_copy_and_the_original_is_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "roots" / "run-a"
+            root.mkdir(parents=True)
+            (root / "relay").mkdir()
+            (root / "relay" / "conn001.client_to_upstream.bin").write_bytes(b"x")
+            original = {"evidence_root": "/root/oauth-capture/runs/run-a", "job_id": "j", "status": "success"}
+            (root / "model-condition-receipt.json").write_text(json.dumps(original), encoding="utf-8")
+            notes: list[str] = []
+            work = base / "work"
+            work.mkdir()
+            localized = preview.localized_root(root, work, notes)
+            self.assertNotEqual(localized, root)
+            patched = json.loads((localized / "model-condition-receipt.json").read_text(encoding="utf-8"))
+            self.assertEqual(patched["evidence_root"], str(localized.resolve()))
+            self.assertEqual({k: v for k, v in patched.items() if k != "evidence_root"}, {"job_id": "j", "status": "success"})
+            self.assertEqual(json.loads((root / "model-condition-receipt.json").read_text(encoding="utf-8")), original)
+            self.assertTrue((localized / "relay" / "conn001.client_to_upstream.bin").is_file())
+            self.assertEqual(len(notes), 1)
+            # 路径本来就一致、或根里没有收据：原地使用，不复制。
+            (localized / "model-condition-receipt.json").write_text(json.dumps({"evidence_root": str(localized.resolve())}), encoding="utf-8")
+            self.assertEqual(preview.localized_root(localized, work, []), localized)
+            plain = base / "plain"
+            plain.mkdir()
+            self.assertEqual(preview.localized_root(plain, work, []), plain)
+
+
 class VersionRewriteTest(unittest.TestCase):
     def test_rewrites_every_string_in_nested_structures(self) -> None:
         value = {"a": "version: 2.0.0", "b": ["codex/2.0.0", {"c": "x2.0.0y"}], "d": 3}
