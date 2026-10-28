@@ -249,7 +249,7 @@ def write_candidate_probe(
             "capture_exit_code": 0,
             "account_proxy_original": "NULL|NULL",
             **{name: True for name in evidence.CANDIDATE_RESTORATION_EQUALITIES},
-            "keeper_was_running": True,
+            "keeper_was_running": False,
             "runtime_secrets_removed": True,
             "started_at_utc": "2026-10-07T00:10:00Z",
             "ended_at_utc": "2026-10-07T00:30:00Z",

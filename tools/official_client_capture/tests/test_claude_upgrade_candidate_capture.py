@@ -57,7 +57,8 @@ BASE_GATEWAY = {
         "container": SERVICE, "container_id": "a" * 64, "image_id": SERVICE_IMAGE_ID, "running": True, "started_at": "t0",
         "port": 8080, "hosts_sha256": "1" * 64, "ca_bundle_sha256": "2" * 64, "custom_ca_present": False,
     },
-    "keeper": {"container": KEEPER, "running": True},
+    # keeper（账号保活容器）已下线：合成夹具与真实现场一致，如实记未部署（在场形状另有专门用例）。
+    "keeper": {"container": KEEPER, "running": False, "deployed": False},
     "postgres": {"container": POSTGRES},
     "account": {"id": 7, "shape": "anthropic|oauth|NULL|live", "proxy_state": "3|NULL", "gate_sha256": "5" * 64},
     "api_key": {"id": 9, "shape": "active|5|live"},
@@ -114,7 +115,7 @@ if probe not in control.get("no_report", []):
         "probe_id": probe, "account_id": int(os.environ["ACCOUNT_ID"]), "api_key_id": int(os.environ["API_KEY_ID"]),
         "trigger": os.environ["GATEWAY_TRIGGER"], "relay_port": int(os.environ["RELAY_PORT"]), "capture_exit_code": code,
         "account_proxy_original": "3|NULL", "account_proxy_restored_equal": restored, "account_gate_restored_equal": True,
-        "hosts_sha256_equal": True, "ca_bundle_sha256_equal": True, "keeper_was_running": True, "runtime_secrets_removed": True,
+        "hosts_sha256_equal": True, "ca_bundle_sha256_equal": True, "keeper_was_running": False, "runtime_secrets_removed": True,
         "started_at_utc": "2026-10-07T00:00:00Z", "ended_at_utc": "2026-10-07T00:00:01Z",
     }
     with open(os.path.join(report_dir, probe + ".json"), "w", encoding="utf-8") as handle:
@@ -433,14 +434,16 @@ class GatewayProbeTests(unittest.TestCase):
         self.data = Path(directory.name)
         self.manifest = {"configuration": dict(CANDIDATE_CONFIGURATION)}
         self.commands: list[list[str]] = []
+        # keeper（账号保活容器）的仿真状态：present 在场；absent 容器不存在；broken docker 守护进程故障。
+        self.keeper_mode = "present"
 
     def fake_command(self, argv, *, operation, deadline=None, heartbeat=None, check=True, timeout_seconds=30):
         del operation, deadline, heartbeat, timeout_seconds
         argv = [str(item) for item in argv]
         self.commands.append(argv)
 
-        def done(stdout: str = "", code: int = 0):
-            return subprocess.CompletedProcess(argv, code, stdout, "")
+        def done(stdout: str = "", code: int = 0, stderr: str = ""):
+            return subprocess.CompletedProcess(argv, code, stdout, stderr)
 
         if argv[:3] == ["docker", "inspect", "--format"]:
             template, target = argv[3], argv[4]
@@ -451,6 +454,10 @@ class GatewayProbeTests(unittest.TestCase):
                     return done("POSTGRES_USER=sub2api\nPOSTGRES_DB=sub2api\nPOSTGRES_PASSWORD=secret-pg\n")
                 return done("SERVER_PORT=18080\nJWT_SECRET=secret-jwt\n")
             if template == "{{json .State.Running}}":
+                if self.keeper_mode == "absent":
+                    return done("", 1, f"Error response from daemon: No such object: {target}\n")
+                if self.keeper_mode == "broken":
+                    return done("", 1, "Cannot connect to the Docker daemon\n")
                 return done("true\n")
         if argv[:2] == ["docker", "exec"] and argv[3] == "sha256sum":
             return done(("1" if argv[4] == "/etc/hosts" else "2") * 64 + "  " + argv[4] + "\n")
@@ -480,6 +487,32 @@ class GatewayProbeTests(unittest.TestCase):
         self.assertFalse([argv for argv in self.commands if argv[1] in mutating])
         self.assertEqual(candidate_capture.gateway_coordinates(candidate_capture.candidate_variables(self.manifest), service_port=18080)["base_url"],
                          "http://sub2apiplus:18080")
+
+    def test_keeper_absent_is_recorded_as_not_deployed(self) -> None:
+        """keeper 已下线：docker 报容器不存在就如实记 deployed=false、running=false，其余事实照取。"""
+
+        with mock.patch.object(capture, "_run_probe_command", self.fake_command):
+            present = candidate_capture.probe_gateway_environment(self.manifest, self.data, "before")
+        self.keeper_mode = "absent"
+        with mock.patch.object(capture, "_run_probe_command", self.fake_command):
+            snapshot = candidate_capture.probe_gateway_environment(self.manifest, self.data, "before")
+        self.assertEqual(snapshot["keeper"], {"container": KEEPER, "running": False, "deployed": False})
+        self.assertEqual(snapshot["service"]["port"], 18080)
+        self.assertEqual(candidate_capture.readiness_failures(snapshot), [])
+        # 缺席前后两份快照在比较字段上无漂移；keeper 在场（原本在跑）而之后缺席才会被 keeper.running 报漂移。
+        self.assertEqual(candidate_capture.gateway_drift(snapshot, json.loads(json.dumps(snapshot))), [])
+        self.assertEqual(candidate_capture.gateway_drift(present, snapshot), ["keeper.running"])
+
+    def test_keeper_present_snapshot_shape_is_unchanged(self) -> None:
+        with mock.patch.object(capture, "_run_probe_command", self.fake_command):
+            snapshot = candidate_capture.probe_gateway_environment(self.manifest, self.data, "before")
+        self.assertEqual(snapshot["keeper"], {"container": KEEPER, "running": True})
+
+    def test_keeper_daemon_failure_is_not_mistaken_for_absence(self) -> None:
+        self.keeper_mode = "broken"
+        with mock.patch.object(capture, "_run_probe_command", self.fake_command):
+            with self.assertRaisesRegex(ConfigurationError, "candidate-gateway:keeper 执行失败（退出码 1）"):
+                candidate_capture.probe_gateway_environment(self.manifest, self.data, "before")
 
     def test_readiness_and_drift(self) -> None:
         dirty = json.loads(json.dumps(BASE_GATEWAY))

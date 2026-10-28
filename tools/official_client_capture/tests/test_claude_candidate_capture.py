@@ -471,6 +471,13 @@ if command == "inspect":
             done(state["capture_ids"][target] + "\n")
         done(code=1)
     if fmt == "{{.State.Running}}":
+        if state.get("keeper_absent") and target == "sub2apiplus-keeper":
+            # keeper 已下线不再部署：docker 对不存在的容器报 No such object（退出码 1、stdout 为空）。
+            sys.stderr.write(f"Error response from daemon: No such object: {target}\n")
+            done(code=1)
+        if state.get("keeper_daemon_error") and target == "sub2apiplus-keeper":
+            sys.stderr.write("Cannot connect to the Docker daemon\n")
+            done(code=1)
         done(("true" if state["keeper_running"] else "false") + "\n")
     if "State.Health" in fmt:
         done("healthy\n")
@@ -649,6 +656,35 @@ class _CandidateScriptCase(unittest.TestCase):
 
 class CandidateScriptTests(_CandidateScriptCase):
     """宿主侧候选采集脚本端到端（仿真 docker）。"""
+
+    def test_keeper_absent_run_skips_stop_start_and_records_not_running(self) -> None:
+        """keeper 不存在（已下线）：脚本不停不启，恢复核验照常通过，恢复报告如实记 keeper_was_running=false。"""
+
+        result = self.run_script(keeper_absent=True, keeper_running=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("keeper 容器不存在（未部署），跳过停启", result.stderr)
+        state = self.final_state()
+        calls = [call for call in state["calls"] if call[0] in {"stop", "start"}]
+        self.assertEqual(calls, [], "keeper 缺席时不得 docker stop／start 任何容器")
+        # 账号 proxy、调度门、hosts、CA 仍精确恢复。
+        self.assertEqual((state["proxy"], state["fallback"], state["proxies"]), ("3", None, {}))
+        self.assertEqual((state["gate"], state["custom_ca_present"]), ("|", False))
+        self.assertEqual(state["hosts"], self.original_hosts)
+        report = self.report()
+        self.assertFalse(report["keeper_was_running"])
+        self.assertEqual((report["status"], report["capture_exit_code"]), ("complete", 0))
+        self.assertTrue(all(report[key] for key in ("account_proxy_restored_equal", "account_gate_restored_equal",
+                                                    "hosts_sha256_equal", "ca_bundle_sha256_equal", "runtime_secrets_removed")))
+
+    def test_keeper_daemon_error_is_not_mistaken_for_absence(self) -> None:
+        """docker 故障不是「容器不存在」：快照阶段就失败，且尚未修改任何东西。"""
+
+        result = self.run_script(keeper_daemon_error=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("无法读取 keeper 容器状态", result.stderr)
+        state = self.final_state()
+        self.assertEqual([call for call in state["calls"] if call[0] in {"stop", "start", "restart"}], [])
+        self.assertEqual((state["proxy"], state["proxies"], state["custom_ca_present"]), ("3", {}, False))
 
     def test_complete_run_isolates_and_restores_exactly(self) -> None:
         result = self.run_script()
@@ -855,6 +891,24 @@ class CandidateRestoreOnlyTests(_CandidateScriptCase):
         self.assertFalse((self.data / "runs").exists())
         # 服务重启经监督器的出口维护声明（清理形态）。
         self.assertIn(["restart", "sub2apiplus"], [call for call in self.final_state()["calls"] if call[0] == "restart"])
+
+    def test_restore_only_with_keeper_absent_restores_without_touching_keeper(self) -> None:
+        """keeper 已下线：强杀后的 --restore-only 照常恢复，不把「不存在」当成被停掉的 keeper，也不去启动它。"""
+
+        self.kill_mid_capture(keeper_absent=True, keeper_running=False)
+        result = self.restore_only()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "restored")
+        self.assertEqual(
+            report["found"],
+            {"temporary_proxy": True, "account_bound_to_temporary_proxy": True, "custom_ca": True, "keeper_stopped": False},
+        )
+        self.assertFalse(report["keeper_was_running"])
+        state = self.final_state()
+        self.assertEqual([call for call in state["calls"] if call[0] in {"stop", "start"}], [])
+        self.assertEqual((state["proxy"], state["proxies"], state["custom_ca_present"]), ("3", {}, False))
+        self.assertEqual(state["hosts"], self.original_hosts)
 
     def test_restore_only_refusals_and_failures(self) -> None:
         self.kill_mid_capture()

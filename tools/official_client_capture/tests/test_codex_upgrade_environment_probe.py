@@ -41,7 +41,13 @@ class DockerFixture:
         duplicate_account_key: bool = False,
         hosts_lines: tuple[str, ...] | None = None,
         container_id_salt: str = "",
+        missing_containers: frozenset[str] = frozenset(),
+        broken_containers: frozenset[str] = frozenset(),
     ) -> None:
+        # 模拟 docker 报告「容器不存在」的容器名（keeper 下线后的真实现状）。
+        self.missing_containers = missing_containers
+        # 模拟 docker 守护进程故障（不是「不存在」）的容器名，不能被当成未部署。
+        self.broken_containers = broken_containers
         self.fail_first = fail_first
         self.duplicate_account_key = duplicate_account_key
         # compose 重建会换实例 ID；salt 用来在测试里模拟同名容器的新实例。
@@ -82,6 +88,19 @@ class DockerFixture:
 
         if arguments[:2] == ["docker", "inspect"]:
             container = arguments[2]
+            if container in self.missing_containers:
+                return self._completed(
+                    arguments,
+                    stdout="[]\n",
+                    stderr=f"Error: No such object: {container}\n",
+                    returncode=1,
+                )
+            if container in self.broken_containers:
+                return self._completed(
+                    arguments,
+                    stderr="Cannot connect to the Docker daemon\n",
+                    returncode=1,
+                )
             suffix = hashlib.sha256(
                 (self.container_id_salt + container).encode("utf-8")
             ).hexdigest()
@@ -638,6 +657,123 @@ class EnvironmentProbeTest(unittest.TestCase):
                 set(parsed_database.watermarks),
                 finalizer.DATABASE_WATERMARK_TABLES,
             )
+
+
+class KeeperOptionalTest(unittest.TestCase):
+    """keeper（账号保活容器）已下线：缺席如实记「未部署」，在场时行为不变，其它容器缺席仍失败。"""
+
+    KEEPER = "sub2apiplus-keeper"
+
+    def setUp(self) -> None:
+        self.egress = self.enterContext(runtime_egress_fixtures.stubbed_runtime_egress_admission())
+
+    def _arguments(self, output_dir: Path, phase: str = "before") -> probe.ProbeArguments:
+        return probe.ProbeArguments(
+            output_dir=output_dir,
+            service_container="sub2apiplus",
+            keeper_container=self.KEEPER,
+            postgres_container="sub2apiplus-postgres",
+            redis_container="sub2apiplus-redis",
+            capture_container="oauth-capture",
+            account_id=41,
+            api_key_id=73,
+            phase=phase,
+        )
+
+    def _run(self, output_dir: Path, fixture: DockerFixture, phase: str = "before") -> dict[str, object]:
+        with mock.patch.object(probe.subprocess, "run", side_effect=fixture):
+            return probe.run_probe(self._arguments(output_dir, phase))
+
+    @staticmethod
+    def _state(output_dir: Path, kind: str) -> dict[str, object]:
+        return json.loads((output_dir / probe.STATE_FILES[kind]).read_text())["state"]
+
+    def test_keeper_absent_is_recorded_as_not_deployed_and_never_touched(self) -> None:
+        fixture = DockerFixture(missing_containers=frozenset({self.KEEPER}))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "probe"
+            manifest = self._run(output, fixture)
+            # 目标清单仍登记 keeper 名字（Campaign 配置不变），证据里如实记未部署。
+            self.assertEqual(manifest["targets"]["keeper"], self.KEEPER)
+            containers = {item["role"]: item for item in self._state(output, "containers")["containers"]}
+            self.assertEqual(
+                containers["keeper"],
+                {"container": self.KEEPER, "deployed": False, "role": "keeper"},
+            )
+            self.assertTrue(containers["service"]["running"])
+            processes = {item["role"]: item for item in self._state(output, "service")["processes"]}
+            self.assertEqual(processes["keeper"], {"deployed": False, "role": "keeper"})
+            records = {item["role"]: item for item in self._state(output, "configuration")["records"]}
+            self.assertEqual(
+                records["keeper"],
+                {"container": self.KEEPER, "deployed": False, "role": "keeper"},
+            )
+            self.assertEqual({"service", "capture"} - set(records), set())
+            # 不存在的容器不会被 exec：除了那一次 inspect，不得有任何命令指向 keeper。
+            keeper_calls = [call for call in fixture.calls if self.KEEPER in call]
+            self.assertEqual(keeper_calls, [["docker", "inspect", self.KEEPER]])
+
+    def test_keeper_absent_before_and_after_are_byte_equal_for_every_snapshot(self) -> None:
+        """前后两次探针在 keeper 缺席下逐字节一致（byte_equal 比较不会误判环境未恢复）。"""
+
+        fixture = DockerFixture(missing_containers=frozenset({self.KEEPER}))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._run(root / "before", fixture, "before")
+            self._run(root / "after", fixture, "after")
+            for kind in ("service", "containers", "configuration", "account"):
+                self.assertEqual(
+                    (root / "before" / probe.STATE_FILES[kind]).read_bytes(),
+                    (root / "after" / probe.STATE_FILES[kind]).read_bytes(),
+                    kind,
+                )
+
+    def test_keeper_present_keeps_full_strict_records(self) -> None:
+        """在场时记录形状与以往逐字相同（有 running／health／mounts，hosts 与 CA 摘要照取）。"""
+
+        fixture = DockerFixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "probe"
+            self._run(output, fixture)
+            containers = {item["role"]: item for item in self._state(output, "containers")["containers"]}
+            self.assertEqual(
+                set(containers["keeper"]),
+                {"container", "health", "image", "mounts", "role", "running", "status"},
+            )
+            self.assertNotIn("deployed", json.dumps(self._state(output, "service")))
+            records = {item["role"]: item for item in self._state(output, "configuration")["records"]}
+            self.assertIn("hosts_sha256", records["keeper"])
+            self.assertNotIn("deployed", records["keeper"])
+
+    def test_keeper_daemon_failure_is_not_mistaken_for_absence(self) -> None:
+        fixture = DockerFixture(broken_containers=frozenset({self.KEEPER}))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "probe"
+            with self.assertRaisesRegex(probe.EnvironmentProbeError, "keeper 容器检查执行失败（退出码 1）"):
+                self._run(output, fixture)
+            self.assertFalse(output.exists())
+
+    def test_other_containers_missing_still_fail_closed(self) -> None:
+        for container in ("sub2apiplus", "sub2apiplus-postgres", "sub2apiplus-redis", "oauth-capture"):
+            with self.subTest(container=container), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "probe"
+                fixture = DockerFixture(missing_containers=frozenset({container}))
+                with self.assertRaises(probe.EnvironmentProbeError):
+                    self._run(output, fixture)
+                self.assertFalse(output.exists())
+
+    def test_missing_detection_requires_docker_not_found_message(self) -> None:
+        """只认 docker 明确的 No such object／container；空 stderr、权限错误都不算缺席。"""
+
+        def completed(returncode: int, stdout: str, stderr: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(["docker", "inspect", "x"], returncode, stdout, stderr)
+
+        self.assertTrue(probe._container_is_missing(completed(1, "[]\n", "Error: No such object: x")))
+        self.assertTrue(probe._container_is_missing(completed(1, "", "Error response from daemon: No such container: x")))
+        self.assertFalse(probe._container_is_missing(completed(1, "[]\n", "")))
+        self.assertFalse(probe._container_is_missing(completed(1, "", "permission denied")))
+        self.assertFalse(probe._container_is_missing(completed(0, "[]\n", "No such object: x")))
+        self.assertFalse(probe._container_is_missing(completed(1, "[{\"Id\":\"a\"}]", "No such object: y")))
 
 
 if __name__ == "__main__":

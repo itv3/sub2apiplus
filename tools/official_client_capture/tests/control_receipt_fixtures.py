@@ -223,8 +223,13 @@ def create_job_rehearsal_receipt(
     preflight_campaign_id: str,
     preflight_campaign_dir: Path | None = None,
     preflight_manifest_sha256: str | None = None,
+    keeper_deployed: bool = False,
 ) -> Path:
-    """写入不运行命令的合成全量 Job facts，并经正式 finalizer 封存。"""
+    """写入不运行命令的合成全量 Job facts，并经正式 finalizer 封存。
+
+    ``keeper_deployed`` 缺省为假：keeper（账号保活容器）已下线不再部署，合成夹具与真实现场一致，
+    容器事实里 keeper 如实记为 ``{"name", "deployed": false}``；传真则回到旧口径（五个容器都在跑）。
+    """
 
     from tools.official_client_capture import codex_upgrade
 
@@ -269,13 +274,18 @@ def create_job_rehearsal_receipt(
             )
         }
     )
+    keeper_name = str(configuration["keeper_container"])
     containers = [
-        {
-            "name": name,
-            "container_id": f"{index:x}" * 64,
-            "image_id": f"sha256:{index + 5:x}" + f"{index + 5:x}" * 63,
-            "running": True,
-        }
+        (
+            {"name": name, "deployed": False}
+            if name == keeper_name and not keeper_deployed
+            else {
+                "name": name,
+                "container_id": f"{index:x}" * 64,
+                "image_id": f"sha256:{index + 5:x}" + f"{index + 5:x}" * 63,
+                "running": True,
+            }
+        )
         for index, name in enumerate(container_names, 1)
     ]
     capture_root = str(configuration["capture_root"])
