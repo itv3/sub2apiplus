@@ -49,7 +49,11 @@ probe = _load("client_launch_probe")
 runner = _load("client_launch_probe_runner")
 
 # 只影响交互流程、不进入客户端命令行的驱动选项（各带一个取值）。
-NON_ARGV_OPTIONS = {"--warmup", "--slash", "--warmup-ready", "--slash-hold", "--prompt", "--prompt-hold", "--log"}
+# --step／--setting-hold 是 0.165 起新增的会话内有序步骤（中途改推理强度、换模型、压缩后续聊），
+# 只决定 TUI 里敲什么，客户端命令行不变；评估结论见 drive_codex_tui.py 的步骤说明。
+NON_ARGV_OPTIONS = {
+    "--warmup", "--slash", "--warmup-ready", "--slash-hold", "--prompt", "--prompt-hold", "--log", "--step", "--setting-hold",
+}
 # drive_codex_tui.py 的全部选项：新增任何一项都必须先评估它是否影响客户端命令行、探测是否需要复刻。
 DRIVE_OPTIONS = NON_ARGV_OPTIONS | {
     "--codex-bin", "--model", "--cwd", "--context-window", "--disable", "--enable", "--config",
