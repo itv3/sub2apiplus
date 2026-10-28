@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from tools.official_client_capture.tests import chain_rehearsal as engine
+from tools.official_client_capture.tests import chain_rehearsal_blindspots as blindspots
 from tools.official_client_capture.tests import chain_rehearsal_inject as inject_module
 from tools.official_client_capture.tests.chain_rehearsal import (
     Checkpoint, CommandRunner, Probe, Registry, UnittestRunner,
@@ -262,6 +263,60 @@ DEFECT_PROBES: tuple[Probe, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# 一之二、整链空跑补盲区（上一版升级里空跑没报出、正式运行才暴露的三类问题；见 chain_rehearsal_blindspots）
+# ---------------------------------------------------------------------------
+
+FAKE_CODEX_DAEMON_GATE = "{tree}/tools/official_client_capture/tests/fixtures/chain_rehearsal/fake_codex_daemon_gate.py"
+
+BLINDSPOT_PROBES: tuple[Probe, ...] = (
+    Probe(
+        "tui-callsite-flags-vs-binary-selfcheck",
+        "新版二进制拒收 TUI 调用点参数（自检）：假客户端复刻上一版的“带 --disable 必须 --no-daemon”规则，调用点命令行逐个交给它启动",
+        "VC-0", "客户端启动探测（调用点参数交给二进制）",
+        blindspots.StartupFlagRunner(binary=(sys.executable, FAKE_CODEX_DAEMON_GATE), window_seconds=3.0),
+        history=("94e344ec3", "记忆 next-codex-upgrade-known-emulation-deviations-0164 附（--no-daemon）",
+                 "入口第 13 步探测 5 个组合 3 个 drive_exited，排在 2 小时门禁之后"),
+        signature=("Cannot use the shared background server",),
+        injections=(ReversePatch("tui-no-daemon-callsites.patch", "94e344ec3"),),
+    ),
+    Probe(
+        "tui-callsite-flags-vs-real-binary",
+        "新版真二进制拒收 TUI 调用点参数：用 REHEARSAL_CODEX_BIN 指向的新版二进制，在无网络命名空间里逐个启动调用点命令行",
+        "VC-0", "客户端启动探测（真二进制）",
+        blindspots.StartupFlagRunner(),
+        history=("94e344ec3",),
+    ),
+    Probe(
+        "closeout-env-nested-executor-isolation",
+        "收尾门禁带收尾环境变量时的测试隔离：把 codex_closeout.run_gates 设的环境变量全部注入，再跑会嵌套起执行器的最小测试全集",
+        "收尾", "收尾全量门禁（执行器环境）",
+        blindspots.closeout_env_runner(),
+        history=("ccb44bab5", "cd75bb9ee", "上一版收尾门禁 test_ci_background_validation_retry 等 3 个单元红，整轮白跑 2.1 小时"),
+        # 缺陷现象：嵌套执行器误用外层门禁的持久补跑账本，第一个用例用掉唯一额度，后面的用例读到“补跑被拒”。
+        signature=("retry-denied",),
+        injections=(ReversePatch("closeout-env-nested-executor.patch", "ccb44bab5"),),
+        copy_extra=("tools/codex_closeout.py",),
+    ),
+    Probe(
+        "label-declaration-vs-real-candidate-stream",
+        "证据标签声明对真实候选 WS 流：本树上一版声明的 frame_labels 落在真实候选 A06 流（压缩消息被拆成多帧）的哪一帧，判据能否选中",
+        "VC-5", "候选侧 seal 预检（选择器可达性）",
+        UnittestRunner([f"{TESTS}.test_registration_preview.TreeDeclarationReplayTest",
+                        f"{TESTS}.test_frame_label_selectors.PriorCandidateFixtureTest"], timeout_seconds=600),
+        history=("c34cdb67e", "WS005.md／WSFIX.md", "VC-5 seal 预览被 SPEC-WS-005 的 7 条 first-business-frame 检查拒收，标签写成原始帧序号 1、实际在 7"),
+        signature=("原写 1、实际 7",),
+        injections=(ReversePatch("label-first-business-frame-index.patch", "c34cdb67e"),),
+    ),
+    Probe(
+        "prior-candidate-seal-assert-replay",
+        "候选侧 seal 预检与 assert-rules 对上一版真实候选证据回放：本树最新标签声明与候选期望清单，REHEARSAL_PRIOR_CANDIDATE_EVIDENCE 给证据",
+        "VC-5", "候选侧 seal／assert 回放",
+        blindspots.PriorCandidateReplayRunner(),
+        history=("WS005.md／WSFIX.md／BODYFIX.md", "SPEC-WS-005 标签错位 + SPEC-BODY-003 判据过严，撞一个修一个，合计 3.0 小时"),
+    ),
+)
+
+# ---------------------------------------------------------------------------
 # 二、恢复分支故障注入探针（ARM64 root 专用；缺条件如实“未执行”）
 # ---------------------------------------------------------------------------
 
@@ -377,7 +432,9 @@ CHAIN_STEPS: tuple[Probe, ...] = (
 # 完整链的范围声明（写进汇总与 README）：它是 6 个真实链模块串联，不是整条 VC-0～VC-6 的端到端回放。
 CHAIN_SCOPE_NOTE = (
     "本完整链是 6 个真实链模块的串联（VC-1 取证、VC-2～VC-5 连续链、评估、构建修订、段复用、VC-6 canonical），"
-    "不含候选侧 seal、compare、accept 链；接入 rehearse-candidate-seal 需要上一版候选证据，放在 ARM64 阶段。"
+    "各真实链用合成夹具自建 Campaign，不含候选侧 seal、compare、accept 链的真实证据回放；"
+    "这一块由独立探针 prior-candidate-seal-assert-replay 覆盖 seal 预检与 assert-rules（给 REHEARSAL_PRIOR_CANDIDATE_EVIDENCE），"
+    "compare（读 Campaign 封存阶段结果与表面指纹）不回放。"
 )
 
 CHECKPOINTS: Mapping[str, Checkpoint] = {}
@@ -387,7 +444,7 @@ def registry() -> Registry:
     """引擎用的登记表：独立探针＝历史缺陷＋恢复分支；完整链单列。"""
 
     return Registry(
-        probes=DEFECT_PROBES + RECOVERY_PROBES,
+        probes=DEFECT_PROBES + BLINDSPOT_PROBES + RECOVERY_PROBES,
         chain=CHAIN_STEPS,
         checkpoints=CHECKPOINTS,
         copy_tree=copy_repo_subset,

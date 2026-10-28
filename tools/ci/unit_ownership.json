@@ -427,6 +427,13 @@
    "owner": "shared",
    "rule": "default-shared"
   },
+  "test_chain_rehearsal_blindspots": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
   "test_chain_rehearsal_catalog": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -2751,6 +2758,13 @@
    "owner": "shared",
    "rule": "default-shared"
   },
+  "test_frame_label_selectors": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
   "test_generate_claude_fw_g_profile": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -2939,6 +2953,13 @@
    "core_seconds": 0.3,
    "owner": "shared",
    "rule": "default-shared"
+  },
+  "test_registration_preview": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
   },
   "test_relay_daemon_scenario": {
    "claude_plan": "run",

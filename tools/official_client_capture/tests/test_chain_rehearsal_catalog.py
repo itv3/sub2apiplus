@@ -193,6 +193,8 @@ class CatalogInjectionTest(unittest.TestCase):
                 paths = ([item.path for item in inject.parse_patch(inject.load_patch(injection.patch))]
                          if isinstance(injection, inject.ReversePatch) else [injection.path])
                 for path in paths:
+                    if path in inject.ALLOWED_TEST_INFRASTRUCTURE:
+                        continue
                     self.assertNotIn("/tests/", path, f"{probe.probe_id} 的注入器改了测试文件 {path}")
 
 

@@ -1,0 +1,110 @@
+{
+  "artifacts": [
+    {
+      "kind": "relay_binary",
+      "labels": {
+        "body_length": "automatic",
+        "compression": "plain",
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "residency": "unset",
+        "track": "main",
+        "transport": "http"
+      },
+      "parser": "opaque_bound_source",
+      "path": "c01640-formal-vc1-r1-20261027t000000z-c01640-candidate-r1-candidate-frozen-core/scenarios/A04/relay/conn002.client_to_upstream.bin",
+      "scenario_ids": [
+        "A04"
+      ]
+    },
+    {
+      "kind": "relay_binary",
+      "labels": {
+        "body_length": "automatic",
+        "compression": "plain",
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "residency": "us",
+        "track": "main",
+        "transport": "http"
+      },
+      "parser": "opaque_bound_source",
+      "path": "c01640-formal-vc1-r1-20261027t000000z-c01640-candidate-r1-candidate-frozen-core/scenarios/A04/relay/conn004.client_to_upstream.bin",
+      "scenario_ids": [
+        "A04"
+      ]
+    },
+    {
+      "kind": "relay_binary",
+      "labels": {
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "track": "main",
+        "transport": "websocket",
+        "variant": "default"
+      },
+      "parser": "opaque_bound_source",
+      "path": "c01640-formal-vc1-r1-20261027t000000z-c01640-candidate-r1-candidate-frozen-core/scenarios/A06/relay/conn001.client_to_upstream.bin",
+      "scenario_ids": [
+        "A06"
+      ]
+    },
+    {
+      "kind": "process_trace",
+      "labels": {
+        "body_length": "automatic",
+        "compression": "plain",
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "residency": "unset",
+        "track": "main",
+        "transport": "http"
+      },
+      "parser": "observation_jsonl",
+      "path": "derived/A04/process_trace/A04_relay_conn002.client_to_upstream.bin.observation.ndjson",
+      "scenario_ids": [
+        "A04"
+      ]
+    },
+    {
+      "kind": "process_trace",
+      "labels": {
+        "body_length": "automatic",
+        "compression": "plain",
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "residency": "us",
+        "track": "main",
+        "transport": "http"
+      },
+      "parser": "observation_jsonl",
+      "path": "derived/A04/process_trace/A04_relay_conn004.client_to_upstream.bin.observation.ndjson",
+      "scenario_ids": [
+        "A04"
+      ]
+    },
+    {
+      "frame_labels": {
+        "0": {
+          "frame_role": "warmup"
+        },
+        "7": {
+          "frame_role": "first_business"
+        }
+      },
+      "kind": "websocket_trace",
+      "labels": {
+        "mode": "lite",
+        "provider": "openai_oauth",
+        "track": "main",
+        "transport": "websocket",
+        "variant": "default"
+      },
+      "parser": "observation_jsonl",
+      "path": "derived/A06/websocket_trace/A06_relay_conn001.client_to_upstream.bin.observation.ndjson",
+      "scenario_ids": [
+        "A06"
+      ]
+    }
+  ]
+}

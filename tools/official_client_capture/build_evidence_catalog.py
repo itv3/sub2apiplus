@@ -54,6 +54,7 @@ from tools.official_client_capture.build_assertion_bundle import (  # noqa: E402
 from tools.official_client_capture.candidate_rule_assertion import (  # noqa: E402
     ENVIRONMENT_PROBE_SNI_FIELD,
     AssertionConfigurationError,
+    parse_frame_label_selector,
     validate_environment_probe_sni,
 )
 from tools.official_client_capture.model_condition_receipts import (  # noqa: E402
@@ -274,7 +275,9 @@ def _validate_rule(
             )
         labels = rule["labels"]
         for frame_index, values in frame_labels.items():
-            if not isinstance(frame_index, str) or not frame_index.isdigit():
+            # 键是原始帧序号（旧写法），或 message:N／event:<类型>:N（按消息序号、事件类型命中，
+            # 候选网关把一条消息拆成多帧时不受分片数影响）；落到具体帧在断言加载器里完成。
+            if parse_frame_label_selector(frame_index) is None:
                 raise EvidenceCatalogError(
                     f"job {job_id} 的 frame_labels 索引非法：{frame_index!r}"
                 )

@@ -822,15 +822,34 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
 * 历史重放（`replay-history`）：把每个历史缺陷的修复补丁反向打进受管树副本，要求探针一轮里各自报出且失败信息命中缺陷签名；每个探针的干净树基线必须先通过。
   这是验证“空跑真能报出上一版升级那批缺陷”的自检，不是每次升级都要跑；受管文件在修复之后又被改过、补丁打不上时该缺陷标“未执行”。
 * 完整链（`full-chain`）：**6 个真实链模块的串联**——VC-1 取证 → VC-2～VC-5 连续链 → 评估 → 构建修订 → 段复用 → VC-6 canonical，沿用
-  `rehearse-candidate-seal` 遇首个失败即停的语义，后面标“未执行”，用来确认这 6 个模块整体能通。**它不含候选侧的 seal、compare、accept 链**
-  （各真实链用合成夹具自建 Campaign，候选 attempt 是合成的，不是上一版候选证据的回放）；把 `rehearse-candidate-seal` 接进来需要上一版候选证据，
-  放在 ARM64 阶段做（做法见任务文档第 13 项的 ARM64 验收步骤）。汇总的 `scope_note` 与表头“范围”一行都写着这句话。
+  `rehearse-candidate-seal` 遇首个失败即停的语义，后面标“未执行”，用来确认这 6 个模块整体能通。**它自己不含候选侧 seal、compare、accept 链的真实证据回放**
+  （各真实链用合成夹具自建 Campaign，候选 attempt 是合成的）；这一块由独立探针 `prior-candidate-seal-assert-replay` 覆盖 seal 预检与 assert-rules
+  （见下面“补盲区探针”），compare 读 Campaign 里的封存阶段结果与表面指纹、与标签和判据无关，不回放。汇总的 `scope_note` 与表头“范围”一行都写着这句话。
   `rehearse` 先 `round`、汇总后再另跑 `full-chain`（`round` 发现缺陷时默认不跑，先修再重跑）。
 * 退出码：0 全部符合预期；1 发现缺陷；2 探针自身出错或用法错误；3 没有缺陷但有未执行项。汇总在 `$RUNROOT/chain-rehearsal/<UTC>/`（`round.json`、`replay-history.json`、
   `full-chain.json`、`rehearse.json` 与同名 `.txt` 表）。
 * 被测树默认是数据根 `$D`（真实链在这里跑）；VC-2 离线判据门、阶段解析、生成器重放登记需要完整检出，可加 `--tree "$B/test-tree"`。与后台验证、采集互斥。
 * 不覆盖的部分（缺口，开工前仍要靠真实批次）：真实监督器下的候选采集脚本整段运行（脚本里的主机名解析、收尾断言按块单独回放，不是整段）、
-  候选侧录制证据回放与 `rehearse-candidate-seal` 接入——这些需要 ARM64 上留存的上一版候选证据。
+  候选网关的真实出站（要靠 VC-5 的候选采集）、compare 阶段的回放。
+* **补盲区探针（OPT-07，上一版空跑 2.9 小时没报出任何缺陷，之后正式运行暴露的三类问题其实都在它范围里）**，在 `round`／`replay-history` 里与历史缺陷探针一起跑：
+  * `tui-callsite-flags-vs-binary-selfcheck`／`tui-callsite-flags-vs-real-binary`（新版二进制拒收调用点参数，如 `--disable` 没有 `--no-daemon` 被拒）：
+    用受管驱动展开每个 TUI 调用点的真实客户端命令行，逐个交给二进制在伪终端里启动几秒，提前非零退出或输出命中拒绝特征即判被拒。
+    自检版用假客户端（复刻上一版的拒收规则）；真二进制版需要 `REHEARSAL_CODEX_BIN=<新版客户端二进制>`，并且必须能在无网络命名空间里启动
+    （Linux root＋`unshare -rn`，保证零请求），做不到如实“未执行”。真二进制探针放在开工准备阶段与登记并行跑，不占入口门禁之后的关键路径。
+  * `label-declaration-vs-real-candidate-stream`（标签声明对真实候选 WS 流）与 `prior-candidate-seal-assert-replay`（候选侧 seal 预检＋assert-rules 回放）：
+    后者给 `REHEARSAL_PRIOR_CANDIDATE_EVIDENCE=<上一版候选 attempt 目录>`（可加 `REHEARSAL_PRIOR_CANDIDATE_ROOTS`、`REHEARSAL_PRIOR_OFFICIAL_EVIDENCE`、
+    `REHEARSAL_PRIOR_OFFICIAL_ROOTS`），把本树最新的证据标签声明与候选期望清单对上一版真实证据回放，没给证据如实“未执行”。
+  * `closeout-env-nested-executor-isolation`（收尾门禁带收尾环境变量时的测试隔离）：从 `codex_closeout.run_gates` 源码取它设给执行器的全部环境变量原样注入，
+    再跑会嵌套起执行器的最小测试全集（真实树 16 个模块，历史重放的受管树副本 6 个）。新增收尾环境变量而测试包没剔除，嵌套执行器继承它，对应单元就红。
+  * 带自检的三个探针（假客户端、标签声明对真实流、收尾环境）都能用 `replay-history` 放回历史缺陷并被报出；注入器允许改测试包的 `__init__.py`（收尾环境缺陷的现场就在那里）。
+* **登记阶段离线预演**（`bash chain-rehearsal.sh preview …`，即 `python3 -m tools.official_client_capture.tests.registration_preview preview …`）：新版证据标签声明与候选期望清单对上一版真实候选证据
+  （可再加官方侧）按真实路径重新编目（编目→收口→派生→回填 manifest），列全 seal 预检的选择器零命中并给出诊断（带标签的帧落在哪、按消息序号解读该落在哪一帧），再对每条规则每个 check 求值；
+  标签写错帧、判据写严两类缺陷一次报全，不用等 VC-5 封存预览撞一个、assert-rules 再撞一个。零写入原证据、零请求，登记期间随时可跑（0.164 证据全程约 2 秒）。
+  用法：`--candidate-evidence <上一版候选 attempt 目录> --labels <新版声明> --profile <新版期望清单> [--candidate-roots-dir <完整原始证据根集合>] [--official-evidence … --official-roots-dir …]
+  [--rewrite-version 新版本=证据版本] [--candidate-only]`。新版判据里写死的版本字面量（UA、`version` 头）与上一版证据对不上时用 `--rewrite-version`；
+  新声明选中了上一版证据包里没有的文件，要给 `--*-roots-dir`（完整原始证据根），否则编目阶段如实报错。退出码 0 全通过、1 发现缺陷、2 输入有误、3 没有缺陷但有未执行项。
+* **何时跑（流程）**：整链空跑和离线预演都放在 0.165 登记期间并行做，不占关键路径——登记源码（标签声明、期望清单）一落盘就先跑预演；工具部署到 ARM64 测试树后，在后台验证之前的空闲窗口跑一遍 `rehearse`
+  （真实链各约 10 分钟占用 unshare／docker，与后台验证、采集互斥）。开工空跑通过之前不进入入口。
 * 缺陷签名：历史重放要求探针失败时，失败现象里出现**只在这个缺陷里才有的片段**（断言消息、`ImportError` 里缺失的符号、被改坏的函数名、
   工具的拒绝原因）；测试类名、方法名、请求的模块名不算，无关故障（语法错误、磁盘满……）命中不了签名，只会判“漏报”。
 

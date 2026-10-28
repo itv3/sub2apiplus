@@ -1,0 +1,8 @@
+这些文件是上一版升级的正式候选 Campaign 的真实断言证据包的一小部分，用作测试夹具：
+  bundle/<候选根>/scenarios/A04|A06/relay/*.bin   候选网关向上游发出的中继原始字节（秘密已在采集时抹掉，记为 <secret>XXXX）
+  bundle/derived/A04|A06/...observation.jsonl      由 derive_official_observations 从上面的原始字节派生出的结构化观测
+  manifest_entries.json                             真实 capture-manifest.json 里对应的 artifact 条目（去掉 sha256，由测试现算）
+关键事实（固定在测试里）：候选 A06 的 WebSocket 出站消息被压缩写入拆成多个帧，三条 response.create 的起始帧在原始帧序号 0、7、14
+（官方一条消息一帧）；A04 的每个 Responses POST 里有 1 条用户消息没有逐项 passthrough。
+
+注：派生观测文件扩展名从 .jsonl 改成 .ndjson 只是为了不被仓库的 .gitignore（tools/official_client_capture/**/*.jsonl）忽略；内容与格式不变，manifest 条目里的 parser 仍是 observation_jsonl。

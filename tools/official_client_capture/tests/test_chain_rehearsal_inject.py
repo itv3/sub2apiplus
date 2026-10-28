@@ -146,7 +146,10 @@ class FixtureDirectoryTest(unittest.TestCase):
                 files = inject.parse_patch(path.read_text(encoding="utf-8"))
                 self.assertTrue(all(item.path.startswith("tools/") for item in files), [item.path for item in files])
                 # 补丁只允许改非测试文件：测试文件是缺陷回来时必须失败的回归用例，不能被一起改回去。
-                self.assertFalse(any("/tests/" in item.path for item in files), [item.path for item in files])
+                self.assertFalse(
+                    any("/tests/" in item.path and item.path not in inject.ALLOWED_TEST_INFRASTRUCTURE for item in files),
+                    [item.path for item in files],
+                )
 
 
 if __name__ == "__main__":
