@@ -475,6 +475,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   前缀不可复用时官方在**同一条连接**上整段重放。官方客户端每次发 WS 请求前先判断能否在上一次请求加其输出之上续链；以下任一情形不能续链：
   换模型、工具目录、`tool_choice`、`parallel_tool_calls`、推理档位（0.165.0 起为窗口内钉死的基线）、`store`、`stream`、`include`、`service_tier`、`prompt_cache_key`、`text` 任一变化；`input` 不再以上次请求加输出为前缀（`input_mismatch`／`input_shortened`，含上下文压缩后的新窗口）；0.165.0 起相邻 `configuration_update` 合并后与上次请求前缀不一致。
   此时客户端在同一连接上发一帧全量 `response.create`：不带 `previous_response_id`、不带 `generate`、`input` 为完整历史，不重新握手、不补预热。握手头（`x-codex-routing-hint` 的模型、`x-codex-window-id`）保持建连时的旧值，新模型与新窗口号只出现在每帧 `client_metadata`。压缩请求本身是增量帧（`previous_response_id` 加单项 `compaction_trigger`，`request_kind=compaction`），压缩完成后的下一轮才是全量帧，再下一轮恢复增量。只有连接键（`ResetOn`：认证代次、账号 owner、`base_url`）变化或连接已断才新建连接，新连接上同样直接发全量帧、不补预热。断线重连后的整段重放带窗口内最新一条 update；WS 且预热已完成时首轮不带 update。
+  每条 `response.create` 消息的文本是 `serde_json` 序列化结果原样发出：没有末尾换行，字符串里的 `<`、`>`、`&`、U+2028、U+2029 按字面量写出，不转成 `\u003c` 等转义（非正式实采：官方两条消息都不以换行结尾，70967 字节那条消息里有 72 个字面 `<`）。
 - **源码**：[L1] `codex-api/src/common.rs:331-357`、
   `core/src/client.rs:2120-2193`、`core/src/client.rs:1118`。续接前缀的判定由 `prepare_websocket_request`
   返回 `Result<Continuation, Failure>` 给出（0.163.0 起复用失败原因逐项记录，只影响遥测，不改变字段）。0.164.0 的预热入参
@@ -496,7 +497,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **实现**：按 serde 条件省略字段；不得把某一类样本的字段子集或“首轮／后续轮”写成固定规则。画像 `responses_ws` 的
   `Body.Fields` 按上列槽位重排并移除 `instructions`。画像 `BaseInstructions.IDScheme=uuidv7` 声明增量窗口形态：网关为第三方客户端派生的预热帧 `input` 为
   `[]`，首个业务帧保留 `additional_tools` 与基础指令消息（不再剥离），并以预热响应 id 续链。
-  整段重放：画像 `WebSocketContinuation.ReplayOnSameConnection=true` 声明该形态。网关对本会话内自己发过 `generate=false` 预热帧的下游客户端（自管续链），其不带 `previous_response_id`、不带 `generate`、非工具结果续轮的全量帧复用当前上游连接原样转发：不新建连接、不补预热、不链 `previous_response_id`；复用的连接被对端关闭时换新连接重试同一帧，新连接上同样不补预热。从未自己发过预热帧的客户端（第三方每个用户轮次发整段历史）仍由“新连接＋网关预热＋链预热响应”承接，画像不声明该字段时一律如此。官方入站的整段重放帧里 `configuration_update` 在整段历史中原位原字节保留。
+  整段重放：画像 `WebSocketContinuation.ReplayOnSameConnection=true` 声明该形态。网关对本会话内自己发过 `generate=false` 预热帧的下游客户端（自管续链），其不带 `previous_response_id`、不带 `generate`、非工具结果续轮的全量帧复用当前上游连接原样转发：不新建连接、不补预热、不链 `previous_response_id`；复用的连接被对端关闭时换新连接重试同一帧，新连接上同样不补预热。从未自己发过预热帧的客户端（第三方每个用户轮次发整段历史）仍由“新连接＋网关预热＋链预热响应”承接，画像不声明该字段时一律如此。官方入站的整段重放帧里 `configuration_update` 在整段历史中原位原字节保留。官方出站的帧编译与最终写入不做 HTML 转义，也不追加换行（`marshalOpenAIWSReadonlyJSON`、`WritePreparedJSON`）。
 - **状态**：✅ 源码充分；抓包充分（0.165.0 非正式实采补充整段重放与改 effort 场景，正式场景随 0.165 登记补入）。
 
 ## 2.8 Header
@@ -899,7 +900,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   auto_review_enabled, context_window_id, node_repl_auto_review_required, node_repl_disabled, root_turn_id,
   sandbox_mode, window_number`（8 键）。默认配置下 `analytics_enabled` 为 `true`。`history_initialization` 对所有带元数据的
   Responses 请求恒在，取值有 6 种（如 `new`），出站位置在 `request_kind` 与 `root_turn_id` 之间。
-  `turn_id` 是 UUIDv7（`Uuid::now_v7()`，同一进程内单调；`rand_a`（12 位）的第 2、3 位（自低位起，从 0 计）恒为 0，这是该库编码实现的特征），前 48 位是提交该回合的毫秒时间；`turn_started_at_unix_ms` 是任务启动时读的系统时钟，不早于 `turn_id` 内嵌毫秒，差值通常是 1～4 毫秒（非正式实采 105 个回合：0 毫秒 2 个、1 毫秒 47 个、2 毫秒 19 个、3 毫秒 17 个、4 毫秒 12 个、5 毫秒 4 个、6 毫秒 2 个、7 毫秒 1 个，另有 1 个 29 毫秒的离群，当时同机另有 TUI 在跑）。预热帧（`request_kind=prewarm`）的 `turn_id` 为空串且没有 `turn_started_at_unix_ms`。
+  `turn_id` 是 UUIDv7（`Uuid::now_v7()`，同一进程内单调；`rand_a`（12 位）的第 2、3 位（自低位起，从 0 计）恒为 0，这是该库编码实现的特征），前 48 位是提交该回合的毫秒时间；`turn_started_at_unix_ms` 是任务启动时读的系统时钟，比 `turn_id` 内嵌毫秒晚 0～7 毫秒（官方实采 143 个回合：0 毫秒 2、1 毫秒 60、2 毫秒 37、3 毫秒 24、4 毫秒 13、5 毫秒 4、6 毫秒 2、7 毫秒 1；另有 1 个 29 毫秒的离群值，出现在采集机另有一路 TUI 争用 CPU 时，不计入分布）。
+  预热帧（`request_kind=prewarm`）的 `turn_id` 为空串且没有 `turn_started_at_unix_ms`。
+  `session_id`、`thread_id`、`prompt_cache_key`、`x-codex-window-id` 的前缀、`context_window_id`、`at_`／`msg_` item id 的 UUID 部分都是同一进程内单调的 UUIDv7，布局同 `turn_id`（`rand_a` 第 2、3 位恒为 0）；根线程的 `session_id` 与 `thread_id` 与 `x-client-request-id` 取值相同；`window_id` 是线程 id 加 `:0`；`installation_id` 是 UUIDv4。官方实采：358 个不同 UUIDv7 全部满足，`x-client-request-id` 与 `thread-id`、`session-id` 三者相同 90/90。子代理线程的 `thread_id` 与 `session_id` 不同、窗口号也可能不是 `:0`，上述相同关系只对根线程成立。
 - **源码**：[L1] 键常量见 `core/src/responses_metadata.rs:46-47`（`analytics_enabled`、`history_initialization`）与
   `core/src/responses_metadata.rs:58`（`turn_trigger`），`model` 与 `reasoning_effort` 键见 `core/src/turn_metadata.rs:47-49`；
   载荷字段与出站顺序见 `core/src/responses_metadata.rs:417-467`，`history_initialization` 的取值与来源见
@@ -915,7 +918,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `turn-metadata-analytics-default` 两项判据在 0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，
   attempt `20261027T135446Z-d8a16a8e788de81e`）各匹配 0 条：这是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
 - **实现**：网关只生成有可信取值的 14 键；允许集合里另外 8 键没有可信取值，网关不生成。画像 `TurnMetadata.Keys`
-  增加 `history_initialization`（字典序位于 `context_window_id` 与 `installation_id` 之间）。网关生成回合 id 时按该库的位布局与单调上下文编码（内嵌毫秒回拨 4 毫秒），开始时间由 `turn_id` 推出：内嵌毫秒加以 `turn_id` 为种子、按官方实采分布确定性抽取的 1～4 毫秒。
+  增加 `history_initialization`（字典序位于 `context_window_id` 与 `installation_id` 之间）。网关生成回合 id 时按该库的位布局与单调上下文编码（内嵌毫秒回拨 7 毫秒），开始时间由 `turn_id` 推出：内嵌毫秒加以 `turn_id` 为种子、按上述 143 个样本的分布确定性抽取的 0～7 毫秒（29 毫秒离群值不计入）；会话、线程、item id 的内嵌毫秒另回拨 50 毫秒，使其总早于首个回合 id。
 - **状态**：✅ 源码充分；抓包充分（13 个既有必含键沿用 0.157.0 官方样本，新增的 `history_initialization` 由源码确认，0.165.0
   复核仍成立）。
 
