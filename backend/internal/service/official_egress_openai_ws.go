@@ -64,6 +64,8 @@ type officialOpenAIWSDerivedState struct {
 	// 载体节时使用：续链帧上重复的同一段正文据此丢弃，换了一段才追加（见 applyOfficialCodexWSBaseInstructions）。
 	baseInstructionsSent   bool
 	baseInstructionsDigest officialCodexBaseInstructionsDigest
+	// windows 记录本下游会话跟踪到的上下文窗口号（画像 TurnMetadata.WindowTracking，见 official_egress_openai_ws_window.go）。
+	windows officialCodexWSWindowTracker
 }
 
 // setFullHistoryFallback 记录本轮是否按“断线后重发的完整历史”开新链。
@@ -180,12 +182,15 @@ func prepareOpenAIOfficialEgressWSContext(
 		}
 		identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
 			identity.turnMetadata, section,
-			officialCodexTurnMetadataExtension{
-				Model: officialOpenAIString(firstFrame, "model"),
-				ReasoningEffort: officialOpenAIEffectiveReasoningEffort(
-					firstFrame, officialOpenAIReasoningDefaultsFromContext(egressContext),
-				),
-			},
+			officialCodexWSHandshakeTurnMetadataExtension(
+				egressContext, identity.sessionID,
+				officialCodexTurnMetadataExtension{
+					Model: officialOpenAIString(firstFrame, "model"),
+					ReasoningEffort: officialOpenAIEffectiveReasoningEffort(
+						firstFrame, officialOpenAIReasoningDefaultsFromContext(egressContext),
+					),
+				},
+			),
 		)
 		if err != nil {
 			return err
@@ -1866,6 +1871,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if err != nil {
 		return nil, "", err
 	}
+	// 画像声明跟踪上下文窗口时，窗口头与 turn metadata 里的窗口身份跟随客户端推进后的窗口号。
+	windowID, windowNumber, contextWindowID, windowTracked := officialCodexWSFrameWindow(
+		egressContext, windowID, sessionID,
+	)
 
 	generate, _ := payload["generate"].(bool)
 	prewarm := !generate && payload["generate"] != nil
@@ -1932,6 +1941,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	extension := officialCodexTurnMetadataExtension{
 		Model:           officialOpenAIString(payload, "model"),
 		ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+	}
+	if windowTracked {
+		extension.WindowNumber = &windowNumber
+		extension.ContextWindowID = contextWindowID
 	}
 	if !prewarm {
 		conditional := egressContext.codexRuntimeState.ConditionalHeaders

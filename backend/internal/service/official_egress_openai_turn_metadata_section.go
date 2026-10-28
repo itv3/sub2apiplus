@@ -71,6 +71,9 @@ type officialCodexTurnMetadataExtension struct {
 	// HistoryInitialization 是会话历史的建立方式。与上面“没有可信取值就省略”的键不同：留空取默认的新会话，
 	// 画像声明该键时恒写入；非空时必须落在官方取值闭集内。
 	HistoryInitialization string
+	// WindowNumber／ContextWindowID 是上下文窗口身份（画像 WindowTracking）；为 nil／空串表示不写对应键。
+	WindowNumber    *int
+	ContextWindowID string
 }
 
 // officialCodexTurnTrigger 按入口与会话种类给出 turn_trigger 取值；无法确定时返回空串。
@@ -161,6 +164,14 @@ func applyOfficialCodexTurnMetadataSection(
 	if trigger := strings.TrimSpace(extension.TurnTrigger); trigger != "" &&
 		declared(officialCodexTurnMetadataKeyTurnTrigger) {
 		values[officialCodexTurnMetadataKeyTurnTrigger] = trigger
+	}
+	if section.WindowTracking {
+		if extension.WindowNumber != nil && declared("window_number") {
+			values["window_number"] = *extension.WindowNumber
+		}
+		if id := strings.TrimSpace(extension.ContextWindowID); id != "" && declared("context_window_id") {
+			values["context_window_id"] = id
+		}
 	}
 	return validateOfficialCodexTurnMetadataCompaction(values["compaction"], section)
 }

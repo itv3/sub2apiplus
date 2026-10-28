@@ -2507,6 +2507,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		// 定型之前的帧：重试要从它重新定型（见下面 retryIngressTurn 之后的说明）。
 		payloadBeforeFinalize := currentPayload
+		// 画像声明跟踪上下文窗口时，按客户端原帧自带的窗口号推进窗口身份（压缩之后客户端的窗口号加一）。
+		observeOfficialCodexWSClientWindow(ctx, currentOriginalPayload)
 		finalPayload, _, finalizeErr := prepareOpenAIOfficialEgressSemanticWSFrame(
 			ctx,
 			currentOriginalPayload,

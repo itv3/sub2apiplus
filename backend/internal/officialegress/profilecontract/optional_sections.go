@@ -107,6 +107,20 @@ type TurnMetadataSection struct {
 	// Responses 回合事实（非 Codex 客户端直接调图像接口）时，网关没有别的可信来源，就取这里登记的默认值。
 	// 缺省表示不补这几个键（旧画像行为，字节与摘要不变）。
 	SessionDefaults *TurnMetadataSessionDefaults `json:"SessionDefaults,omitempty"`
+	// WindowTracking：WS 回合元数据按官方跟踪上下文窗口。
+	//
+	// 官方客户端的上下文窗口由“窗口号”（x-codex-window-id 的 `<线程>:<窗口号>` 后缀，turn metadata 里的 window_id 与
+	// window_number）和“上下文窗口 id”（turn metadata 的 context_window_id，每个窗口一个 UUIDv7）标识；上下文压缩后
+	// 进入新窗口，窗口号加一、上下文窗口 id 换新，之后的请求与新建连接的握手都用新值。握手头只在建连时发出，所以复用
+	// 的连接上握手里仍是旧窗口号，新窗口号只出现在每帧 client_metadata 里。声明 true 后，网关在 WS 回合元数据里写入
+	// window_number 与 context_window_id，并跟随下游客户端自己的窗口号推进（压缩之后客户端帧里的窗口号加一）：帧里的
+	// x-codex-window-id、turn metadata 的 window_id／window_number／context_window_id，以及新建连接握手里的窗口头与
+	// turn metadata 都用推进后的值。缺省（false）表示旧行为：窗口号固定为 `:0`，不写这两个键。
+	// 声明时 Keys 必须包含 window_id、window_number、context_window_id。
+	//
+	// omitempty：缺省时规范化 JSON 与各类摘要和引入本字段之前逐字节相同；显式写 false 会让同一份语义出现两种表示，
+	// 因此解码阶段拒绝（见 DecodeOptionalSection）。
+	WindowTracking bool `json:"WindowTracking,omitempty"`
 }
 
 // TurnMetadataSessionDefaults 是目标版本客户端默认会话模型的 turn metadata 取值，登记时取自该版本官方内置
@@ -393,6 +407,11 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 				return nil, fmt.Errorf("可选节 %s 的字段 ReplayOnSameConnection 存在时必须为 true", name)
 			}
 		}
+		if name == SectionTurnMetadata {
+			if value, declared := fields["WindowTracking"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 WindowTracking 存在时必须为 true", name)
+			}
+		}
 		if name == SectionTurnState {
 			if value, declared := fields["ResetOnNewTurn"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`false`)) {
 				return nil, fmt.Errorf("可选节 %s 的字段 ResetOnNewTurn 存在时必须为 true", name)
@@ -449,6 +468,13 @@ func validateOptionalSection(name string, value any) error {
 		}
 		if err := requireSortedUnique("CompactionPhases", section.CompactionPhases, sectionTokenPattern); err != nil {
 			return err
+		}
+		if section.WindowTracking {
+			for _, key := range []string{"window_id", "window_number", "context_window_id"} {
+				if !slices.Contains(section.Keys, key) {
+					return fmt.Errorf("WindowTracking 存在时 Keys 必须包含 %s", key)
+				}
+			}
 		}
 		return validateTurnMetadataSessionDefaults(section)
 	case *ClientMetadataSection:

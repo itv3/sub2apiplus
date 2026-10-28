@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,6 +115,20 @@ func withTurnStateResetOnNewTurnProfile(t *testing.T, mode string, enabled bool)
 		doc.TurnState = raw
 	})
 	require.Equal(t, enabled, officialCodexTurnStateResetOnNewTurn(mode))
+}
+
+// withTurnMetadataSectionProfile 对 mode 槽位 TurnMetadata 节做改写（叠加在已有改写之上）。
+func withTurnMetadataSectionProfile(t *testing.T, mode string, mutate func(section *profilecontract.TurnMetadataSection)) {
+	t.Helper()
+	withMutatedOfficialProfile(t, mode, func(doc *profilecontract.SnapshotDoc) {
+		require.NotEmpty(t, doc.TurnMetadata, "槽位 %s 的画像必须已有 TurnMetadata 节", mode)
+		var section profilecontract.TurnMetadataSection
+		require.NoError(t, json.Unmarshal(doc.TurnMetadata, &section))
+		mutate(&section)
+		raw, err := json.Marshal(section)
+		require.NoError(t, err)
+		doc.TurnMetadata = raw
+	})
 }
 
 // replayStep 由上一轮完成事件的响应 ID 构造客户端要发的下一帧。
@@ -587,8 +602,15 @@ func (s replay0165Session) step(t *testing.T, frameNo int) replayStep {
 	}
 }
 
-// replayRunSteps 用给定账号清单驱动一条下游 WS 入站会话（支持大帧），返回终端握手与下游实际发出的各帧。
-func replayRunSteps(t *testing.T, mode string, manifest string, steps []replayStep) ([]codexGateWireRequest, [][]byte) {
+// replayRunStepsHooked 用给定账号清单驱动一条下游 WS 入站会话（支持大帧）；before 若非空，在发出第 index 帧之前调用，
+// 可用来关闭上游连接等。返回终端握手、下游实际发出的各帧与终端。
+func replayRunStepsHooked(
+	t *testing.T,
+	mode string,
+	manifest string,
+	steps []replayStep,
+	before func(index int, server *codexGateWireServer),
+) ([]codexGateWireRequest, [][]byte) {
 	t.Helper()
 	server := startCodexGateWireServer(t, nil)
 	gate := newCodexGateService(t, mode, server)
@@ -599,6 +621,9 @@ func replayRunSteps(t *testing.T, mode string, manifest string, steps []replaySt
 	last := ""
 	var sent [][]byte
 	for index, step := range steps {
+		if before != nil {
+			before(index, server)
+		}
 		frame := step(last)
 		sent = append(sent, frame)
 		if index == 0 {
@@ -610,6 +635,21 @@ func replayRunSteps(t *testing.T, mode string, manifest string, steps []replaySt
 	}
 	ws.close(t)
 	return codexGateWebSocketHandshakes(server), sent
+}
+
+// replayRunSteps 用给定账号清单驱动一条下游 WS 入站会话（支持大帧），返回终端握手与下游实际发出的各帧。
+func replayRunSteps(t *testing.T, mode string, manifest string, steps []replayStep) ([]codexGateWireRequest, [][]byte) {
+	t.Helper()
+	return replayRunStepsHooked(t, mode, manifest, steps, nil)
+}
+
+// replayCloseUpstreamConnections 由终端关闭所有上游连接。
+func replayCloseUpstreamConnections(server *codexGateWireServer) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	for open := range server.open {
+		_ = open.Close()
+	}
 }
 
 // replayFrameFieldsExcept 返回帧的顶层字段原文（按字段名），去掉 skip 里的字段。
@@ -989,6 +1029,113 @@ func TestShouldResetOpenAIWSTurnStateOnNewTurn(t *testing.T) {
 			require.Equal(t, item.want, shouldResetOpenAIWSTurnStateOnNewTurn(
 				item.enabled, item.turn, item.hasFunctionCallOutput, item.previousFrameWasClientPrewarm))
 		})
+	}
+}
+
+func replayFrameTurnMetadata(frame []byte) gjson.Result {
+	return gjson.Parse(gjson.GetBytes(frame, `client_metadata.x-codex-turn-metadata`).String())
+}
+
+func replayHandshakeTurnMetadata(handshake codexGateWireRequest) gjson.Result {
+	return gjson.Parse(handshake.header.Get("x-codex-turn-metadata"))
+}
+
+var replayUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// 上下文窗口跟踪（画像 TurnMetadata.WindowTracking）。官方 0.165 压缩续聊会话（c1）的事实：
+//   - 握手里窗口头是 `<线程>:0`，握手 turn metadata 带 window_id、window_number=0、context_window_id；
+//   - 压缩请求仍在窗口 0；压缩后新窗口的第一帧起 client_metadata 与 turn metadata 里窗口号变 `:1`、window_number=1、
+//     context_window_id 换新，之后各帧同窗口同值；握手头不重发（复用连接上仍是旧窗口号）；
+//   - 推进之后新建连接（上游断开后重放）的握手窗口头与 turn metadata 用推进后的窗口号。
+//
+// 画像不声明（对照）时保持旧行为：窗口号恒为 `:0`，不写 window_number 与 context_window_id。
+func TestOpenAIWSWindowTrackingAdvancesWindowAfterCompaction(t *testing.T) {
+	mode := officialClientProfileModeActive
+	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
+	if !section.UsesUUIDv7IDs() {
+		t.Skip("槽位画像不是增量窗口方案，实采帧的前缀形态不适用")
+	}
+	session := loadCodex0165Session(t, "c1_ws_compact_continue")
+	var steps []replayStep
+	for index := 1; index <= 6; index++ {
+		steps = append(steps, session.step(t, index))
+	}
+	// 官方样本事实（夹具自检）。
+	officialHandshakeTM := gjson.Parse(session.header("x-codex-turn-metadata"))
+	require.EqualValues(t, 0, officialHandshakeTM.Get("window_number").Int())
+	require.True(t, replayUUIDPattern.MatchString(officialHandshakeTM.Get("context_window_id").String()))
+	officialReplayTM := replayFrameTurnMetadata(session.frames[5])
+	require.EqualValues(t, 1, officialReplayTM.Get("window_number").Int())
+	require.NotEqual(t, officialHandshakeTM.Get("context_window_id").String(), officialReplayTM.Get("context_window_id").String())
+
+	withReplayOnSameConnectionProfile(t, mode, true)
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WindowTracking = true })
+	handshakes, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
+	require.Len(t, handshakes, 1)
+	frames := codexGateResponseCreateFrames(handshakes[0])
+	require.Len(t, frames, 6)
+
+	thread := strings.TrimSuffix(handshakes[0].header.Get("x-codex-window-id"), ":0")
+	require.NotEqual(t, handshakes[0].header.Get("x-codex-window-id"), thread, "握手窗口头是 <线程>:0")
+	handshakeTM := replayHandshakeTurnMetadata(handshakes[0])
+	require.Equal(t, thread+":0", handshakeTM.Get("window_id").String())
+	require.EqualValues(t, 0, handshakeTM.Get("window_number").Int(), "握手 turn metadata 带 window_number")
+	windowZeroContext := handshakeTM.Get("context_window_id").String()
+	require.True(t, replayUUIDPattern.MatchString(windowZeroContext), "握手 turn metadata 带 context_window_id：%s", handshakeTM.Raw)
+
+	for index, frame := range frames {
+		label := fmt.Sprintf("第 %d 帧", index+1)
+		tm := replayFrameTurnMetadata(frame)
+		window := gjson.GetBytes(frame, `client_metadata.x-codex-window-id`).String()
+		require.Equal(t, window, tm.Get("window_id").String(), label+"：client_metadata 与 turn metadata 的窗口号一致")
+		if index < 4 {
+			// 帧 1～4（预热、首个业务帧、增量、压缩请求）仍在窗口 0，与握手一致。
+			require.Equal(t, thread+":0", window, label)
+			require.EqualValues(t, 0, tm.Get("window_number").Int(), label)
+			require.Equal(t, windowZeroContext, tm.Get("context_window_id").String(), label+"：窗口 0 的上下文窗口 id 与握手相同")
+			continue
+		}
+		// 帧 5、6：压缩后的新窗口。
+		require.Equal(t, thread+":1", window, label+"：压缩后窗口号推进到 :1，线程部分仍是网关派生的")
+		require.EqualValues(t, 1, tm.Get("window_number").Int(), label)
+		require.True(t, replayUUIDPattern.MatchString(tm.Get("context_window_id").String()), label)
+		require.NotEqual(t, windowZeroContext, tm.Get("context_window_id").String(), label+"：上下文窗口 id 换新")
+	}
+	require.Equal(t, replayFrameTurnMetadata(frames[4]).Get("context_window_id").String(),
+		replayFrameTurnMetadata(frames[5]).Get("context_window_id").String(), "同一窗口内上下文窗口 id 不变")
+	require.Equal(t, thread+":0", handshakes[0].header.Get("x-codex-window-id"), "复用的连接不重发握手，握手里仍是旧窗口号")
+
+	// 推进之后新建连接：上游断开后客户端重放（不带 previous_response_id），新连接的握手用推进后的窗口号。
+	reconnectSteps := append(append([]replayStep{}, steps[:5]...), func(string) []byte {
+		raw, err := sjson.DeleteBytes(session.frames[6], "previous_response_id")
+		require.NoError(t, err)
+		return raw
+	})
+	reconnected, _ := replayRunStepsHooked(t, mode, replay0165Manifest, reconnectSteps, func(index int, server *codexGateWireServer) {
+		if index == 5 {
+			replayCloseUpstreamConnections(server)
+		}
+	})
+	require.Len(t, reconnected, 2, "上游断开后重放换了新连接")
+	secondThread := strings.TrimSuffix(reconnected[1].header.Get("x-codex-window-id"), ":1")
+	require.NotEqual(t, reconnected[1].header.Get("x-codex-window-id"), secondThread, "新连接握手的窗口头是推进后的 :1")
+	require.Equal(t, strings.TrimSuffix(reconnected[0].header.Get("x-codex-window-id"), ":0"), secondThread, "线程部分不变")
+	secondTM := replayHandshakeTurnMetadata(reconnected[1])
+	require.Equal(t, reconnected[1].header.Get("x-codex-window-id"), secondTM.Get("window_id").String())
+	require.EqualValues(t, 1, secondTM.Get("window_number").Int())
+	require.Equal(t, replayFrameTurnMetadata(frames[4]).Get("context_window_id").String(), secondTM.Get("context_window_id").String(),
+		"新连接握手的上下文窗口 id 与窗口 1 的帧相同")
+
+	// 对照：不声明。
+	withTurnMetadataSectionProfile(t, mode, func(section *profilecontract.TurnMetadataSection) { section.WindowTracking = false })
+	legacyHandshakes, _ := replayRunSteps(t, mode, replay0165Manifest, steps)
+	require.Len(t, legacyHandshakes, 1)
+	for index, frame := range codexGateResponseCreateFrames(legacyHandshakes[0]) {
+		label := fmt.Sprintf("对照第 %d 帧", index+1)
+		tm := replayFrameTurnMetadata(frame)
+		require.True(t, strings.HasSuffix(gjson.GetBytes(frame, `client_metadata.x-codex-window-id`).String(), ":0"), label+"：旧行为窗口号恒为 :0")
+		require.False(t, tm.Get("window_number").Exists(), label)
+		require.False(t, tm.Get("context_window_id").Exists(), label)
 	}
 }
 
