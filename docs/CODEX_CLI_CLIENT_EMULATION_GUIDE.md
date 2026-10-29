@@ -1679,7 +1679,7 @@ assert-rules 才暴露，而且撞一个修一个（0.164 为此在关键路径�
 补盲区探针覆盖：TUI 调用点参数交给新版二进制、收尾环境变量下的测试隔离、证据标签对真实候选流、上一版候选 seal 断言回放；新增 TUI 调用点时要同步更新 `replay-history` 用的反向补丁，否则自检探针报“探针出错”而不是“复现”。
 
 **升级工具不要求 keeper（账号保活容器）在场。** 环境探针、Job 演练容器事实、候选采集脚本与 Claude 候选网关快照，在 `docker inspect` 明确报告该名字的容器不存在时如实记为“未部署”
-（探针 `deployed:false`，脚本 `keeper_was_running=false`）并跳过检查与停启，其余四个容器仍必须在跑；只认 `No such object／container`，守护进程故障等一律失败。keeper 重新部署则行为不变，升级前不必建占位容器。
+（探针 `deployed:false`，脚本 `keeper_was_running=false`）并跳过检查与停启，其余四个容器仍必须在跑；只认 `no such object／container`（大小写不敏感：Docker 29 写小写 `error: no such object:`，旧版写大写 `No such object:`），守护进程故障等一律失败。keeper 重新部署则行为不变，升级前不必建占位容器。
 
 **部署前做一次 CI 等价预跑。** 起后台验证、入口之前，在本机对将要部署的最终提交（工作树干净）一次跑齐 CI 会查、而升级工具门禁覆盖不到的项；本机重负载一次只跑一路：
 ① `golangci-lint run --timeout=30m --max-issues-per-linter=0 --max-same-issues=0`，默认、`--build-tags=unit`、`--build-tags=integration` 三遍（缺 `--max-same-issues=0` 会把同类问题折叠漏看）；
