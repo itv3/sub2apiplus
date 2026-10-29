@@ -607,6 +607,12 @@ def run_session(
 #
 # 计划里不带 configuration_update：候选侧目前没有任何判据读它（官方 A18／A19 才是它的证据来源），入站带上它
 # 只会让第三方入站形态多一个变量。
+#
+# 每个计划都以**客户端自己的预热帧**开头（generate=false、input 为空），首个业务帧再用 previous_response_id 链到它的
+# 响应——这是官方客户端会话开头的形态。网关只对“本会话里自己发过 generate=false 预热帧”的下游，才把后面不带
+# previous_response_id 的整段重放帧留在原上游连接上（画像 WebSocketContinuation 节 ReplayOnSameConnection）；没有这一帧时
+# 它按第三方每轮整段历史处理：新连接、补预热、业务帧链预热，A20～A22 的“同连接、不补预热”判据永远得不到。
+# 客户端有了自己的预热帧，网关就不再补预热，上游看到的 response.create 条数（4／6／3）与计划帧数一致。
 
 PLAN_NAMES = ("model-switch", "compact-continue", "effort-change")
 # 每个计划的会话与线程标识：与 A06 的固定会话互不相同，网关按会话派生的状态不会跨场景串用。
@@ -710,6 +716,13 @@ def _plan_body(
             "x-codex-turn-metadata": json.dumps(metadata, separators=(",", ":")),
         },
     }
+    if request_kind == "compaction":
+        # 官方压缩请求帧只有 compaction_trigger 一项，顶层不带 instructions／tools。网关对 Lite 模型会把顶层 tools 搬成 input 最前的
+        # additional_tools 载体（第三方入站的归一化，对每一帧都做），压缩帧带着它就变成 [additional_tools, compaction_trigger]，
+        # 不是官方形态，也让按“input 首项是 compaction_trigger”选帧的判据命不中。真实第三方客户端不会发压缩帧，
+        # 所以压缩帧按官方形态合成，不带顶层 instructions／tools。
+        del body["instructions"]
+        del body["tools"]
     return body
 
 
@@ -722,6 +735,8 @@ def build_plan(
     user_text: str = "candidate core probe",
 ) -> tuple[HandshakeIdentity, list[PlanStep]]:
     """生成一份计划的握手身份与有序帧。
+
+    每个计划都先发一帧客户端预热（见模块头注释），首个业务帧链到它的响应。
 
     * model-switch（A20）：主线模型一轮 → 换成第二个模型整段重放 → 换回主线模型整段重放；窗口号始终 0。
     * compact-continue（A21）：两轮（第二轮增量续链）→ 压缩触发帧（增量，窗口 0）→ 压缩后整段重放（带上游回的
@@ -744,10 +759,22 @@ def build_plan(
     def add(label: str, chain: bool, request_kind: str = "turn", **fields: Any) -> None:
         steps.append(PlanStep(label, _plan_body(plan, len(steps) + 1, request_kind=request_kind, **fields), chain, request_kind))
 
+    def add_client_prewarm(*, model: str, effort: str) -> None:
+        """官方客户端会话开头自己发的预热帧：generate=false、input 为空；之后首个业务帧链到它的响应。
+
+        网关只对“本会话客户端自己发过预热帧”的下游把后续整段重放帧留在原上游连接上（画像 ReplayOnSameConnection），
+        所以计划必须先发它；网关因此不再补预热，上游看到的 response.create 条数不变。"""
+
+        body = _plan_body(plan, len(steps) + 1, request_kind="prewarm", model=model, effort=effort,
+                          input_items=[], window_number=0)
+        body["generate"] = False
+        steps.append(PlanStep("prewarm", body, False, "prewarm"))
+
     if plan == "model-switch":
         if not main_model or not second_model or main_model == second_model:
             raise ValueError("model-switch 需要两个互不相同的模型（--main-model、--second-model）。")
-        add("turn-1", False, model=main_model, effort="high", window_number=0,
+        add_client_prewarm(model=main_model, effort="high")
+        add("turn-1", True, model=main_model, effort="high", window_number=0,
             input_items=[carrier, _plan_user(users[0])])
         add("switch-to-second", False, model=second_model, effort="high", window_number=0,
             input_items=[carrier, _plan_user(users[0]), _plan_user(users[1])])
@@ -756,7 +783,8 @@ def build_plan(
     elif plan == "compact-continue":
         if not main_model:
             raise ValueError("compact-continue 需要 --main-model。")
-        add("turn-1", False, model=main_model, effort="high", window_number=0,
+        add_client_prewarm(model=main_model, effort="high")
+        add("turn-1", True, model=main_model, effort="high", window_number=0,
             input_items=[carrier, _plan_user(users[0])])
         # 续轮与 A06 同形：保留首轮业务前缀（不含载体）并追加一条用户消息。
         add("turn-2", True, model=main_model, effort="high", window_number=0,
@@ -772,7 +800,8 @@ def build_plan(
     else:
         if not no_update_model:
             raise ValueError("effort-change 需要 --no-update-model。")
-        add("turn-1", False, model=no_update_model, effort="low", window_number=0,
+        add_client_prewarm(model=no_update_model, effort="low")
+        add("turn-1", True, model=no_update_model, effort="low", window_number=0,
             input_items=[carrier, _plan_user(users[0])])
         add("effort-raised", False, model=no_update_model, effort="high", window_number=0,
             input_items=[carrier, _plan_user(users[0]), _plan_user(users[1])])
@@ -839,7 +868,7 @@ def run_plan(
     expected_id_prefix: str,
     timeout: float,
 ) -> dict[str, Any]:
-    """在同一连接内按计划串行发帧；每帧终态都校验响应 id，整份计划的 id 必须是受控序列 0002、0003…（0001 是网关预热）。"""
+    """在同一连接内按计划串行发帧；每帧终态都校验响应 id，整份计划的 id 必须是受控序列 0001、0002…（0001 是计划自己的预热帧，网关不再补预热）。"""
 
     if timeout <= 0 or timeout > 600:
         raise ValueError("timeout 必须在 0..600 秒内。")
@@ -873,7 +902,7 @@ def run_plan(
                         **{key: value for key, value in body.items() if key not in {"type", "model"}}}
             client.send_json(body)
             result = _collect_turn(client, timeout)
-            expected = f"{expected_id_prefix}{index + 2:04d}"
+            expected = f"{expected_id_prefix}{index + 1:04d}"
             if result.response_id != expected:
                 raise WebSocketProtocolError(
                     f"第 {index + 1} 帧的响应 id {result.response_id!r} 不是受控序列的 {expected!r}："

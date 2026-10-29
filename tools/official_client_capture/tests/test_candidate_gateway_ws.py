@@ -439,7 +439,7 @@ class CandidateGatewayWebSocketDriverTest(unittest.TestCase):
 
 
 class PlanGateway:
-    """计划模式的测试网关：一条连接，按序接收 response.create，逐帧回受控 id（0001 视为网关预热，业务帧从 0002 起）。
+    """计划模式的测试网关：一条连接，按序接收 response.create，逐帧回受控 id（计划自己的客户端预热帧是 0001，网关不再补预热，业务帧从 0002 起）。
 
     收到含 compaction_trigger 的帧时回一个 compaction 输出项（同 A21 的受控上游）。``skip_ids`` 用来模拟网关多补了
     一个预热（id 序列出现缺口）。"""
@@ -490,7 +490,7 @@ class PlanGateway:
                         f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
                     ).encode("ascii")
                 )
-                ordinal = 1  # 0001 是网关预热，不经过驱动
+                ordinal = 0  # 计划自己的预热帧是 0001（网关不再补预热）
                 while True:
                     try:
                         opcode, payload, _ = receive_client_frame(stream)
@@ -503,7 +503,7 @@ class PlanGateway:
                     frame = json.loads(payload)
                     self.frames.append(frame)
                     ordinal += 1
-                    if self.skip_ids and len(self.frames) == 2:
+                    if self.skip_ids and len(self.frames) == 3:
                         ordinal += 1
                     response_id = f"{self.prefix}{ordinal:04d}"
                     items: list[dict[str, object]] = []
@@ -541,39 +541,52 @@ def _run_plan(plan: str, prefix: str, root: Path, **gateway_options: object) -> 
 class PlanModeTests(unittest.TestCase):
     def test_build_plan_shapes(self) -> None:
         handshake, steps = driver.build_plan("model-switch", main_model="gpt-6.1-sol", second_model="gpt-6-astra")
-        self.assertEqual([s.body["model"] for s in steps], ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol"])
-        self.assertFalse(any(s.chain for s in steps), "官方换模型的整段重放帧不续链")
+        self.assertEqual([s.label for s in steps], ["prewarm", "turn-1", "switch-to-second", "switch-back"])
+        self.assertEqual([s.body["model"] for s in steps], ["gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol"])
+        # 官方客户端会话以自己的预热帧开头（generate=false、input 空），首个业务帧链到它；换模型的整段重放帧不续链
+        self.assertEqual([s.chain for s in steps], [False, True, False, False])
+        self.assertEqual([s.request_kind for s in steps], ["prewarm", "turn", "turn", "turn"])
+        self.assertIs(steps[0].body["generate"], False)
+        self.assertEqual(steps[0].body["input"], [])
         for step in steps:
-            self.assertNotIn("previous_response_id", step.body)
-            self.assertNotIn("generate", step.body)
+            self.assertNotIn("previous_response_id", step.body, "续链帧的 previous_response_id 由发送时按上一帧响应填入")
+        for step in steps[1:]:
+            self.assertNotIn("generate", step.body, "只有会话开头的预热帧带 generate")
             self.assertEqual(step.body["input"][0]["type"], "additional_tools", "整段重放里载体仍在 input 最前")
         self.assertEqual(handshake.window_id, handshake.session_id + ":0")
         self.assertEqual(json.loads(handshake.turn_metadata)["window_number"], 0)
         # 每帧回合 id 互不相同，窗口号恒 0
         turn_ids = [s.body["client_metadata"]["turn_id"] for s in steps]
-        self.assertEqual(len(set(turn_ids)), 3)
+        self.assertEqual(len(set(turn_ids)), 4)
         self.assertEqual({json.loads(s.body["client_metadata"]["x-codex-turn-metadata"])["window_number"] for s in steps}, {0})
 
     def test_compaction_plan_advances_window_only_after_trigger(self) -> None:
         _, steps = driver.build_plan("compact-continue", main_model="gpt-6.1-sol")
-        self.assertEqual([s.label for s in steps], ["turn-1", "turn-2", "compaction", "replay-after-compaction", "turn-after-replay"])
+        self.assertEqual([s.label for s in steps],
+                         ["prewarm", "turn-1", "turn-2", "compaction", "replay-after-compaction", "turn-after-replay"])
         windows = [json.loads(s.body["client_metadata"]["x-codex-turn-metadata"])["window_number"] for s in steps]
-        self.assertEqual(windows, [0, 0, 0, 1, 1])
+        self.assertEqual(windows, [0, 0, 0, 0, 1, 1])
         for step, window in zip(steps, windows):
             self.assertTrue(step.body["client_metadata"]["x-codex-window-id"].endswith(f":{window}"))
-        self.assertEqual([s.chain for s in steps], [False, True, True, False, True])
-        self.assertEqual([s.request_kind for s in steps], ["turn", "turn", "compaction", "turn", "turn"])
-        self.assertEqual(steps[2].body["input"], [{"type": "compaction_trigger"}])
+        self.assertEqual([s.chain for s in steps], [False, True, True, True, False, True])
+        self.assertEqual([s.request_kind for s in steps], ["prewarm", "turn", "turn", "compaction", "turn", "turn"])
+        self.assertIs(steps[0].body["generate"], False)
+        self.assertEqual(steps[3].body["input"], [{"type": "compaction_trigger"}])
+        # 压缩帧按官方形态：顶层没有 instructions／tools（否则网关会在 input 最前补 additional_tools 载体）；其余帧仍带
+        self.assertNotIn("tools", steps[3].body)
+        self.assertNotIn("instructions", steps[3].body)
+        self.assertTrue(all("tools" in s.body and "instructions" in s.body for i, s in enumerate(steps) if i != 3))
         marker = driver.PLAN_COMPACTION_MARKER
-        replay_marks = [item for item in steps[3].body["input"] if marker in item]
+        replay_marks = [item for item in steps[4].body["input"] if marker in item]
         self.assertEqual(len(replay_marks), 1, "整段重放帧恰有一个压缩项占位，且位于新用户消息之前")
-        self.assertEqual(steps[3].body["input"].index(replay_marks[0]), len(steps[3].body["input"]) - 2)
+        self.assertEqual(steps[4].body["input"].index(replay_marks[0]), len(steps[4].body["input"]) - 2)
 
     def test_effort_change_plan_changes_only_effort(self) -> None:
         _, steps = driver.build_plan("effort-change", main_model="x", no_update_model="gpt-5.6-sol")
-        self.assertEqual([s.body["reasoning"]["effort"] for s in steps], ["low", "high"])
+        self.assertEqual([s.label for s in steps], ["prewarm", "turn-1", "effort-raised"])
+        self.assertEqual([s.body["reasoning"]["effort"] for s in steps], ["low", "low", "high"])
         self.assertEqual({s.body["model"] for s in steps}, {"gpt-5.6-sol"})
-        self.assertFalse(any(s.chain for s in steps))
+        self.assertEqual([s.chain for s in steps], [False, True, False], "只有首个业务帧链预热，改强度的整段重放帧不续链")
 
     def test_plan_argument_validation(self) -> None:
         with self.assertRaisesRegex(ValueError, "互不相同"):
@@ -592,17 +605,21 @@ class PlanModeTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(gateway.connections, 1)
             self.assertIsNone(gateway.error)
-            self.assertEqual([f["model"] for f in gateway.frames], ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol"])
-            self.assertTrue(all("previous_response_id" not in f for f in gateway.frames))
+            self.assertEqual([f["model"] for f in gateway.frames], ["gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol"])
+            # 会话以客户端自己的预热帧开头；首个业务帧链到它，之后的整段重放帧不带 previous_response_id、不带 generate
+            self.assertIs(gateway.frames[0]["generate"], False)
+            self.assertEqual(gateway.frames[1]["previous_response_id"], "resp_candidate_core_a20_0001")
+            self.assertTrue(all("previous_response_id" not in f for f in (gateway.frames[0], *gateway.frames[2:])))
+            self.assertTrue(all("generate" not in f for f in gateway.frames[1:]))
             # 握手身份来自计划自己的会话，而不是 A06 的固定会话
             self.assertEqual(gateway.handshake["session-id"], driver.PLAN_SESSION_IDS["model-switch"])
             self.assertEqual(gateway.handshake["x-codex-window-id"], driver.PLAN_SESSION_IDS["model-switch"] + ":0")
             receipt = json.loads((root / "summary.json").read_text())
             self.assertEqual(receipt["schema_version"], "candidate-gateway-ws-plan/v1")
             self.assertEqual([t["response_id"] for t in receipt["turns"]],
-                             [f"resp_candidate_core_a20_{n:04d}" for n in (2, 3, 4)])
+                             [f"resp_candidate_core_a20_{n:04d}" for n in (1, 2, 3, 4)])
             self.assertEqual(sorted(p.name for p in (root / "plan").iterdir()),
-                             ["switch-back.sse", "switch-to-second.sse", "turn-1.sse"])
+                             ["prewarm.sse", "switch-back.sse", "switch-to-second.sse", "turn-1.sse"])
 
     def test_compaction_session_replays_the_upstream_compaction_item_and_advances_window(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -611,20 +628,22 @@ class PlanModeTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(gateway.connections, 1)
             frames = gateway.frames
-            self.assertEqual(len(frames), 5)
-            self.assertEqual(frames[1]["previous_response_id"], "resp_candidate_core_a21_0002")
-            self.assertEqual(frames[2]["previous_response_id"], "resp_candidate_core_a21_0003")
-            self.assertEqual(frames[2]["input"], [{"type": "compaction_trigger"}])
-            self.assertNotIn("previous_response_id", frames[3])
-            replay_types = [item["type"] for item in frames[3]["input"]]
+            self.assertEqual(len(frames), 6)
+            self.assertIs(frames[0]["generate"], False)
+            self.assertEqual(frames[1]["previous_response_id"], "resp_candidate_core_a21_0001")
+            self.assertEqual(frames[2]["previous_response_id"], "resp_candidate_core_a21_0002")
+            self.assertEqual(frames[3]["previous_response_id"], "resp_candidate_core_a21_0003")
+            self.assertEqual(frames[3]["input"], [{"type": "compaction_trigger"}])
+            self.assertNotIn("previous_response_id", frames[4])
+            replay_types = [item["type"] for item in frames[4]["input"]]
             self.assertEqual(replay_types[0], "additional_tools")
             self.assertEqual(replay_types.count("compaction"), 1)
             self.assertEqual(replay_types.index("compaction"), len(replay_types) - 2)
-            compaction = next(item for item in frames[3]["input"] if item["type"] == "compaction")
+            compaction = next(item for item in frames[4]["input"] if item["type"] == "compaction")
             self.assertEqual(compaction["id"], "cmp_0004", "替换进来的是上游在压缩帧响应里真实回的那一项")
-            self.assertTrue(frames[3]["client_metadata"]["x-codex-window-id"].endswith(":1"))
-            self.assertEqual(frames[4]["previous_response_id"], "resp_candidate_core_a21_0005")
             self.assertTrue(frames[4]["client_metadata"]["x-codex-window-id"].endswith(":1"))
+            self.assertEqual(frames[5]["previous_response_id"], "resp_candidate_core_a21_0005")
+            self.assertTrue(frames[5]["client_metadata"]["x-codex-window-id"].endswith(":1"))
             self.assertNotIn("previous_response_id", frames[0])
             # 握手仍是建连时的窗口 0（复用连接不重发握手）
             self.assertTrue(gateway.handshake["x-codex-window-id"].endswith(":0"))
@@ -633,8 +652,10 @@ class PlanModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             completed, gateway = _run_plan("effort-change", "resp_candidate_core_a22_", Path(temporary))
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual([f["reasoning"]["effort"] for f in gateway.frames], ["low", "high"])
-            self.assertTrue(all("previous_response_id" not in f for f in gateway.frames))
+            self.assertEqual([f["reasoning"]["effort"] for f in gateway.frames], ["low", "low", "high"])
+            self.assertIs(gateway.frames[0]["generate"], False)
+            self.assertEqual(gateway.frames[1]["previous_response_id"], "resp_candidate_core_a22_0001")
+            self.assertNotIn("previous_response_id", gateway.frames[2], "改强度的整段重放帧不续链")
 
     def test_id_gap_means_the_gateway_added_a_frame_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

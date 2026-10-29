@@ -1,0 +1,71 @@
+{
+  "base_commit": "acd3a25aa89e12cffda4ab38e67c1e4b31daa1b9",
+  "changed_path_count": 4,
+  "current_commit": "e24d218d90c5352866b35bb39f9a21e49221337f",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7243,
+  "frozen_path_count": 2318,
+  "identity_sha256": "3eda05ac2aff0254bda78faaba3f50a115693cae209d490817c6bf04ccc3db5e",
+  "issued_at_utc": "2026-10-29T14:47:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0165-candidate-driver-compaction-frame-20261029-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "c02b5a1a618a9f43786a1f7303a879ba5c737078e4bf5bf9592b48c20f4f2913"
+      ],
+      "reason": "Codex 0.165.0 候选采集 A21 的压缩触发帧按官方形态合成（候选驱动 drive_candidate_gateway_ws.py 及其测试，身份守恒基线重封） path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-guide-chain-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-merge-align-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-assertion-desc-no-baseline-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-guide-chain-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-merge-wsfix-reseal-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-label-first-business-frame-index-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-probe-no-daemon-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-candidate-driver-prewarm-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-registration-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1e7eab36c14da44e36692fefaa72365244817853287fbb840f77e3becc2e60bf"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/official_client_capture/drive_candidate_gateway_ws.py",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_165_0.json",
+    "tools/official_client_capture/tests/test_candidate_gateway_ws.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
