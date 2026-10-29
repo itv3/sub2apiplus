@@ -51,20 +51,21 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 
 # 第二部分 Codex CLI 客户端规则画像
 
-本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述当前生产 active 0.164.0 的规则（previous 为
-0.163.0）；生产激活、精确回滚、目标恢复与 0.160.0 Runtime Catalog 退休的机器事实见
-[`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json)。各条实测中的“0.164.0
-官方样本”来自 Campaign `c01640-formal-vc1-r1-20261027t000000z` 的 attempt `20261027T135446Z-d8a16a8e788de81e`
-（本轮官方证据全部重新采集，47 个官方 Job 全部 complete）；继承规则正文里保留的“0.163.0 官方样本”（Campaign
+本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述当前生产 active 0.165.0 的规则（previous 为
+0.164.0）；生产激活、精确回滚、目标恢复与 0.163.0 Runtime Catalog 退休的机器事实见
+[`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json)。各条实测中的“0.165.0
+官方样本”来自 Campaign `c01650-formal-vc1-r1-20261029t000000z` 的 attempt `20261029T042703Z-54406f2fab548474`
+（本轮官方证据全部重新采集，52 个官方 Job 全部 complete）；继承规则正文里保留的“0.164.0 官方样本”（Campaign
+`c01640-formal-vc1-r1-20261027t000000z` 的 attempt `20261027T135446Z-d8a16a8e788de81e`）、“0.163.0 官方样本”（Campaign
 `c01630-formal-vc1-r2-20261020t131500z` 的 attempt `20261021T003916Z-24ff3483a4288709`）、“0.160.0 官方样本”（Campaign
 `c01600-formal-vc1-r1-20261003t084239z` 的 attempt `20261003T102647Z-6b5390a3ddffc296`）与“0.157.0 官方样本”
 （Campaign `c01570-formal-vc1-r2-20260926t084354z` 的 attempt `20260926T094510Z-ce907a4fa1d25931`）是历史佐证；
-“候选断言”指 `c01640-formal-vc1-r1-20261027t000000z` canonical 链中的 `assert-SPEC-*`（评估基线与 evidence_level 以该链的断言结果为准）。
-本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.164.0
+“候选断言”指 `c01650-formal-vc1-r1-20261029t000000z` canonical 链中的 `assert-SPEC-*`（评估基线与 evidence_level 以该链的断言结果为准）。
+本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.165.0
 官方样本（`gpt-5.5` 已在采集账号下线），相关结论以源码为准（0.164.0 源码；0.165.0 源码在该分支的请求构造代码上只有两处变化：`reasoning.summary` 增加提供方能力判断，OpenAI 默认为开；`reasoning_effort` 覆盖默认开启，只对清单标记 `supports_reasoning_effort_updates` 的 Lite 模型生效，见 SPEC-BODY-006）。
 源码字段的行号锚点以本地固化的 0.165.0 源码为准（`tools/spec_ref_anchors.json`，源码树 `local-analysis/sources/codex-cli-0.165.0`；
 0.163.0 到 0.164.0、0.164.0 到 0.165.0 之间有变化的引用已逐条复核，行为有差异处在对应规则里以“0.164.0 复核”“0.165.0 复核”标出；
-0.165.0 目前只做过源码复核，尚无 0.165.0 官方样本，各条实测里的样本类证据仍是 0.164.0 及更早版本的）；正文里 0.157.0 与 0.160.0 的
+0.165.0 官方 VC-1 样本已采集：变化规则与随版本取值的继承规则（SPEC-HDR-005、SPEC-EP-006、SPEC-EP-013）的实测给出 0.165.0 官方样本匹配数，其余继承规则的样本类证据仍是 0.164.0 及更早版本的历史佐证）；正文里 0.157.0 与 0.160.0 的
 “文件 第 N 行”坐标只是历史对照，不再由门禁复核。
 
 ## 2.1 规则证据与准入标准
@@ -84,7 +85,7 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 | 逐规则机器证据 | [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) |
 | 源码锚点 | [`tools/spec_ref_anchors.json`](../tools/spec_ref_anchors.json) |
 | Sub2API 实现证据 | `backend/` 与 `docs/egress/` |
-| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与 [`0.164 终态收据`](egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json) |
+| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与 [`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json) |
 
 每条规则的准入证据包必须绑定官方源码、依赖、二进制、平台、配置、账号、抓包运行号和摘要。只有能够
 重新解析的材料可以作为规则依据；R 类材料只允许等长脱敏，未脱敏材料不得离开采集机。
@@ -105,7 +106,7 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 - 自定义 CA、代理和受控失败等条件样本不能外推为默认路径或自然成功链；
 - 全集、缺失和连接完整性结论必须基于无预设过滤的完整双向样本。
 
-**遥测零流量判定（当前 active 0.164.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
+**遥测零流量判定（当前 active 0.165.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
 源码链均已冻结时，未产生的遥测才可排除在 strict 分母之外：
 
 | 组件 | 关闭条件与源码闭环 |
@@ -495,12 +496,17 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   续链，以及增量帧只在可复用前缀时携带 `previous_response_id`；owner 变化时复位 WS 会话见 0.157.0
   `core/src/client.rs` 第 1538-1548 行。
   0.165.0 非正式实采（`sub2apiplus-evidence/codex-cli/0.165.0/informal/`（X 路 ARM64 非正式实采，没有账本与 Campaign；下称非正式实采））：m1（换模型 gpt-6.1-sol→gpt-6-astra→gpt-6.1-sol）、c1／c2（压缩后续聊）、e6（目录不支持 effort update 的 gpt-5.6-sol 改 effort）的整段重放全部在原连接上，握手只有一次且无新预热帧；握手里的 `x-codex-routing-hint` 与 `x-codex-window-id` 保持旧值（m1 的 hint 仍为首个模型，帧里 model 已换；c1 握手 `:0`、帧里 `:1`），c1 压缩后窗口号 `:0` 变 `:1`。124 条客户端消息均为 1 个帧。
+  0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；场景 A05、A06、A20、A21、A22；匹配数不是去重请求数）：`field-slots` 匹配 35 条，`warmup-input-empty` 匹配 3 条；整段重放帧
+  （`replay-frame-no-previous-response-id`、`replay-frame-no-generate`、`replay-frame-carries-full-history`）各匹配 4 条，`replay-same-connection` 与
+  `replay-no-second-warmup` 各匹配 3 条；窗口：`window-stays-zero-without-compaction` 匹配 7 条、`compaction-frame-in-old-window` 匹配
+  1 条、`window-advances-after-compaction` 匹配 1 条、`window-stays-advanced-after-compaction` 匹配 2 条；
+  消息形态：`message-no-trailing-newline` 与 `message-no-html-escape` 各匹配 16 条。这些判据由候选断言 `assert-SPEC-WS-005` 在候选侧核对。
 - **实现**：按 serde 条件省略字段；不得把某一类样本的字段子集或“首轮／后续轮”写成固定规则。画像 `responses_ws` 的
   `Body.Fields` 按上列槽位重排并移除 `instructions`。画像 `BaseInstructions.IDScheme=uuidv7` 声明增量窗口形态：网关为第三方客户端派生的预热帧 `input` 为
   `[]`，首个业务帧保留 `additional_tools` 与基础指令消息（不再剥离），并以预热响应 id 续链。
   整段重放：画像 `WebSocketContinuation.ReplayOnSameConnection=true` 声明该形态。网关对本会话内自己发过 `generate=false` 预热帧的下游客户端（自管续链），其不带 `previous_response_id`、不带 `generate`、非工具结果续轮的全量帧复用当前上游连接原样转发：不新建连接、不补预热、不链 `previous_response_id`；复用的连接被对端关闭时换新连接重试同一帧，新连接上同样不补预热。从未自己发过预热帧的客户端（第三方每个用户轮次发整段历史）仍由“新连接＋网关预热＋链预热响应”承接，画像不声明该字段时一律如此。官方入站的整段重放帧里 `configuration_update` 在整段历史中原位原字节保留。官方出站的帧编译与最终写入不做 HTML 转义，也不追加换行（`marshalOpenAIWSReadonlyJSON`、`WritePreparedJSON`）。
   窗口推进：画像 `TurnMetadata.WindowTracking` 声明后网关读客户端原帧的窗口号推进；`CodexIdentityFacts.WindowAdvances` 令 invocation 摘要不再绑定窗口标识。已知偏差：窗口号来源是下游客户端帧里的窗口号，对不发 `x-codex-window-id` 的第三方客户端窗口号不推进（保持 `:0`）。
-- **状态**：✅ 源码充分；抓包充分（0.165.0 非正式实采补充整段重放与改 effort 场景，正式场景随 0.165 登记补入）。
+- **状态**：✅ 源码充分；抓包充分（0.165.0 官方 VC-1 的正式场景 A20～A22 覆盖整段重放、压缩后续聊与改 effort；非正式实采保留为补充）。
 
 ## 2.8 Header
 
@@ -571,8 +577,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth。
 - **规则**：UA 为平台前缀加可选 ` ({name}; {version})` suffix。exec 使用
-  `codex_exec/0.164.0` 与 `(codex_exec; 0.164.0)`；TUI 使用
-  `codex-tui/0.164.0` 与 `(codex-tui; 0.164.0)`。启动首次 models 因进程级写入时序，
+  `codex_exec/0.165.0` 与 `(codex_exec; 0.165.0)`；TUI 使用
+  `codex-tui/0.165.0` 与 `(codex-tui; 0.165.0)`。启动首次 models 因进程级写入时序，
   有 suffix 和无 suffix 均属于官方观测集；TUI initialize 之后的真实插件请求必须带 `codex-tui` 前缀与同名 suffix。
   0.163.0 复核：UA、originator 与 suffix 机制未改；exec 新增 `model/list` 后，首次 `/models` 更可能带 suffix，
   规则已允许有无两种。
@@ -582,13 +588,13 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `cloud-tasks/src/util.rs:13`、`exec/src/lib.rs:268`。
 - **实测**：`clean-search-20260728T132311Z`（exec）、`clean-legacy-20260728T132509Z`
   （TUI）、`audit-ep019-wham-consume-safe-20260730a`（`codex_exec` originator、
-  `unknown` 终端标识）均为 R。0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt
-  `20261027T135446Z-d8a16a8e788de81e`）对场景 A15 的五项判据（`exec-identity`、`tui-identity`、
+  `unknown` 终端标识）均为 R。0.165.0 官方 VC-1（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt
+  `20261029T042703Z-54406f2fab548474`）对场景 A15 的五项判据（`exec-identity`、`tui-identity`、
   `exec-startup-models-suffix-optional`、`tui-startup-models-suffix-optional`、`post-initialize-suffix-present`）各匹配
   0 条：这五项是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
 - **实现**：按入口和进程状态生成 suffix；不得把一次首次 models 结果硬编码为固定值。ARM64 候选的平台前缀为
   `(Ubuntu 24.4.0; aarch64)`，suffix 的可选性和生成规则不变。
-- **状态**：✅ 源码充分；抓包充分（R 类样本）；0.164.0 的身份判据是候选侧判据，由 VC-5 候选断言核对。
+- **状态**：✅ 源码充分；抓包充分（R 类样本）；0.165.0 的身份判据是候选侧判据，由 VC-5 候选断言核对。
 
 ### SPEC-HDR-006 accept 按传输和端点变化
 
@@ -619,7 +625,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **实测**：`audit-h1raw-20260730a`（responses）与 `clean-search-20260728T132311Z`（alpha-search 不发送）均为 R；
   0.157.0 官方普通 Responses 8 条均带 `session-id` 与 `thread-id`。候选断言 `assert-SPEC-HDR-007` 核对普通 Responses
   均含两头、所有请求不含 `session_id` 与 `conversation-id`、realtime 第一跳使用 `x-session-id`；取值见 0.157.0
-  `core/src/client.rs` 第 571-593 行与第 1307-1310 行、`core/src/session/session.rs` 第 886-900 行。
+  `core/src/client.rs` 第 571-593 行与第 1307-1310 行、`core/src/session/session.rs` 第 886-900 行。0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：`responses-session-id` 与 `responses-thread-id` 各匹配 10 条，`conversation-id-absent` 与 `legacy-names-absent` 各匹配 146 条，realtime 第一跳 `realtime-x-session` 匹配 1 条。
 - **实现**：严格按端点发送，不能把会话头扩散到 alpha-search；`session-id` 按上述缓存亲和键取值。
 - **状态**：✅ 源码充分；抓包充分。
 
@@ -780,7 +786,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/client.rs:2112-2119`、`core/src/client.rs:2495-2511`、`core/src/client.rs:694-709`、`core/src/session/turn.rs:194-195`（回合作用域，见机制）。
 - **实测**：`audit-ep014-turnstate-echo-20260730a` 与 `audit-body004-ws-turnstate-20260730a`（R）完成 HTTP、WS
   两条输入→保存→回送闭环。候选断言 `assert-SPEC-BODY-004` 核对回送值不变、两条通道均闭环、owner 变化后不回送；
-  清空见 0.157.0 `core/src/client.rs` 第 1538-1542 行。
+  清空见 0.157.0 `core/src/client.rs` 第 1538-1542 行。0.165.0 新增的“新用户轮次首个请求不回送上一回合 turn-state”判据 `turn-state-new-turn-reset` 与既有 `turn-state-owner-reset` 在 0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`）上各匹配 0 条：它们是候选侧判据（按候选侧 `reset_reason` 记录选请求），由 VC-5 候选断言核对，官方侧不适用。
 - **实现**：Sub2API 若终结上下游流，必须保存并回送；透明转发时不得丢失或重复生成；账号 owner 变化时清空。画像 `TurnState.ResetOnNewTurn=true` 时网关在新用户轮次（非工具续轮、非首帧、上一帧不是客户端预热帧）先清空已保存的值；不声明保持旧行为。
 - **状态**：✅ 源码充分；抓包充分。
 
@@ -841,8 +847,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `core/src/turn_metadata.rs` 第 83-93 行。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（Lite）与
   `audit-body002-plain-20260730a`（非 Lite），均为 R；这两份 R 类样本采集版本早于 0.163.0，其非 Lite 样本里的顶层
-  `instructions` 在 0.163.0 起不再出现，不作为 0.164.0 非 Lite 的佐证。0.164.0 官方样本（Campaign
-  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：Lite 轨场景
+  `instructions` 在 0.163.0 起不再出现，不作为 0.164.0 非 Lite 的佐证。0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：Lite 轨场景
   A03 的请求 `body.model` 为 gpt-6-astra（`lite-model-is-lite-track-model`），顶层无 `instructions` 与 `tools`
   （`lite-top-level-omission`、`lite-tools-omission`），`reasoning.context=all_turns`（`lite-reasoning-manifest-defaults`），
   `reasoning.effort` 为清单支持的档位（采集客户端配置为 low，`lite-reasoning-effort-present`），`reasoning.summary` 省略
@@ -850,12 +855,12 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   A04（gpt-6.1-sol，0.163.0 起为 Lite 模型）顶层无 `instructions`（`main-instructions-absent` 匹配 3 条），工具目录在
   `input` 的 `additional_tools` 项里（`main-additional-tools-present` 匹配 3 条）；数字档位定向样本中 `reasoning.effort`
   为 JSON 整数 `3`（A04 HTTP 的 `numeric-effort-http-integer` 匹配 1 条，A05 WS `response.create` 的
-  `numeric-effort-ws-integer` 匹配 2 条）；0.165.0 起这些数字档位样本的 `input` 类型里**没有** `configuration_update`（判据 `numeric-effort-http-no-configuration-update`、`numeric-effort-ws-no-configuration-update` 由 0.165 期望清单承载，官方侧匹配数待 VC-1 回填）。本轮官方采集的主线与 Lite 轨都是 Lite 模型，非 Lite
+  `numeric-effort-ws-integer` 匹配 2 条）；0.165.0 起这些数字档位样本的 `input` 类型里**没有** `configuration_update`（官方 VC-1 判据 `numeric-effort-http-no-configuration-update` 匹配 1 条、`numeric-effort-ws-no-configuration-update` 匹配 2 条）。本轮官方采集的主线与 Lite 轨都是 Lite 模型，非 Lite
   分支（基础指令作为 `input` 最前的 developer 消息）没有本轮官方样本：gpt-5.5 在采集账号上已下线，0.164.0 内置目录再无
   非 Lite 模型；该分支的结论依据 0.164.0 与 0.165.0 源码（`core/src/client_common.rs` 两版逐字节相同），不用 0.160.0 的非 Lite 样本充当 0.164.0 的佐证。候选断言
   `assert-SPEC-BODY-006` 核对 Lite 省略顶层字段、Lite 的 reasoning 与 text 定型、主线请求无顶层 `instructions` 且工具目录在
   `additional_tools`，以及数字档位在 HTTP 与 WS 均为整数。
-  0.165.0 非正式实采（`sub2apiplus-evidence/codex-cli/0.165.0/informal/`（X 路 ARM64 非正式实采，没有账本与 Campaign；下称非正式实采））：有 WS 预热的路径 16 个场景首轮都不带 `configuration_update`；`supports_websockets=false` 的 OpenAI provider（h1、h2）首轮 `input` 末尾带 update(请求 effort)；数字档位（n1、n2）不产生 update，请求 `reasoning.effort` 为整数 `3`；采集账号目录（真实上游 `GET /models?client_version=0.165.0`）里 gpt-6.1-sol、gpt-6-astra、gpt-6.1-terra、gpt-6-sol、gpt-6-luna 的 `supports_reasoning_effort_updates` 为 true，gpt-5.6-* 与隐藏模型为 false；窗口内改 effort（e1、e5）三个业务帧的请求级 `reasoning.effort` 全是同一个钉死值，`input` 末尾依次多出 update；update 的 JSON 为 `{"type":"configuration_update","reasoning":{"effort":"high"}}`，键序 `type, reasoning`（抽查 5 个场景 13 处，除取值外字节完全一致）。正式样本的匹配数由 VC-1 回填，对应判据 `configuration-update-http-first-turn`、`configuration-update-ws-absent-without-effort-change`。官方抓包未核实：上游确实按最后一条 update 执行。
+  0.165.0 非正式实采（`sub2apiplus-evidence/codex-cli/0.165.0/informal/`（X 路 ARM64 非正式实采，没有账本与 Campaign；下称非正式实采））：有 WS 预热的路径 16 个场景首轮都不带 `configuration_update`；`supports_websockets=false` 的 OpenAI provider（h1、h2）首轮 `input` 末尾带 update(请求 effort)；数字档位（n1、n2）不产生 update，请求 `reasoning.effort` 为整数 `3`；采集账号目录（真实上游 `GET /models?client_version=0.165.0`）里 gpt-6.1-sol、gpt-6-astra、gpt-6.1-terra、gpt-6-sol、gpt-6-luna 的 `supports_reasoning_effort_updates` 为 true，gpt-5.6-* 与隐藏模型为 false；窗口内改 effort（e1、e5）三个业务帧的请求级 `reasoning.effort` 全是同一个钉死值，`input` 末尾依次多出 update；update 的 JSON 为 `{"type":"configuration_update","reasoning":{"effort":"high"}}`，键序 `type, reasoning`（抽查 5 个场景 13 处，除取值外字节完全一致）。官方 VC-1 正式样本：`configuration-update-http-first-turn` 匹配 2 条（只走 HTTP 的 provider，首轮 `input` 带 update）、`configuration-update-ws-absent-without-effort-change` 匹配 16 条（有 WS 预热的路径首轮不带 update）。官方抓包未核实：上游确实按最后一条 update 执行。
 - **实现**：按模型 manifest 与 Option 值序列化，不硬编码某个模型的一次字段子集。数字档位由画像 ReasoningEffort 节
   （`CustomNumericSerialization=u64_integer`）驱动：能按 u64 解析的档位以 JSON 整数出站，turn metadata 仍记字符串；
   节缺省的画像一律发字符串。非 Lite 请求不再发送顶层 `instructions`，基础指令作为 `input` 最前的 developer 消息，
@@ -889,9 +894,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   自定义 provider 默认不带。0.165.0 复核：以上写入与判定未变；保留键清单（只阻止 app-server 覆盖）另增 `guardian_recorded_items`
   （`core/src/responses_metadata.rs:70`、`core/src/responses_metadata.rs:112`），该键属于 turn metadata，不进入 `client_metadata` 顶层，见 SPEC-BODY-009。
 - **实测**：0.157.0 官方 HTTP Responses 请求体 `client_metadata.mcp_attribution` 为字符串 `{"status":"none"}`、
-  `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。0.164.0 官方样本（Campaign `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：
+  `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：
   `http-guardian-credits`、`http-mcp-attribution` 各匹配 4 条（场景 A03、A04 的 HTTP Responses），`ws-guardian-credits`、`ws-mcp-attribution` 各匹配 16 条（场景 A05、A06 的
-  `response.create`）。候选断言 `assert-SPEC-BODY-008` 核对 HTTP 与 WS 两类载体的两项取值。
+  `response.create`）。0.165.0 新增的逐请求键（判据 `ws-turn-frame-root-turn-id` 匹配 10 条回合帧、`ws-prewarm-frame-no-root-turn-id` 匹配 3 条预热帧、`ws-frame-request-start-ms` 与 `ws-frame-responses-lite-flag` 各匹配 13 条、`ws-compaction-frame-no-access-programs` 匹配 1 条压缩帧、`http-turn-request-root-turn-id` 匹配 4 条 HTTP 回合请求）同样取自本 Campaign 官方证据。候选断言 `assert-SPEC-BODY-008` 核对 HTTP 与 WS 两类载体的两项取值，以及上述逐请求键。
 - **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明的动态键中，`root_turn_id` 同时适用于 WS 帧与 HTTP `/responses` 回合请求（含压缩请求）：HTTP 请求的 `client_metadata` 带 `root_turn_id`，根线程上等于本请求出站的 `turn_id`；子代理、guardian、记忆合并线程不写。Lite 标记与发送时间戳只属于 WS 帧，HTTP 请求体不写；WS 帧的 `root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致（未核实，旧行为同）。
 - **状态**：✅ 源码充分；抓包充分。
 
@@ -919,8 +924,11 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **实测**：候选断言 `assert-SPEC-BODY-009` 核对：键为 22 键的有序子集、必含上列 14 键，默认配置
   `analytics_enabled=true`。13 个既有必含键与默认 `analytics_enabled=true` 的官方依据沿用 0.157.0 官方样本的封存断言
   （键为 21 键的有序子集、必含 13 键）；新增的 `history_initialization` 由源码确认（0.163.0 起，0.165.0 复核仍成立）。`turn-metadata-keys` 与
-  `turn-metadata-analytics-default` 两项判据在 0.164.0 官方 VC-1（Campaign `c01640-formal-vc1-r1-20261027t000000z`，
-  attempt `20261027T135446Z-d8a16a8e788de81e`）各匹配 0 条：这是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
+  `turn-metadata-analytics-default` 两项判据在 0.165.0 官方 VC-1（Campaign `c01650-formal-vc1-r1-20261029t000000z`，
+  attempt `20261029T042703Z-54406f2fab548474`）各匹配 0 条：这是候选侧判据，由 VC-5 候选断言核对，官方侧不适用。
+  0.165.0 新增的 turn metadata 键判据在同一官方证据上的匹配数（匹配数不是去重请求数）：WS 回合帧 `ws-turn-frame-root-turn-id-key` 22 条、
+  `ws-turn-frame-agent-name-key` 35 条，WS 预热帧 `ws-prewarm-frame-no-root-turn-id-key` 13 条，
+  HTTP 回合请求 `http-turn-request-agent-name-key`、`http-turn-request-root-turn-id-key`、`http-turn-request-window-number-key`、`http-turn-request-context-window-id-key` 各 4 条；这些判据是候选侧判据，由 VC-5 候选断言核对。
 - **实现**：网关生成有可信取值的键：基础 14 键；画像 `WindowTracking` 声明时另生成 `window_number`、`context_window_id`；画像 `RootThreadKeys` 声明时，根线程另生成 `agent_name`（`/root`）与 `root_turn_id`（回合帧，等于 `turn_id`，预热无）。`sandbox_mode`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled` 取决于用户本地配置或模型目录，网关没有可信来源，维持不生成。压缩请求（`WSCompactionRequests`）：`request_kind=compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象，不带 `model`、`reasoning_effort`、`turn_trigger`；压缩请求有自己的新回合 id：`turn_id` 是新的 UUIDv7，`root_turn_id` 同值，既不同于压缩前最后一个业务回合，也不同于压缩后的下一个业务回合，同一压缩帧重试取同一 id。画像 `WindowTracking`、`RootThreadKeys` 对 HTTP `/responses` 回合请求同样生效：turn metadata 带 `window_number`、`context_window_id`；根线程另带 `agent_name`（`/root`）与 `root_turn_id`（等于 `turn_id`，压缩请求同样）。HTTP 窗口号取自下游 `x-codex-window-id` 头的数字后缀（无状态读取，只采数字），窗口头、`client_metadata`、turn metadata 的窗口身份一致；上下文窗口 id 由（会话、窗口号）稳定派生，同窗口内各请求相同，窗口号加一后换新。画像 `TurnMetadata.HTTPCompactionRequests` 声明后，HTTP `/responses` 上的压缩请求（`input` 带 `compaction_trigger`）：`request_kind` 为 `compaction`，带 `compaction{trigger,reason,implementation,phase,strategy}` 对象并排在最后一个键，不带 `model`、`reasoning_effort`、`turn_trigger`；与 `WSCompactionRequests` 各自独立，WS 与 HTTP 两条出站路径分别声明。画像 `TurnMetadata.Keys`
   增加 `history_initialization`（字典序位于 `context_window_id` 与 `installation_id` 之间）。网关生成回合 id 时按该库的位布局与单调上下文编码（内嵌毫秒回拨 7 毫秒），开始时间由 `turn_id` 推出：内嵌毫秒加以 `turn_id` 为种子、按上述 143 个样本的分布确定性抽取的 0～7 毫秒（29 毫秒离群值不计入）；会话、线程、item id 的内嵌毫秒另回拨 50 毫秒，使其总早于首个回合 id。
 - **状态**：✅ 源码充分；抓包充分（13 个既有必含键沿用 0.157.0 官方样本，新增的 `history_initialization` 由源码确认，0.165.0
@@ -1010,7 +1018,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 ### SPEC-EP-006 models 的 URL 与方法
 
 - **范围**：内置 OpenAI OAuth。
-- **规则**：`GET {base}/models?client_version=0.164.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
+- **规则**：`GET {base}/models?client_version=0.165.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
   的值随 CLI 版本；exec 新增 `model/list`（`OnlineIfUncached`），可能使冷 home 的首个 `/models` 提前发出并变为同步等待，
   请求形态不变。0.164.0 复核：`model/list` 改为用 catalog 当前快照里的 config 与 models_manager 取列表
   （`list_models_from_snapshot`），刷新策略仍是 `OnlineIfUncached`，URL、方法、query 不变。
@@ -1018,11 +1026,11 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `model/list` 的触发见 `app-server/src/request_processors/catalog_processor.rs:296-304` 与 `exec/src/daybreak.rs:41-50`。
   0.163.0 另在 `codex-api/src/endpoint/models.rs:48-67` 增加 `model_catalog_url`（自定义 provider 专用）的 URL 构造，内置
   provider 不受影响。
-- **实测**：`audit-h1raw-20260730a`（R）验证 URL、方法与 query 形态。0.164.0 官方样本（Campaign
-  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；匹配数不是去重请求数）：场景 A09 的
-  `models-method-path-query` 匹配 17 条，method 为 GET，path 为 `/backend-api/codex/models`，query 只有
-  `client_version=0.164.0`。
-- **实现**：版本 query 与画像对应的 CLI 版本一致（0.164.0）。
+- **实测**：`audit-h1raw-20260730a`（R）验证 URL、方法与 query 形态。0.165.0 官方样本（Campaign
+  `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：场景 A09 的
+  `models-method-path-query` 匹配 16 条，method 为 GET，path 为 `/backend-api/codex/models`，query 只有
+  `client_version=0.165.0`。
+- **实现**：版本 query 与画像对应的 CLI 版本一致（0.165.0）。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-EP-008 alpha-search 的 URL 与方法
@@ -1071,7 +1079,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth；由 `Provider::url_for_path()` 构造的 Codex API URL。
 - **规则**：provider 级 `query_params=None`；query 只由端点自身添加。目前 models
-  添加 `client_version=0.164.0`，realtime/calls 添加 `intent` 与 `architecture`，
+  添加 `client_version=0.165.0`，realtime/calls 添加 `intent` 与 `architecture`，
   普通 responses 不带 query。0.163.0 复核：行为不变，provider 级 `query_params` 仍为 `None`。
 - **源码**：[L1] `codex-client/src/provider.rs:55`、
   `model-provider-info/src/lib.rs:543`、
@@ -1079,9 +1087,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `Provider` 与 `url_for_path` 在 0.163.0 移入 `codex-client`（原 `codex-api/src/provider.rs`）；models 的 `client_version`
   由 `codex-api/src/endpoint/models.rs:37-46` 追加，realtime/calls 的 query 见 `codex-api/src/endpoint/realtime_call.rs:221-222`。
 - **实测**：`audit-h1raw-20260730a`（models／responses）与
-  `webrtc-20260728T134028Z`（realtime），均为 R。0.164.0 官方样本（Campaign
-  `c01640-formal-vc1-r1-20261027t000000z`，attempt `20261027T135446Z-d8a16a8e788de81e`；场景 A01、A03、A11；匹配数不是去重
-  请求数）：`models-query-boundary` 匹配 10 条，models 的 query 只有 `client_version=0.164.0`；`realtime-query-boundary`
+  `webrtc-20260728T134028Z`（realtime），均为 R。0.165.0 官方样本（Campaign
+  `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；场景 A01、A03、A11；匹配数不是去重
+  请求数）：`models-query-boundary` 匹配 9 条，models 的 query 只有 `client_version=0.165.0`；`realtime-query-boundary`
   匹配 1 条，realtime calls 只有 `intent=quicksilver` 与 `architecture=avas`；`responses-no-query` 匹配 3 条，场景 A03 的普通
   Responses 不带 query。
 - **实现**：不得给全部 Codex API URL 透传统一 query；自定义 provider 不属于本条。
@@ -1163,7 +1171,10 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   另增 `reasoning_summaries` 字段（默认 `true`），与压缩无关；`remote_compaction_v2` 仍是 Removed 键，`x-codex-beta-features` 仍恒含它
   （`core/src/session/mod.rs:1317-1329`，已启用的实验特性集合未变）。
 - **实测**：`relay-tui-recap-20260728T112358Z`（manual）与
-  `audit-ep021-auto-clean-20260730a`（auto），均为 R。候选断言 `assert-SPEC-EP-021` 核对含 compaction_trigger 的
+  `audit-ep021-auto-clean-20260730a`（auto），均为 R。0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：beta 头恒带（`beta-header-always-http` 匹配 1 条、`beta-header-always-ws` 匹配 8 条），
+  含 `compaction_trigger` 的压缩 POST 匹配 1 条；WS 压缩帧（`ws-compaction-frame-request-kind`、`-no-model-key`、`-no-reasoning-effort-key`、`-no-turn-trigger-key`、`-compaction-object`）与 HTTP 压缩请求
+  （`http-compaction-request-kind`、`-no-model-key`、`-no-reasoning-effort-key`、`-no-turn-trigger-key`、`-compaction-object`、`-no-access-programs`）各匹配 1 条（压缩后续聊场景 A21 与 A10）。
+  候选断言 `assert-SPEC-EP-021` 核对含 compaction_trigger 的
   POST、没有 `/responses/compact` 请求、HTTP 与 WS 恒带 beta 头；`remote_compaction_v2` 为 Removed 键见 0.157.0
   `features/src/lib.rs` 第 1821-1826 行，manual 按 V2 能力直接进入 V2 见 `core/src/tasks/compact.rs` 第 41-49 行。
 - **实现**：恒走 V2；入站 legacy compact 请求在出站前失败关闭，不计入账号错误。
