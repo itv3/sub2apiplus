@@ -55,6 +55,9 @@ type OpenAIForwardInvocationPlan struct {
 	nextOrdinal    uint32
 	currentSink    officialegress.SinkID
 	pendingOrdinal uint32
+	// windowAdvancesBound／windowAdvances 记录首个 attempt 的身份事实里“窗口号是否随压缩推进”的取值（见 alignWindowAdvances）。
+	windowAdvancesBound bool
+	windowAdvances      bool
 }
 
 type openAIForwardInvocationPlanInput struct {
@@ -357,6 +360,26 @@ func validateOpenAIForwardAttemptInput(input openAIForwardAttemptInput) error {
 	return nil
 }
 
+// alignWindowAdvances 让同一次 invocation 里的各个 attempt 对“窗口号是否随压缩推进”（CodexIdentityFacts.WindowAdvances）保持同一口径。
+//
+// 该取值决定 invocation 摘要是否绑定窗口标识，而 Executor 把首个 attempt 的 invocation 摘要冻结下来，之后任何 attempt 摘要不同都会被
+// “attempt 不能更换 invocation 冻结的 Persona attestation”拒绝。身份事实构造器按 attempt 自己的上下文给出取值：带 WS 派生状态的 WS
+// attempt 在画像声明 TurnMetadata.WindowTracking 时为真，而由 WS 降级而来的 HTTP attempt（SinkCodexResponsesWSHTTPBridge，Forward 里
+// WS 重连预算耗尽后的降级与 WS 入站会话的 HTTP bridge 都属此类）没有 WS 派生状态，取值为假。口径不一致的后果是降级请求被 Executor
+// 拒绝，Forward 把它当传输错误转成 502 failover（换号），而不是降级到 HTTP 继续服务。
+//
+// 做法：首个 attempt（ordinal 1）的取值记入计划，之后的 attempt 一律沿用它——摘要由首个 attempt 冻结，后续 attempt 只需与之相符。
+// 各 attempt 取值本来就一致时（旧画像、首发就是 HTTP 的 invocation、WS 与 HTTP 同为假）这是恒等操作。
+func (p *OpenAIForwardInvocationPlan) alignWindowAdvances(ordinal uint32, current bool) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if ordinal == 1 || !p.windowAdvancesBound {
+		p.windowAdvancesBound, p.windowAdvances = true, current
+		return current
+	}
+	return p.windowAdvances
+}
+
 func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 	ctx context.Context,
 	attempt OpenAIForwardAttempt,
@@ -429,6 +452,8 @@ func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 	if err != nil {
 		return officialegress.TransportResult{}, err
 	}
+	identityFacts := semantic.IdentityFacts
+	identityFacts.WindowAdvances = p.alignWindowAdvances(attempt.ordinal, identityFacts.WindowAdvances)
 	routingHint := semantic.RoutingHint
 	if !attempt.routingHint.IsZero() {
 		if !routingHint.IsZero() && routingHint.Digest() != attempt.routingHint.Digest() {
@@ -452,7 +477,7 @@ func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 			Mode: p.bundle.Mode(), Protocol: attempt.protocol,
 			Method: attempt.method, URL: attempt.target, Headers: semantic.Headers,
 			ResolvedHeaderOverrides: p.resolvedHeaderOverride,
-			IdentityMode:            p.identityMode, IdentityFacts: semantic.IdentityFacts,
+			IdentityMode:            p.identityMode, IdentityFacts: identityFacts,
 			Authentication: semantic.Authentication, HeaderPolicy: p.headerPolicy,
 			BodyPolicy: officialegress.BodyPolicy{
 				ID: p.headerPolicy.ID + ".body", Source: p.headerPolicy.Source,
