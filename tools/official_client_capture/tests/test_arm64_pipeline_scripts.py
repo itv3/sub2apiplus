@@ -223,6 +223,7 @@ class Sandbox:
         _write(d / "vc5-all.sh", f"""
             #!/bin/bash
             echo "VC5_ALL_START"
+            echo "RENEW_APPROVER=${{VC5_RENEW_APPROVER:-}}" >> "{self.log}"
             /bin/sleep 0.2
             echo "KILO_DONE"
             /bin/sleep 0.5
@@ -356,6 +357,32 @@ class CaptureAccountOrderTests(SandboxCase):
         self.assertEqual(offs[0], "OFF done=1 kilo=1", "关账号时 vc5-all 必须已经打出 VC5_ALL_DONE")
         self.assertIn("PASS VC5", "\n".join(self.sb.status_lines()))
         self.assertIn("VC5ALL_FINISHED", self.sb.events())
+
+    def _renew_approver_seen_by_vc5_all(self, *argv: str, **extra: str) -> str:
+        """跑一遍 VC5 阶段，返回假 vc5-all.sh 看到的 VC5_RENEW_APPROVER（没设时为空串）。"""
+
+        self._install_account_stubs()
+        self._prepare_vc5()
+        result = self.sb.stage_pipeline("--from", "VC5", "--to", "VC5", *argv, **extra)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+        seen = [line for line in self.sb.events() if line.startswith("RENEW_APPROVER=")]
+        self.assertEqual(len(seen), 1, seen)
+        return seen[0].split("=", 1)[1]
+
+    def test_approver_is_handed_to_vc5_all_for_token_auto_renewal(self) -> None:
+        """0.165 实战：流水线起 vc5-all 时没传 VC5_RENEW_APPROVER，consume 窗口过期后 canonical 前不会自动续签（手工 --renew 才通过）。
+        起跑传了 --approver 就必须把同一批准人交给 vc5-all。"""
+
+        self.assertEqual(self._renew_approver_seen_by_vc5_all("--approver", "老板·测试批准依据"), "老板·测试批准依据")
+
+    def test_existing_vc5_renew_approver_environment_wins_over_pipeline_approver(self) -> None:
+        self.assertEqual(
+            self._renew_approver_seen_by_vc5_all("--approver", "流水线批准人", VC5_RENEW_APPROVER="环境里的续签批准人"),
+            "环境里的续签批准人",
+        )
+
+    def test_without_any_approver_vc5_all_gets_empty_value_not_inherited_garbage(self) -> None:
+        self.assertEqual(self._renew_approver_seen_by_vc5_all(), "")
 
     def test_premature_close_is_caught_by_this_test_mutation(self) -> None:
         """变异验证：把脚本改回上一版的错误行为（见到 KILO_DONE 就关账号），上面那条不变量必须被打破——

@@ -586,7 +586,9 @@ run_VC5() {
   capture_on || stop VC5 "采集账号打开失败（访问令牌剩余 <60 分钟会被拒绝，见 ${PDIR}/capture-account.out）"
   : > "${mark}"
   : > "${RR}/vc5-all.out"
-  ( cd "${DRV}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
+  # vc5-all 在 canonical 前做准入守卫（lib.sh vc5_admission_guard）：管理令牌 consume 窗口过期时，只有进程环境里有 VC5_RENEW_APPROVER 才会自动续签。
+  # 起跑时传了 --approver 就是调度者授权本流水线签 VC-5 准入的同一批准人，续签沿用它；环境里已有 VC5_RENEW_APPROVER 的以环境为准；都没有则留空（守卫按“未设”处理）。
+  ( cd "${DRV}" && export VC5_RENEW_APPROVER="${VC5_RENEW_APPROVER:-${APPROVER}}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
   log "STEP vc5-all 已起（候选采集 → Kilo 双入口 → seal → compare → accept → canonical）"
   fi
   # 监视循环。采集账号要到 VC5_ALL_DONE 之后才关：seal checkpoint 的“Kilo 后环境恢复门禁”拿 Kilo 后探针（client-after）对比
