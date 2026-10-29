@@ -1,0 +1,99 @@
+{
+  "base_commit": "26a9c1eb4aea038706f263c1d5b46053647b472f",
+  "changed_path_count": 9,
+  "current_commit": "97dc67402e9755996f41ca8cd02e9aa797d3568b",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7244,
+  "frozen_path_count": 2318,
+  "identity_sha256": "ac2c31b27625edefcea7b61eb6ecc0ace6986e12796be4465881bb39d07dfc19",
+  "issued_at_utc": "2026-10-29T00:42:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01650-candidate-test-adapt-r1-20261029-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "predecessor_sha256s": [
+        "1f1749ecf7fe26ac970abdab55d638057cbdb204abaff551e09895b0ba3b782b"
+      ],
+      "reason": "登记候选链测试适配对冻结台账内测试文件的精确后继摘要；旧收据逐字保留。 path=backend/internal/service/official_egress_openai_ws_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2c4747ca8d00b6f527a28c15db85ada6bfa6c7fac4128e683508a8f3e197abc7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_oauth_input_metadata_test.go",
+      "predecessor_sha256s": [
+        "3c78e782de0cf7033875f9455700cd5c6b7b722eeebd3052f608ff44faec0e73"
+      ],
+      "reason": "登记候选链测试适配对冻结台账内测试文件的精确后继摘要；旧收据逐字保留。 path=backend/internal/service/openai_oauth_input_metadata_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "807c525a6c349fb2437171997bfdb6f687fcc20e0ac62ab78c31ef8fb663c650"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "predecessor_sha256s": [
+        "d8abd26fe775d3bb65842c6fd95cdb736e3edd28e1285620e519a5e84c0a2f78"
+      ],
+      "reason": "登记候选链测试适配对冻结台账内测试文件的精确后继摘要；旧收据逐字保留。 path=backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-tool-opt-20261026-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "138580ecc804c01225ba868730c35fa7edfa2de9afc62e2b1a21f42f44491cad"
+    }
+  ],
+  "unregistered_path_count": 6,
+  "unregistered_paths": [
+    "backend/internal/service/official_egress_codex_gpt61sol_lite_test.go",
+    "backend/internal/service/official_egress_codex_older_slot_form_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_auxiliary_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_carrier_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_target_frames_test.go",
+    "backend/internal/service/official_egress_openai_ws_default_instructions_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
