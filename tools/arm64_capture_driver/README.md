@@ -172,7 +172,7 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * 起跑前两张收据（优化第 4、5 项，只对 Codex 做，Claude 记为 `skipped`；收据目录 `$RUNROOT/local-receipts/`）：`local-capture-receipt`（要进入入口门禁的修复提交 `ENTRY_COMMIT`
   必须已有“本机完整 `make test-capture-tools` 通过”的本地收据：本机 `bash driver/local/local-capture-tools-receipt.sh --out-dir <目录>` 生成——完整提交号、命令、退出码、起止时间、
   工作树是否干净、日志摘要，自带封口，红的也如实写；上传到 ARM64 的收据目录）与 `tui-prelaunch-receipt`（新版二进制对 compact、ws-idle-close、daemon、guardian
-  各 TUI 场景做过零请求启动预探且全部通过，`bash driver/tui-prelaunch-receipt.sh scenarios|write|verify` 生成与核对，绑定目标版本与登记的二进制摘要）。
+  以及会话内改推理强度／换模型／压缩后续聊（effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws）各 TUI 场景做过零请求启动预探且全部通过，`bash driver/tui-prelaunch-receipt.sh scenarios|write|verify` 生成与核对，绑定目标版本与登记的二进制摘要）。
   上一轮这两处各白跑一次：修复提交只跑了定向测试、注释里写了版本号致 `test_driver_client_table` 红（入口门禁白跑 1.8 小时），新版客户端取消 daemon 功能白名单致带
   `--disable` 的 TUI 启动即退出（在 2 小时门禁之后才暴露）。后台验证起跑前置检查（`background-validate.sh preflight`）同样核对这两张收据（第六、七项）。
   跳过办法同上两项（`OPENING_CHECKS_SKIP` 加理由，项目名 `local-capture-receipt`、`tui-prelaunch-receipt`）。

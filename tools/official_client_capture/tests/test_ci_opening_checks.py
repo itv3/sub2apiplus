@@ -428,7 +428,8 @@ class TuiReceiptTests(unittest.TestCase):
         sys.modules[spec.name] = module
         self.addCleanup(sys.modules.pop, spec.name, None)
         spec.loader.exec_module(module)
-        self.assertEqual(oc.REQUIRED_TUI_SCENARIOS, ("compact-tui", "ws-idle-close-tui", "daemon-tui", "guardian-tui"))
+        self.assertEqual(oc.REQUIRED_TUI_SCENARIOS, ("compact-tui", "ws-idle-close-tui", "daemon-tui", "guardian-tui",
+                                                     "effort-update-ws", "effort-update-http", "model-switch-ws", "compact-continue-ws"))
         for name in oc.REQUIRED_TUI_SCENARIOS:
             self.assertIn(name, module.TUI_SCENARIOS)
 
@@ -441,8 +442,11 @@ class TuiReceiptTests(unittest.TestCase):
     def test_missing_failed_optional_failed_and_unbound_receipts_are_refused(self) -> None:
         self.assertIn("没有新版二进制", oc.check_tui_receipt(self.dir)[0])
         rows = [{"name": name, "status": "passed"} for name in oc.REQUIRED_TUI_SCENARIOS]
-        self.write(rows=rows[:3])
+        self.write(rows=[row for row in rows if row["name"] != "guardian-tui"])
         self.assertIn("缺少必需场景：guardian-tui", "\n".join(oc.check_tui_receipt(self.dir)))
+        # 只登记旧的四个（0.165 之前的做法）：会话内步骤场景缺失必须被拦下，并逐个点名
+        self.write(rows=rows[:4])
+        self.assertIn("缺少必需场景：effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws", "\n".join(oc.check_tui_receipt(self.dir)))
         self.write(rows=[{**rows[0], "status": "failed", "exit_code": 1, "tail": "line1\nCannot use the shared background server"}, *rows[1:]])
         text = "\n".join(oc.check_tui_receipt(self.dir))
         self.assertIn("场景 compact-tui 预探没通过", text)
