@@ -823,6 +823,62 @@ class ContinueGuardTests(_WorldCase):
         self.assertEqual(len(kept), 2, kept)
 
 
+class ZeroRequestEvidenceTests(_WorldCase):
+    """零请求判定（``zero_request_evidence``）的每个条件单独成立才放行，任何一条不成立都不能判零。"""
+
+    def _evidence(self, directory: str, *, successors: list[str], inflight: bool = True, setup=None) -> dict:
+        helper = self.make_world().helper()
+        root = Path(directory)
+        out, state = root / "out", root / "state"
+        (out / "continue").mkdir(parents=True)
+        state.mkdir()
+        params = {"OUT": str(out), "VC_STATE_DIR": str(state)}
+        if inflight:
+            marker = out / "continue" / "REV.inflight.json"
+            marker.write_text("{}", encoding="utf-8")
+            os.utime(marker, (1000, 1000))
+        if setup is not None:
+            setup(state)
+        return helper.zero_request_evidence(params, "REV", successors)
+
+    def test_nothing_new_and_no_successor_is_zero(self) -> None:
+        def old_run(state: Path) -> None:
+            (state / "run-old").mkdir()
+            os.utime(state / "run-old", (500, 500))
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertTrue(self._evidence(directory, successors=[], setup=old_run)["zero"])
+
+    def test_a_successor_attempt_alone_defeats_zero(self) -> None:
+        """后继 attempt 已存在（续跑已预约新 attempt）：即使监督器状态目录里没有新 run 也不能判零请求。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self._evidence(directory, successors=["20990101T000000Z-successor0000000000"])
+            self.assertFalse(evidence["zero"])
+            self.assertEqual(evidence["successors"], ["20990101T000000Z-successor0000000000"])
+
+    def test_a_new_run_directory_alone_defeats_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = self._evidence(directory, successors=[], setup=lambda state: (state / "run-new").mkdir())
+            self.assertFalse(evidence["zero"])
+            self.assertEqual(evidence["new_runs"], ["run-new"])
+
+    def test_an_old_run_whose_json_was_written_after_dispatch_defeats_zero(self) -> None:
+        def touched(state: Path) -> None:
+            (state / "run-old").mkdir()
+            os.utime(state / "run-old", (500, 500))
+            (state / "run-old" / "state.json").write_text("{}", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(self._evidence(directory, successors=[], setup=touched)["zero"])
+
+    def test_unprovable_inputs_never_claim_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_marker = self._evidence(directory, successors=[], inflight=False)
+            self.assertFalse(missing_marker["zero"])
+            self.assertTrue(missing_marker["reason"])
+
+
 class InterruptionTests(_WorldCase):
     """中途被打断（kill -9 等价）后再执行同一条命令，终态与不打断相同；绝不因打断而重复写账本或重复采集。"""
 

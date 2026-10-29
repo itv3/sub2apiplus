@@ -578,6 +578,25 @@ class AdmissionTests(unittest.TestCase):
         self.assertNotIn("receipt_drift", again)
         self.assertEqual(self.subject.consume()["status"], "ready")
 
+    def test_dry_run_flags_credential_only_drift_of_the_receipt(self):
+        """漂移判据与 consume 逐项相同：除绑定外还比凭据。只改收据里的凭据、绑定不变，consume 会拒绝，dry-run 也必须报 needs_apply。"""
+
+        self.subject.apply(self.approval())
+        data = json.loads(self.subject.receipt.read_text())
+        self.assertIsInstance(data["credential"], dict)
+        data["credential"] = {**data["credential"], "remaining_seconds": data["credential"].get("remaining_seconds", 0) + 1, "tampered": True}
+        admission.write_json(self.subject.receipt, data)
+        self.assertEqual(data["bindings"], self.subject.inspect()["bindings"], "只有凭据不同")
+        report = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(report["status"], "needs_apply")
+        self.assertEqual(report["receipt_drift"]["reason"], "admission_receipt_binding_drift")
+
+    def test_dry_run_makes_no_drift_claim_without_a_readable_receipt(self):
+        self.assertNotIn("receipt_drift", self.subject.dry_run_report(skip_database=True), "没有收据")
+        self.subject.apply(self.approval())
+        self.subject.receipt.write_text("{not json")
+        self.assertNotIn("receipt_drift", self.subject.dry_run_report(skip_database=True), "收据读不出来由 consume 自己报")
+
     def test_consume_binding_drift_error_carries_the_reapply_hint_without_secrets(self):
         self.subject.apply(self.approval())
         self.facts.generation += 1

@@ -713,6 +713,21 @@ class LiveRequestProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(provenance.ProvenanceError, "没有任何已执行的场景"):
                 provenance._root_branches(root, target_version="0.165.0")
 
+    def test_failed_frozen_run_scenario_directory_symlink_is_never_tolerated(self) -> None:
+        """没跑过的场景要求“场景目录确实不存在”：悬空软链接也是一个目录项（``exists()`` 对悬空链接为假），不能放行；
+        指向真实 relay 请求的软链接更不能把请求藏起来。"""
+
+        for name, target_has_request in (("dangling", False), ("to_real_relay", True)):
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                root = self._failed_frozen_root(Path(directory) / "runs", executed=("A03",), unexecuted=("A07",))
+                target = Path(directory) / "elsewhere"
+                if target_has_request:
+                    (target / "relay").mkdir(parents=True)
+                    (target / "relay" / "conn001.client_to_upstream.bin").write_bytes(_h1_post(RESPONSES, {"model": "gpt-5.5", "n": "A07"}))
+                os.symlink(target, root / "scenarios" / "A07")
+                with self.assertRaises(provenance.ProvenanceError):
+                    provenance._root_branches(root, target_version="0.165.0")
+
     def test_compact_driver_fact_without_error_type_stays_unresolved(self) -> None:
         """turn 0 但驱动没有记录错误类型或协议记录数时，不能当零。"""
 
