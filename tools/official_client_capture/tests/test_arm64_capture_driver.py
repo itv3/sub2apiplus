@@ -2277,6 +2277,10 @@ for gate in manifest["gates"]:
                   "started_at_utc": stamp[0], "completed_at_utc": stamp[1], "unit_seconds": float(len(gate["units"]))})
 status = "failed" if any(gate["status"] != "passed" for gate in gates) else "passed"
 out.mkdir(parents=True, exist_ok=True)
+if config.get("executor_error"):   # 执行器自己出错（没写汇总）：入口门禁按“没有门禁结论”退出 3
+    sys.exit(2)
+if config.get("leave_dirty"):   # 模拟门禁把测试树弄脏（make test 留下未跟踪文件）
+    Path(os.getcwd(), "LEFTOVER.txt").write_text("dirty", encoding="utf-8")
 (out / "summary.json").write_text(json.dumps({"schema_version": "unit-executor-gates-summary/v1", "status": status, "policy_sha256": "0" * 64,
     "elapsed_seconds": 300.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [], "failed_units": sorted(failing),
     "diagnostic": [], "max_cores_in_use": 4.0}, ensure_ascii=False), encoding="utf-8")
@@ -2305,7 +2309,8 @@ class Arm64GateScriptTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._template_root.cleanup()
 
-    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = "", fail_warmup: bool = False):
+    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = "", fail_warmup: bool = False,
+                 leave_dirty: bool = False, executor_error: bool = False):
         fixture = _DriverFixture(root)
         hist = fixture.data_root / "candidates" / "hist"
         _git(root, "clone", "-q", str(self.template), str(hist))
@@ -2327,7 +2332,8 @@ class Arm64GateScriptTests(unittest.TestCase):
         shim.write_text(_ISOLATION_SHIM, encoding="utf-8")
         shim.chmod(0o700)
         record = root / "gate-commands.jsonl"
-        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units, "fail_warmup": fail_warmup}), encoding="utf-8")
+        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units, "fail_warmup": fail_warmup,
+                                                             "leave_dirty": leave_dirty, "executor_error": executor_error}), encoding="utf-8")
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
                "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
         return fixture, work, drv, record, env
@@ -2609,6 +2615,52 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertIn("frontend:lint", (gates / "full-regression.stderr.log").read_text(encoding="utf-8"), "失败单元的日志进 stderr 拼接日志")
             self.assertTrue((fixture.runroot / "impl-logs" / "READY").is_file(), "门禁结论照常交付，由 VC-4／VC-5 判定")
             self.assertEqual(_git(fixture.runroot / "arm64-vc4-gates" / "entry-work" / "test-tree", "rev-parse", "HEAD"), dc, "未通过时保留 DC 测试树供排查")
+
+    def test_vc4_gates_abort_without_delivering_when_the_gates_pass_but_the_tree_is_left_dirty(self) -> None:
+        """原脚本在 check-egress-spec 之后、make test 之前查测试树洁净度，脏就中止（退出 3、不交付、不写 READY）。改走统一执行器后这道守卫由入口门禁在
+        门禁之后的树洁净度检查承担：入口门禁退出码 1、每个门禁项却都通过的矛盾态，必须按脚本自身失败中止，不能当“通过”交付（验收 V4 的 D1）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root, leave_dirty=True)
+            c, dc, receipt = self._vc4_chain(fixture, work)
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("门禁后测试树不干净", result.stdout, "入口门禁自己报出树不干净")
+            self.assertIn("ARM64_VC4_GATES_ABORTED", result.stdout)
+            self.assertIn("门禁之后测试树不干净", result.stdout, "脚本说明这是自身失败而不是门禁结论")
+            self.assertNotIn("ARM64_VC4_GATES_DONE", result.stdout)
+            self.assertFalse((fixture.runroot / "impl-logs" / "READY").exists(), "不交付、不写 READY")
+            tree = fixture.runroot / "arm64-vc4-gates" / "entry-work" / "test-tree"
+            self.assertTrue((tree / "LEFTOVER.txt").is_file(), "现场（DC 测试树）保留，不能随脚本退出被删")
+            self.assertEqual(_git(tree, "rev-parse", "HEAD"), dc)
+            subject = next(path for path in (fixture.runroot / "arm64-vc4-gates").iterdir() if path.name.startswith("arm64-vc4-gates-"))
+            self.assertFalse((subject / "summary.json").exists(), "没有交付摘要")
+
+    def test_vc4_gates_abort_without_delivering_when_the_unified_executor_itself_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root, executor_error=True)
+            self._vc4_chain(fixture, work)
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("ARM64_VC4_GATES_ABORTED", result.stdout)
+            self.assertFalse((fixture.runroot / "impl-logs" / "READY").exists())
+
+    def test_vc4_gate_failure_with_a_dirty_tree_is_still_a_delivered_conclusion(self) -> None:
+        """门禁本身没过时（哪怕树也脏了）是门禁结论，照常交付失败结论并写 READY；中止只针对“全过却脏”的矛盾态。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root, leave_dirty=True, fail_units="frontend:lint")
+            self._vc4_chain(fixture, work)
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("ARM64_VC4_GATES_FAILED", result.stdout)
+            self.assertTrue((fixture.runroot / "impl-logs" / "READY").is_file())
 
     def test_vc4_resume_can_be_switched_off_and_the_second_layer_is_opt_in(self) -> None:
         for name, extra, expect_resume, expect_scope in (("关闭续跑", {"VC4_RESUME": "off"}, False, False),

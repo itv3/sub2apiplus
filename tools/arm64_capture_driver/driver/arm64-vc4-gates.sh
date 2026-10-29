@@ -19,7 +19,7 @@
 # 上传逐字段相同，随后用 upload_manifest.py 生成上传清单并写 READY：vc4-all.sh 的上传等待与清单核验、vc5-all.sh 与
 # build_gate_facts.py 都不用改（门禁收据只要求 target-platform 一项的架构等于候选架构）。
 # 门禁期间每 30 秒更新 impl-logs/HEARTBEAT；门禁结论（rc 非零）照常交付并写 READY，由 vc4-all.sh 与 VC-5 按日志和 gate.json
-# 判定；脚本自身失败（bundle、测试树、前端依赖、字节码缓存、并发锁、提交链不符）不交付、不写 READY。
+# 判定；脚本自身失败（bundle、测试树、前端依赖、字节码缓存、并发锁、提交链不符、门禁之后测试树不干净）不交付、不写 READY。
 # 顺序：先跑本脚本，完成后再启动 vc4-all.sh（READY 已在，上传等待立即通过），两者不并行，避免 4 核争用把计时用例拖红。
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
@@ -115,6 +115,14 @@ bash "$DRV/entry-gates.sh" "${EG_ARGS[@]}" "$BUNDLE" "$BUNDLE_BRANCH" "$DC" "$NM
 RUN_END=$(utc_now)
 if [ "$EG_RC" != 0 ] && [ "$EG_RC" != 1 ]; then
   echo "入口门禁没有给出结论（rc=${EG_RC}），原因见上方输出；主体目录 $WORK/$SUBJECT/entry"; false
+fi
+# 入口门禁退出码 1 有两种来源：门禁项没过（门禁结论，照常交付），或者门禁项都过了、却在门禁之后发现测试树不干净（或运行清单自检没过）——后者是脚本自身
+# 的失败，不是门禁结论：原脚本在 check-egress-spec 之后、make test 之前查树洁净度，脏就中止（退出 3、不交付、不写 READY、保留现场）；改走统一执行器后
+# 这道守卫由入口门禁在门禁之后的树洁净度检查承担，退出码 1 但每个门禁项都通过的矛盾态就是它拦下的，这里按同样的口径中止，不能当“通过”交付。
+if [ "$EG_RC" = 1 ] && python3 -B -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d.get("gates") and all(g.get("status") == "passed" for g in d["gates"]) else 1)' \
+    "$WORK/$SUBJECT/entry/entry-gates.json" 2>/dev/null; then
+  echo "入口门禁退出码 1，但每个门禁项都通过：门禁之后测试树不干净（或运行清单自检没过），不是门禁结论；不交付、不写 READY，现场保留在 $WORK/$SUBJECT/entry 与 $EGW"
+  false
 fi
 echo "=== 门禁产物：改写成 local-gates 六件套与 impl-logs/check-egress-spec.log $(utc_now)"
 RECORDS_OUT=$(python3 -B "$DRV/vc4_gate_records.py" build --entry-out "$WORK/$SUBJECT/entry" --gates-dir "$GATES" --impl-dir "$IMPL" --round "$ROUND" \
