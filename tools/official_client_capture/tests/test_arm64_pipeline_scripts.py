@@ -382,6 +382,39 @@ class CaptureAccountOrderTests(SandboxCase):
         self.assertIn("采集账号仍是开启状态", text)
         self.assertTrue(text.splitlines()[-1].split(" ", 1)[1].startswith("EXIT rc=1"), text.splitlines()[-1])
 
+    def _run_paused_vc5_all(self) -> tuple[subprocess.CompletedProcess, Path]:
+        """vc5-all 打出 KILO_DONE 与 VC5_ALL_PAUSED 后不再前进（真实场景：Claude 的 seal 暂停等人处置）。"""
+
+        account_log = self._install_account_stubs()
+        self._prepare_vc5()
+        _write(self.sb.drv / "vc5-all.sh", "#!/bin/bash\necho 'KILO_DONE'\necho 'VC5_ALL_PAUSED seal 暂停等人处置'\nexit 0\n")
+        return self.sb.stage_pipeline("--from", "VC5", "--to", "VC5"), account_log
+
+    def test_account_not_closed_when_vc5_all_is_paused(self) -> None:
+        """VC5_ALL_PAUSED 分支：流水线 STOPPED 等人处置，不替人关采集账号。
+        暂停点可能在 seal 对比点之前，此时关账号会让之后的“Kilo 后环境恢复门禁”拿到不一致的账号状态；
+        人处置完继续时账号还要在开着。变异“先关账号再停”原先没有测试能抓到（V1 验收的存活变异）。"""
+
+        result, account_log = self._run_paused_vc5_all()
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        self.assertEqual(self._off_lines(account_log), [], account_log.read_text(encoding="utf-8"))
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("vc5-all 暂停等人处置", text)
+        self.assertIn("采集账号仍是开启状态", text, "停下时要提示账号仍开着、需手工处置")
+
+    def test_paused_branch_close_is_caught_by_this_test_mutation(self) -> None:
+        """变异验证：把 VC5_ALL_PAUSED 分支改成“先 capture_off 再 stop”，上一条测试的不变量必须被打破。"""
+
+        script = self.sb.pipe / "vc-pipeline.sh"
+        text = script.read_text(encoding="utf-8")
+        needle = """if grep -q 'VC5_ALL_PAUSED' "${RR}/vc5-all.out"; then stop VC5"""
+        self.assertEqual(text.count(needle), 1, "VC5_ALL_PAUSED 分支的写法变了，请同步更新变异点")
+        script.write_text(text.replace(needle, """if grep -q 'VC5_ALL_PAUSED' "${RR}/vc5-all.out"; then capture_off; stop VC5"""), encoding="utf-8")
+        result, account_log = self._run_paused_vc5_all()
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        self.assertTrue(self._off_lines(account_log), "变异版应当在暂停时关了账号")
+
     def test_capture_on_retry_classification(self) -> None:
         """采集账号开关脚本文档保证幂等：退出码 5（管理接口失败）可重试；退出码 4（访问令牌快过期，确定性拒绝）不重试。"""
 
