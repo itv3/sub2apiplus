@@ -909,6 +909,65 @@ class RoundEnvTemplateTests(unittest.TestCase):
             self.assertIn(key, keys)
 
 
+class WaitMarkerFailureWordsTests(unittest.TestCase):
+    """vc-pipeline.sh 的 wait_marker 扫日志里的失败字样；脚本自己打印的“=== ”阶段标题行不能算失败。
+
+    0.165 事故：VC2 阶段用 'Traceback|拒绝|失败|…' 扫 vc23.out，vc23-seq.sh 的标题行“=== VC-3 前重放离线报告，拒绝批准后的输入漂移”
+    含“拒绝”被当成失败，流水线写 STOPPED VC2（实际脚本没出错、后面照常跑完）。
+    """
+
+    BAD_VC23 = "Traceback|拒绝|失败|rc=[1-9]|断言|Error"
+    BAD_VC4 = "Traceback|拒绝|失败|BATCH FAILED"
+
+    def _wait(self, text: str, bad: str) -> int:
+        script = (PIPELINE / "vc-pipeline.sh").read_text(encoding="utf-8")
+        match = re.search(r"^wait_marker\(\) \{\n.*?^\}\n", script, re.S | re.M)
+        self.assertIsNotNone(match, "找不到 wait_marker 函数")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out.log").write_text(text, encoding="utf-8")
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                set -u -o pipefail
+                log() {{ :; }}
+                disk_txt() {{ echo x; }}
+                sleep() {{ :; }}
+                {match.group(0)}
+                wait_marker "{root}/out.log" 'VC_DONE' '{bad}' 1 t ''
+                echo "rc=$?"
+            """)
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return int(done.stdout.strip().rsplit("rc=", 1)[1])
+
+    def test_real_stage_titles_are_not_failures(self) -> None:
+        """用驱动脚本里真实的标题行当输入：命中“拒绝”的标题不再触发失败，等不到成功标记时只是超时（rc=1）。"""
+
+        title = next(line for line in (REAL_DRIVER / "vc2-approve-and-stage.sh").read_text(encoding="utf-8").splitlines()
+                     if line.startswith('echo "=== VC-3 前重放离线报告'))
+        printed = title.split('echo "', 1)[1].rsplit('"', 1)[0]
+        self.assertIn("拒绝", printed, "标题行措辞变了，请换一条仍含失败字样的真实标题")
+        self.assertEqual(self._wait(printed + "\n", self.BAD_VC23), 1)
+        self.assertEqual(self._wait(printed + "\n=== 管理 token\nVC23_DONE-not-yet\n", self.BAD_VC4), 1)
+
+    def test_real_failures_are_still_caught(self) -> None:
+        title = "=== VC-3 前重放离线报告，拒绝批准后的输入漂移\n"
+        self.assertEqual(self._wait(title + "本轮客户端（claude）的 VC-2／VC-3 派发脚本是 x，拒绝\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait(title + "Traceback (most recent call last):\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait(title + "step rc=3\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait("BATCH FAILED 4\n", self.BAD_VC4), 3)
+
+    def test_success_marker_wins_even_with_titles_present(self) -> None:
+        self.assertEqual(self._wait("=== 拒绝 失败 标题\nVC_DONE\n", self.BAD_VC23), 0)
+
+    def test_failure_words_in_pipeline_calls_match_this_test(self) -> None:
+        """本测试用的两组失败正则必须与流水线里实际传给 wait_marker 的一致，否则测的不是真实调用。"""
+
+        text = (PIPELINE / "vc-pipeline.sh").read_text(encoding="utf-8")
+        self.assertIn(f"'{self.BAD_VC23}'", text)
+        self.assertIn(f"'{self.BAD_VC4}'", text)
+
+
 class PlRemoteVarTests(unittest.TestCase):
     """pl_remote_var 要同时认 parse_env.py 的两种输出形态。
 
