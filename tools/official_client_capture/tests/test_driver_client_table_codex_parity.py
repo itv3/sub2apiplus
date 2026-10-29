@@ -1130,14 +1130,134 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
                     '+private_directory "$STORE"']}
 
 
+
 # >>> T2 预检登记常量（脚本生成，可重跑）
 T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
-T2_PRECHECK_DIGESTS = {'entry-preflight.sh': '9f4417a012a9bb5e4d572f7018e6f8cbca88d640dba2dd130fbba87a647f22b3',
+T2_PRECHECK_DIGESTS = {'entry-gates.sh': 'f80292303f9970da87a735b1d63f247e74b81dc7d544393054832a0b2db57186',
+ 'entry-preflight.sh': '9f4417a012a9bb5e4d572f7018e6f8cbca88d640dba2dd130fbba87a647f22b3',
  'env.example.sh': '9b14a35fe251cd604dcafd4ba5fa75e19bf141b65512a5f782a261b9efad61f3',
- 'lib.sh': '8f09b91ddd30375da4fd0c50e438a8c33ddf06b27be3b58db2a3510a8bf26fd3',
- 'vc5-all.sh': 'e8f7bacc6ef5c55fc4eced0019db85fdaae6eb1ef17cbf8b5765e387e96e1b24',
+ 'lib.sh': 'da83d97f499b8e01d230465641ad4393dbf842684b9f9f4804847aa5b2767ce5',
+ 'vc5-all.sh': '83b6d035858d5d279fef4a23d218c62da65a4b974cb4e76f0527ce04a339f999',
+ 'vc5-gate-target.sh': '98ce09d9da772e8f32372f74bc892c5820b35d80fa64a97538a66a6d2c6b52a8',
  'vc5-precheck.sh': '7f50098622a6652f1366ebfc009ad2e80cf5ca846ecee010340c4ab275e19b79'}
-T2_PRECHECK_RESIDUALS = {'entry-preflight.sh': ['+receipt_not_applicable() {',
+T2_PRECHECK_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] '
+                    '[--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache '
+                    '<目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent '
+                    '<绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] '
+                    '[--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] '
+                    '[--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample '
+                    'off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle '
+                    '绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+                    '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|vc4|pre-a3|regression] [--go-warmup auto|off] '
+                    '[--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache '
+                    '<目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent '
+                    '<绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] '
+                    '[--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] '
+                    '[--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample '
+                    'off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] '
+                    '[--resume-from auto|<运行ID> [--resume-series <系列>] [--resume-binding-extra <JSON>] [--resume-max-age-hours <小时>] '
+                    '[--resume-waive-env <理由> --resume-waive-env-names <条目,…>]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+                    '+RESUME_FROM=""; RESUME_SERIES=""; RESUME_BINDING_EXTRA="{}"; RESUME_MAX_AGE=""; RESUME_WAIVE=""; RESUME_WAIVE_NAMES=""; '
+                    'RESUME_ARGS=(); FORCE_ARGS=()',
+                    '+    --resume-from) RESUME_FROM="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '+    --resume-series) RESUME_SERIES="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '+    --resume-binding-extra) RESUME_BINDING_EXTRA="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '+    --resume-max-age-hours) RESUME_MAX_AGE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '+    --resume-waive-env) RESUME_WAIVE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '+    --resume-waive-env-names) RESUME_WAIVE_NAMES="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+                    '-case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac',
+                    '+case "$PROFILE" in entry|full-gates|preflight|vc4|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac',
+                    '+if [ -n "$RESUME_FROM" ] && [ -z "$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then',
+                    '+  RESUME_WAIVE="${ENTRY_RESUME_WAIVE_ENV:-}"; RESUME_WAIVE_NAMES="${ENTRY_RESUME_WAIVE_ENV_NAMES:-}"',
+                    '+fi',
+                    '+if [ -n "$RESUME_FROM" ]; then',
+                    '+  if ! [[ "$RESUME_FROM" =~ ^(auto|[0-9A-Za-z._-]{1,128})$ ]]; then echo "--resume-from 只接受 auto 或来源运行 ID：$RESUME_FROM" >&2; '
+                    'exit 2; fi',
+                    '+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" '
+                    '] || [ "$AUDIT_READS" = true ] \\',
+                    '+      || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ '
+                    '"${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \\',
+                    '+      || [ "$BIND_ONLY" = true ] || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then',
+                    '+    echo "续跑沿用只与重新执行全集同用，不能与读集审计、读集合同、收窄提案、B-09／B-10、逐单元承接、--bind-only 同用" >&2; exit 2',
+                    '+  fi',
+                    '+  RESUME_SERIES="${RESUME_SERIES:-$PROFILE}"',
+                    '+  if ! [[ "$RESUME_SERIES" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then echo "--resume-series 只允许字母、数字与 ._-：$RESUME_SERIES" '
+                    '>&2; exit 2; fi',
+                    '+  if [ -n "$RESUME_MAX_AGE" ] && ! [[ "$RESUME_MAX_AGE" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then echo "--resume-max-age-hours '
+                    '是小时数：$RESUME_MAX_AGE" >&2; exit 2; fi',
+                    '+  if { [ -n "$RESUME_WAIVE" ] && [ -z "$RESUME_WAIVE_NAMES" ]; } || { [ -z "$RESUME_WAIVE" ] && [ -n "$RESUME_WAIVE_NAMES" ]; '
+                    '}; then',
+                    '+    echo "环境豁免要同时给理由（--resume-waive-env）和点名的指纹条目（--resume-waive-env-names）" >&2; exit 2',
+                    '+  fi',
+                    "+  python3 -B -c 'import json, sys; value = json.loads(sys.argv[1]); sys.exit(0 if isinstance(value, dict) else 1)' "
+                    '"$RESUME_BINDING_EXTRA" \\',
+                    '+    || { echo "--resume-binding-extra 必须是 JSON 对象：$RESUME_BINDING_EXTRA" >&2; exit 2; }',
+                    '+elif [ -n "$RESUME_SERIES$RESUME_MAX_AGE$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then',
+                    '+  echo "--resume-series／--resume-max-age-hours／--resume-waive-env* 只与 --resume-from 同用" >&2; exit 2',
+                    '+fi',
+                    '-  case "$PROFILE" in entry|full-gates|preflight) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac',
+                    '+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac',
+                    '-  case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; '
+                    'exit 2 ;; esac',
+                    '+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) echo '
+                    '"按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight、vc4）：$PROFILE" >&2; exit 2 ;; esac',
+                    '+if [ -n "$RESUME_FROM" ]; then',
+                    '+  python3 -B - "$OUT/resume-binding.json" codex "$PLAN_PROFILE" "$PRE_A3_MODE" "${DEPLOY:-}" "${TREE_FILES:-}" '
+                    '"${DEPLOY_OTHERS:-}" "$RESUME_BINDING_EXTRA" <<\'PYBIND\'',
+                    '+import hashlib, json, os, sys',
+                    '+out, client, plan_profile, pre_a3, deploy, tool_files, others, extra = sys.argv[1:]',
+                    '+binding = {"client": client, "plan_profile": plan_profile, "pre_a3": pre_a3,',
+                    '+           "deploy_receipt_sha256": hashlib.sha256(open(deploy, "rb").read()).hexdigest() if deploy else None,',
+                    '+           "tool_files_sha256": tool_files or None, "deploy_others": others or None, "extra": json.loads(extra)}',
+                    '+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)',
+                    '+with os.fdopen(fd, "w", encoding="utf-8") as handle:',
+                    '+    json.dump(binding, handle, ensure_ascii=False, sort_keys=True, indent=1)',
+                    '+PYBIND',
+                    '+  RESUME_ARGS=(--resume-from "$RESUME_FROM" --resume-series "$RESUME_SERIES" --resume-binding "$OUT/resume-binding.json")',
+                    '+  if [ -n "$RESUME_MAX_AGE" ]; then RESUME_ARGS+=(--resume-max-age-hours "$RESUME_MAX_AGE"); fi',
+                    '+  if [ -n "$RESUME_WAIVE" ]; then RESUME_ARGS+=(--resume-waive-env "$RESUME_WAIVE" --resume-waive-env-names '
+                    '"$RESUME_WAIVE_NAMES"); fi',
+                    '+  if python3 -B "$DRV/entry_gates.py" resume-plan --record-store "$STORE" --series "$RESUME_SERIES" --tree "$TREE" > '
+                    '"$OUT/resume-plan.json" 2> "$OUT/resume-plan.err"; then',
+                    '+    FORCE_ARGS=(--resume-plan "$OUT/resume-plan.json")',
+                    '+    RESUME_LAYER2=$(python3 -B -c \'import json, sys; d = json.load(open(sys.argv[1])); print(d["layer"], d.get("base_commit") '
+                    'or "-", ",".join(d.get("force_modules") or []) or "-")\' "$OUT/resume-plan.json")',
+                    '+    read -r RESUME_LAYER RESUME_BASE RESUME_FORCE <<< "$RESUME_LAYER2"',
+                    '+    echo "续跑沿用：系列 ${RESUME_SERIES}，$(python3 -B -c \'import json, sys; '
+                    'print("；".join(json.load(open(sys.argv[1]))["reasons"]))\' "$OUT/resume-plan.json")"',
+                    '+    if [ "$RESUME_LAYER" = 2 ] && [ "${#SCOPE_ARGS[@]}" -gt 0 ]; then',
+                    '+      if [ -z "$SELECT_BASE" ] && [ "$RESUME_BASE" != "-" ]; then SCOPE_ARGS+=(--select-base "$RESUME_BASE"); fi',
+                    '+      if [ "$RESUME_FORCE" != "-" ]; then FORCE_ARGS+=(--force-run-modules "$RESUME_FORCE"); fi',
+                    '+    fi',
+                    '+  else',
+                    '+    echo "续跑规划没做出来（忽略，按原样规划；原因 $(tail -n 1 "$OUT/resume-plan.err" | cut -c1-200)）"',
+                    '+  fi',
+                    '+fi',
+                    '-    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \\',
+                    '+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} ${FORCE_ARGS[@]+"${FORCE_ARGS[@]}"} \\',
+                    '+if [ -n "$RESUME_FROM" ] && [ "$GO_WARMUP_ACTIVE" = true ]; then',
+                    '+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/unit_executor.py" run-gates --out-dir "$OUT/resume-decide" --manifest '
+                    '"$OUT/gates-manifest.json" \\',
+                    '+      --mode re-execute --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} "${RESUME_ARGS[@]}" --decide-only ) '
+                    '> "$OUT/resume-decide.log" 2>&1 < /dev/null || true',
+                    '+  if python3 -B - "$OUT/resume-decide/decisions.json" <<\'PYDECIDE\'',
+                    '+import json, sys',
+                    '+try:',
+                    '+    units = json.load(open(sys.argv[1], encoding="utf-8"))["units"]',
+                    '+except (OSError, ValueError, KeyError):',
+                    '+    sys.exit(1)   # 判定没做出来：保守起见照常预热',
+                    '+go = [name for name in ("backend:go-test", "backend:unit", "backend:integration") if name in units]',
+                    '+sys.exit(0 if go and all(units[name]["inherit"] for name in go) else 1)',
+                    '+PYDECIDE',
+                    '+  then GO_WARMUP_ACTIVE=false; echo "续跑：后端 go test 各组都沿用上一轮的通过记录，跳过 Go 预编译预热"; fi',
+                    '+fi',
+                    '-    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} '
+                    '${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) '
+                    '> "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
+                    '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} '
+                    '${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} '
+                    '${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?'],
+ 'entry-preflight.sh': ['+receipt_not_applicable() {',
                         '+  if [ codex = codex ]; then return 1; fi',
                         '+  printf \'%s\\n\' "本轮客户端 codex 没有这条流程，未做检查" > "$OUT/$1.skipped"',
                         '+  echo "跳过 $1：本轮客户端 codex 不适用（未做检查，不是通过）"',
@@ -1196,7 +1316,11 @@ T2_PRECHECK_RESIDUALS = {'entry-preflight.sh': ['+receipt_not_applicable() {',
             '+  fi',
             '+  rc=0; bash "$DRV/vc5-precheck.sh" --consume >/dev/null 2>&1 || rc=$?',
             '+  if [ "$rc" -ne 0 ]; then echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：续签后准入消费仍不通过 rc=${rc}"; return 3; fi',
-            '+  echo "VC5_ADMISSION_GUARD stage=${stage} 续签成功，准入消费通过"'],
+            '+  echo "VC5_ADMISSION_GUARD stage=${stage} 续签成功，准入消费通过"',
+            '-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" '
+            'CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\',
+            '+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH && export '
+            'PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\'],
  'vc5-all.sh': ['+vc5_stage() {',
                 '+  local stage=$1 pattern=$2 rc=0 raw',
                 '+  shift 2',
@@ -1212,6 +1336,13 @@ T2_PRECHECK_RESIDUALS = {'entry-preflight.sh': ['+receipt_not_applicable() {',
                 '+    return "$rc"',
                 '+  fi',
                 '+}',
+                '-  python3 -c "import json; d=json.load(open(\'$G/local/full-regression.gate.json\')); assert d[\'exit_code\']==0 and '
+                "d['tree_head']=='$DC', d; print('full-regression(本机):', d['exit_code'], d['host'], d['architecture'], d['started_at_utc'], "
+                'd[\'completed_at_utc\'])"',
+                '+  python3 -c "import json; d=json.load(open(\'$G/local/full-regression.gate.json\')); assert d[\'exit_code\']==0 and '
+                "d['tree_head']=='$DC', d; assert d.get('client_selection') is None or '${VC5_ALLOW_SUBSET_LOCAL_GATES:-}'=='1', '本地 full-regression "
+                "是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1'; print('full-regression(本机):', d['exit_code'], "
+                'd[\'host\'], d[\'architecture\'], d[\'started_at_utc\'], d[\'completed_at_utc\'])"',
                 '-  echo "=== seal 链 $(utc_now)"; bash "$DRV/vc5-seal.sh" "$ATT" 2>&1 | { grep -E "===|ATT=|batch ok|BATCH '
                 'FAILED|REHEARSAL|预演:|CKPT=|SEAL_SHA=|candidate '
                 'result|compare:|账本|SEAL_DONE|SEAL_ABORT|PERMISSION_CLOSEOUT|Error|Traceback|拒绝|失败|assert" || true; } | cut -c1-300',
@@ -1229,27 +1360,63 @@ T2_PRECHECK_RESIDUALS = {'entry-preflight.sh': ['+receipt_not_applicable() {',
                 '+  echo "=== canonical 交接 $(utc_now)"; vc5_stage canonical "review_sha256|CLI preview|一致|plan '
                 '->|===|rc=|actions:|checkpoint|import-receipt|canonical '
                 'latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败" bash "$DRV/vc5-canonical2.sh" "$ATT"'],
+ 'vc5-gate-target.sh': ["-set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o "
+                        'ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test\' > "$GATE/logs/target-platform.stdout.log" 2> '
+                        '"$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)',
+                        '+set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO -u ENTRY_COMMIT -u ENTRY_BUNDLE -u ENTRY_BRANCH unshare -m --propagation '
+                        "private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "
+                        '"$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)'],
  'vc5-precheck.sh': ['-  --dry-run|--apply|--consume) exec python3 -B "$(dirname "${BASH_SOURCE[0]}")/vc5_admission.py" "$@" ;;',
                      '+  --dry-run|--apply|--consume|--renew) exec python3 -B "$(dirname "${BASH_SOURCE[0]}")/vc5_admission.py" "$@" ;;']}
 # <<< T2 预检登记常量
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_SH_1_BASELINE = '5fcdf0b6b6ba847e86f42452c975cd841832e606'
-CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': '81c176d329af13b0d2d5ca8db6ec681465b4e1dfc65e6977d37f189cb7948c03'}
+CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': 'f80292303f9970da87a735b1d63f247e74b81dc7d544393054832a0b2db57186'}
 CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
-        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|vc4|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] [--resume-from auto|<运行ID> [--resume-series <系列>] [--resume-binding-extra <JSON>] [--resume-max-age-hours <小时>] [--resume-waive-env <理由> --resume-waive-env-names <条目,…>]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
         '+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; PRE_A3_STAGING_PARENT=""; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
         '+BIND_ONLY=false; BIND_ARGS=()',
         '+DECLARED_SAMPLE=off',
         '+GATE_SCOPE=full; SELECT_BASE=""; INCLUDE_CLAUDE=false; SCOPE_ARGS=()',
+        '+RESUME_FROM=""; RESUME_SERIES=""; RESUME_BINDING_EXTRA="{}"; RESUME_MAX_AGE=""; RESUME_WAIVE=""; RESUME_WAIVE_NAMES=""; RESUME_ARGS=(); FORCE_ARGS=()',
         '+    --bind-only) BIND_ONLY=true; BIND_ARGS=(--decide-only); shift ;;',
         '+    --declared-sample) DECLARED_SAMPLE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+    --gate-scope) GATE_SCOPE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+    --select-base) SELECT_BASE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+    --include-claude) INCLUDE_CLAUDE=true; shift ;;',
+        '+    --resume-from) RESUME_FROM="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+    --resume-series) RESUME_SERIES="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+    --resume-binding-extra) RESUME_BINDING_EXTRA="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+    --resume-max-age-hours) RESUME_MAX_AGE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+    --resume-waive-env) RESUME_WAIVE="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+    --resume-waive-env-names) RESUME_WAIVE_NAMES="${2:-}"; shift 2 || { usage; exit 2; } ;;',
         '+    --pre-a3-staging-parent) PRE_A3_STAGING_PARENT="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '-case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac',
+        '+case "$PROFILE" in entry|full-gates|preflight|vc4|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac',
         '+if ! [[ "$DECLARED_SAMPLE" =~ ^(off|always|every:[1-9][0-9]*)$ ]]; then echo "--declared-sample 只接受 off、always 或 every:N（N 为正整数）：$DECLARED_SAMPLE" >&2; exit 2; fi',
+        '+fi',
+        '+if [ -n "$RESUME_FROM" ] && [ -z "$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then',
+        '+  RESUME_WAIVE="${ENTRY_RESUME_WAIVE_ENV:-}"; RESUME_WAIVE_NAMES="${ENTRY_RESUME_WAIVE_ENV_NAMES:-}"',
+        '+fi',
+        '+if [ -n "$RESUME_FROM" ]; then',
+        '+  if ! [[ "$RESUME_FROM" =~ ^(auto|[0-9A-Za-z._-]{1,128})$ ]]; then echo "--resume-from 只接受 auto 或来源运行 ID：$RESUME_FROM" >&2; exit 2; fi',
+        '+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ] || [ "$AUDIT_READS" = true ] \\',
+        '+      || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \\',
+        '+      || [ "$BIND_ONLY" = true ] || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then',
+        '+    echo "续跑沿用只与重新执行全集同用，不能与读集审计、读集合同、收窄提案、B-09／B-10、逐单元承接、--bind-only 同用" >&2; exit 2',
+        '+  fi',
+        '+  RESUME_SERIES="${RESUME_SERIES:-$PROFILE}"',
+        '+  if ! [[ "$RESUME_SERIES" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then echo "--resume-series 只允许字母、数字与 ._-：$RESUME_SERIES" >&2; exit 2; fi',
+        '+  if [ -n "$RESUME_MAX_AGE" ] && ! [[ "$RESUME_MAX_AGE" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then echo "--resume-max-age-hours 是小时数：$RESUME_MAX_AGE" >&2; exit 2; fi',
+        '+  if { [ -n "$RESUME_WAIVE" ] && [ -z "$RESUME_WAIVE_NAMES" ]; } || { [ -z "$RESUME_WAIVE" ] && [ -n "$RESUME_WAIVE_NAMES" ]; }; then',
+        '+    echo "环境豁免要同时给理由（--resume-waive-env）和点名的指纹条目（--resume-waive-env-names）" >&2; exit 2',
+        '+  fi',
+        '+  python3 -B -c \'import json, sys; value = json.loads(sys.argv[1]); sys.exit(0 if isinstance(value, dict) else 1)\' "$RESUME_BINDING_EXTRA" \\',
+        '+    || { echo "--resume-binding-extra 必须是 JSON 对象：$RESUME_BINDING_EXTRA" >&2; exit 2; }',
+        '+elif [ -n "$RESUME_SERIES$RESUME_MAX_AGE$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then',
+        '+  echo "--resume-series／--resume-max-age-hours／--resume-waive-env* 只与 --resume-from 同用" >&2; exit 2',
         '+fi',
         '+case "$GATE_SCOPE" in full|client-plan|auto) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan、auto）" >&2; exit 2 ;; esac',
         '+if [ "$GATE_SCOPE" = full ]; then',
@@ -1257,7 +1424,7 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+elif [ "$GATE_SCOPE" = auto ]; then',
         '+  if [ -n "$SELECT_BASE" ] && ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--select-base 必须是 40 位小写提交：$SELECT_BASE" >&2; exit 2; fi',
         '+  AUTO_SKIP=""',
-        '+  case "$PROFILE" in entry|full-gates|preflight) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac',
+        '+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac',
         '+  if [ codex != codex ]; then AUTO_SKIP="本版只启用 codex 计划"; fi',
         '+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then',
         '+    AUTO_SKIP="模式或请求要求全集（全集通过、逐单元承接）"',
@@ -1275,7 +1442,7 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '+  fi',
         '+else',
         '+  if ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--gate-scope client-plan 必须同时给 --select-base（40 位小写提交）：$SELECT_BASE" >&2; exit 2; fi',
-        '+  case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; exit 2 ;; esac',
+        '+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight、vc4）：$PROFILE" >&2; exit 2 ;; esac',
         '+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then',
         '+    echo "按客户端筛选只许 --mode re-execute，不能与全集请求、逐单元承接同用（子集不能承接，也不能冒充全集）" >&2; exit 2',
         '+  fi',
@@ -1301,11 +1468,52 @@ CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash en
         '-EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")',
         '+if [ -n "${UNIT_EXECUTOR_RETRY_LEDGER:-}" ]; then EXEC_ENV+=("UNIT_EXECUTOR_RETRY_LEDGER=$UNIT_EXECUTOR_RETRY_LEDGER"); fi',
         '+EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_SPEC_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")',
-        '+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \\',
+        '+if [ -n "$RESUME_FROM" ]; then',
+        '+  python3 -B - "$OUT/resume-binding.json" codex "$PLAN_PROFILE" "$PRE_A3_MODE" "${DEPLOY:-}" "${TREE_FILES:-}" "${DEPLOY_OTHERS:-}" "$RESUME_BINDING_EXTRA" <<\'PYBIND\'',
+        '+import hashlib, json, os, sys',
+        '+out, client, plan_profile, pre_a3, deploy, tool_files, others, extra = sys.argv[1:]',
+        '+binding = {"client": client, "plan_profile": plan_profile, "pre_a3": pre_a3,',
+        '+           "deploy_receipt_sha256": hashlib.sha256(open(deploy, "rb").read()).hexdigest() if deploy else None,',
+        '+           "tool_files_sha256": tool_files or None, "deploy_others": others or None, "extra": json.loads(extra)}',
+        '+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)',
+        '+with os.fdopen(fd, "w", encoding="utf-8") as handle:',
+        '+    json.dump(binding, handle, ensure_ascii=False, sort_keys=True, indent=1)',
+        '+PYBIND',
+        '+  RESUME_ARGS=(--resume-from "$RESUME_FROM" --resume-series "$RESUME_SERIES" --resume-binding "$OUT/resume-binding.json")',
+        '+  if [ -n "$RESUME_MAX_AGE" ]; then RESUME_ARGS+=(--resume-max-age-hours "$RESUME_MAX_AGE"); fi',
+        '+  if [ -n "$RESUME_WAIVE" ]; then RESUME_ARGS+=(--resume-waive-env "$RESUME_WAIVE" --resume-waive-env-names "$RESUME_WAIVE_NAMES"); fi',
+        '+  if python3 -B "$DRV/entry_gates.py" resume-plan --record-store "$STORE" --series "$RESUME_SERIES" --tree "$TREE" > "$OUT/resume-plan.json" 2> "$OUT/resume-plan.err"; then',
+        '+    FORCE_ARGS=(--resume-plan "$OUT/resume-plan.json")',
+        '+    RESUME_LAYER2=$(python3 -B -c \'import json, sys; d = json.load(open(sys.argv[1])); print(d["layer"], d.get("base_commit") or "-", ",".join(d.get("force_modules") or []) or "-")\' "$OUT/resume-plan.json")',
+        '+    read -r RESUME_LAYER RESUME_BASE RESUME_FORCE <<< "$RESUME_LAYER2"',
+        '+    echo "续跑沿用：系列 ${RESUME_SERIES}，$(python3 -B -c \'import json, sys; print("；".join(json.load(open(sys.argv[1]))["reasons"]))\' "$OUT/resume-plan.json")"',
+        '+    if [ "$RESUME_LAYER" = 2 ] && [ "${#SCOPE_ARGS[@]}" -gt 0 ]; then',
+        '+      if [ -z "$SELECT_BASE" ] && [ "$RESUME_BASE" != "-" ]; then SCOPE_ARGS+=(--select-base "$RESUME_BASE"); fi',
+        '+      if [ "$RESUME_FORCE" != "-" ]; then FORCE_ARGS+=(--force-run-modules "$RESUME_FORCE"); fi',
+        '+    fi',
+        '+  else',
+        '+    echo "续跑规划没做出来（忽略，按原样规划；原因 $(tail -n 1 "$OUT/resume-plan.err" | cut -c1-200)）"',
+        '+  fi',
+        '+fi',
+        '+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} ${FORCE_ARGS[@]+"${FORCE_ARGS[@]}"} \\',
+        '+if [ -n "$RESUME_FROM" ] && [ "$GO_WARMUP_ACTIVE" = true ]; then',
+        '+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/unit_executor.py" run-gates --out-dir "$OUT/resume-decide" --manifest "$OUT/gates-manifest.json" \\',
+        '+      --mode re-execute --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} "${RESUME_ARGS[@]}" --decide-only ) > "$OUT/resume-decide.log" 2>&1 < /dev/null || true',
+        '+  if python3 -B - "$OUT/resume-decide/decisions.json" <<\'PYDECIDE\'',
+        '+import json, sys',
+        '+try:',
+        '+    units = json.load(open(sys.argv[1], encoding="utf-8"))["units"]',
+        '+except (OSError, ValueError, KeyError):',
+        '+    sys.exit(1)   # 判定没做出来：保守起见照常预热',
+        '+go = [name for name in ("backend:go-test", "backend:unit", "backend:integration") if name in units]',
+        '+sys.exit(0 if go and all(units[name]["inherit"] for name in go) else 1)',
+        '+PYDECIDE',
+        '+  then GO_WARMUP_ACTIVE=false; echo "续跑：后端 go test 各组都沿用上一轮的通过记录，跳过 Go 预编译预热"; fi',
+        '+fi',
         '+if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS+=(--identity-memo off); fi',
         '+if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi',
         '-    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
-        '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
+        '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
         '+if [ "$BIND_ONLY" = true ]; then',
         '+  if [ "$EXEC_RC" -ne 0 ] || [ ! -f "$OUT/executor/binding.json" ]; then',
         '+    echo "ENTRY_GATES_ABORTED：运行绑定没算出来（rc=${EXEC_RC}）；日志 ${OUT}/executor.log"; exit 3',
@@ -1402,7 +1610,7 @@ CLOSEOUT_SH_4_RESIDUALS = {'vc0-gate-target.sh': ['-bash "$DRV/entry-gates.sh" -
         '+GATE_SCOPE_ARGS=(); if [ codex = codex ]; then GATE_SCOPE_ARGS=(--gate-scope auto); fi',
         '+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" ${GATE_SCOPE_ARGS[@]+"${GATE_SCOPE_ARGS[@]}"} "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?']}
 CLOSEOUT_SH_5_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
-CLOSEOUT_SH_5_DIGESTS = {'lib.sh': '8f09b91ddd30375da4fd0c50e438a8c33ddf06b27be3b58db2a3510a8bf26fd3'}
+CLOSEOUT_SH_5_DIGESTS = {'lib.sh': 'da83d97f499b8e01d230465641ad4393dbf842684b9f9f4804847aa5b2767ce5'}
 CLOSEOUT_SH_5_RESIDUALS = {'lib.sh': ['-  local parameters',
         '-  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || return 3',
         '+  local parameters rc=0',
@@ -1433,15 +1641,17 @@ CLOSEOUT_SH_5_RESIDUALS = {'lib.sh': ['-  local parameters',
         '+  if [ "$rc" -ne 0 ]; then echo "VC5_ADMISSION_GUARD_FAILED stage=${stage}：续签后准入消费仍不通过 rc=${rc}"; return 3; fi',
         '+  echo "VC5_ADMISSION_GUARD stage=${stage} 续签成功，准入消费通过"',
         '-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\',
-        '+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\']}
+        '+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \\']}
 CLOSEOUT_SH_6_BASELINE = 'f9fd48826c9ddc47376a57beb65328cc35cca180'
-CLOSEOUT_SH_6_DIGESTS = {'vc5-gate-target.sh': '310387f836cfded54248f851ba4b8d423efff11d32fddaa2b3db9d792e83ce94'}
+CLOSEOUT_SH_6_DIGESTS = {'vc5-gate-target.sh': '98ce09d9da772e8f32372f74bc892c5820b35d80fa64a97538a66a6d2c6b52a8'}
 CLOSEOUT_SH_6_RESIDUALS = {'vc5-gate-target.sh': ['-ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT',
         '+ATT="$1"; GATE="$2"; T="$3"; SRC_SPEC=$HISTORICAL_SOURCE_ROOT',
         '-export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"',
         '+export CODEX_SPEC_SOURCE_ROOT="$SRC_SPEC"',
         '-    --pycache "$PYC" --historical-source "$SRC1491" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"',
-        '+    --pycache "$PYC" --historical-source "$SRC_SPEC" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"']}
+        '+    --pycache "$PYC" --historical-source "$SRC_SPEC" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"',
+        '-set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c \'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test\' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)',
+        '+set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO -u ENTRY_COMMIT -u ENTRY_BUNDLE -u ENTRY_BRANCH unshare -m --propagation private bash -c \'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test\' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)']}
 # <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),

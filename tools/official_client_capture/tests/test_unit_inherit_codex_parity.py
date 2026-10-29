@@ -885,9 +885,15 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
                                        '"--mode", "re-execute", require,',
                                        '    except (OSError, ValidationError, KeyError, TypeError) as error:']}
 
+
 # >>> T2 预检登记常量（脚本生成，可重跑）
 T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
-T2_PRECHECK_DIGESTS = {'tools/ci/background_validation.py': '7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389'}
+T2_PRECHECK_DIGESTS = {'tools/ci/background_validation.py': '7589fae140a1e7e7c8efeaa37db5c1a678010dbf9efd60db2312843d6db354f5',
+ 'tools/ci/entry_gates.py': '87187147c3309d0d5413722ae5f09c57ff7ce0ebbf35754a3a3f5cf3072169a2',
+ 'tools/ci/entry_orchestrator.py': '7d400c835b5e108590109dc4c889deba36508353737f5b122f324759ce80fce3',
+ 'tools/ci/entry_steps.py': '4c57d915784ab2c3873a9be72464b0d7b947daceafa6c1681b396f8519181e4e',
+ 'tools/ci/unit_executor.py': 'bddfd49451a2f9bdbefd87ba1d6893ef6c86a7e0b6b774231db29ddf2d43ce0a',
+ 'tools/ci/unit_records.py': 'aa01d3ea59a20a41151a26d88d7e15cf52ae46b934cbba82425b0eb458125edc'}
 T2_PRECHECK_REMOVED = {'tools/ci/background_validation.py': ['``start --preflight on`` 在起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本（第五项 '
                                        '``host-toolchain``），任一项不过就拒绝起跑（不启动后台进程、不写结论、不停掉已在跑的验证），',
                                        '    """``--preflight on``（命令行缺省）时起跑前逐项核对冻结收据、基线重封、重部署、准入绑定、主机 Go 版本；不通过抛 ``ValidationError``（拒绝起跑）。',
@@ -899,12 +905,31 @@ T2_PRECHECK_REMOVED = {'tools/ci/background_validation.py': ['``start --prefligh
                                        '    p_pre.add_argument("--only", default=None, '
                                        'help="只跑指定检查项，逗号分隔（freeze-receipts、baseline-reseal、redeploy、admission-binding、host-toolchain）")',
                                        '                    scratch_parent=Path(args.runroot) / DIRECTORY / "preflight", only=[item for item in '
-                                       '(args.only or "").split(",") if item] or None)']}
+                                       '(args.only or "").split(",") if item] or None)'],
+ 'tools/ci/entry_gates.py': ['                     include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes, '
+                             'recorded_bridge=recorded_bridge)',
+                             '                      include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any, '
+                             'discover: Any) -> None:',
+                             '        selection = ownership.select(tree, client=select_client, base=base, include_claude=include_claude)',
+                             '                     discover: Any = None) -> None:',
+                             '                          recorded_bridge=recorded_bridge, discover=discover)',
+                             '    manifest["selection"] = _ownership().select(tree, client=select_client, base=select_base, '
+                             'include_claude=include_claude)'],
+ 'tools/ci/entry_orchestrator.py': ['                 gate_scope: str = "auto", select_base: str | None = None) -> None:',
+                                    '                                          *self.gate_scope_args,',
+                                    '                                gate_scope=args.gate_scope, select_base=args.select_base)'],
+ 'tools/ci/entry_steps.py': ['其他前序产物）、环境（内核、Python、Go、node、容器镜像、二进制、录制数据、出口策略）。输入范围拿不准的一律从宽',
+                             '        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。',
+                             '            Input("environment", "file", "/etc/sub2api-egress/policy.json"),'],
+ 'tools/ci/unit_executor.py': [],
+ 'tools/ci/unit_records.py': ['                reasons = [shape] if shape else check_record(store, record_path, record, current, facts)',
+                              '                      "units": len(manifest.get("units") or []), "problems": problems}, ensure_ascii=False, '
+                              'indent=1))']}
 # <<< T2 预检登记常量
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '7589fae140a1e7e7c8efeaa37db5c1a678010dbf9efd60db2312843d6db354f5'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
         'def _terminate(payload: Mapping[str, Any]) -> None:',
@@ -948,11 +973,11 @@ CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': ['* 跑：``env -i`` 干净
         '            "bash", str(payload["entry"]), "--to", payload["to"]]',
         '        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode']}
 CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '5c0d689da6b67ede2674041bd003bc15bf34b2f68aed4d73fd4dfab098d60629'}
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': '87187147c3309d0d5413722ae5f09c57ff7ce0ebbf35754a3a3f5cf3072169a2'}
 CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""',
         '            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
 CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': 'b46d06f0f0d9825bb92b00e9f683aa41b2c04e033d296038690f93326da7f680'}
+CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '7d400c835b5e108590109dc4c889deba36508353737f5b122f324759ce80fce3'}
 CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
         '  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。',
         '记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。``--audit-reads``：入口门禁检查实际读集；',
@@ -973,7 +998,7 @@ CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': ['其他前序产物）、�
         '        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。',
         '            Input("environment", "file", "/etc/sub2api-egress/policy.json"),']}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'c6ac694ea1870b6dd3c5e48e8bc1566e941cd4276949cc81c42ae38716b6441e'}
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'bddfd49451a2f9bdbefd87ba1d6893ef6c86a7e0b6b774231db29ddf2d43ce0a'}
 CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
         '            for member in [pid, *_session_members(pid)]:',
         '                    os.kill(member, signal.SIGKILL)',
@@ -1013,7 +1038,7 @@ CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(
         '        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
 CLOSEOUT_PY_7_BASELINE = 'df90c329e3ba2b659ac7667b897e38a7a35d6269'
-CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '53bf0adc72cefce9ba7b94b562f9cfc0c026909d2f98ed3f7f9a784bc1a0c031'}
+CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': 'aa01d3ea59a20a41151a26d88d7e15cf52ae46b934cbba82425b0eb458125edc'}
 CLOSEOUT_PY_7_REMOVED = {'tools/ci/unit_records.py': ['    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}',
         '        entries.append(_audit_module().host_snapshot(path))',
         '    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""',
@@ -1026,7 +1051,8 @@ CLOSEOUT_PY_7_REMOVED = {'tools/ci/unit_records.py': ['    allowed = {"ranges", 
         '                     require_read_audit=mode == UNIT_INHERIT)',
         '        if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):',
         '                reasons = check_record(store, record_path, record, current, facts)',
-        '    for group, expected in (manifest.get("test_groups") or {}).items():']}
+        '    for group, expected in (manifest.get("test_groups") or {}).items():',
+        '                      "units": len(manifest.get("units") or []), "problems": problems}, ensure_ascii=False, indent=1))']}
 CLOSEOUT_PY_8_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
 CLOSEOUT_PY_8_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
 CLOSEOUT_PY_8_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}

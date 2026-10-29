@@ -373,8 +373,11 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-10-29（0.165.0 集成重冻）：上次冻结（摘要 c53ed9ef…，提交 8227760d7）之后，登记路与 W3 又直接在 0.165.0 期望清单上补了 HTTP 回合请求
 # root_turn_id／turn metadata 四键／HTTP 压缩请求等判据，清单字节变了而本常量未跟着重冻。载荷逐项审核（上次冻结点清单对当前清单）：规则 43 条不变；每条规则
 # 除 checks、scenario_ids 外的字段逐字不变；已有 check 0 个被删或被改；新增 check 11 个（SPEC-BODY-008 1、SPEC-BODY-009 4、SPEC-EP-021 6）；场景增量 SPEC-BODY-009 加 A03。摘要 c53ed9ef… 变为 016faf50…。
+# 2026-10-30（0.165.0 收尾重冻）：VC-5 批准修订 b1（候选 c01650-candidate-r1 的 revisions/b1/approval-revision.json，原因：SPEC-BODY-003
+# main-session-ids-official-form 与 SPEC-BODY-006 configuration-update-http-first-turn 的选择器没有收窄到根线程，把记忆合并与普通子代理请求也选了进来）
+# 把这两条判据的 select 追加 turn metadata thread_source 等于 user；仓库期望清单与批准版本对齐，免得下次升级继承过严判据。载荷逐项审核（上次冻结点 60236c97e 的清单对当前清单）：规则 43 条不变；每条规则除 checks、scenario_ids 外的字段逐字不变；check 无删除、新增 0 个；已有 check 恰有 2 个改动（SPEC-BODY-003 main-session-ids-official-form、SPEC-BODY-006 configuration-update-http-first-turn），各自只在 select.where 末尾追加一项并更新 description，id／assertion／其余 select 键逐字不变。摘要 502e7010… 变为 8382d992…。
 FROZEN_PROFILE_SHA256 = (
-    "502e7010f6824a694b46303986682a5975f72822a4e28253609e1c99c3f6d00f"
+    "f5708a153625f6f6f398411f6a1570125b3d42369078aee944503e9e98970bfe"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

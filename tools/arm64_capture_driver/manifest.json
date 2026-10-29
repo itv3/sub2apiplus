@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 193,
+  "file_count": 194,
   "files": [
     {
       "path": "README.md",
-      "sha256": "4d3fa12d566662c2c438952d175094a2d86b7df73964041642a8da46becd8d3d",
+      "sha256": "766c10589ee9131eac6a18bf5e4c90e2dea2f776631ff55fde0ff5cc657a9b59",
       "mode": "0600",
-      "bytes": 154310
+      "bytes": 155335
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -16,9 +16,9 @@
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
-      "sha256": "747be4db69b1fbb663d08918f77151a3eb83a28ab7f5c43cf7536f4c0a613fea",
+      "sha256": "1bc743a6fb75e0e9c27bb817d9fdc0e3c3efc0766b93383e55d7c5fb955eaf37",
       "mode": "0700",
-      "bytes": 12963
+      "bytes": 15538
     },
     {
       "path": "driver/backend_dependencies.py",
@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "c2467553326dc8216bf6946759e5eaaec0ddef8901a9620a94890bc5f60bf34e",
+      "sha256": "2e956856d6de01de6851c63d007a19e314bdb1cf35b52f120ac6d5080ecbefec",
       "mode": "0700",
-      "bytes": 11781
+      "bytes": 13254
     },
     {
       "path": "driver/background_preflight.py",
@@ -40,9 +40,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "7d909acb74eb087399450c89a6b6c86dcffe67607a3d004797a4b048f541e389",
+      "sha256": "7589fae140a1e7e7c8efeaa37db5c1a678010dbf9efd60db2312843d6db354f5",
       "mode": "0700",
-      "bytes": 226855
+      "bytes": 229057
     },
     {
       "path": "driver/build.sh",
@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "81c176d329af13b0d2d5ca8db6ec681465b4e1dfc65e6977d37f189cb7948c03",
+      "sha256": "f80292303f9970da87a735b1d63f247e74b81dc7d544393054832a0b2db57186",
       "mode": "0700",
-      "bytes": 57659
+      "bytes": 66590
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -208,9 +208,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "5c0d689da6b67ede2674041bd003bc15bf34b2f68aed4d73fd4dfab098d60629",
+      "sha256": "87187147c3309d0d5413722ae5f09c57ff7ce0ebbf35754a3a3f5cf3072169a2",
       "mode": "0700",
-      "bytes": 203375
+      "bytes": 212399
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -220,9 +220,9 @@
     },
     {
       "path": "driver/entry_orchestrator.py",
-      "sha256": "b46d06f0f0d9825bb92b00e9f683aa41b2c04e033d296038690f93326da7f680",
+      "sha256": "7d400c835b5e108590109dc4c889deba36508353737f5b122f324759ce80fce3",
       "mode": "0700",
-      "bytes": 98461
+      "bytes": 99769
     },
     {
       "path": "driver/entry_steps.py",
@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "348e76fc3e2ec1101e0ea881b33f0c10f53847f1fa598fc21a0069d6b3838fbe",
+      "sha256": "fa18a499de1305c1b3f71540a5ca247f36da0ccf63eb47d0920d04cf5ee9fc63",
       "mode": "0700",
-      "bytes": 3638
+      "bytes": 3686
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -334,9 +334,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "8f09b91ddd30375da4fd0c50e438a8c33ddf06b27be3b58db2a3510a8bf26fd3",
+      "sha256": "da83d97f499b8e01d230465641ad4393dbf842684b9f9f4804847aa5b2767ce5",
       "mode": "0700",
-      "bytes": 23358
+      "bytes": 23704
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -382,9 +382,9 @@
     },
     {
       "path": "driver/opening_checks.py",
-      "sha256": "57d89321d1e1efaa90dbfe339aabd17740182280e9104b746efccd096749d4f5",
+      "sha256": "4d07f0023597d0ef9f4cb11d90d9db18ad8f4bc2f94fda51b10e4af762610a34",
       "mode": "0700",
-      "bytes": 33401
+      "bytes": 34008
     },
     {
       "path": "driver/parse_env.py",
@@ -514,9 +514,9 @@
     },
     {
       "path": "driver/pipeline/pipeline-lib.sh",
-      "sha256": "19aaf68ce99feafa3ce185a35cd61577d1c52ea76961428ee8c6093329db1f72",
+      "sha256": "fe26de44f036d165bc2fae4cce3cbd849d101a6f340d45858a80c46411db458e",
       "mode": "0700",
-      "bytes": 9087
+      "bytes": 12395
     },
     {
       "path": "driver/pipeline/pipeline.env.example",
@@ -568,9 +568,9 @@
     },
     {
       "path": "driver/pipeline/start-entry.sh",
-      "sha256": "6cfa5c1d5588bb3301ba563bf5012d4b537466d7d6a088573c9813a3b37d45c7",
+      "sha256": "35c9781486016c5b8d3863b839de93c26874ca2ceaa26958ece0a9a3308f16f9",
       "mode": "0700",
-      "bytes": 18956
+      "bytes": 20822
     },
     {
       "path": "driver/pipeline/sync-data-root-backend.sh",
@@ -592,9 +592,9 @@
     },
     {
       "path": "driver/pipeline/vc-pipeline.sh",
-      "sha256": "0f3950998b6e80e60bee6079efae5d48bcacef2c4cc3c992c34e095427819dd2",
+      "sha256": "13d64f1eeccdee72040bde765483fd22c1957f00266dc9a05ef489358e7f1cb8",
       "mode": "0700",
-      "bytes": 59424
+      "bytes": 62686
     },
     {
       "path": "driver/pipeline/vc2/gen_vc1_seal_plans.py",
@@ -694,9 +694,9 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-cleanup-execute.sh",
-      "sha256": "69475f5c6e5240882e408f4f11a823e988a7923b52deeeeb5daecf9d6568c170",
+      "sha256": "825695ea80ddf242ce4ac94318517680d2366f82d02945b33a07520c6283e484",
       "mode": "0700",
-      "bytes": 14222
+      "bytes": 14442
     },
     {
       "path": "driver/pipeline/vc6/vc6-deliver-1.sh",
@@ -730,9 +730,9 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-gates.sh",
-      "sha256": "4c7a93adb04da517ac25cae13b105382d64eb8dadffc3d7851462cd2974bc15c",
+      "sha256": "490f1ee920612f52f6c9e224cbc0a19d37522cb8115cbb0ecdf7ed72201bbfb9",
       "mode": "0700",
-      "bytes": 5070
+      "bytes": 5261
     },
     {
       "path": "driver/pipeline/vc6/vc6-private-archive.sh",
@@ -832,9 +832,9 @@
     },
     {
       "path": "driver/recovery_plan.py",
-      "sha256": "9071902a41f55ba2191310e84004e50236a33a653ff1a6a9f6a0868569e1130d",
+      "sha256": "80de87fc3d9ca654ad39a9f95b0644330e2c7f47a834c773c059792e09ea0277",
       "mode": "0700",
-      "bytes": 110924
+      "bytes": 121931
     },
     {
       "path": "driver/retry_policy.py",
@@ -892,9 +892,9 @@
     },
     {
       "path": "driver/tui-prelaunch-receipt.sh",
-      "sha256": "c5d21e7df239a3becacf1979154c338ce2dcc3da26f8e36827a7c425be02c33c",
+      "sha256": "eb894ab0720b8b8fde9d266706a3b1f061c6831366bc491de891c66d7e5312dc",
       "mode": "0700",
-      "bytes": 3503
+      "bytes": 3679
     },
     {
       "path": "driver/unit_executor.json",
@@ -904,9 +904,9 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "c6ac694ea1870b6dd3c5e48e8bc1566e941cd4276949cc81c42ae38716b6441e",
+      "sha256": "bddfd49451a2f9bdbefd87ba1d6893ef6c86a7e0b6b774231db29ddf2d43ce0a",
       "mode": "0700",
-      "bytes": 322075
+      "bytes": 334890
     },
     {
       "path": "driver/unit_inherit.py",
@@ -916,15 +916,15 @@
     },
     {
       "path": "driver/unit_ownership.py",
-      "sha256": "27c04ce0bafdf233355078a434e666be66a4cfed525362c9a27ea8781db5ba79",
+      "sha256": "066c55469ec387c4c0be84dde557bf0316ab105bfc30f0418bccdb6ed1cb22fb",
       "mode": "0700",
-      "bytes": 71016
+      "bytes": 73531
     },
     {
       "path": "driver/unit_records.py",
-      "sha256": "53bf0adc72cefce9ba7b94b562f9cfc0c026909d2f98ed3f7f9a784bc1a0c031",
+      "sha256": "aa01d3ea59a20a41151a26d88d7e15cf52ae46b934cbba82425b0eb458125edc",
       "mode": "0700",
-      "bytes": 237000
+      "bytes": 256146
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -1035,6 +1035,12 @@
       "bytes": 15122
     },
     {
+      "path": "driver/vc4_gate_records.py",
+      "sha256": "11b5c57a66ffb79f3f86fceec7a355b3ac4c8ab42ce852b35e35831d03126c6d",
+      "mode": "0700",
+      "bytes": 8975
+    },
+    {
       "path": "driver/vc4_resume.py",
       "sha256": "fbb6948add60f357f5b0649de6bfc59cc8f6884af14523796560487482a5212b",
       "mode": "0700",
@@ -1048,9 +1054,9 @@
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "e8f7bacc6ef5c55fc4eced0019db85fdaae6eb1ef17cbf8b5765e387e96e1b24",
+      "sha256": "83b6d035858d5d279fef4a23d218c62da65a4b974cb4e76f0527ce04a339f999",
       "mode": "0700",
-      "bytes": 6692
+      "bytes": 6935
     },
     {
       "path": "driver/vc5-canonical2.sh",
@@ -1090,9 +1096,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "310387f836cfded54248f851ba4b8d423efff11d32fddaa2b3db9d792e83ce94",
+      "sha256": "98ce09d9da772e8f32372f74bc892c5820b35d80fa64a97538a66a6d2c6b52a8",
       "mode": "0700",
-      "bytes": 6343
+      "bytes": 6391
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -1144,9 +1150,9 @@
     },
     {
       "path": "driver/vc5_admission.py",
-      "sha256": "1e09a6feabd0e91453e2adbdb32a4409749970a5bd86c96c313e145cfab011aa",
+      "sha256": "137f7d51012cb597a2e6d5fd4b54e719eab0532835771e5a49f4081a8aed7e5b",
       "mode": "0700",
-      "bytes": 60962
+      "bytes": 63946
     },
     {
       "path": "driver/wait_state.py",
@@ -1161,5 +1167,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "91b5d0dec5ccb44252f350669a301075b2dea0b036c94893ca49401029b2d243"
+  "manifest_sha256": "78ffd12642f3b01d49c50e03924458910d2080f49ca14806e9afee9eee62ad0f"
 }
