@@ -1,10 +1,10 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "eb0276a22698321fa07018459cc06cc654b2d94e",
+ "source_commit": "7d03d7b674f174f4c2da01632ee983d129413eb0",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "d982d8896cac606ae5437f282fc697eaf14209a7b28cff56227ca76d90697c5b",
- "wire_producer_sha256": "e843e875cffa7c17f1b7e0fd599f9d56f1ff806beb1521c483a2b008d683922a",
+ "files_sha256": "9962137fdd306477e14f0641c09ffc8342085fdce64ca4dcf533a71ccdd91dc3",
+ "wire_producer_sha256": "49dfb74df5279b022553afdaef126fd74f45643411b0b47454ee055e0e5cd4e1",
  "evidence_semantics_sha256": "a8e6989ddcb25e40941f20cf435d777dee1da689f2baad5d745a483b3e61a018",
  "control_sha256": "aeb4efba3beeb2aab5f5e9ba1c6de75ffa4be017445377e00f93723a9ab844b6",
  "orchestrator_closure_sha256": {
@@ -2587,7 +2587,7 @@
   },
   {
    "path": "drive_candidate_gateway_ws.py",
-   "sha256": "eeb34c9e479181e31b78d70fa83b2e52ed4a398397aac84cc304b329099e2503"
+   "sha256": "32bc47bbf3184183de07d20e30a013d405c19c980c66dfa4744ca4e714840440"
   },
   {
    "path": "drive_claude_tui.py",
