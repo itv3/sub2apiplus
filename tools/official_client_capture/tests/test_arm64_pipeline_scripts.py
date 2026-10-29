@@ -204,9 +204,19 @@ class Sandbox:
             echo "HOUSEKEEPING $*" >> "{self.log}"
             exit 0
         """)
+        # 假 vc5-precheck.sh：--consume 恒通过（＝准入收据已存在）；--dry-run 回放 precheck_dryrun.json（缺省为库表前置全绿的 ready 报告），
+        # 退出码取 precheck_dryrun.rc（缺省 0）。写 precheck_consume.rc 可让 --consume 失败（＝收据不存在）。
         _write(d / "vc5-precheck.sh", f"""
             #!/bin/bash
             echo "PRECHECK $*" >> "{self.log}"
+            case "$1" in
+              --consume) [ -f "{self.root}/precheck_consume.rc" ] && exit "$(cat "{self.root}/precheck_consume.rc")" ;;
+              --dry-run)
+                if [ -f "{self.root}/precheck_dryrun.json" ]; then cat "{self.root}/precheck_dryrun.json"
+                else echo '{{"status": "ready", "checks": [], "candidate_prerequisites": [{{"check": "model_mapping_empty", "status": "passed"}}]}}'; fi
+                echo "人读摘要：库表前置如何改" >&2
+                [ -f "{self.root}/precheck_dryrun.rc" ] && exit "$(cat "{self.root}/precheck_dryrun.rc")" ;;
+            esac
             exit 0
         """)
         # 假 vc5-all.sh：先报 Kilo 完成，隔一会儿才打 VC5_ALL_DONE（真实流程里 seal／compare／accept 还要跑很久）
@@ -381,6 +391,105 @@ class CaptureAccountOrderTests(SandboxCase):
         self.assertIn("STOPPED VC5", text)
         self.assertIn("采集账号仍是开启状态", text)
         self.assertTrue(text.splitlines()[-1].split(" ", 1)[1].startswith("EXIT rc=1"), text.splitlines()[-1])
+
+    def _run_paused_vc5_all(self) -> tuple[subprocess.CompletedProcess, Path]:
+        """vc5-all 打出 KILO_DONE 与 VC5_ALL_PAUSED 后不再前进（真实场景：Claude 的 seal 暂停等人处置）。"""
+
+        account_log = self._install_account_stubs()
+        self._prepare_vc5()
+        _write(self.sb.drv / "vc5-all.sh", "#!/bin/bash\necho 'KILO_DONE'\necho 'VC5_ALL_PAUSED seal 暂停等人处置'\nexit 0\n")
+        return self.sb.stage_pipeline("--from", "VC5", "--to", "VC5"), account_log
+
+    def test_account_not_closed_when_vc5_all_is_paused(self) -> None:
+        """VC5_ALL_PAUSED 分支：流水线 STOPPED 等人处置，不替人关采集账号。
+        暂停点可能在 seal 对比点之前，此时关账号会让之后的“Kilo 后环境恢复门禁”拿到不一致的账号状态；
+        人处置完继续时账号还要在开着。变异“先关账号再停”原先没有测试能抓到（V1 验收的存活变异）。"""
+
+        result, account_log = self._run_paused_vc5_all()
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        self.assertEqual(self._off_lines(account_log), [], account_log.read_text(encoding="utf-8"))
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("vc5-all 暂停等人处置", text)
+        self.assertIn("采集账号仍是开启状态", text, "停下时要提示账号仍开着、需手工处置")
+
+    def test_paused_branch_close_is_caught_by_this_test_mutation(self) -> None:
+        """变异验证：把 VC5_ALL_PAUSED 分支改成“先 capture_off 再 stop”，上一条测试的不变量必须被打破。"""
+
+        script = self.sb.pipe / "vc-pipeline.sh"
+        text = script.read_text(encoding="utf-8")
+        needle = """if grep -q 'VC5_ALL_PAUSED' "${RR}/vc5-all.out"; then stop VC5"""
+        self.assertEqual(text.count(needle), 1, "VC5_ALL_PAUSED 分支的写法变了，请同步更新变异点")
+        script.write_text(text.replace(needle, """if grep -q 'VC5_ALL_PAUSED' "${RR}/vc5-all.out"; then capture_off; stop VC5"""), encoding="utf-8")
+        result, account_log = self._run_paused_vc5_all()
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        self.assertTrue(self._off_lines(account_log), "变异版应当在暂停时关了账号")
+
+    # ---- 准入收据已存在时的库表前置复查 ----
+    BLOCKED_REPORT = {"status": "blocked", "checks": [], "candidate_prerequisites": [
+        {"check": "model_mapping_empty", "status": "blocked", "reason": "model_mapping_not_empty", "detail": "怎么改"},
+        {"check": "group_allow_live", "status": "passed"}]}
+
+    def _stage_vc5_with_existing_receipt(self, report: object | None = None, rc: int | None = None) -> subprocess.CompletedProcess:
+        self._install_account_stubs()
+        self._prepare_vc5()
+        if report is not None:
+            (self.root / "precheck_dryrun.json").write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
+        if rc is not None:
+            (self.root / "precheck_dryrun.rc").write_text(str(rc), encoding="utf-8")
+        return self.sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+
+    def test_existing_receipt_still_rechecks_db_prerequisites_and_passes_when_ok(self) -> None:
+        result = self._stage_vc5_with_existing_receipt()
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+        calls = self.sb.log.read_text(encoding="utf-8")
+        self.assertIn("PRECHECK --consume", calls)
+        self.assertIn("PRECHECK --dry-run", calls, "收据已存在也要跑一次只读 dry-run 复查库表前置")
+        self.assertNotIn("PRECHECK --apply", calls)
+        self.assertIn("库表前置复查通过", "\n".join(self.sb.status_lines()))
+
+    def test_existing_receipt_but_db_prerequisite_reverted_stops_before_vc5_all(self) -> None:
+        """V1 验收建议：准入收据存在时 consume 直接返回，库表被改回去的重启场景拦不住。现在在起 vc5-all 之前停下并指出是哪一项。"""
+
+        result = self._stage_vc5_with_existing_receipt(self.BLOCKED_REPORT, rc=3)
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("库表前置被改回去了", text)
+        self.assertIn("model_mapping_empty", text)
+        self.assertIn("vc5-admission-recheck.err", text, "停下的提示要指向人读摘要文件")
+        self.assertNotIn("vc5-all 已起", text)
+        self.assertNotIn("VC5ALL_FINISHED", self.sb.events())
+        account_log = self.root / "account.log"   # 开关桩只在被调用时才写它
+        self.assertFalse(account_log.exists() and "ON" in account_log.read_text(encoding="utf-8"), "库表前置不过时不得先打开采集账号")
+
+    def test_existing_receipt_ignores_other_blocked_checks_outside_db_prerequisites(self) -> None:
+        """复查只看 candidate_prerequisites：dry-run 报告顶层 blocked 但库表前置全绿（别的检查项状态）不拦。"""
+
+        report = {"status": "blocked", "checks": [{"check": "x", "status": "blocked"}], "candidate_prerequisites": [{"check": "a", "status": "passed"}]}
+        result = self._stage_vc5_with_existing_receipt(report, rc=3)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+
+    def test_existing_receipt_with_unparseable_dryrun_fails_closed(self) -> None:
+        result = self._stage_vc5_with_existing_receipt("这不是 JSON", rc=0)
+        self.assertEqual(result.returncode, 1)
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("dry-run 输出不是 JSON", text)
+
+    def test_blocked_stop_message_points_to_dryrun_err(self) -> None:
+        """没有收据（consume 不通过）走完整准入：blocked 的停止提示要指出详细“怎么改”在 vc5-admission-dryrun.err。"""
+
+        self._install_account_stubs()
+        self._prepare_vc5()
+        (self.root / "precheck_consume.rc").write_text("2", encoding="utf-8")
+        (self.root / "precheck_dryrun.json").write_text(json.dumps(self.BLOCKED_REPORT), encoding="utf-8")
+        (self.root / "precheck_dryrun.rc").write_text("3", encoding="utf-8")
+        result = self.sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("VC-5 准入 blocked", text)
+        self.assertIn("vc5-admission-dryrun.err", text)
 
     def test_capture_on_retry_classification(self) -> None:
         """采集账号开关脚本文档保证幂等：退出码 5（管理接口失败）可重试；退出码 4（访问令牌快过期，确定性拒绝）不重试。"""
@@ -678,6 +787,25 @@ class Vc6CleanupTests(SandboxCase):
         self.assertNotIn("发布镜像", reason)
         self.assertFalse(self.junk.exists(), "清单内目录应已删除")
 
+    def test_still_running_final_image_never_records_a_release_image_ref(self) -> None:
+        """容器仍跑最终镜像、但环境里设了 VC6_RELEASE_IMAGE（先清理后发版时提前声明）：执行证据 running_image_ref 必须为空。"""
+
+        self._docker(running=self.FINAL)
+        check = self._run("--check", release=self.RELEASE_REF)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        report = json.loads(check.stdout.splitlines()[0])
+        self.assertEqual(report["running_image_kind"], "final")
+        self.assertEqual(report["running_image_ref"], "", "预检报告同样不得带发布镜像引用")
+        result = self._run(release=self.RELEASE_REF)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        post = self._execution()["post_checks"]
+        self.assertEqual(post["running_image_kind"], "final")
+        self.assertEqual(post["running_image_ref"], "")
+        self.assertEqual(post["production_image_id"], self.FINAL)
+        reason = self._executed_receipt()["facts"]["assertions"]["reason"]
+        self.assertIn("运行镜像仍是退休后最终镜像", reason)
+        self.assertNotIn(self.RELEASE_REF, reason)
+
     def test_execute_after_release_swap_writes_truthful_receipt(self) -> None:
         """先发版后清理：脚本放行，生成“已执行”收据，收据如实写明运行的是发布镜像（引用与 ID），而不是“仍是退休后最终镜像”。"""
 
@@ -855,6 +983,313 @@ class RoundEnvTemplateTests(unittest.TestCase):
         self.assertEqual(keys - allowed, set(), "pipeline.env.example 里出现了库不认的键")
         for key in ("ARM64_VC_ENV", "PIPE_RETRY_MAX", "PIPE_RETRY_VC4_GATES", "PIPE_SSH_HOST"):
             self.assertIn(key, keys)
+
+
+class WaitMarkerFailureWordsTests(unittest.TestCase):
+    """vc-pipeline.sh 的 wait_marker 扫日志里的失败字样；脚本自己打印的“=== ”阶段标题行不能算失败。
+
+    0.165 事故：VC2 阶段用 'Traceback|拒绝|失败|…' 扫 vc23.out，vc23-seq.sh 的标题行“=== VC-3 前重放离线报告，拒绝批准后的输入漂移”
+    含“拒绝”被当成失败，流水线写 STOPPED VC2（实际脚本没出错、后面照常跑完）。
+    """
+
+    BAD_VC23 = "Traceback|拒绝|失败|rc=[1-9]|断言|Error"
+    BAD_VC4 = "Traceback|拒绝|失败|BATCH FAILED"
+
+    def _wait(self, text: str, bad: str) -> int:
+        script = (PIPELINE / "vc-pipeline.sh").read_text(encoding="utf-8")
+        match = re.search(r"^wait_marker\(\) \{\n.*?^\}\n", script, re.S | re.M)
+        self.assertIsNotNone(match, "找不到 wait_marker 函数")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out.log").write_text(text, encoding="utf-8")
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                set -u -o pipefail
+                log() {{ :; }}
+                disk_txt() {{ echo x; }}
+                sleep() {{ :; }}
+                {match.group(0)}
+                wait_marker "{root}/out.log" 'VC_DONE' '{bad}' 1 t ''
+                echo "rc=$?"
+            """)
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return int(done.stdout.strip().rsplit("rc=", 1)[1])
+
+    def test_real_stage_titles_are_not_failures(self) -> None:
+        """用驱动脚本里真实的标题行当输入：命中“拒绝”的标题不再触发失败，等不到成功标记时只是超时（rc=1）。"""
+
+        title = next(line for line in (REAL_DRIVER / "vc2-approve-and-stage.sh").read_text(encoding="utf-8").splitlines()
+                     if line.startswith('echo "=== VC-3 前重放离线报告'))
+        printed = title.split('echo "', 1)[1].rsplit('"', 1)[0]
+        self.assertIn("拒绝", printed, "标题行措辞变了，请换一条仍含失败字样的真实标题")
+        self.assertEqual(self._wait(printed + "\n", self.BAD_VC23), 1)
+        self.assertEqual(self._wait(printed + "\n=== 管理 token\nVC23_DONE-not-yet\n", self.BAD_VC4), 1)
+
+    def test_real_failures_are_still_caught(self) -> None:
+        title = "=== VC-3 前重放离线报告，拒绝批准后的输入漂移\n"
+        self.assertEqual(self._wait(title + "本轮客户端（claude）的 VC-2／VC-3 派发脚本是 x，拒绝\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait(title + "Traceback (most recent call last):\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait(title + "step rc=3\n", self.BAD_VC23), 3)
+        self.assertEqual(self._wait("BATCH FAILED 4\n", self.BAD_VC4), 3)
+
+    def test_success_marker_wins_even_with_titles_present(self) -> None:
+        self.assertEqual(self._wait("=== 拒绝 失败 标题\nVC_DONE\n", self.BAD_VC23), 0)
+
+    def test_failure_words_in_pipeline_calls_match_this_test(self) -> None:
+        """本测试用的两组失败正则必须与流水线里实际传给 wait_marker 的一致，否则测的不是真实调用。"""
+
+        text = (PIPELINE / "vc-pipeline.sh").read_text(encoding="utf-8")
+        self.assertIn(f"'{self.BAD_VC23}'", text)
+        self.assertIn(f"'{self.BAD_VC4}'", text)
+
+
+class EntryCoordinatesNotInheritedByGatesTests(unittest.TestCase):
+    """门禁里的测试不得继承入口坐标 ENTRY_COMMIT／ENTRY_BUNDLE／ENTRY_BRANCH。
+
+    parse_env 把本轮参数文件里的全部键导出，其中三个入口坐标是入口编排器自己的参数；``source lib.sh`` 之后起 ``make test`` 的脚本若不清掉，
+    测试进程继承到它们，test_ci_entry_preflight_skip 等用例把它们当成“入口正在运行”的信号而红（0.165 的 VC-4 门禁因此红过一次）。
+    """
+
+    NAMES = ("ENTRY_COMMIT", "ENTRY_BUNDLE", "ENTRY_BRANCH")
+    # 在驱动脚本里直接起门禁（make）的脚本：新增这类脚本时本集合会对不上，逼着作者想清楚要不要清入口坐标。
+    GATE_LAUNCHERS = {"arm64-vc4-gates.sh", "gates.sh", "vc5-gate-target.sh"}
+
+    def _code(self, path: Path) -> list[str]:
+        return [line for _, line in _code_lines(path)]
+
+    def test_isolated_run_does_not_pass_entry_coordinates_to_the_gate(self) -> None:
+        """行为：取 lib.sh 里真实的 isolated_run，把 unshare 换成只打印环境的桩，父 shell 里导出三个入口坐标。"""
+
+        text = (REAL_DRIVER / "lib.sh").read_text(encoding="utf-8")
+        match = re.search(r"^isolated_run\(\) \{\n.*?^\}\n", text, re.S | re.M)
+        self.assertIsNotNone(match, "找不到 isolated_run")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tree").mkdir()
+            _write(root / "bin" / "unshare", f"#!/bin/bash\nenv > '{root}/seen.env'\n")
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                HISTORICAL_SOURCE_ROOT=/x
+                export ENTRY_COMMIT={'1' * 40} ENTRY_BUNDLE=/b/entry.bundle ENTRY_BRANCH=feature/entry CODEX_UPGRADE_IDENTITY_MEMO=/memo KEEP_ME=yes
+                {match.group(0)}
+                isolated_run "{root}/tree" . "{root}/pyc" "{root}/out" "{root}/err" make test
+            """)
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, env={"PATH": f"{root}/bin:/usr/bin:/bin"})
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            seen = (root / "seen.env").read_text(encoding="utf-8")
+        for name in self.NAMES + ("CODEX_UPGRADE_IDENTITY_MEMO",):
+            self.assertNotIn(f"{name}=", seen, f"{name} 不得进入门禁进程的环境")
+        self.assertIn("KEEP_ME=yes", seen, "只清指定的变量，其余环境照旧")
+        self.assertIn("PYTHONPYCACHEPREFIX=", seen)
+
+    def test_every_gate_launcher_clears_the_entry_coordinates(self) -> None:
+        launchers = set()
+        for path in sorted(REAL_DRIVER.glob("*.sh")):
+            code = "\n".join(self._code(path))
+            if re.search(r"exec make |isolated_run [^\n]* make ", code):
+                launchers.add(path.name)
+        self.assertEqual(launchers, self.GATE_LAUNCHERS, "驱动里起门禁的脚本变了：新增的要清入口坐标，并登记到本测试")
+        # arm64-vc4-gates.sh 经 lib.sh 的 isolated_run 起门禁（上一条行为测试覆盖）；另外两个自己用 env -u 清。
+        for name in ("gates.sh", "vc5-gate-target.sh"):
+            code = "\n".join(self._code(REAL_DRIVER / name))
+            line = next(item for item in code.splitlines() if "exec make" in item)
+            for variable in self.NAMES:
+                self.assertIn(f"-u {variable}", line.split("unshare")[0], f"{name} 起 make test 前必须 env -u {variable}")
+        isolated = "\n".join(self._code(REAL_DRIVER / "lib.sh"))
+        self.assertIn("unset CODEX_UPGRADE_IDENTITY_MEMO ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH", isolated)
+
+    def test_vc6_gates_clear_them_right_after_sourcing_vc6_env(self) -> None:
+        """VC-6 post-promotion 门禁直接起计划里的 go test：vc6-env.sh 要用 ENTRY_COMMIT 做占位断言，用完立刻清。"""
+
+        code = self._code(PIPELINE / "vc6" / "vc6-gates.sh")
+        source = next(i for i, line in enumerate(code) if "vc6-env.sh" in line and line.lstrip().startswith("source"))
+        unset = next(i for i, line in enumerate(code) if line.strip() == "unset ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH")
+        self.assertGreater(unset, source)
+        run = next(i for i, line in enumerate(code) if "subprocess.run" in line)
+        self.assertGreater(run, unset, "清除必须在起门禁命令之前")
+
+
+class PlRemoteVarTests(unittest.TestCase):
+    """pl_remote_var 要同时认 parse_env.py 的两种输出形态。
+
+    parse_env.py 用 shlex.quote 输出：值只含安全字符时不带引号（export RUNROOT=/root/x），含空格等字符才带单引号。
+    首次部署时曾只认带引号的形态，local/ 下所有本机脚本都因“取不到 RUNROOT”起不来；流水线测试的 ssh 桩恰好返回带引号形态，没抓到。
+    这里用真实 parse_env.py 的输出当输入。
+    """
+
+    FILL = {
+        "API_KEY_ID": "1", "CAPTURE_RUNTIME_IMAGE": "img", "CODEX_ACCOUNT_ID": "2", "CODEX_BIN_SHA256": "a" * 64,
+        "COMPOSE_BACKUP": "/root/x", "ENTRY_BRANCH": "b", "FRONTEND_DEVIATION_APPROVED_BY": "boss", "HISTORY_TEST_TREE": "/root/h",
+        "JWTGEN_BIN": "/root/j", "KILO_BIN": "/root/k", "KILO_SHA256": "a" * 64, "KILO_VERSION": "1.0.0", "LITE_MODEL": "m1",
+        "MAIN_MODEL": "m2", "OFFICIAL_ASSET_SHA256": "a" * 64, "OFFICIAL_STOP_LEDGER": "/root/l", "OFFICIAL_STOP_RECEIPT": "/root/r",
+        "POLICY_ACTIVATION": "/root/p", "POLICY_COMPAT_RECEIPT": "/root/c", "PREDECESSOR_CAMPAIGN": "pc", "PREVIOUS_POLICY": "/root/pp",
+        "PREV_CANDIDATE": "/root/pcand", "PRODUCTION_IMAGE": "pi", "PROJECT_DEADLINE_UTC": "2099-01-01T00:00:00Z",
+        "RELEASE_CERTIFICATION": "/root/rc", "RETIRE_VERSION": "0.163.0", "TARGET_CODE_MODE_HOST_SHA256": "a" * 64,
+    }
+
+    def _remote_var(self, remote_vars: str, key: str) -> str:
+        """在一个干净的 HOME 下 source 真实 pipeline-lib.sh，对给定的 REMOTE_VARS 调 pl_remote_var。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                source "{PIPELINE}/pipeline-lib.sh"
+                REMOTE_VARS=$(cat "{root}/vars.txt")
+                pl_remote_var "{key}"
+            """)
+            (root / "vars.txt").write_text(remote_vars, encoding="utf-8")
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, cwd=root,
+                                  env={"PATH": os.environ["PATH"], "HOME": str(root), "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout.strip()
+
+    def test_reads_unquoted_value_from_real_parse_env_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env = Path(directory) / "env.sh"
+            sets = [item for key, value in self.FILL.items() for item in ("--set", f"{key}={value}")]
+            rendered = subprocess.run([sys.executable, "-B", str(PIPELINE / "render_round_env.py"), "--target", "0.165.0", "--baseline",
+                                       "0.164.0", "--round", "r1", "--stamp", "20990101t000000z", "--out", str(env), *sets],
+                                      capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            parsed = subprocess.run([sys.executable, "-B", str(REAL_DRIVER / "parse_env.py"), str(env)], capture_output=True, text=True,
+                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(parsed.returncode, 0, parsed.stderr)
+            self.assertIn("export RUNROOT=/root/vc-rounds/c01650-r1\n", parsed.stdout, "真实输出里安全字符的值本来就不带引号")
+            self.assertEqual(self._remote_var(parsed.stdout, "RUNROOT"), "/root/vc-rounds/c01650-r1")
+            self.assertEqual(self._remote_var(parsed.stdout, "TARGET_VERSION"), "0.165.0")
+
+    def test_still_reads_quoted_value(self) -> None:
+        remote_vars = "export RUNROOT='/root/vc rounds/c01650-r1'\nexport ROUND=r1\n"
+        self.assertEqual(self._remote_var(remote_vars, "RUNROOT"), "/root/vc rounds/c01650-r1")
+        self.assertEqual(self._remote_var(remote_vars, "ROUND"), "r1")
+
+    def test_key_match_is_exact_and_missing_key_is_empty(self) -> None:
+        remote_vars = "export RUNROOT_OLD=/root/old\nexport RUNROOT=/root/new\n"
+        self.assertEqual(self._remote_var(remote_vars, "RUNROOT"), "/root/new", "前缀相同的键不能串")
+        self.assertEqual(self._remote_var(remote_vars, "NO_SUCH_KEY"), "")
+
+
+class StartEntryPrecheckTests(unittest.TestCase):
+    """start-entry.sh 起跑前自检新增的 C10（Go 编译缓存容量）、C11（本轮输入已准备）及相关开关。
+
+    start-entry.sh 本体读 /proc 与真实 docker／psql，不在开发机上整体运行；检查逻辑放在 pipeline-lib.sh 的函数里单测，
+    脚本接线用静态合同守。
+    """
+
+    START_ENTRY = PIPELINE / "start-entry.sh"
+
+    def _call(self, root: Path, call: str, stat_type: str = "tmpfs", df_m: str = "4096") -> subprocess.CompletedProcess:
+        """stat／df 换成桩（开发机的 stat -f -c 与 df -BM 参数不兼容），然后 source 真实 pipeline-lib.sh 调一个函数。"""
+
+        stubs = root / "bin"
+        _write(stubs / "stat", f"#!/bin/bash\necho '{stat_type}'\n")
+        _write(stubs / "df", f"#!/bin/bash\nprintf 'Filesystem 1048576-blocks Used Available Capacity Mounted\\ntmpfs {df_m}M 1M 1M 1%% /x\\n'\n")
+        wrapper = _write(root / "call.sh", f"""
+            #!/bin/bash
+            source "{PIPELINE}/pipeline-lib.sh"
+            {call}
+        """)
+        return subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, cwd=root,
+                              env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(root), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_go_cache_on_small_tmpfs_is_refused_with_remount_hint(self) -> None:
+        """0.165 事故：4 GiB 的 tmpfs 在腾盘清空 Go 缓存后冷启动写满。小于 10 GiB 的内存盘必须在起跑前拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            done = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "4096")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("4 GiB < 10 GiB", done.stdout)
+            self.assertIn("remount,size=10G", done.stdout)
+
+    def test_go_cache_on_big_enough_tmpfs_passes_and_threshold_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            ok = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "10240")
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+            self.assertIn("10 GiB ≥ 10 GiB", ok.stdout)
+            low = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 4', "tmpfs", "4096")
+            self.assertEqual(low.returncode, 0, "阈值可调：要求 4 GiB 时 4 GiB 的内存盘通过")
+            self.assertEqual(self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "10239").returncode, 1)
+
+    def test_go_cache_on_disk_or_missing_dir_is_not_applicable(self) -> None:
+        """缓存在磁盘上（含目录还不存在、父目录在磁盘上）由根盘检查约束，本检查不拦。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            disk = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "ext2/ext3", "1024")
+            self.assertEqual(disk.returncode, 0, disk.stdout + disk.stderr)
+            self.assertIn("在磁盘上", disk.stdout)
+            missing = self._call(root, f'pl_check_go_cache_capacity "{root}/not/yet/created" 10', "ext2/ext3", "1024")
+            self.assertEqual(missing.returncode, 0, missing.stdout + missing.stderr)
+
+    def test_go_cache_on_tmpfs_with_unreadable_size_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            done = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("读不出容量", done.stdout)
+
+    def test_round_inputs_check_requires_both_prepare_outputs(self) -> None:
+        """漏跑 prepare-round-inputs.sh：P0 回退依据与基线画像都缺，入口便宜检查两项会红；起跑前自检要先拦下并指向该脚本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rr, data = root / "run", root / "data"
+            call = f'pl_check_round_inputs "{rr}" "{data}" in-x'
+            both_missing = self._call(root, call)
+            self.assertEqual(both_missing.returncode, 1)
+            self.assertIn("rollback-catalog-promotion-receipt.json", both_missing.stdout)
+            self.assertIn("baseline-profile.json", both_missing.stdout)
+            self.assertIn("prepare-round-inputs.sh", both_missing.stdout)
+            rr.mkdir()
+            (rr / "rollback-catalog-promotion-receipt.json").write_text("{}", encoding="utf-8")
+            one_missing = self._call(root, call)
+            self.assertEqual(one_missing.returncode, 1)
+            self.assertNotIn("rollback-catalog-promotion-receipt.json", one_missing.stdout)
+            self.assertIn("baseline-profile.json", one_missing.stdout)
+            (data / "control" / "in-x").mkdir(parents=True)
+            (data / "control" / "in-x" / "baseline-profile.json").write_text("", encoding="utf-8")
+            self.assertEqual(self._call(root, call).returncode, 1, "空文件不算就绪")
+            (data / "control" / "in-x" / "baseline-profile.json").write_text("{}", encoding="utf-8")
+            ready = self._call(root, call)
+            self.assertEqual(ready.returncode, 0, ready.stdout)
+            self.assertIn("prepare-round-inputs.sh 已跑", ready.stdout)
+
+    def test_round_inputs_check_honours_explicit_rollback_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data" / "control" / "in-x").mkdir(parents=True)
+            (root / "data" / "control" / "in-x" / "baseline-profile.json").write_text("{}", encoding="utf-8")
+            (root / "elsewhere.json").write_text("{}", encoding="utf-8")
+            done = self._call(root, f'pl_check_round_inputs "{root}/run" "{root}/data" in-x "{root}/elsewhere.json"')
+            self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_start_entry_wires_the_new_checks_and_switches(self) -> None:
+        """脚本接线（静态）：C10／C11 调用函数且失败计 FAIL；--check 不建目录；SKIP_CAPTURE_ACCOUNT_ON 先于 capture-account-on.sh 判断。"""
+
+        code = [line for _, line in _code_lines(self.START_ENTRY)]
+        text = "\n".join(code)
+        self.assertRegex(text, r'pl_check_go_cache_capacity "\$\(dirname "\$\{D\}"\)/entry-gates-work/go-build-cache"')
+        self.assertRegex(text, r'else fail "C10 ')
+        self.assertRegex(text, r'pl_check_round_inputs "\$\{RUNROOT\}" "\$\{D\}" "\$\{IN\}"')
+        self.assertRegex(text, r'else fail "C11 ')
+        self.assertIn('[ "${MODE}" = check ] || mkdir -p "${P}"', text)
+        self.assertNotRegex(text, r"(?m)^mkdir -p \"\$\{P\}\"")
+        skip = text.index('"${SKIP_CAPTURE_ACCOUNT_ON:-0}" = 1')
+        self.assertLess(skip, text.index('bash "${PIPE_HOME}/capture-account-on.sh"'), "跳过判断必须在调用 capture-account-on.sh 之前")
+        self.assertIn("warn \"SKIP_CAPTURE_ACCOUNT_ON=1", text, "跳过要留 WARN，不静默")
+
+    def test_start_entry_documents_the_switches_in_header(self) -> None:
+        head = "\n".join(self.START_ENTRY.read_text(encoding="utf-8").splitlines()[:30])
+        self.assertIn("SKIP_CAPTURE_ACCOUNT_ON=1", head)
+        self.assertIn("GO_CACHE_TMPFS_MIN_GIB", head)
 
 
 class Vc6EnvTests(SandboxCase):

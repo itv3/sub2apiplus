@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,8 +23,9 @@ from unittest import mock
 from tools.ci import entry_gates as eg
 from tools.ci import unit_executor as ue
 from tools.ci import unit_ownership as uo
+from tools.ci import unit_records as ur
 from tools.official_client_capture.tests import test_ci_entry_gates as entry_gates_tests
-from tools.official_client_capture.tests.unit_ownership_world import CAPTURE, TESTS, WORLD, World, git
+from tools.official_client_capture.tests.unit_ownership_world import CALIBRATION, CAPTURE, TESTS, WORLD, World, git, pulled
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = REPO_ROOT / "tools" / "ci" / "unit_executor.py"
@@ -519,6 +521,319 @@ class EntryGatesScopeScriptTests(unittest.TestCase):
                 code, scope, stderr = self.parse(*options)
                 self.assertEqual((code, scope), (2, []), stderr)
                 self.assertIn(message, stderr)
+
+
+class ResumeLayerTwoTests(unittest.TestCase):
+    """修好接着跑的第二层：提交变了时，比对基点取这道门禁最近一次全集运行的提交，上一轮失败的模块强制并入；找不到基点不瞎猜。"""
+
+    def _store(self) -> ur.RecordStore:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return ur.RecordStore(Path(directory.name))
+
+    @staticmethod
+    def _publish(store: ur.RecordStore, run_id: str, commit: str, results: dict[str, bool], *, subset: bool = False,
+                 completed: str = "2026-10-29T01:00:00Z", series: str = "entry") -> None:
+        units = [{"unit_id": unit, "disposition": "executed", "record_sha256": "r" * 64, "passed": passed,
+                  "test_group": "capture" if unit.startswith("test_") else None} for unit, passed in results.items()]
+        basis = ur.resume_basis(commit=commit, series=series, profile="entry", gates=["g"], planned=list(results), binding={"d": 1})
+        store.put_manifest(ur.build_manifest(run_id=run_id, mode="re-execute", planned_units=list(results), units=units, completed_at_utc=completed,
+                                             resume_basis=basis, **({"client_selection": {"scope": "client-plan"}} if subset else {})))
+
+    def test_the_base_is_the_latest_full_run_that_is_an_ancestor_and_failed_modules_along_the_way_are_forced(self) -> None:
+        world = World(self, WORLD, CALIBRATION)
+        first = world.commit("第一次修复")
+        second = world.commit("第二次修复")
+        store = self._store()
+        self._publish(store, "run-full", world.base, {"test_claude_heavy_a": False, "test_claude_heavy_b#1": True, "backend:unit": False},
+                      completed="2026-10-29T01:00:00Z")
+        self._publish(store, "run-subset", first, {"test_codex_thing": False, "test_ci_shared_thing": True}, subset=True, completed="2026-10-29T02:00:00Z")
+        plan = eg.resume_plan(store.root, "entry", world.root)
+        self.assertEqual((plan["layer"], plan["head"], plan["base_commit"], plan["base_run_id"]), (2, second, world.base, "run-full"))
+        self.assertEqual(plan["force_modules"], ["test_claude_heavy_a", "test_codex_thing"], "命令单元的失败不进模块清单；沿途的子集运行失败的模块也算")
+        selection = uo.select(world.root, client="codex", base=plan["base_commit"], force_modules=plan["force_modules"])
+        self.assertEqual(pulled(selection)["test_claude_heavy_a"], ["上一轮失败或没执行完，必须重跑"], "不受改动影响的重模块，因为上一轮失败而强制并入")
+        self.assertNotIn("test_claude_heavy_b", pulled(selection))
+        self.assertEqual(selection["force_modules"], ["test_claude_heavy_a", "test_codex_thing"])
+        self.assertTrue(uo.seal_ok(selection))
+        plain = uo.select(world.root, client="codex", base=world.base)
+        self.assertNotIn("force_modules", plain, "没有强制模块时 selection 与改造前逐字相同")
+
+    def test_same_commit_is_layer_one_and_other_series_or_unrelated_branches_are_ignored(self) -> None:
+        world = World(self, WORLD, CALIBRATION)
+        head = world.commit("修复")
+        store = self._store()
+        self.assertEqual(eg.resume_plan(store.root, "entry", world.root)["layer"], 0, "记录库里什么都没有")
+        self._publish(store, "run-same", head, {"test_codex_thing": False})
+        plan = eg.resume_plan(store.root, "entry", world.root)
+        self.assertEqual((plan["layer"], plan["source_run_id"], plan["force_modules"]), (1, "run-same", []), "同提交：第一层，执行器逐单元沿用")
+        self.assertEqual(eg.resume_plan(store.root, "bgv", world.root)["layer"], 0, "别的系列互不相干")
+        # 侧枝上的运行：既不当基点，也不计它的失败。
+        git(world.root, "checkout", "-q", "-b", "side", world.base)
+        side = world.commit("侧枝")
+        git(world.root, "checkout", "-q", "-")
+        store2 = self._store()
+        self._publish(store2, "run-side", side, {"test_codex_thing": False})
+        plan = eg.resume_plan(store2.root, "entry", world.root)
+        self.assertEqual((plan["layer"], plan["base_commit"], plan["force_modules"]), (2, None, []))
+        self.assertIn("基点照旧取最近发版 tag", " ".join(plan["reasons"]))
+
+    def test_no_full_run_ancestor_gives_no_base_but_still_forces_the_failures(self) -> None:
+        world = World(self, WORLD, CALIBRATION)
+        first = world.commit("一")
+        world.commit("二")
+        store = self._store()
+        self._publish(store, "run-sub", first, {"test_claude_heavy_c": False}, subset=True)
+        plan = eg.resume_plan(store.root, "entry", world.root)
+        self.assertEqual((plan["base_commit"], plan["force_modules"]), (None, ["test_claude_heavy_c"]))
+
+    def test_the_plan_command_hands_the_forced_modules_to_the_selection_and_echoes_the_plan(self) -> None:
+        world = World(self, MINI, MINI_CALIBRATION)
+        head = world.commit("改")
+        plan_file = world.root.parent / f"{world.root.name}-resume-plan.json"
+        plan_file.write_text(json.dumps({"layer": 2, "base_commit": world.base, "force_modules": ["test_claude_big"]}), encoding="utf-8")
+        self.addCleanup(plan_file.unlink)
+        output = world.root.parent / f"{world.root.name}-manifest.json"
+        self.addCleanup(lambda: output.unlink(missing_ok=True))
+        completed = subprocess.run([sys.executable, "-B", str(REPO_ROOT / "tools/ci/entry_gates.py"), "plan", "--tree", str(world.root), "--profile", "regression",
+                                    "--gate-scope", "client-plan", "--select-base", world.base, "--force-run-modules", "test_claude_big",
+                                    "--resume-plan", str(plan_file), "--output", str(output)], capture_output=True, text=True, timeout=120,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        manifest = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["selection"]["modules"]["test_claude_big"], "run", "上一轮失败的重模块被并入")
+        self.assertEqual(manifest["resume_plan"]["layer"], 2)
+        self.assertEqual(head, manifest["selection"]["head_commit"])
+
+
+class EntryGatesResumeScriptTests(unittest.TestCase):
+    """``entry-gates.sh`` 的续跑参数解析与互斥校验：把参数解析段原样截出来在 bash 里跑（不跑门禁本身）。"""
+
+    SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh"
+
+    def parse(self, *args: str, env: dict[str, str] | None = None) -> tuple[int, dict[str, str], str]:
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        begin = text.index('PROFILE=entry; OUT="";')
+        segment = text[begin:text.index('for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do', begin)]
+        snippet = ('set -Eeuo pipefail\nusage() { echo "用法" >&2; }\nD=/data; HISTORY_TEST_TREE=/hist; CT_CLIENT=codex\n' + segment +
+                   'printf "RESUME_FROM=%s\\nRESUME_SERIES=%s\\nMODE=%s\\nWAIVE=%s\\nWAIVE_NAMES=%s\\n" "$RESUME_FROM" "$RESUME_SERIES" "$MODE" "$RESUME_WAIVE" "$RESUME_WAIVE_NAMES"\n')
+        completed = subprocess.run(["bash", "-c", snippet, "entry-gates", *args, "/bundle", "codex/x", "c" * 40], capture_output=True, text=True, timeout=30,
+                                   env={**os.environ, "CLAUDE_ENTRY_FULL79_SPEC": "", "CLAUDE_ENTRY_FULL79_SPEC_SHA256": "", **(env or {})})
+        values = dict(line.split("=", 1) for line in completed.stdout.splitlines() if "=" in line)
+        return completed.returncode, values, completed.stderr
+
+    def test_resume_defaults_the_series_to_the_profile_and_accepts_the_vc4_profile(self) -> None:
+        code, values, stderr = self.parse("--profile", "vc4", "--resume-from", "auto")
+        self.assertEqual((code, values["RESUME_FROM"], values["RESUME_SERIES"]), (0, "auto", "vc4"), stderr)
+        code, values, _ = self.parse("--resume-from", "20261029t001558z-1679755-dbab00", "--resume-series", "bgv", "--resume-max-age-hours", "12")
+        self.assertEqual((code, values["RESUME_SERIES"]), (0, "bgv"))
+        code, values, _ = self.parse("--profile", "vc4")
+        self.assertEqual((code, values["RESUME_FROM"]), (0, ""), "不带 --resume-from 什么都不变")
+        code, values, _ = self.parse("--resume-from", "auto", "--resume-waive-env", "换了缓存目录", "--resume-waive-env-names", "envvar:GOCACHE")
+        self.assertEqual(code, 0)
+
+    def test_the_environment_waiver_can_come_from_the_environment_for_callers_without_the_options(self) -> None:
+        """入口编排器、后台验证起的入口门禁没有 --resume-waive-env* 选项：操作员用环境变量声明，同样要理由和点名成对，且只在 --resume-from 下生效。"""
+
+        both = {"ENTRY_RESUME_WAIVE_ENV": "换缓存目录", "ENTRY_RESUME_WAIVE_ENV_NAMES": "envvar:GOCACHE"}
+        code, values, stderr = self.parse("--resume-from", "auto", env=both)
+        self.assertEqual((code, values["WAIVE"], values["WAIVE_NAMES"]), (0, "换缓存目录", "envvar:GOCACHE"), stderr)
+        code, values, _ = self.parse("--resume-from", "auto", "--resume-waive-env", "显式理由", "--resume-waive-env-names", "envvar:A", env=both)
+        self.assertEqual((code, values["WAIVE"]), (0, "显式理由"), "命令行选项优先")
+        code, _values, stderr = self.parse("--resume-from", "auto", env={"ENTRY_RESUME_WAIVE_ENV": "只有理由"})
+        self.assertEqual(code, 2, stderr)
+        self.assertIn("要同时给理由", stderr)
+        code, values, _ = self.parse(env=both)
+        self.assertEqual((code, values["WAIVE"]), (0, ""), "没有 --resume-from：变量不起作用")
+
+    def test_resume_is_refused_with_the_modes_that_need_the_whole_set_or_an_audit(self) -> None:
+        cases = {
+            "全集请求": ("--full-set-request", "/r.json"),
+            "逐单元承接": ("--unit-inherit-request", "/r.json"),
+            "承接提案": ("--unit-inherit-propose", "/not/exist/proposal"),
+            "读集审计": ("--audit-reads",),
+            "读集合同": ("--audit-reads", "--audit-strict", "--audit-policy", "/p.json"),
+            "收窄提案": ("--audit-reads", "--audit-strict", "--input-scope", "/s.json"),
+            "只算绑定": ("--bind-only",),
+        }
+        for name, options in cases.items():
+            with self.subTest(name):
+                code, _values, stderr = self.parse("--resume-from", "auto", *options)
+                self.assertEqual(code, 2, stderr)
+                self.assertIn("续跑沿用只与重新执行全集同用", stderr)
+
+    def test_resume_options_without_resume_from_and_malformed_values_are_refused(self) -> None:
+        for options, message in (
+            (("--resume-series", "x"), "只与 --resume-from 同用"),
+            (("--resume-waive-env", "理由"), "只与 --resume-from 同用"),
+            (("--resume-from", "../etc"), "只接受 auto 或来源运行 ID"),
+            (("--resume-from", "auto", "--resume-series", "bad series"), "--resume-series 只允许"),
+            (("--resume-from", "auto", "--resume-max-age-hours", "soon"), "是小时数"),
+            (("--resume-from", "auto", "--resume-waive-env", "理由"), "要同时给理由"),
+            (("--resume-from", "auto", "--resume-waive-env-names", "envvar:A"), "要同时给理由"),
+            (("--resume-from", "auto", "--resume-binding-extra", "[1]"), "必须是 JSON 对象"),
+        ):
+            with self.subTest(options):
+                code, _values, stderr = self.parse(*options)
+                self.assertEqual(code, 2, stderr)
+                self.assertIn(message, stderr)
+
+
+class EntryGatesResumePlanningBlockTests(unittest.TestCase):
+    """``entry-gates.sh`` 生成门禁清单之前的续跑规划段：登记部署绑定、问 resume-plan、第二层只在筛选下起作用且不覆盖显式基点。
+    把这一段原样截出来在 bash 里跑，用真实的 entry_gates.py resume-plan 和一个合成记录库。"""
+
+    SCRIPT = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-gates.sh"
+    DRV = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
+
+    def run_block(self, world: World, store: ur.RecordStore, *, scope: str, select_base: str = "", resume_from: str = "auto") -> dict:
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        begin = text.index('if [ -n "$RESUME_FROM" ]; then\n  # 续跑沿用：登记部署／门禁绑定')
+        end = text.index('echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"', begin)
+        self.blocks = getattr(self, "blocks", 0) + 1
+        out = world.root.parent / f"{world.root.name}-block-out-{self.blocks}"
+        out.mkdir()
+        self.addCleanup(lambda: shutil.rmtree(out, ignore_errors=True))
+        deploy = out / "deploy-receipt.json"
+        deploy.write_text('{"tool_files_sha256": "' + "f" * 64 + '"}', encoding="utf-8")
+        snippet = ("set -Eeuo pipefail\nutc_now() { echo T; }\n"
+                   f'OUT="{out}"; CT_CLIENT=codex; PLAN_PROFILE=entry; PRE_A3_MODE=run; DEPLOY="{deploy}"; TREE_FILES={"e" * 64}; DEPLOY_OTHERS=""\n'
+                   f'RESUME_FROM={resume_from}; RESUME_SERIES=entry; RESUME_BINDING_EXTRA=\'{{"k": 1}}\'; RESUME_MAX_AGE=""; RESUME_WAIVE=""; RESUME_WAIVE_NAMES=""\n'
+                   f'STORE="{store.root}"; DRV="{self.DRV}"; TREE="{world.root}"; SELECT_BASE="{select_base}"; RESUME_ARGS=(); FORCE_ARGS=()\n'
+                   f'SCOPE_ARGS=({"--gate-scope auto --client codex" if scope == "auto" else ""})\n' + text[begin:end] +
+                   'printf "%s\\n" "RESUME_ARGS=${RESUME_ARGS[*]}" "FORCE_ARGS=${FORCE_ARGS[*]}" "SCOPE_ARGS=${SCOPE_ARGS[*]}"\n')
+        completed = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True, timeout=60, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        values = dict(line.split("=", 1) for line in completed.stdout.splitlines() if line.split("=", 1)[0] in ("RESUME_ARGS", "FORCE_ARGS", "SCOPE_ARGS"))
+        values["binding"] = json.loads((out / "resume-binding.json").read_text(encoding="utf-8"))
+        return values
+
+    def world_with_runs(self) -> tuple[World, ur.RecordStore, str]:
+        world = World(self, WORLD, CALIBRATION)
+        world.commit("第一次修复")
+        head = world.commit("第二次修复")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        store = ur.RecordStore(Path(directory.name))
+        ResumeLayerTwoTests._publish(store, "run-full", world.base, {"test_claude_heavy_a": False})
+        return world, store, head
+
+    def test_layer_two_hands_the_base_and_the_failed_modules_to_the_plan_under_auto(self) -> None:
+        world, store, _head = self.world_with_runs()
+        values = self.run_block(world, store, scope="auto")
+        self.assertEqual(values["RESUME_ARGS"].split()[:4], ["--resume-from", "auto", "--resume-series", "entry"])
+        self.assertIn("--resume-binding", values["RESUME_ARGS"])
+        self.assertEqual(values["SCOPE_ARGS"], f"--gate-scope auto --client codex --select-base {world.base}", "没有显式基点：取上一轮全集运行的提交")
+        self.assertIn("--force-run-modules test_claude_heavy_a", values["FORCE_ARGS"])
+        self.assertIn("--resume-plan", values["FORCE_ARGS"])
+        binding = values["binding"]
+        self.assertEqual((binding["client"], binding["plan_profile"], binding["pre_a3"], binding["tool_files_sha256"], binding["extra"]),
+                         ("codex", "entry", "run", "e" * 64, {"k": 1}))
+        self.assertEqual(len(binding["deploy_receipt_sha256"]), 64, "部署收据的内容摘要进绑定：重新部署后不沿用")
+
+    def test_an_explicit_base_wins_and_a_full_scope_gets_no_layer_two_arguments(self) -> None:
+        world, store, _head = self.world_with_runs()
+        explicit = self.run_block(world, store, scope="auto", select_base="d" * 40)
+        self.assertNotIn("--select-base", explicit["SCOPE_ARGS"], "显式基点（SELECT_BASE）由原有参数传递，规划不覆盖")
+        self.assertIn("--force-run-modules test_claude_heavy_a", explicit["FORCE_ARGS"], "上一轮失败的模块照样强制重跑")
+        full = self.run_block(world, store, scope="full")
+        self.assertEqual(full["SCOPE_ARGS"], "")
+        self.assertNotIn("--force-run-modules", full["FORCE_ARGS"], "全集运行没有筛选，第二层无从谈起（全集本来就重跑一切未沿用的单元）")
+        self.assertIn("--resume-plan", full["FORCE_ARGS"], "规划结果仍回显进清单")
+
+
+class ResumeLayersEndToEndTests(unittest.TestCase):
+    """两层“修好接着跑”在真实执行器进程里走一遍（假门禁单元）：第一次让一个单元失败；修好后同提交重跑只跑它；换了提交只跑归属表判定受影响的单元，
+    加上上一轮失败的单元；改归属表自己时回退全集。"""
+
+    def setUp(self) -> None:
+        self.marker_name = "RESUME_E2E_MARKER"
+        files = dict(MINI)
+        files[f"{TESTS}/test_claude_big.py"] = ("import os\nimport unittest\n\n\nclass ClaudeBig(unittest.TestCase):\n"
+                                                f"    def test_marker(self) -> None:\n        self.assertTrue(os.path.exists(os.environ['{self.marker_name}']))\n")
+        files["docs/notes.md"] = "说明\n"
+        self.world = World(self, files, MINI_CALIBRATION)
+        self.tree = self.world.root
+        self.root = self.tree.parent / f"{self.tree.name}-run"
+        self.root.mkdir()
+        self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
+        (self.root / "config.json").write_text(json.dumps({
+            "schema_version": ue.CONFIG_SCHEMA, "default_parallelism": 2, "default_quota": {"cores": 1, "memory_mb": 128},
+            "quotas": {}, "splits": {}, "exclusive": [], "unit_timeout_seconds": 120, "orphan_grace_seconds": 1}), encoding="utf-8")
+        (self.root / "binding.json").write_text(json.dumps({"deploy": "d1"}), encoding="utf-8")
+        self.marker = self.root / "marker"
+        self.runs = 0
+
+    def run_gates(self, manifest: dict, *extra: str) -> tuple[subprocess.CompletedProcess, dict]:
+        self.runs += 1
+        out = f"run{self.runs}"
+        path = self.root / f"{out}-gates.json"
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        command = [sys.executable, "-B", str(EXECUTOR), "run-gates", "--manifest", str(path), "--config", str(self.root / "config.json"),
+                   "--weights", str(self.root / "none-weights.json"), "--durations", str(self.root / "none-durations.json"), "--cores", "4",
+                   "--state-dir", str(self.root / "state"), "--out-dir", str(self.root / out), "--shared-caches", "off",
+                   "--record-store", str(self.root / "store"), "--resume-binding", str(self.root / "binding.json"), *extra]
+        completed = subprocess.run(command, cwd=self.tree, capture_output=True, text=True, timeout=300,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", self.marker_name: str(self.marker)})
+        return completed, json.loads((self.root / out / "unit-manifest.json").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def executed(manifest: dict) -> list[str]:
+        return sorted(unit["unit_id"] for unit in manifest["units"] if unit["disposition"] == "executed")
+
+    def test_the_two_layers_end_to_end(self) -> None:
+        store = ur.RecordStore(self.root / "store")
+        first, manifest = self.run_gates(eg.plan_gates(self.tree, profile="regression", launcher=[]))
+        self.assertEqual(first.returncode, 1, first.stderr[-1500:])
+        self.assertEqual([unit["unit_id"] for unit in manifest["units"] if not unit["passed"]], ["test_claude_big"])
+        # 第一层：修好（外部标记出现），同提交重跑——只跑失败的那一个，其余五个沿用。
+        self.marker.write_text("fixed", encoding="utf-8")
+        second, manifest = self.run_gates(eg.plan_gates(self.tree, profile="regression", launcher=[]), "--resume-from", "auto")
+        self.assertEqual(second.returncode, 0, second.stderr[-1500:])
+        self.assertEqual(self.executed(manifest), ["test_claude_big"])
+        self.assertEqual((manifest["resume"]["status"], manifest["resume"]["reused"], manifest["mode"]), ("applied", 4, "full-set-pass"))
+        self.assertEqual(ur.verify_manifest(manifest, store=store), [])
+        # 第二层：换了提交（只改文档）。先让上一轮的失败再现：把标记删掉，在新提交上跑一遍全集（它失败），再换一次提交。
+        self.marker.unlink()
+        self.world.write("docs/notes.md", "说明（改）\n")
+        self.world.commit("改文档")
+        failing, manifest = self.run_gates(eg.plan_gates(self.tree, profile="regression", launcher=[]))
+        self.assertEqual(failing.returncode, 1)
+        self.marker.write_text("fixed", encoding="utf-8")
+        self.world.write("docs/notes.md", "说明（再改）\n")
+        head = self.world.commit("再改文档")
+        plan = eg.resume_plan(store.root, "regression", self.tree)
+        self.assertEqual((plan["layer"], plan["force_modules"]), (2, ["test_claude_big"]), plan)
+        self.assertNotEqual(plan["base_commit"], head)
+        # 没有强制并入：重模块 test_claude_big 不受文档改动影响，被跳过——上一轮它失败了，却没人再验证它。
+        plain = eg.plan_gates(self.tree, profile="regression", launcher=[], gate_scope="client-plan", select_base=plan["base_commit"])
+        self.assertEqual(plain["selection"]["modules"]["test_claude_big"], "skip")
+        # 强制并入：上一轮失败的模块照样重跑；其余（Codex 计划、廉价模块）本来就跑。
+        forced = eg.plan_gates(self.tree, profile="regression", launcher=[], gate_scope="client-plan", select_base=plan["base_commit"],
+                               force_modules=plan["force_modules"])
+        self.assertEqual(forced["selection"]["modules"]["test_claude_big"], "run")
+        third, manifest = self.run_gates(forced, "--resume-from", "auto")
+        self.assertEqual(third.returncode, 0, third.stderr[-1500:])
+        self.assertEqual(manifest["resume"]["status"], "no-source", "提交不同：第一层不沿用")
+        self.assertEqual(sorted(unit["unit_id"] for unit in manifest["units"]),
+                         ["capture:prerequisites", "test_ci_y", "test_claude_big", "test_claude_small", "test_codex_x"])
+        self.assertEqual(manifest["client_selection"]["force_modules"], ["test_claude_big"])
+        # 改归属表自己：选择器整轮回退全集（auto 的既有规则），强制并入也无从谈起。
+        self.world.data["cheap_core_seconds"] = 31
+        self.world.write_data()
+        self.world.commit("改归属表")
+        fallback = eg.plan_gates(self.tree, profile="regression", launcher=[])
+        eg.apply_gate_scope(fallback, self.tree, gates_wanted=("test-capture-tools",), gate_scope="auto", select_base=plan["base_commit"],
+                            select_client="codex", include_claude=False, audit_policy=None, input_scopes=(), recorded_bridge=None,
+                            discover=lambda _tree: {"test_ci_y", "test_claude_big", "test_claude_small", "test_codex_x"},
+                            force_modules=plan["force_modules"])
+        info = fallback["gate_scope_info"]
+        self.assertEqual((info["applied"], fallback["selection"]["scope"]), ("full", "full"), info)
+        self.assertEqual(set(fallback["selection"]["modules"].values()), {"run"}, "归属表在改动里：整轮全集")
+        self.assertIn("归属表或选择器本身在改动里", info["fallback_reason"])
+        fourth, manifest = self.run_gates(fallback, "--resume-from", "auto")
+        self.assertEqual(fourth.returncode, 0, fourth.stderr[-1500:])
+        self.assertEqual(len(manifest["units"]), 5, "回退全集：五个单元全在清单里")
 
 
 class RealTreeDiscoveryTests(unittest.TestCase):

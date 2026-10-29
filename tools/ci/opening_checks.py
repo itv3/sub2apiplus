@@ -221,9 +221,13 @@ CAPTURE_COMMAND = ["make", "test-capture-tools"]
 CAPTURE_MIN_SECONDS = 120.0
 TUI_RECEIPT_SCHEMA = "tui-prelaunch-receipt/v1"
 TUI_RECEIPT_NAME = "tui-prelaunch.json"
-# 必需的 TUI 场景（取驱动 ``client_launch_probe.TUI_SCENARIOS`` 里的场景名，测试核对都存在）：compact、ws-idle-close、daemon、guardian。
-# 另外三个（image-repeat-tui、search-repeat-tui、review-tui）可选，登记了就必须通过。
-REQUIRED_TUI_SCENARIOS = ("compact-tui", "ws-idle-close-tui", "daemon-tui", "guardian-tui")
+# 必需的 TUI 场景（取驱动 ``client_launch_probe.TUI_SCENARIOS`` 里的场景名，测试核对都存在）：compact、ws-idle-close、daemon、guardian，
+# 以及会话内改推理强度／换模型／压缩后续聊的四个步骤场景（effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws；
+# 其中 effort-update-http 的调用点带只走 HTTP 的 provider 配置序列，新版二进制若不认这些覆盖，在 2 小时门禁之后才会暴露）。
+# 另外四个（image-repeat-tui、search-repeat-tui、review-tui、effort-unsupported-ws）可选，登记了就必须通过。
+# 步骤场景只对目标版本支持 reasoning effort 更新的客户端有意义（驱动脚本按版本门限拒绝更旧的版本）。
+REQUIRED_TUI_SCENARIOS = ("compact-tui", "ws-idle-close-tui", "daemon-tui", "guardian-tui",
+                          "effort-update-ws", "effort-update-http", "model-switch-ws", "compact-continue-ws")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _UTC = "%Y-%m-%dT%H:%M:%SZ"

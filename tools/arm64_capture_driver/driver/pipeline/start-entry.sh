@@ -12,6 +12,10 @@
 #   SKIP_BGV_CHECK=1                  明知入口提交还没有 passed 的后台验证结论、仍要起跑（把 C4b 的 FAIL 降为 WARN；入口门禁本身会对该提交重跑全集）
 #   SKIP_CAPTURE_ACCOUNT_CHECK=1      明知采集账号／Key 还没就绪、仍要起跑（把 C6 的 FAIL 降为 WARN）。注意：账号与 Key 的 ID 会被建账本后的
 #                                     预检 plan 冻结进 Campaign 配置，事后更换要走后继 Campaign 的重绑，所以只有确认后面会用同一对 ID 才这样做。
+#   SKIP_CAPTURE_ACCOUNT_ON=1         本阶段有意不打开采集账号（起跑时不调用 capture-account-on.sh，账号保持现状；例如还没到 VC-5 的 #90 窗口、
+#                                     只想先把入口便宜检查与入口门禁跑完）。入口便宜检查里依赖账号在线的项（如 model-availability）要在
+#                                     opening-env.sh 里带理由跳过，留到账号打开的窗口再核。
+#   GO_CACHE_TMPFS_MIN_GIB=10         C10 入口门禁 Go 编译缓存在内存盘（tmpfs）上时要求的最小总容量，缺省 10 GiB。
 #
 # 对账号的唯一改动：起跑前调用 capture-account-on.sh 把采集账号打开（只改它的 status／schedulable，写 ${PREP}/logs/capture-account.log）；
 # 升级结束后由人执行 capture-account-off.sh 关回去。除此之外不改任何账号，不碰 sub2apiplus 容器配置，对库只做 SELECT。
@@ -35,7 +39,8 @@ CAP_EMAIL=${CAPTURE_USER_EMAIL:-capture-user@entry.invalid}
 MODE=${1:-start}
 case "${MODE}" in --check) MODE=check ;; --run) MODE=run ;; start) ;; *) echo "用法：start-entry.sh [--check]"; exit 2 ;; esac
 
-mkdir -p "${P}"
+# --check 承诺“不建任何东西”：状态目录只在真起跑（start／--run）时才建（此前无条件 mkdir，PIPE_PREP 没配对时会在默认位置留下空目录）
+[ "${MODE}" = check ] || mkdir -p "${P}"
 log() { echo "$(date -u +%FT%TZ) $*" >> "${STATUS}"; }
 disk() { df -h / | awk 'NR==2{print $5" 已用，可用 "$4}'; }
 
@@ -187,6 +192,12 @@ else
   fail "C9 读不出官方采集登录态访问令牌的剩余有效期（preflight-refresh.sh --remaining 失败）"
 fi
 
+# C10 入口门禁 Go 编译缓存的容量：缓存在 tmpfs 上时总容量要 ≥ ${GO_CACHE_TMPFS_MIN_GIB:-10} GiB（腾盘清掉 Go 缓存后冷启动全量重建 >4 GiB，写满即 ENOSPC）；在磁盘上则由 C5 管
+if GC_MSG=$(pl_check_go_cache_capacity "$(dirname "${D}")/entry-gates-work/go-build-cache" "${GO_CACHE_TMPFS_MIN_GIB:-10}"); then pass "C10 ${GC_MSG}"; else fail "C10 ${GC_MSG}"; fi
+
+# C11 本轮输入目录已准备：prepare-round-inputs.sh 的产物（P0 回退依据、基线画像）在位，漏跑会让入口便宜检查两项直接红
+if RI_MSG=$(pl_check_round_inputs "${RUNROOT}" "${D}" "${IN}" "${P0_ROLLBACK_EVIDENCE:-}"); then pass "C11 ${RI_MSG}"; else fail "C11 ${RI_MSG}"; fi
+
 echo "----"
 if [ "${FAILS}" -gt 0 ]; then echo "自检未通过：${FAILS} 项 FAIL，不起跑"; exit 1; fi
 if [ "${MODE}" = check ]; then echo "自检全部通过（--check 不起跑）"; exit 0; fi
@@ -204,7 +215,9 @@ if [ ! -s "${KEY_TMP}" ]; then rm -f "${KEY_TMP}"; echo "取不到 Key ${API_KEY
 chmod 600 "${KEY_TMP}" && mv -f "${KEY_TMP}" "${PROBE_KEY}"
 # 采集账号平时关闭，起跑前自动打开（capture-account-on.sh 幂等，动手前打印并写 ${PREP}/logs/capture-account.log）；打不开就不起跑。
 # 升级结束后必须执行 capture-account-off.sh 关回去——本脚本和运行体都不会替你关（VC-5 之后还要用它）。
-if [ -n "${CAP_ID}" ]; then
+if [ "${SKIP_CAPTURE_ACCOUNT_ON:-0}" = 1 ]; then
+  warn "SKIP_CAPTURE_ACCOUNT_ON=1：按要求本阶段不打开采集账号 ${CAP_ID}（账号保持现状）；依赖账号在线的入口检查项须在 opening-env.sh 里带理由跳过"
+elif [ -n "${CAP_ID}" ]; then
   if ! bash "${PIPE_HOME}/capture-account-on.sh"; then rm -f "${PROBE_KEY}"; echo "capture-account-on.sh 失败，不起跑（状态见 ${PREP}/logs/capture-account.log）"; exit 1; fi
   ON_STATE=$(DBQ "select status||'/'||schedulable from accounts where id = ${CAP_ID}" 2>&1 | head -1)
   if [ "${ON_STATE}" != "active/true" ]; then rm -f "${PROBE_KEY}"; echo "打开后采集账号状态是 ${ON_STATE}，不是 active/true，不起跑"; exit 1; fi
@@ -212,7 +225,7 @@ if [ -n "${CAP_ID}" ]; then
 else
   warn "本轮参数文件没有采集账号号，本脚本不负责打开账号"
 fi
-log "START 起跑脚本自检通过，提交 ${ENTRY_COMMIT:0:9}，账号 ${CAP_ID}／Key ${API_KEY_ID}，采集账号已打开，参数 ENTRY_ARGS=[${ENTRY_ARGS:-}]，SKIP_BGV_CHECK=${SKIP_BGV_CHECK:-0}"
+log "START 起跑脚本自检通过，提交 ${ENTRY_COMMIT:0:9}，账号 ${CAP_ID}／Key ${API_KEY_ID}，参数 ENTRY_ARGS=[${ENTRY_ARGS:-}]，SKIP_BGV_CHECK=${SKIP_BGV_CHECK:-0}，SKIP_CAPTURE_ACCOUNT_ON=${SKIP_CAPTURE_ACCOUNT_ON:-0}（为 1 时采集账号保持现状，否则已打开）"
 BEFORE=$(wc -l < "${STATUS}")
 ENTRY_ARGS="${ENTRY_ARGS:-}" setsid -f bash "${PIPE_HOME}/start-entry.sh" --run >> "${P}/entry-start.out" 2>&1 < /dev/null
 for _ in $(seq 1 30); do [ "$(wc -l < "${STATUS}")" -ge $(( BEFORE + 2 )) ] && break; sleep 1; done

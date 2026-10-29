@@ -2198,6 +2198,12 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         if other is not None and other.get("commit") == args.commit and other.get("deployments") == deployments:
             path, existing = target, other
     rerun = bool(getattr(args, "rerun_full_set", False))
+    resume_auto = getattr(args, "resume", "off") == "auto"
+    if resume_auto and (inherit_reference is not None or getattr(args, "audit_policy", None) is not None
+                        or any(full_set_paths[key] for key in ("full_set_context", "full_set_clock", "full_set_predecessor"))):
+        raise ValidationError("--resume auto 不能与逐单元承接、B-09 参数、读集合同同用（续跑沿用只用于重新执行全集）")
+    if resume_auto and existing is not None and effective_status(existing) in ("failed", "aborted", "superseded"):
+        rerun = True   # 同提交、同部署的上一次尝试没有通过：修好之后重新起跑，沿用它已通过的单元（保留旧终态到 history）
     # 带来源选项的跨提交后继：本提交、本部署还没有结论时，原结论就是来源（已在上面校验）；已有同提交同部署的上一次后继尝试时，
     # 仍按下面原有规则相对它续作（客户端、提交、部署、WORK、记录库、门禁与调度参数逐项不变）。
     if inherit_reference is not None and (existing is not None or source_info is None):
@@ -2294,6 +2300,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
                        **({"include_claude": True} if include_claude else {}))
         if select_base_origin is not None:
             payload["select_base_origin"] = select_base_origin   # 基点取自哪个已通过的结论（last-passed）；输入合同里登记的是解析出的具体提交
+    if resume_auto:
+        payload["resume"] = "auto"   # 不进输入合同：续跑只改变哪些单元被执行，不改变门禁的参数与范围
     if inherit_reference is not None:
         payload.update(mode="unit-inherit", unit_inherit_request=inherit_reference)
     if existing is not None:
@@ -2436,6 +2444,8 @@ def run(result: Path) -> int:
             argv += ["--select-base", str(payload["select_base"])]
         if payload.get("include_claude"):
             argv += ["--include-claude"]
+    if payload.get("resume") == "auto" and mode == "re-execute" and not payload.get("audit_policy"):
+        argv += ["--resume-from", "auto", "--resume-series", "bgv"]   # 修好接着跑：入口门禁按同提交沿用已通过的单元
     argv += [payload["bundle"], payload["branch"], payload["commit"]]
     received: list[int] = []
 
@@ -2534,6 +2544,9 @@ def run(result: Path) -> int:
         status, reason = "passed", None
     else:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
+    if isinstance((summary or {}).get("resume"), Mapping):
+        # 续跑沿用：来源运行、沿用与重跑个数、环境豁免登记进结论（完整出处在运行清单的 resume 块里）。
+        current = {**current, "resume_result": dict(summary["resume"])}
     echoed = (summary or {}).get("client_selection")
     if isinstance(echoed, Mapping):
         # 按客户端筛选（优化第 9 项）：入口门禁总摘要回显的筛选摘要登记进结论——这份结论是哪个客户端计划的子集，防串用据此判定。
@@ -2949,6 +2962,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                               "或写 last-passed：取本运行根（同一 Campaign 这一轮）里上一个已通过的后台验证的提交（须是新提交的祖先；找不到可用的就拒绝），"
                               "同一 Campaign 内修一次几个文件时用它把验证压到只看这一小段改动（Codex 升级工具优化第 2 项）")
     p_start.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
+    p_start.add_argument("--resume", choices=("auto", "off"), default="off",
+                         help="修好接着跑：auto 时同提交、同部署上一次尝试失败／中止后，重新起跑会沿用上一轮已通过且记录完整的单元，只重跑失败、未完成的单元"
+                              "（提交、部署绑定、执行器、调度策略、环境指纹都相同才沿用，否则整轮重跑并写明原因）；换了提交时（第二层）由入口门禁取上一轮全集运行的提交作基点、"
+                              "强制重跑沿途失败的模块（只在 auto 筛选下起作用）。缺省 off（驱动入口 background-validate.sh 缺省带 auto）；"
+                              "不与逐单元承接、B-09 参数、读集合同同用")
     p_pre = sub.add_parser("preflight", help="只做起跑前置检查，不起后台验证（退出码 0 通过、3 不通过）")
     p_pre.add_argument("--runroot", type=Path, required=True)
     p_pre.add_argument("--data-root", type=Path, required=True)

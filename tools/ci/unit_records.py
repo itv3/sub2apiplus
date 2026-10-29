@@ -1175,6 +1175,250 @@ def evaluate(store: RecordStore, current: Current, facts: RunFacts) -> Decision:
 
 
 # ---------------------------------------------------------------------------
+# 同提交续跑沿用（resume，"修好接着跑"第一层）
+#
+# 做什么：同一个提交、同一次部署（调用方给的绑定）、同一个执行器、调度策略与环境指纹下，上一轮同一门禁（系列）里已通过且记录完整的
+# 单元直接沿用，只重跑失败、未完成、记录不完整的单元。提交相同且测试树干净，输入逐字节相同，所以不需要读集审计，也不走
+# B-09／B-10 的批准链；沿用组成的结论在清单里仍写成“全集通过”形态（承接项的 basis 与 B-09 同形），已发布的受管校验器（P0 v2 证据、
+# pre-A3 认证）不改一个字就能重验它。
+#
+# 与 check_record 的区别（有意的）：check_record 为“跨提交承接”服务，要求记录标明可承接；续跑的前提是“同提交”，所以后端 Go 测试、
+# lint 这类“设计上不可承接”的命令单元只要上一轮在同一提交上真实通过，也可以沿用。但下面这些永不沿用：失败的、补跑才通过的（抖动后的
+# 通过）、观察到失败的、整机预约中止的、诊断执行的、自摘要不符的、日志缺失的、规格／输入／策略／执行器／环境任何一项对不上的、超过期限的。
+#
+# 出处链：每条沿用记录追到它自己的原运行清单（必须已发布、自摘要相符、把这条记录列为该单元的正式执行），原运行清单登记的提交与绑定必须等于
+# 本次的提交与绑定（跨提交的第一层永不生效）。沿用的来源运行、提交、绑定、操作员声明的环境豁免都写进本次清单的 resume 块，
+# verify_manifest 与清单发布前的自检按同一函数重验。
+#
+# 环境豁免：环境指纹是默认的硬条件。“不影响已通过单元正确性的环境修复”（例如换了缓存目录）要操作员显式声明理由并逐项点名变化的指纹条目；
+# 点名之外的任何环境差异仍然拒绝沿用。豁免写进清单，已发布的 P0 v2 证据不接受带豁免的清单（入口导出时扣证据，要求无豁免全集重跑）。
+# ---------------------------------------------------------------------------
+
+RESUME_SCHEMA = "unit-resume/v1"
+RESUME_BASIS_SCHEMA = "unit-resume-basis/v1"
+RESUME_MAX_AGE_HOURS = 24.0
+RESUME_SCAN_LIMIT = 80
+RESUME_MATCH_LIMIT = 16
+_RESUME_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+def resume_basis(*, commit: str, series: str, profile: Any, gates: Iterable[str], planned: Iterable[str], binding: Mapping[str, Any],
+                 selection_sha256: str | None = None) -> dict[str, Any]:
+    """一次运行登记在清单里的“续跑出处”：提交、系列（哪一道门禁）、组合、门禁项、规划单元集合的摘要、调用方给的部署绑定。
+    政策、环境、执行器不在这里：它们本来就在清单顶层与每条记录里，逐条核对。"""
+
+    body = {"schema_version": RESUME_BASIS_SCHEMA, "commit": commit, "series": series, "profile": profile,
+            "gates": sorted(str(gate) for gate in gates), "planned_sha256": sha256_json(sorted(str(unit) for unit in planned)),
+            "binding": dict(binding), "selection_sha256": selection_sha256}
+    return seal(body, "basis_sha256")
+
+
+def resume_basis_ok(basis: Any) -> bool:
+    return (isinstance(basis, Mapping) and basis.get("schema_version") == RESUME_BASIS_SCHEMA and seal_ok(basis, "basis_sha256")
+            and isinstance(basis.get("commit"), str) and _RESUME_COMMIT.fullmatch(basis["commit"]) is not None
+            and isinstance(basis.get("series"), str) and isinstance(basis.get("binding"), Mapping))
+
+
+def resume_runs(store: RecordStore, series: str, *, limit: int = RESUME_SCAN_LIMIT, matches: int = RESUME_MATCH_LIMIT) -> list[dict[str, Any]]:
+    """记录库里属于这道门禁（系列）的已发布运行清单，完成时间新的在前。按文件修改时间从新到旧最多扫 ``limit`` 份，凑够 ``matches`` 份本系列的就停
+    （每份清单一两兆，不必全读）；没有登记续跑出处的老清单不算。"""
+
+    runs = store.root / "runs"
+    if not runs.is_dir():
+        return []
+    files = []
+    for path in runs.glob("*.json"):
+        try:
+            files.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    found = []
+    for _mtime, path in sorted(files, reverse=True)[:limit]:
+        manifest = _read_json(path)
+        if (manifest is None or manifest.get("schema_version") != MANIFEST_SCHEMA or not seal_ok(manifest, "manifest_sha256")
+                or Path(path).stem != manifest.get("run_id") or not resume_basis_ok(manifest.get("resume_basis"))
+                or manifest["resume_basis"]["series"] != series):
+            continue
+        found.append(manifest)
+        if len(found) >= matches:
+            break
+    return sorted(found, key=lambda item: (str(item.get("completed_at_utc")), str(item.get("run_id"))), reverse=True)
+
+
+def resume_record_problems(store: RecordStore, record_path: Path, record: dict[str, Any] | None, *, unit_id: str, unit_type: str,
+                           spec_sha256: str, inputs_sha256: str | None, facts: RunFacts, commit: str, binding: Mapping[str, Any],
+                           max_age_hours: float, waive_names: Iterable[str] = (),
+                           inputs: Sequence[Mapping[str, Any]] | None = None) -> list[str]:
+    """一条记录能不能在“同提交续跑”里沿用的全部问题（空＝可以沿用）。规则见本节说明；调用方是执行器的决策与清单自检（verify_manifest），
+    两处用同一个函数，所以清单发布前的自检和事后重验的口径相同。"""
+
+    if record is None:
+        return ["记录读不出来"]
+    problems: list[str] = []
+    if record.get("schema_version") != RECORD_SCHEMA:
+        problems.append("记录格式版本不对")
+    if not seal_ok(record, "record_sha256") or Path(record_path).stem != record.get("record_sha256"):
+        problems.append("记录自摘要不符（被改过）")
+    if record.get("kind") != "formal":
+        problems.append("诊断执行的记录永不沿用")
+    if record.get("unit_id") != unit_id or record.get("unit_type") != unit_type:
+        problems.append("单元 ID 或类型不符")
+    passed, why = derived_pass(record)
+    if not passed:
+        problems.append(f"该次执行没通过（{why}）")
+    if record.get("attempt") == "retry" or record.get("retry_of"):
+        problems.append("补跑才通过的记录（抖动后的通过）不沿用")
+    if record.get("observed_failure") or record.get("reservation_interruption"):
+        problems.append("记录带观察到的失败或整机预约中止，不沿用")
+    if record.get("spec_sha256") != spec_sha256:
+        problems.append("单元规格变了（测试集合、命令、环境、额度、独占或超时）")
+    if record.get("inputs_sha256") != inputs_sha256:
+        changed = _diff_names(record.get("inputs"), inputs) if inputs is not None else []
+        problems.append(f"输入变了：{'、'.join(changed[:8]) or '（声明不同）'}{' 等' if len(changed) > 8 else ''}")
+    if record.get("policy_sha256") != facts.policy_sha256:
+        problems.append("调度策略版本变了")
+    if record.get("environment_sha256") != facts.environment_sha256:
+        changed = _diff_names(record.get("environment"), facts.environment)
+        waived = {str(name) for name in waive_names}
+        if not changed or not set(changed) <= waived:
+            unwaived = [name for name in changed if name not in waived]
+            problems.append(f"环境变了：{'、'.join((unwaived or changed)[:8]) or '（明细不同）'}{' 等' if len(unwaived or changed) > 8 else ''}")
+    executor = record.get("executor") if isinstance(record.get("executor"), Mapping) else {}
+    if executor.get("sha256") != facts.executor.get("sha256"):
+        old, new = executor.get("files") or {}, facts.executor.get("files") or {}
+        changed = sorted(name for name in set(old) | set(new) if old.get(name) != new.get(name))
+        problems.append(f"执行器变了：{'、'.join(changed) or '（版本不同）'}")
+    completed = parse_utc(record.get("completed_at_utc"))
+    if completed is None:
+        problems.append("完成时间不可读")
+    else:
+        age_hours = (facts.now - completed) / 3600
+        if age_hours > max_age_hours:
+            problems.append(f"超过续跑期限（{_span(age_hours)}前完成，期限 {_span(max_age_hours)}）")
+        elif age_hours < -0.1:
+            problems.append("完成时间在未来")
+    run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
+    origin = store.manifest(str(run.get("run_id")))
+    if origin is None or not seal_ok(origin, "manifest_sha256") or origin.get("schema_version") != MANIFEST_SCHEMA:
+        problems.append("原运行的清单缺失或自摘要不符（那次运行没有正常结束或清单被改过）")
+    else:
+        if not _listed_as_formal(origin, unit_id, str(record.get("record_sha256"))):
+            problems.append("原运行的清单没有把这条记录列为该单元的正式执行")
+        origin_basis = origin.get("resume_basis")
+        if not resume_basis_ok(origin_basis):
+            problems.append("原运行的清单没有登记续跑出处（提交与绑定），无法证明它与本次是同一提交")
+        elif origin_basis["commit"] != commit:
+            problems.append(f"原运行的提交 {origin_basis['commit'][:12]} 不是本次的 {commit[:12]}（第一层只在同一提交内沿用）")
+        elif dict(origin_basis["binding"]) != dict(binding):
+            problems.append("原运行绑定的部署／门禁绑定与本次不同")
+    log = record.get("log") if isinstance(record.get("log"), Mapping) else {}
+    digest = str(log.get("sha256") or "")
+    stored = store.log_path(digest) if re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    if stored is None or not stored.is_file() or file_sha256(stored) != digest:
+        problems.append("日志不在记录库里或摘要不符")
+    return problems
+
+
+def resume_source(store: RecordStore, basis: Mapping[str, Any], *, run_id: str | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+    """续跑的来源运行：显式给了运行 ID 就只认它，否则取这道门禁（系列）里最新的同提交运行。返回（来源清单，原因）；没有可用来源时清单是 None，
+    原因写明为什么（提交不同、绑定不同、组合不同……），调用方整次重跑并把原因记进清单，不静默。"""
+
+    reasons: list[str] = []
+    if run_id is not None:
+        manifest = store.manifest(run_id)
+        candidates = [manifest] if manifest is not None and seal_ok(manifest, "manifest_sha256") and resume_basis_ok(manifest.get("resume_basis")) else []
+        if not candidates:
+            return None, [f"指定的来源运行 {run_id} 不在记录库里、自摘要不符或没有登记续跑出处"]
+        if candidates[0]["resume_basis"]["series"] != basis["series"]:
+            return None, [f"指定的来源运行属于另一道门禁（{candidates[0]['resume_basis']['series']}），本次是 {basis['series']}"]
+    else:
+        candidates = resume_runs(store, str(basis["series"]))
+        if not candidates:
+            return None, ["记录库里没有这道门禁的上一轮运行（没有登记过续跑出处）"]
+    same_commit = [item for item in candidates if item["resume_basis"]["commit"] == basis["commit"]]
+    if not same_commit:
+        newest = candidates[0]["resume_basis"]["commit"]
+        return None, [f"这道门禁最近一轮的提交是 {newest[:12]}，不是本次的 {basis['commit'][:12]}：提交不同走第二层（按依赖补跑），第一层不沿用"]
+    source = same_commit[0]
+    old = source["resume_basis"]
+    if old["profile"] != basis["profile"]:
+        reasons.append(f"门禁组合不同（上一轮 {old['profile']}，本次 {basis['profile']}）")
+    if dict(old["binding"]) != dict(basis["binding"]):
+        keys = sorted(key for key in set(old["binding"]) | set(basis["binding"]) if old["binding"].get(key) != basis["binding"].get(key))
+        reasons.append(f"部署／门禁绑定变了：{'、'.join(keys[:8])}")
+    if reasons:
+        return None, reasons
+    return source, []
+
+
+def resume_decide(store: RecordStore, source: Mapping[str, Any], basis: Mapping[str, Any], currents: Mapping[str, Current], facts: RunFacts, *,
+                  max_age_hours: float, waive_names: Iterable[str] = ()) -> dict[str, Decision]:
+    """给本次的每个单元找上一轮（来源清单）里可沿用的记录：找到并过了全部核对的承接，其余写明重跑的原因。"""
+
+    entries = {str(item.get("unit_id")): item for item in source.get("units") or [] if isinstance(item, Mapping)}
+    waived = tuple(waive_names)
+    decisions: dict[str, Decision] = {}
+    for unit_id, current in currents.items():
+        entry = entries.get(unit_id)
+        if entry is None:
+            decisions[unit_id] = Decision(reasons=["上一轮没有这个单元"])
+            continue
+        if entry.get("passed") is not True or not entry.get("record_sha256") or entry.get("disposition") not in ("executed", "inherited"):
+            decisions[unit_id] = Decision(reasons=["上一轮这个单元没通过、没执行完或没有执行记录"])
+            continue
+        path = store.record_path(unit_id, str(entry["record_sha256"]))
+        record = _read_json(path)
+        problems = resume_record_problems(store, path, record, unit_id=unit_id, unit_type=current.unit_type, spec_sha256=current.spec_sha256,
+                                          inputs_sha256=current.inputs_sha256, facts=facts, commit=str(basis["commit"]), binding=basis["binding"],
+                                          max_age_hours=max_age_hours, waive_names=waived, inputs=current.inputs)
+        decisions[unit_id] = Decision(reasons=[f"上一轮记录不能沿用：{'；'.join(problems)}"]) if problems else Decision(record=record, record_path=path)
+    return decisions
+
+
+def resume_failed_units(source: Mapping[str, Any]) -> list[str]:
+    """上一轮没通过、没执行完的单元（第二层补跑要把它们对应的模块强制并入）。"""
+
+    return sorted(str(item.get("unit_id")) for item in source.get("units") or []
+                  if isinstance(item, Mapping) and (item.get("passed") is not True or item.get("disposition") not in ("executed", "inherited")))
+
+
+def resume_manifest_problems(manifest: Mapping[str, Any], store: RecordStore | None) -> list[str]:
+    """带 resume 块的清单自身的问题（块的形状、出处与计数）；每条承接项的记录核对在 verify_manifest 里按 resume_record_problems 做。"""
+
+    problems: list[str] = []
+    resume, basis = manifest.get("resume"), manifest.get("resume_basis")
+    if not isinstance(resume, Mapping) or resume.get("schema_version") != RESUME_SCHEMA or resume.get("layer") != 1:
+        return ["续跑块的格式版本或层级不对"]
+    entries = [entry for entry in manifest.get("units") or [] if isinstance(entry, Mapping)]
+    inherited = sum(1 for entry in entries if entry.get("disposition") == "inherited")
+    if not resume_basis_ok(basis):
+        # 测试树不干净等原因拒绝续跑时没有出处可登记：只允许“拒绝且一个单元都没沿用”的清单带续跑块（把拒绝的原因留在清单里）。
+        if resume.get("status") == "refused" and inherited == 0 and resume.get("reused") == 0 and basis is None:
+            return []
+        return ["续跑清单没有合法的续跑出处（resume_basis）"]
+    if resume.get("reused") != inherited:
+        problems.append(f"续跑块登记沿用 {resume.get('reused')} 个，清单里承接项是 {inherited} 个")
+    if inherited and manifest.get("mode") != FULL_SET_PASS:
+        problems.append("续跑沿用了单元，清单模式必须是全集通过形态")
+    if inherited and not isinstance(resume.get("source"), Mapping):
+        problems.append("沿用了单元却没有登记来源运行")
+    source = resume.get("source")
+    if isinstance(source, Mapping) and store is not None:
+        origin = store.manifest(str(source.get("run_id")))
+        if origin is None or not seal_ok(origin, "manifest_sha256") or origin.get("manifest_sha256") != source.get("manifest_sha256"):
+            problems.append("续跑来源运行的清单不在记录库里，或摘要与登记的不符")
+        elif not resume_basis_ok(origin.get("resume_basis")) or origin["resume_basis"]["commit"] != basis["commit"]:
+            problems.append("续跑来源运行的提交不是本次的提交")
+        elif origin["resume_basis"]["series"] != basis["series"]:
+            problems.append("续跑来源运行属于另一道门禁")
+    waiver = resume.get("environment_waiver")
+    if waiver is not None and (not isinstance(waiver, Mapping) or not str(waiver.get("reason") or "").strip()
+                               or not isinstance(waiver.get("names"), list) or not waiver["names"]):
+        problems.append("环境豁免必须写明理由并逐项点名变化的指纹条目")
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # 清单与自检
 # ---------------------------------------------------------------------------
 
@@ -1214,6 +1458,13 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
                      max_age_hours=float(manifest.get("inheritance_max_age_hours") or 0),
                      now=parse_utc(manifest.get("decided_at_utc")) or 0.0, historical_read_audit=historical,
                      require_read_audit=mode == UNIT_INHERIT, allow_partial_origin=mode == UNIT_INHERIT)
+    # 同提交续跑（第一层）：带 resume 块的清单，承接项按 resume_record_problems 核对（同提交、同绑定，不要求记录标明可承接）。
+    resume = manifest.get("resume") if isinstance(manifest.get("resume"), Mapping) else None
+    resume_waive: list[str] = []
+    if resume is not None:
+        problems.extend(resume_manifest_problems(manifest, store))
+        resume_waive = [str(name) for name in ((resume.get("environment_waiver") or {}).get("names") or [])]
+    resume_basis_doc = manifest.get("resume_basis") if resume_basis_ok(manifest.get("resume_basis")) else None
     if facts.environment_sha256 != entries_sha256(facts.environment):
         problems.append("清单的环境指纹与明细不符")
     if facts.max_age_hours > MAX_AGE_HOURS:
@@ -1263,7 +1514,14 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
                     check = entry["inherit_check"]
                     current.inherit_repo_root, current.inherit_inputs_sha256 = check["repo_root"], check["inherit_inputs_sha256"]
                     current.inherit_data_root = check["data_root"]
-                reasons = [shape] if shape else check_record(store, record_path, record, current, facts)
+                if resume is not None:
+                    reasons = (["续跑清单没有合法的续跑出处，承接项无从核对"] if resume_basis_doc is None else
+                               resume_record_problems(store, record_path, record, unit_id=unit_id, unit_type=str(record.get("unit_type")),
+                                                      spec_sha256=str(entry.get("spec_sha256")), inputs_sha256=entry.get("inputs_sha256"),
+                                                      facts=facts, commit=resume_basis_doc["commit"], binding=resume_basis_doc["binding"],
+                                                      max_age_hours=facts.max_age_hours, waive_names=resume_waive))
+                else:
+                    reasons = [shape] if shape else check_record(store, record_path, record, current, facts)
                 if run.get("run_id") == manifest.get("run_id"):
                     reasons.append("承接项的记录来自本次运行")
                 if reasons:
@@ -3231,8 +3489,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     root = args.store or (Path(manifest["record_store"]) if manifest.get("record_store") else None)
     problems = verify_manifest(manifest, store=RecordStore(root) if root else None)
+    resume = manifest.get("resume") if isinstance(manifest.get("resume"), dict) else None
     print(json.dumps({"status": "passed" if not problems else "failed", "mode": manifest.get("mode"), "run_id": manifest.get("run_id"),
-                      "units": len(manifest.get("units") or []), "problems": problems}, ensure_ascii=False, indent=1))
+                      "units": len(manifest.get("units") or []), "problems": problems,
+                      # 同提交续跑的清单：来源运行、提交、沿用与重跑个数、环境豁免一并打印，重放核对时一眼看到出处。
+                      **({"resume": {key: resume.get(key) for key in ("status", "layer", "reused", "rerun", "source", "environment_waiver")}} if resume else {})},
+                     ensure_ascii=False, indent=1))
     return 0 if not problems else 1
 
 

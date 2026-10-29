@@ -62,7 +62,9 @@ for image in manifest["candidate_images"]:
 def classify_running(running_id):
     """运行镜像归类：final＝VC-6 最终镜像；release＝VC6_RELEASE_IMAGE 指定的发布镜像（本机 ID 必须等于容器在跑的 ID）；否则 unknown。"""
     if running_id == PRODUCTION:
-        return "final", ENV.get("VC6_RELEASE_IMAGE", "") or "", running_id
+        # 容器仍跑最终镜像时没有“发布镜像引用”这回事：即使环境里设了 VC6_RELEASE_IMAGE 也不能把它写进执行证据
+        # （running_image_kind=final 却 running_image_ref=<发布镜像引用> 与现实不符）。
+        return "final", "", running_id
     ref = ENV.get("VC6_RELEASE_IMAGE", "")
     if ref:
         out = docker(["image", "inspect", ref, "--format", "{{.Id}}"])

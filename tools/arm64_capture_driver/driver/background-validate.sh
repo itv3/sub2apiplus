@@ -28,6 +28,11 @@
 #       上一个通过的结论必须是 passed 且筛选印证无问题；归属表或选择器自己在这段改动里时，入口门禁照旧整轮回退全集（auto 的既有规则）。
 #       --gate-scope full 显式要全集（本验证与同提交已有 auto 结论的输入合同不同，须先 stop 再重新 start）；Claude 轮次（CLIENT 非 codex）不带 auto；
 #       与逐单元承接、B-09 全集收据、读集合同同用时 auto 在起跑就按全集处理（start 的输出里写明原因）。
+#       --resume auto|off（修好接着跑，缺省 auto；--no-resume 即 off）：同提交、同部署上一次尝试 failed／aborted／superseded 后重新 start，会沿用上一轮已通过且记录完整的单元，只重跑
+#       失败、未完成的单元——提交、部署绑定、执行器、调度策略、环境指纹都相同才沿用（环境修复不影响已通过单元时可在 entry-gates.sh 的 --resume-waive-env* 显式豁免并记入清单），
+#       否则整轮重跑并在结论 resume_result 写明原因；沿用的来源运行、提交、个数写进结论的 resume_result 与运行清单的 resume 块。失败的、补跑才通过的单元记录永不沿用。
+#       换了提交时（第二层）：缺省的 auto 筛选由入口门禁取这道门禁里最近一次全集运行的提交作基点（须是新提交的祖先；--select-base 显式给的优先），并把沿途失败的模块强制并入。
+#       不与逐单元承接（--unit-inherit-request）、B-09 参数、读集合同同用。
 #   reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]
 #       同树重部署后沿用已通过的测试结论（优化第 5 项）：来源是同一提交的通过结论（带沿用绑定）；在来源的工作目录里用 entry-gates.sh --bind-only
 #       现算新部署上的绑定（含部署后核对，不跑测试），工具身份五摘要、提交、门禁集合、执行器、调度策略、输入清单、平台环境逐项相同且未过有效期（24 小时）
@@ -62,15 +67,17 @@ case "$command" in
     extra=(--then-dryrun)
     preflight_args=(--preflight on)
     reuse_args=(--reuse auto)
+    # 修好接着跑（Codex 升级工具优化）：缺省 --resume auto——同提交、同部署上一次尝试失败／中止后重新起跑会沿用已通过的单元；--no-resume 关闭。
+    resume_args=(--resume auto)
     # 按客户端筛选（优化第 9 项）：Codex 缺省 --gate-scope auto，操作者自己给了 --gate-scope（含 =形式）就不再带；Claude 轮次不带，保持全集。
     scope_args=(); if [ "$CT_CLIENT" = codex ]; then scope_args=(--gate-scope auto); fi
     rest=()
     for arg in "$@"; do
       if [[ "$arg" == --gate-scope || "$arg" == --gate-scope=* ]]; then scope_args=(); fi
-      if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(--preflight off); elif [ "$arg" = --no-reuse ]; then reuse_args=(--reuse off); else rest+=("$arg"); fi
+      if [ "$arg" = --no-dryrun ]; then extra=(); elif [ "$arg" = --no-preflight ]; then preflight_args=(--preflight off); elif [ "$arg" = --no-reuse ]; then reuse_args=(--reuse off); elif [ "$arg" = --no-resume ]; then resume_args=(--resume off); elif [[ "$arg" == --resume || "$arg" == --resume=* ]]; then resume_args=(); rest+=("$arg"); else rest+=("$arg"); fi
     done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
-      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${scope_args[@]+"${scope_args[@]}"} ${rest[@]+"${rest[@]}"} \
+      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${preflight_args[@]+"${preflight_args[@]}"} ${reuse_args[@]+"${reuse_args[@]}"} ${resume_args[@]+"${resume_args[@]}"} ${scope_args[@]+"${scope_args[@]}"} ${rest[@]+"${rest[@]}"} \
       ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   reuse)
     if [ "$#" -lt 3 ]; then echo "用法：bash background-validate.sh reuse <bundle 绝对路径> <分支> <40 位提交> [--no-dryrun]" >&2; exit 2; fi

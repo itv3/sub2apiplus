@@ -174,5 +174,35 @@ class PriorCandidateReplayRunnerTest(unittest.TestCase):
         self.assertEqual((labels.name, profile.name), ("codex_upgrade_evidence_labels_0_10_0.json", "candidate_rule_expectations_0_10_0.json"))
 
 
+class TuiCallsiteReplayHistoryTest(unittest.TestCase):
+    """真跑一次 ``replay-history``：TUI 调用点探针的历史重放必须在**当前树**上“复现”，而不是“探针出错”。
+
+    上一版（0.165）验收发现：反向补丁只还原了当时已有的调用点，之后新增的会话内步骤场景（effort-update-ws 等）仍带
+    ``--no-daemon``、而驱动的该选项已被反向补丁去掉，驱动没产出命令行，探针出错——门禁绿（执行器单测不跑 replay-history）。
+    以后新增 TUI 调用点而忘了更新 ``tui-no-daemon-callsites.patch``，这条测试会红。
+    """
+
+    PROBE = "tui-callsite-flags-vs-binary-selfcheck"
+
+    def test_replay_history_reproduces_the_no_daemon_defect_on_the_current_tree(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out").mkdir()
+            (root / "work").mkdir()
+            done = subprocess.run(
+                [sys.executable, "-B", "-m", "tools.official_client_capture.tests.chain_rehearsal", "replay-history", "--tree", str(REPO),
+                 "--out", str(root / "out"), "--work", str(root / "work"), "--probe", self.PROBE],
+                capture_output=True, text=True, cwd=REPO, timeout=600, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            report = json.loads((root / "out" / "replay-history.json").read_text(encoding="utf-8"))
+        rows = {row["id"]: row for row in report["rows"]}
+        self.assertEqual(set(rows), {self.PROBE}, done.stdout + done.stderr)
+        row = rows[self.PROBE]
+        self.assertEqual(row["label"], "复现", f"{row.get('detail')}\n{done.stdout[-800:]}")
+        # 新增的会话内步骤场景（HTTP 无预热 provider 的调用点）也要被放回缺陷后的二进制拒收到
+        self.assertIn("effort-update-http", json.dumps(row, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     unittest.main()

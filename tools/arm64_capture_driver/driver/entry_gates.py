@@ -283,6 +283,9 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "entry": MAKE_TEST_GATES + FULL_GATES_EXTRA + ("pre-a3",),
     # 单独签 pre-A3（驱动 lib.sh 与编排器的单独路径，E3-02）：只有场景单元，同样写记录、可承接。
     "pre-a3": ("pre-a3",),
+    # VC-4 实现门禁（候选链 DC 上的 make check-egress-spec 与 make test，经统一执行器一次运行）：门禁项就是 make test 的组成
+    # （其中 check-egress-spec 门禁项即 make check-egress-spec 本身）；独立成组合是为了让它自成一个续跑系列、记录里看得出出处。
+    "vc4": MAKE_TEST_GATES,
     # 定向回归（E4-01，修复轮部署前提）：只含采集工具测试组。全集通过下执行器只执行静态依赖闭包里有改动文件的测试单元，
     # 其余承接记录库里的有效记录——这就是「按改动文件选出」。改动落在闭包选不出的地方（后端、前端、文档、出站规格）时
     # 用 --with-gates 人工补门禁项；全量门禁由后台验证（full-gates 组合）跑。
@@ -731,6 +734,7 @@ def plan_gates(
     select_base: str | None = None,
     select_client: str = "codex",
     include_claude: bool = False,
+    force_modules: Sequence[str] = (),
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -892,7 +896,8 @@ def plan_gates(
     apply_declared_inputs(manifest, tree, launcher=launcher, input_scopes=input_scopes, registry_path=declared_registry)
     apply_input_scopes(manifest, input_scopes)
     apply_gate_scope(manifest, tree, gates_wanted=gates_wanted, gate_scope=gate_scope, select_base=select_base, select_client=select_client,
-                     include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes, recorded_bridge=recorded_bridge)
+                     include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes, recorded_bridge=recorded_bridge,
+                     force_modules=force_modules)
     return manifest
 
 
@@ -916,7 +921,8 @@ def executor_modules(tree: Path) -> set[str]:
 
 
 def _apply_auto_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], select_base: str | None, select_client: str,
-                      include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any, discover: Any) -> None:
+                      include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any, discover: Any,
+                      force_modules: Sequence[str] = ()) -> None:
     """``auto``：能按客户端筛选就筛选，任何一步不行就回退全集——选择器抛错（归属数据坏、基点不对、树不干净、客户端未启用、找不到发版 tag）、
     归属表选择的模块集合与执行器 discover 的全集身份对不上、组合或选项与筛选互斥。回退不是错误：清单不带 ``selection``，原因与基点来源
     写进 ``gate_scope_info``（请求、实际范围、基点及来源、回退原因），由 ``plan`` 打印、入口门禁总摘要回显。基点来源只有两种：显式给出，
@@ -935,7 +941,7 @@ def _apply_auto_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Seq
         else:
             (base, tag), source = ownership.latest_release_base(tree), "latest-release-tag"
         info.update(base_commit=base, base_source=source, base_tag=tag)
-        selection = ownership.select(tree, client=select_client, base=base, include_claude=include_claude)
+        selection = ownership.select(tree, client=select_client, base=base, include_claude=include_claude, force_modules=force_modules)
         found = (discover or executor_modules)(tree)
         modules = set(selection["modules"])
         if found != modules:
@@ -951,7 +957,7 @@ def _apply_auto_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Seq
 
 def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], gate_scope: str, select_base: str | None,
                      select_client: str, include_claude: bool, audit_policy: Any, input_scopes: Sequence[Any], recorded_bridge: Any,
-                     discover: Any = None) -> None:
+                     discover: Any = None, force_modules: Sequence[str] = ()) -> None:
     """按客户端筛选测试单元（优化第 9 项）：``gate_scope=client-plan`` 时往清单加 ``selection`` 块（谁跑、谁跳过、为什么并入；
     由归属表选择器按基点..候选提交的改动算出），执行器据此只保留标 run 的测试模块；命令单元与 pre-A3 场景单元不受影响。
 
@@ -968,7 +974,7 @@ def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequ
         # 升级流程的缺省：基点缺省取最近的发版 tag，任何失败都回退全集（见 _apply_auto_scope）。
         _apply_auto_scope(manifest, tree, gates_wanted=gates_wanted, select_base=select_base, select_client=select_client,
                           include_claude=include_claude, audit_policy=audit_policy, input_scopes=input_scopes,
-                          recorded_bridge=recorded_bridge, discover=discover)
+                          recorded_bridge=recorded_bridge, discover=discover, force_modules=force_modules)
         return
     if "test-capture-tools" not in gates_wanted:
         raise ValueError("按客户端筛选只作用于采集工具测试组：门禁组合里没有 test-capture-tools")
@@ -976,7 +982,70 @@ def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequ
         raise ValueError("--gate-scope client-plan 必须同时给 --select-base（最近一次发版的 40 位提交；工具不自动猜基点）")
     if audit_policy is not None or input_scopes or recorded_bridge is not None:
         raise ValueError("按客户端筛选不能与读集合同、收窄提案、固定79接线同用（这些走全集）")
-    manifest["selection"] = _ownership().select(tree, client=select_client, base=select_base, include_claude=include_claude)
+    manifest["selection"] = _ownership().select(tree, client=select_client, base=select_base, include_claude=include_claude,
+                                                force_modules=force_modules)
+
+
+def _module_of(unit_id: str) -> str:
+    """测试单元 ID 对应的测试模块名（与 executor_modules 同一规则：去掉拆块／独占后缀与 +pkg）。"""
+
+    return re.split(r"[#!]", str(unit_id))[0].removesuffix("+pkg")
+
+
+def _git_ok(tree: Path, *args: str) -> str | None:
+    completed = subprocess.run(["git", "--no-optional-locks", "-C", str(tree), *args], capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=120)
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def resume_plan(record_store: Path, series: str, tree: Path, *, limit: int = 80) -> dict[str, Any]:
+    """入口脚本在生成门禁清单之前问一次：这道门禁（系列）的上一轮在哪、和本次同一提交吗（第一层，由执行器逐单元沿用）；
+    提交不同时（第二层）该用哪个提交作比对基点、哪些测试模块上一轮失败了必须重跑。
+
+    第二层的基点：这道门禁里最近的一次**全集**运行（清单不带 client_selection）、且它的提交是本次提交的真祖先——全集运行里每个 Claude 重模块都
+    跑过，所以“基点..本次”的改动没碰到的模块等于仍然是通过的（失败的模块不算，下面强制并入）。必须重跑的模块＝从最新一轮到基点那一轮之间
+    每一轮（只算提交是本次祖先的）里失败或没执行完的测试模块。找不到基点时不给基点（调用方照旧取最近发版 tag），强制模块照给。
+    本函数只读、不改任何东西；记录库取不到、没有登记过续跑出处的老运行都算“没有上一轮”。"""
+
+    records = _unit_records_module()
+    head = _git_ok(Path(tree), "rev-parse", "HEAD")
+    result: dict[str, Any] = {"series": series, "head": head, "layer": 0, "source_run_id": None, "source_commit": None, "base_commit": None,
+                              "base_run_id": None, "force_modules": [], "runs_considered": 0, "reasons": []}
+    if head is None or not re.fullmatch(r"[0-9a-f]{40}", head):
+        result["reasons"].append("测试树取不到 HEAD")
+        return result
+    runs = records.resume_runs(records.RecordStore(Path(record_store)), series, limit=limit)
+    if not runs:
+        result["reasons"].append("记录库里没有这道门禁的上一轮运行")
+        return result
+    newest = runs[0]
+    result.update(source_run_id=newest["run_id"], source_commit=newest["resume_basis"]["commit"])
+    if newest["resume_basis"]["commit"] == head:
+        result.update(layer=1)
+        result["reasons"].append("最近一轮与本次是同一提交：逐单元沿用已通过的记录（第一层），执行器判定")
+        return result
+    forced: set[str] = set()
+    considered = 0
+    for run in runs:
+        commit = run["resume_basis"]["commit"]
+        if commit == head:
+            continue   # 同提交的运行不在第二层里扮演基点；它的失败单元由第一层处理
+        if _git_ok(Path(tree), "merge-base", "--is-ancestor", commit, head) is None:
+            continue   # 不是本次提交的祖先（侧枝或测试树里没有这个提交）：既不当基点，也不算它的失败
+        considered += 1
+        forced.update(_module_of(entry["unit_id"]) for entry in run.get("units") or []
+                      if isinstance(entry, dict) and entry.get("test_group") and (entry.get("passed") is not True
+                                                                                    or entry.get("disposition") not in ("executed", "inherited")))
+        chosen = run.get("client_selection")
+        if chosen is None or (isinstance(chosen, dict) and chosen.get("scope") == GATE_SCOPE_FULL):   # 回退成全集的筛选也是全集运行
+            result.update(base_commit=commit, base_run_id=run["run_id"])
+            break
+    result.update(layer=2, force_modules=sorted(forced), runs_considered=considered)
+    if result["base_commit"] is None:
+        result["reasons"].append("没有找到提交是本次祖先的全集运行作基点：基点照旧取最近发版 tag，上一轮失败的模块仍强制重跑")
+    else:
+        result["reasons"].append(f"提交不同（第二层）：以全集运行 {result['base_run_id']} 的提交作基点，只看这一小段改动，加上沿途失败的 {len(forced)} 个模块")
+    return result
 
 
 def verify_scope_workspace(tree: Path, bytecode_cache: Path, *, commit: str, bundle: Path, branch: str) -> dict[str, Any]:
@@ -2561,6 +2630,14 @@ def export_records(
         }
 
     mode = summary.get("mode")
+    # 续跑沿用下整个门禁项的单元全是沿用的（本次没有执行）时，执行器汇总的起止时间是空的；门禁记录与 P0 证据要有合法的起止时间，
+    # 这时取本次运行的时间窗（运行清单的判定时间与完成时间）并在记录里写明 time_basis，不伪造成某个单元的执行时间。
+    window: tuple[str | None, str | None] = (None, None)
+    try:
+        published = json.loads(Path(str((summary.get("unit_manifest") or {}).get("path") or "")).read_text(encoding="utf-8"))
+        window = (published.get("decided_at_utc"), published.get("completed_at_utc"))
+    except (OSError, ValueError, AttributeError):
+        pass
     for gate_id in wanted:
         row = gate_rows[gate_id]
         failed = list(row["failed_units"])
@@ -2575,6 +2652,8 @@ def export_records(
             # 优化第 2 项：打开补跑的运行才有这个键；门禁项通过但其中这几个单元是补跑才通过的，单列、不静默放行。
             **({"retry_passed_units": list(row["retry_passed_units"])} if "retry_passed_units" in row else {}),
         })
+        if (record["started_at_utc"] is None or record["completed_at_utc"] is None) and window[0] and window[1] and row.get("inherited_units"):
+            record.update(started_at_utc=window[0], completed_at_utc=window[1], time_basis="run-window")
         _write(out / "logs" / f"{gate_id}.gate.json", record)
         records[gate_id] = record
     composites: dict[str, Any] = {}
@@ -2586,6 +2665,10 @@ def export_records(
                                  max((r["completed_at_utc"] for r in members if r["completed_at_utc"]), default=None),
                                  {"status": "passed" if not failed_gates else "failed", "composed_of": list(MAKE_TEST_GATES),
                                   "failed_gates": failed_gates, "executor_summary": str(summary_path)})
+        if isinstance(manifest.get("selection"), dict):
+            # 按客户端筛选的运行只是计划子集：full-regression 记录带筛选标记，读它的人（VC-5 外部门禁注入、准入）一眼分得出，子集不会冒充
+            # make test 全集；全集运行不带这个键，记录与改造前逐字相同。
+            regression["client_selection"] = {"gate_scope": manifest["selection"].get("scope"), "selection_sha256": manifest["selection"].get("selection_sha256")}
         composites["full-regression"] = {"exit_code": regression["exit_code"], "gate_json": _write(out / "logs" / "full-regression.gate.json", regression)}
     p0: dict[str, str] = {}
     withheld: dict[str, str] = {}
@@ -2593,9 +2676,16 @@ def export_records(
     inherited_any = any(records[gate_id]["inherited_units"] for gate_id in p0_gates)
     # 承接单元来自哪种模式（只影响说明文字）：全集通过（E3-01）或逐单元承接（B5a-08，签发时另按决策收据重验形成期证明）。
     inherit_label = "逐单元承接模式" if mode == "unit-inherit" else "全集通过模式"
+    resume_summary = summary.get("resume") if isinstance(summary.get("resume"), dict) else None
+    if resume_summary is not None and resume_summary.get("status") == "applied":
+        inherit_label = "同提交续跑沿用"
     v2: dict[str, Any] | None = None
     if inherited_any:
         v2, why = _p0_v2_context(summary, tree, tool_identity, client)
+        if v2 is not None and resume_summary is not None and resume_summary.get("environment_waiver"):
+            # 带环境豁免的续跑：沿用的记录是在另一份环境指纹下执行的，已发布的受管校验器要求记录与清单环境指纹相同，签不出 P0 v2 证据——
+            # 扣证据并写明，要求无豁免全集重跑（豁免只服务后台验证、VC-4 这类不签 P0 的门禁）。
+            v2, why = None, "本次续跑带操作员的环境豁免（沿用的记录是在另一份环境指纹下执行的），P0 证据不接受；请无豁免重跑"
         if v2 is None:
             for gate_id in p0_gates:
                 withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（{inherit_label}），要写以运行清单为证据的"
@@ -2695,6 +2785,11 @@ def export_records(
         # E3-04：读集审计（带 --audit-reads 时才有）：结论、有未声明读取的单元与明细位置。
         "read_audit": summary.get("read_audit"),
     }
+    if resume_summary is not None:
+        # 同提交续跑沿用（修好接着跑第一层）：来源运行、提交、沿用与重跑个数、环境豁免原样回显（完整出处在运行清单的 resume／resume_basis 里）。
+        entry["resume"] = resume_summary
+    if isinstance(manifest.get("resume_plan"), dict):
+        entry["resume_plan"] = manifest["resume_plan"]   # 第二层：基点与强制重跑的模块（门禁清单登记的那一份）
     if isinstance(summary.get("retry"), dict):
         # 优化第 2 项：补跑（打开时才有）。总摘要只列规则与单元清单；两次尝试的记录与日志摘要在执行器汇总的 retry.units 里。
         retry = summary["retry"]
@@ -2787,6 +2882,13 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                       help="基点：最近一次发版的 40 位提交（候选提交取测试树 HEAD）。client-plan 必须给；auto 缺省取最近的发版 tag")
     plan.add_argument("--client", dest="select_client", default="codex", help="client-plan 的客户端计划（本版只启用 codex）")
     plan.add_argument("--include-claude", action="store_true", help="client-plan 手动开关：并入全部另一客户端的重模块（仍记为 client-plan）")
+    plan.add_argument("--force-run-modules", default="",
+                      help="修好接着跑第二层：上一轮失败的测试模块（逗号分隔），不论改动是否影响都并入；只在 client-plan／auto 筛选下有意义")
+    plan.add_argument("--resume-plan", type=Path, default=None, help="resume-plan 子命令的输出（原样登记进门禁清单的 resume_plan，门禁总摘要回显）")
+    rplan = sub.add_parser("resume-plan", help="只读：这道门禁的上一轮在哪、同提交（第一层）还是换了提交（第二层的基点与必须重跑的模块）")
+    rplan.add_argument("--record-store", type=Path, required=True)
+    rplan.add_argument("--series", required=True)
+    rplan.add_argument("--tree", type=Path, required=True)
     recorded = sub.add_parser("recorded-full79-inputs", help="只读核固定79接线及真实夹具、预算来源")
     recorded.add_argument("--spec", type=Path, required=True)
     recorded.add_argument("--sha256", required=True)
@@ -2850,6 +2952,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "make-checks":
             return make_checks(args.name, list(args.targets))
+        if args.command == "resume-plan":
+            print(json.dumps(resume_plan(args.record_store, args.series, args.tree), ensure_ascii=False))
+            return 0
         if args.command == "verify-scope-workspace":
             print(json.dumps(verify_scope_workspace(args.tree, args.bytecode_cache, commit=args.commit,
                                                     bundle=args.bundle, branch=args.branch), ensure_ascii=False))
@@ -2880,11 +2985,14 @@ def main(argv: list[str] | None = None) -> int:
                                   declared_registry=args.declared_registry,
                                   gate_scope=args.gate_scope, select_base=args.select_base, select_client=args.select_client,
                                   include_claude=args.include_claude,
+                                  force_modules=[name for name in args.force_run_modules.split(",") if name],
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=pre_a3_env,
                                   pre_a3_data_inputs=data_inputs,
                                   environment=environment_facts(args.tree, args.typescript_module),
                                   egress_extra_inputs=[historical_source_input(args.historical_source_root)])
+            if args.resume_plan is not None:
+                manifest["resume_plan"] = json.loads(args.resume_plan.read_text(encoding="utf-8"))
             _write(args.output, manifest)
             print(json.dumps({"profile": args.profile, "gates": [g["gate_id"] for g in manifest["gates"]], "units": len(manifest["units"]),
                               "test_groups": [g["group_id"] for g in manifest["test_groups"]],

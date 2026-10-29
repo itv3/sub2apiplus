@@ -64,6 +64,44 @@ pl_defaults() {
 
 pl_sigign_ok() { local v; v=$(awk '/^SigIgn:/{print $2}' /proc/$$/status 2>/dev/null); [ -z "${v}" ] || [ $(( 0x${v} & 1 )) -eq 0 ]; }
 
+# 入口门禁 Go 编译缓存的容量前置检查（start-entry.sh 的 C10 用）。
+#   pl_check_go_cache_capacity <缓存目录> <最小 GiB>   打印一行结论；返回 0＝通过或不适用，1＝容量不足
+# 为什么：入口门禁的 GOCACHE 是数据根上一级 entry-gates-work/go-build-cache。ARM64 上这个目录曾是手工挂的 4 GiB tmpfs，
+# 平时缓存是暖的够用；腾盘清掉 Go 编译缓存后冷启动全量重建超过 4 GiB，写满后 6 项门禁报 no space left on device，白跑近 2 小时。
+# 规则：目录（不存在则取最近的已存在祖先）落在 tmpfs／ramfs 上时总容量必须 ≥ 最小 GiB（缺省 10）；落在磁盘上的由根盘检查（C5）约束。
+pl_check_go_cache_capacity() {
+  local dir=$1 min=${2:-10} probe fstype size_m
+  probe=${dir}
+  while [ ! -e "${probe}" ] && [ "${probe}" != / ] && [ "${probe}" != . ]; do probe=$(dirname "${probe}"); done
+  fstype=$(stat -f -c %T "${probe}" 2>/dev/null) || fstype=未知
+  case "${fstype}" in
+    tmpfs|ramfs) ;;
+    *) echo "入口门禁 Go 编译缓存 ${dir} 在磁盘上（${fstype}），容量由根盘检查约束"; return 0 ;;
+  esac
+  size_m=$(df -P -BM "${probe}" 2>/dev/null | awk 'NR==2{gsub("M","",$2); print $2}')
+  case "${size_m}" in ''|*[!0-9]*) echo "入口门禁 Go 编译缓存 ${dir} 在内存盘上，但读不出容量"; return 1 ;; esac
+  if [ "${size_m}" -lt $(( min * 1024 )) ]; then
+    echo "入口门禁 Go 编译缓存 ${dir} 是 ${fstype}，总容量 $(( size_m / 1024 )) GiB < ${min} GiB：冷启动（腾盘清过 Go 缓存之后）全量重建会写满，门禁报 no space left on device。先扩容（mount -o remount,size=${min}G ${probe}，需确认可用内存够），或卸载后改走磁盘"
+    return 1
+  fi
+  echo "入口门禁 Go 编译缓存 ${dir} 是 ${fstype}，总容量 $(( size_m / 1024 )) GiB ≥ ${min} GiB（腾盘清掉 Go 缓存后冷启动仍装得下）"
+}
+# 本轮输入目录前置检查（start-entry.sh 的 C11 用）：prepare-round-inputs.sh 必须已经跑过。
+#   pl_check_round_inputs <RUNROOT> <数据根 D> <输入目录名 IN> [回退依据收据路径]   打印结论；返回 0＝齐全，1＝缺
+# 为什么：漏跑 prepare-round-inputs.sh 时入口便宜检查两项直接红（required-parameters 缺 P0 回退依据、plan-audit 缺基线画像），
+# 入口白占一次起跑；这两个文件正是它的产物，起跑前先查。
+pl_check_round_inputs() {
+  local rr=$1 data=$2 in_dir=$3 rollback=${4:-$1/rollback-catalog-promotion-receipt.json} missing="" file
+  for file in "${rollback}" "${data}/control/${in_dir}/baseline-profile.json"; do
+    [ -s "${file}" ] || missing="${missing} ${file}"
+  done
+  if [ -n "${missing}" ]; then
+    echo "缺本轮输入文件：${missing# }。先在采集主机跑 prepare-round-inputs.sh（用法见其头注释：新参数文件、上一轮 VC-6 画像目录晋升收据、基线画像 JSON 与摘要）"
+    return 1
+  fi
+  echo "本轮输入已就绪（P0 回退依据与基线画像都在，即 prepare-round-inputs.sh 已跑）"
+}
+
 # 有限重试，只用于“可证明幂等”的步骤（只读检查，或脚本文档明确写了幂等、重入安全）：
 #   pl_retry <标签> <允许重试的退出码列表，逗号分隔，空串＝任何非零> <命令…>
 # 最多再试 ${PIPE_RETRY_MAX:-2} 次，每次前等 ${PIPE_RETRY_SLEEP:-60} 秒；每次失败用调用方定义的 log 写一行 RETRY。
@@ -104,8 +142,9 @@ pl_local_init() {
   REMOTE_PREP=${PIPE_REMOTE_PREP:-/root/pipeline-prep/$(basename "${REMOTE_RUNROOT}")}
   REMOTE_PIPE=${REMOTE_DRIVER}/pipeline
 }
-# 从 pl_local_init 取回的参数文件导出里读一个键（parse_env 的输出形如 export KEY='VALUE'）
-pl_remote_var() { printf '%s\n' "${REMOTE_VARS}" | sed -n "s/^export $1='\(.*\)'\$/\1/p" | head -1; }
+# 从 pl_local_init 取回的参数文件导出里读一个键。parse_env 用 shlex.quote 输出：值只含安全字符时不带引号
+# （export KEY=VALUE，路径、版本号基本都是这种），含空格等字符时才带单引号（export KEY='VALUE'），两种形态都要认。
+pl_remote_var() { printf '%s\n' "${REMOTE_VARS}" | sed -n -e "s/^export $1='\(.*\)'\$/\1/p" -e "s/^export $1=\([^']*\)\$/\1/p" | head -1; }
 # 经 ssh 在采集主机上执行（不吃本机标准输入；带保活）
 pl_ssh() { ssh -n -o ServerAliveInterval=30 "${PIPE_SSH_HOST}" "$@"; }
 # 一轮的第一次部署时，采集主机上安装的还是上一版驱动，没有本目录的新脚本：把需要的脚本连同 pipeline-lib.sh 传到

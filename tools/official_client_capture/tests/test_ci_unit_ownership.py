@@ -100,6 +100,23 @@ class RealTreeGuardTests(unittest.TestCase):
         self.assertIn("tools/ci/unit_ownership.py", uo.SELF_PATHS)
         self.assertIn("tools/arm64_capture_driver/driver/unit_ownership.py", uo.SELF_PATHS)
 
+    def test_the_executor_version_files_and_the_scheduling_policy_are_self_paths_too(self) -> None:
+        """修好接着跑的第二层：执行器自己（14 个版本文件，含驱动副本）与调度策略文件在改动里，选择器整轮不筛选。清单必须与执行器真实记录的版本文件、
+        调度策略文件逐个对得上——执行器以后增减版本文件，这里先红，免得自身路径集悄悄过期。"""
+
+        from tools.ci import unit_records as ur
+
+        repo = Path(__file__).resolve().parents[3]
+        self.assertEqual(set(uo.EXECUTOR_VERSION_FILES), set(ur.EXECUTOR_FILES) | {"bytecode_cache.py", "retry_policy.py", "go_test_packages.py", "declared_sampler.py"})
+        self.assertEqual(len(uo.EXECUTOR_VERSION_FILES), 14)
+        for name in uo.EXECUTOR_VERSION_FILES:
+            self.assertTrue((repo / "tools/ci" / name).is_file() or (repo / "tools/arm64_capture_driver/driver" / name).is_file(), name)
+            self.assertIn(f"tools/arm64_capture_driver/driver/{name}", uo.EXECUTOR_SELF_PATHS)
+        for name in uo.SCHEDULING_POLICY_FILES:
+            self.assertTrue((repo / "tools/ci" / name).is_file(), name)
+            self.assertIn(f"tools/ci/{name}", uo.EXECUTOR_SELF_PATHS)
+        self.assertEqual(set(uo.SELF_PATHS) & set(uo.EXECUTOR_SELF_PATHS), set(), "归属表与选择器的自身路径另有理由文字，两个集合不重叠")
+
     def test_the_coupled_table_is_the_eleven_modules_approved_for_the_registration_anchors(self) -> None:
         # 拍板 4：Claude 联动文件（场景清单、期望画像、冻结摘要）被改时，只并入直接验证它们的这 11 个单元；改这张表要在评审里显式看到。
         # 验收修正补进 test_claude_upgrade_scenarios（它用 glob("claude_upgrade_scenarios_*.json") 核对每份场景清单的 tool_dependencies）。
@@ -117,6 +134,24 @@ class RealTreeGuardTests(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
+    def test_a_change_to_the_executor_or_its_scheduling_policy_makes_the_selector_fall_back_to_the_whole_set(self) -> None:
+        """验收 V4 的反例：只在 unit_executor.py（及驱动副本）末尾加一行注释，原来 scope=client-plan、没有回退；现在整轮全集并写明原因。"""
+
+        paths = ("tools/ci/unit_executor.py", "tools/arm64_capture_driver/driver/unit_executor.py", "tools/ci/unit_records.py",
+                 "tools/arm64_capture_driver/driver/entry-gates.sh", "tools/arm64_capture_driver/driver/bytecode_cache.py", "tools/ci/entry_gates.py",
+                 "tools/ci/unit_executor.json", "tools/ci/capture_test_weights.json", "tools/ci/capture_test_durations.json",
+                 "tools/arm64_capture_driver/driver/unit_executor.json")
+        for path in paths:
+            with self.subTest(path=path):
+                world = World(self)
+                selection = world.select((path, "# 只多一行注释\n" if path.endswith((".py", ".sh")) else "{}\n"))
+                self.assertEqual(selection["scope"], uo.SCOPE_FULL)
+                self.assertEqual(set(selection["modules"].values()), {uo.RUN}, "整轮不筛选")
+                self.assertEqual(selection["fallback_reasons"], [f"执行器版本文件或调度策略文件在改动里：{path}"])
+        world = World(self)
+        quiet = world.select(("tools/ci/helper.py", "X = 2\n"))
+        self.assertEqual((quiet["scope"], quiet["fallback_reasons"]), (uo.SCOPE_CLIENT_PLAN, []), "执行器之外的 tools/ci 文件照常筛选")
+
     def test_the_synthetic_world_classifies_as_designed(self) -> None:
         world = World(self)
         modules = world.data["modules"]

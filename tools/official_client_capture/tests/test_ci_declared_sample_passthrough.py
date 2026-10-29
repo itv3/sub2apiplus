@@ -243,7 +243,8 @@ class EntryGatesScriptTests(unittest.TestCase):
         """脚本里只有一处起 run-gates，且它展开 AUDIT_ARGS——采样方式经 AUDIT_ARGS 转交，所以不会有哪一次调用漏掉它。"""
 
         text = self.SCRIPT.read_text(encoding="utf-8")
-        calls = re.findall(r"unit_executor\.py\" run-gates[^\n]*\n[^\n]*", text)
+        # 续跑沿用（修好接着跑）另有一次只判定的调用（--decide-only：不执行单元、不写记录，只为决定要不要做 Go 预热）；真正起单元的仍只有一处。
+        calls = [item for item in re.findall(r"unit_executor\.py\" run-gates[^\n]*\n[^\n]*", text) if "--decide-only" not in item]
         self.assertEqual(len(calls), 1, calls)
         self.assertIn('${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"}', calls[0])
 

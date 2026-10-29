@@ -50,6 +50,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
     --parallel) echo "parallel:$2" >> "$FAKE_GATES_CALLS"; shift 2 ;;
+    --resume-from) echo "resume:$2" >> "$FAKE_GATES_CALLS"; shift 2 ;;
+    --resume-series) echo "series:$2" >> "$FAKE_GATES_CALLS"; shift 2 ;;
     --profile|--mode|--record-store|--work|--wait-lock) shift 2 ;;
     --require-deployed) echo "require-deployed" >> "$FAKE_GATES_CALLS"; shift ;;
     *) ARGS+=("$1"); shift ;;
@@ -308,6 +310,43 @@ class BackgroundValidationTests(unittest.TestCase):
 
     def test_driver_carries_an_identical_copy(self) -> None:
         self.assertEqual(DRIVER_COPY.read_bytes(), MODULE.read_bytes())
+
+    def _start_cli(self, commit: str, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                        "--branch", "codex/test", "--commit", commit, "--entry-gates", str(self.gates), *extra, env=env)
+
+    def test_resume_auto_restarts_a_failed_attempt_and_hands_the_resume_flags_to_the_gate(self) -> None:
+        """修好接着跑：同提交、同部署上一次尝试失败后，--resume auto 重新起跑（旧终态留在 history），入口门禁带 --resume-from auto --resume-series bgv；
+        不带 --resume 时失败的结论照旧返回 exists（命令行与改造前相同）。"""
+
+        failed = self.wait(self.start(COMMIT_A, FAKE_GATES_STATUS="failed")["result"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertNotIn("resume", failed)
+        plain = self._start_cli(COMMIT_A)
+        self.assertEqual((plain.returncode, json.loads(plain.stdout)["action"]), (0, "exists"), "不带 --resume：失败的结论不自动重启")
+        resumed = self._start_cli(COMMIT_A, "--resume", "auto")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        started = json.loads(resumed.stdout)
+        self.assertEqual(started["action"], "started")
+        second = self.wait(started["result"])
+        self.assertEqual((second["status"], second["resume"]), ("passed", "auto"))
+        self.assertEqual((self.boundary()[0], self.boundary("require-passed")[0]), (0, 0), "续跑得到的通过结论 VC-5 准入（require-passed）与批次边界照常接受")
+        self.assertNotIn("resume", second["input_contract"], "续跑只改变哪些单元被执行，不进输入合同")
+        calls = self.calls.read_text(encoding="utf-8").split()
+        self.assertEqual(calls[-4:], ["require-deployed", "resume:auto", "series:bgv", COMMIT_A])
+        self.assertEqual(sum(1 for item in calls if item.startswith("resume:")), 1, "第一次尝试没带续跑参数")
+        history = [json.loads(path.read_text()) for path in (self.runroot / "background-validation" / "history").glob("*.json")]
+        self.assertTrue(any(item["status"] == "failed" for item in history), "旧的失败终态保留")
+        again = self._start_cli(COMMIT_A, "--resume", "auto")
+        self.assertEqual(json.loads(again.stdout)["action"], "exists", "已经通过的结论不会因为 --resume auto 被重跑")
+
+    def test_resume_auto_is_refused_with_the_inheritance_and_audit_paths(self) -> None:
+        self.wait(self.start(COMMIT_A, FAKE_GATES_STATUS="failed")["result"])
+        policy = self.root / "policy.json"
+        policy.write_text("{}", encoding="utf-8")
+        result = self._start_cli(COMMIT_A, "--resume", "auto", "--audit-policy", str(policy))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--resume auto 不能与", result.stderr)
 
     def test_explicit_full_rerun_preserves_old_passed_history(self) -> None:
         first = self.wait(self.start(COMMIT_A)["result"])

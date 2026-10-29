@@ -41,7 +41,7 @@ if [ ! -f "$G/local/full-regression.gate.json" ]; then
   mkdir -p "$G/local"; chmod 700 "$G" "$G/local"
   for f in check-egress-spec.gate.json check-egress-spec.stdout.log check-egress-spec.stderr.log full-regression.gate.json full-regression.stdout.log full-regression.stderr.log; do test -f "$LOCAL_GATES/$f"; cp -f "$LOCAL_GATES/$f" "$G/local/"; done
   chown root:root "$G/local"/*; chmod 600 "$G/local"/*
-  python3 -c "import json; d=json.load(open('$G/local/full-regression.gate.json')); assert d['exit_code']==0 and d['tree_head']=='$DC', d; print('full-regression(本机):', d['exit_code'], d['host'], d['architecture'], d['started_at_utc'], d['completed_at_utc'])"
+  python3 -c "import json; d=json.load(open('$G/local/full-regression.gate.json')); assert d['exit_code']==0 and d['tree_head']=='$DC', d; assert d.get('client_selection') is None or '${VC5_ALLOW_SUBSET_LOCAL_GATES:-}'=='1', '本地 full-regression 是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1'; print('full-regression(本机):', d['exit_code'], d['host'], d['architecture'], d['started_at_utc'], d['completed_at_utc'])"
   test "$(git -C $B/test-tree rev-parse HEAD)" = "$DC" || bash "$DRV/gates.sh" prepare "$DC" 2>&1 | tail -n 3
 fi
 if [ ! -f "$RUNROOT/vc5-run-batch.out" ]; then

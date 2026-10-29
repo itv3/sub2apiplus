@@ -6,13 +6,14 @@
 # 场景做一次零请求启动预探，就能提前发现。预探本身由 ARM64 上的预探流程做（对每个场景按驱动的真实参数启动一次、不发任何真实请求，观察是否一直停在首帧后的交互等待
 # 而不是启动即退出）；本脚本只负责把预探结果登记成收据，并给起跑前置检查（entry-preflight.sh 的 tui-prelaunch-receipt、后台验证的 tui-prelaunch-receipt）核对用。
 #
-# 必需场景：compact-tui、ws-idle-close-tui、daemon-tui、guardian-tui（bash tui-prelaunch-receipt.sh scenarios 列出）；image-repeat-tui、search-repeat-tui、review-tui
+# 必需场景：compact-tui、ws-idle-close-tui、daemon-tui、guardian-tui，以及会话内步骤场景 effort-update-ws、effort-update-http、model-switch-ws、
+# compact-continue-ws（bash tui-prelaunch-receipt.sh scenarios 列出）；image-repeat-tui、search-repeat-tui、review-tui、effort-unsupported-ws
 # 可选，登记了就必须通过。收据绑定本轮目标版本与登记的客户端二进制摘要（CODEX_BIN_SHA256），并要求真实请求数为 0。
 #
 # 用法（参数全部来自 $ARM64_VC_ENV）：
 #   bash tui-prelaunch-receipt.sh scenarios
 #   bash tui-prelaunch-receipt.sh write --scenario compact-tui=passed --scenario ws-idle-close-tui=passed --scenario daemon-tui=passed \
-#        --scenario guardian-tui=passed [--scenario 名称=failed:退出码:屏幕尾部文字 …] --started <UTC> --finished <UTC> [--note 文字]
+#        --scenario guardian-tui=passed --scenario 其余必需场景=passed … [--scenario 名称=failed:退出码:屏幕尾部文字 …] --started <UTC> --finished <UTC> [--note 文字]
 #      写之前核对宿主机上 $CODEX_BIN 的摘要等于登记的 CODEX_BIN_SHA256、--version 含目标版本；失败的场景也照实登记（收据会让起跑检查拒绝，并把退出码与屏幕尾部带进提示）。
 #   bash tui-prelaunch-receipt.sh verify      # 只读：按起跑前置检查同一规则核对当前收据，通过 0、不通过 1
 # 收据位置：$RUNROOT/local-receipts/tui-prelaunch.json（0600）。
