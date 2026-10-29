@@ -1200,7 +1200,13 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
     # ---- W1：configuration_update（SPEC-BODY-006 的 4 条判据；provider 条件用标签 ws_prewarm 表达） ----
 
     @staticmethod
-    def http_observation_with(types, labels, *, method="POST", path="/backend-api/codex/responses", scenario="A04"):
+    def http_observation_with(types, labels, *, method="POST", path="/backend-api/codex/responses", scenario="A04",
+                              thread_source="user"):
+        # 0.165.0 起 SPEC-BODY-006 的 HTTP 首轮判据只选根线程（turn metadata 的 thread_source 为 user，VC-5 批准修订 b1）；
+        # thread_source=None 表示请求体没有可解析的 turn metadata（不带 _turn_metadata 摘要）。
+        shape = {"input": {"_types": types}}
+        if thread_source is not None:
+            shape["_turn_metadata"] = {"thread_source": thread_source}
         return candidate_rule_assertion.Observation(
             record_id=f"{scenario}-http",
             scenario_id=scenario,
@@ -1209,7 +1215,7 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             evidence_paths=("relay/conn001.client_to_upstream.bin",),
             labels=labels,
             data={"method": method, "path": path, "wire_protocol": "http",
-                  "body": {"shape": {"input": {"_types": types}}}},
+                  "body": {"shape": shape}},
         )
 
     @staticmethod
@@ -1251,6 +1257,17 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             self.http_observation_with(with_update, self.HTTP_PROBE_LABELS),
             self.http_observation_with(without_update, numeric),
         ]))
+        # 只验根线程（VC-5 批准修订 b1）：普通子代理／记忆合并请求（thread_source 不是 user）的合成取决于模型清单是否声明
+        # supports_reasoning_effort_updates，不代表网关行为，不进这条判据；也不能因此让空选择放行。
+        for other in ("subagent", "memory_consolidation", None):
+            with self.subTest(thread_source=other):
+                self.assertTrue(self.run_body006(check, [
+                    self.http_observation_with(with_update, self.HTTP_PROBE_LABELS),
+                    self.http_observation_with(without_update, self.HTTP_PROBE_LABELS, thread_source=other),
+                ]))
+                self.assertFalse(self.run_body006(check, [
+                    self.http_observation_with(with_update, self.HTTP_PROBE_LABELS, thread_source=other),
+                ]))
 
     def test_numeric_effort_never_produces_configuration_update(self) -> None:
         numeric = {"transport": "http", "reasoning_effort_config": "numeric"}
@@ -1349,11 +1366,21 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
                         artifact_path="relay/conn002.client_to_upstream.bin", evidence_paths=("relay/conn002.client_to_upstream.bin",),
                         labels={"mode": "lite"},
                         data={"method": "POST", "path": "/backend-api/codex/responses",
-                              "body": {"shape": {"input": {"_passthrough": {field: value}}}}},
+                              "body": {"shape": {"input": {"_passthrough": {field: value}},
+                                                 "_turn_metadata": {"thread_source": thread_source}}}},
                     )
+                thread_source = "user"
                 self.assertTrue(self.run_check("SPEC-BODY-003", check_id, [observation(good)]))
                 self.assertFalse(self.run_check("SPEC-BODY-003", check_id, [observation(bad)]))
                 self.assertFalse(self.run_check("SPEC-BODY-003", check_id, []))
+                if check_id == "main-session-ids-official-form":
+                    # 只验根线程（VC-5 批准修订 b1）：记忆合并与普通子代理请求按官方形态 session_id 与 thread_id 不同，
+                    # 不进这条判据；被排除后选择为空仍失败关闭，不能放行。
+                    thread_source = "memory_consolidation"
+                    self.assertFalse(self.run_check("SPEC-BODY-003", check_id, [observation(bad)]))
+                    self.assertFalse(self.run_check("SPEC-BODY-003", check_id, [observation(good)]))
+                    thread_source = "user"
+                    self.assertTrue(self.run_check("SPEC-BODY-003", check_id, [observation(good), observation(good)]))
         for check_id, (field, good, bad) in {
             "first-business-frame-client-turn-id-form": ("client_turn_id_form", "uuidv7", "uuid_other"),
             "first-business-frame-turn-started-gap": ("client_turn_started_gap_ok", True, False),

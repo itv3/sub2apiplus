@@ -3147,7 +3147,7 @@
             "path": "data.body.shape.input._passthrough.client_session_ids_ok",
             "value": true
           },
-          "description": "根线程的会话标识形态：session_id 是官方位布局 UUIDv7 且等于 thread_id，x-codex-window-id 是 thread_id:0（子代理线程与压缩后的新窗口不满足，所以只在 A04 主线样本上启用）",
+          "description": "根线程的会话标识形态：session_id 是官方位布局 UUIDv7 且等于 thread_id，x-codex-window-id 是 thread_id:0（子代理线程与压缩后的新窗口不满足，所以只在 A04 主线样本上启用）；select 追加 turn metadata 的 thread_source 为 user，把记忆合并与普通子代理请求（按官方形态本就是 session_id 与 thread_id 不同的子线程）排除出样本。",
           "id": "main-session-ids-official-form",
           "select": {
             "record_type": "http_request",
@@ -3173,6 +3173,11 @@
               {
                 "operator": "absent",
                 "path": "data.body.shape.input._types_count.compaction_trigger"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
               }
             ]
           }
@@ -3779,7 +3784,7 @@
             "path": "data.body.shape.input._types",
             "value": "configuration_update"
           },
-          "description": "不带 WS 预热的 OpenAI provider（正式 HTTP 采集用，名叫 OpenAI、supports_websockets=false）首轮 input 末尾带 configuration_update；候选侧第三方入站的 HTTP 出站（画像声明 http_first_turn、目录支持该模型、请求 effort 是已知档位）同形。有 WS 预热的路径首轮不带，所以只选标了 ws_prewarm=none 的样本（数字档位样本不产生，已另有判据排除）",
+          "description": "不带 WS 预热的 OpenAI provider（正式 HTTP 采集用，名叫 OpenAI、supports_websockets=false）首轮 input 末尾带 configuration_update；候选侧第三方入站的 HTTP 出站（画像声明 http_first_turn、目录支持该模型、请求 effort 是已知档位）同形。有 WS 预热的路径首轮不带，所以只选标了 ws_prewarm=none 的样本（数字档位样本不产生，已另有判据排除）；select 追加 turn metadata 的 thread_source 为 user，只验根线程：普通子代理请求的合成取决于模型清单是否声明 supports_reasoning_effort_updates，候选 relay 的合成清单不带该字段，清单进入后的子代理请求不合成，不能代表网关行为。",
           "id": "configuration-update-http-first-turn",
           "select": {
             "record_type": "http_request",
@@ -3815,6 +3820,11 @@
                 "operator": "equal",
                 "path": "data.path",
                 "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.body.shape._turn_metadata.thread_source",
+                "value": "user"
               }
             ]
           }
