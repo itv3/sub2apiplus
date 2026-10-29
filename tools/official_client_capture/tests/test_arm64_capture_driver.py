@@ -1622,7 +1622,8 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
         for name in ("vc5-gate-target.sh", "gates.sh"):
             make = [line for line in (SCRIPTS / name).read_text(encoding="utf-8").splitlines() if "exec make test" in line]
             self.assertEqual(len(make), 1, name)
-            self.assertIn("env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m", make[0], name)
+            # 609c1a3ac 起这一行在 unshare 之前还一并清掉入口坐标三键（ENTRY_COMMIT／ENTRY_BUNDLE／ENTRY_BRANCH），否则 lib.sh 导出的入口坐标会漏进测试包。
+            self.assertIn("env -u CODEX_UPGRADE_IDENTITY_MEMO -u ENTRY_COMMIT -u ENTRY_BUNDLE -u ENTRY_BRANCH unshare -m", make[0], name)
 
     def test_gate_scripts_prepare_cache_then_export_before_make_test(self) -> None:
         lib_code = [line for line in (SCRIPTS / "lib.sh").read_text(encoding="utf-8").splitlines()
