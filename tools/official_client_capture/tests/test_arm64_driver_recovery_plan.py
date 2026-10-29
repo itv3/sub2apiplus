@@ -513,6 +513,13 @@ class ApplyTests(_WorldCase):
         self.assertIn("accounting-resolve", result.stderr)
         self.assertIn("重新执行同一条命令", result.stderr)
         self.assertNotIn("--from", result.stderr)
+        # 停在 reconcile 时直接打印补账命令模板：参数名与已知坐标（数据根、Campaign 目录、编排器、未决 operation）已填好。
+        self.assertIn("命令模板：补账预览（零写入）", result.stderr)
+        self.assertIn(f"accounting-resolve --campaign-dir {world.data}/evidence/campaigns/{world.campaign}", result.stderr)
+        self.assertIn(f"--operation-id reconcile-attempt:{world.attempt}", result.stderr)
+        self.assertIn("--estimated-count <请求数批准上界> --evidence <来源审计文件绝对路径>", result.stderr)
+        self.assertIn("--approve-sha256 <预览输出的 review_sha256> --approved-by '<批准人>'", result.stderr)
+        self.assertNotIn("environment-isolate --campaign-dir", result.stderr, "只有账务暂停时不打印环境隔离命令")
         self.assertEqual(world.write_calls(), [])
         self.assertEqual(world.dispatches(), [])
         world.set_state(accounting_resolved=True)  # 人执行了 accounting-resolve
@@ -527,6 +534,13 @@ class ApplyTests(_WorldCase):
         self.assertEqual(result.returncode, EXIT_OPERATOR)
         self.assertIn("environment-isolate", result.stderr)
         self.assertIn("request-budget-extend", result.stderr)
+        # 环境暂停：干净环境收据（collect／finalize）与环境隔离两条命令模板；批准权限不变，仍由人给出批准摘要与批准人。
+        self.assertIn("codex_upgrade_arm64_environment_receipt collect --evidence-root", result.stderr)
+        self.assertIn("finalize --evidence-root <证据根> --facts <facts.json> --output <receipt.json>", result.stderr)
+        self.assertIn(f"environment-isolate --campaign-dir {world.data}/evidence/campaigns/{world.campaign}", result.stderr)
+        self.assertIn("--environment-repair-receipt <环境修复记录绝对路径> --clean-environment-receipt", result.stderr)
+        self.assertNotIn("accounting-resolve --campaign-dir", result.stderr, "没有账务暂停时不打印补账命令")
+        self.assertEqual(world.write_calls(), [], "只是打印模板，不执行任何写动作")
 
     def test_stale_preview_at_authorize_rewinds_to_reconcile_once(self) -> None:
         world = self.make_world(scenario={"stale_authorize_once": True})
@@ -673,6 +687,64 @@ class ContinueGuardTests(_WorldCase):
         again = world.run("--apply")
         self.assertEqual(again.returncode, EXIT_OPERATOR)
         self.assertEqual(len(world.dispatches()), 1, "失败的续跑不自动重派")
+
+    def _wait_blocked_continue(self, world: rw.World) -> dict:
+        import time
+
+        plan = world.plan()
+        for _ in range(60):
+            plan = world.plan()
+            if self.step(plan, "continue")["status"] == "blocked":
+                break
+            time.sleep(0.2)
+        return plan
+
+    def test_zero_request_exit_prints_a_runnable_new_round_redispatch_command_but_never_redispatches(self) -> None:
+        """0.165 实战：续跑在派发真实批次之前就因准入失败退出（零请求），计划只说“禁止自动重派，人工核对后换新轮次”，
+        操作员手工拼新轮次命令。现在在“占位之后没有新的监督器 run、没有后继 attempt”时给出可直接执行的新轮次命令；仍不自动重派。"""
+
+        world = self._ready()
+        (world.root / "dispatch.mode").write_text("fail", encoding="utf-8")
+        self.assertIn(world.run("--apply").returncode, (EXIT_OK, EXIT_OPERATOR))
+        plan = self._wait_blocked_continue(world)
+        step = self.step(plan, "continue")
+        self.assertEqual(step["status"], "blocked")
+        self.assertIn("判为零请求退出", step["detail"])
+        self.assertTrue(step["evidence"]["zero_request"])
+        new_params = world.params_path.with_name(f"{world.params_path.stem}-r2{world.params_path.suffix}")
+        self.assertEqual(step["evidence"]["new_params_path"], str(new_params))
+        self.assertIn(f"s/^ROUND=.*/ROUND=r2/", step["command"])
+        self.assertIn(f"recovery-plan.sh {new_params} --apply", step["command"])
+        again = world.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OPERATOR, again.stderr)
+        self.assertIn("修好退出原因后人工执行（本计划不代办）", again.stderr)
+        self.assertIn(step["command"], again.stderr)
+        self.assertEqual(len(world.dispatches()), 1, "有了命令也不自动重派")
+        # 命令是可运行的：照它建出新轮次参数文件，新轮次不继承占位，同一预览已批准，直接重派一次（这回成功）。
+        (world.root / "dispatch.mode").write_text("ok", encoding="utf-8")
+        shell = subprocess.run(["bash", "-c", step["command"].replace(f"bash {SCRIPTS / 'recovery-plan.sh'}", "true")],
+                               capture_output=True, text=True)
+        self.assertEqual(shell.returncode, 0, shell.stderr)
+        self.assertIn("ROUND=r2", new_params.read_text(encoding="utf-8"))
+        redo = subprocess.run([sys.executable, "-B", str(SCRIPTS / "recovery_plan.py"), str(new_params), "--apply"],
+                              capture_output=True, text=True, env=world.env(), stdin=subprocess.DEVNULL)
+        self.assertEqual(redo.returncode, EXIT_OK, redo.stderr)
+        self.assertEqual(len(world.dispatches()), 2)
+
+    def test_exit_after_new_supervisor_run_is_not_called_zero_request_and_prints_no_redispatch_command(self) -> None:
+        """续跑启动之后监督器状态目录里出现了新的 run（已经开始过真实采集）：不能当零请求，保持原来的禁止自动重派，不给重派命令。"""
+
+        world = self._ready()
+        (world.root / "dispatch.mode").write_text("fail", encoding="utf-8")
+        self.assertIn(world.run("--apply").returncode, (EXIT_OK, EXIT_OPERATOR))
+        world.add_tail_run("run-after-dispatch", "failed", 0.0)   # 占位之后才出现的 run 目录
+        plan = self._wait_blocked_continue(world)
+        step = self.step(plan, "continue")
+        self.assertEqual(step["status"], "blocked")
+        self.assertIn("可能已发出真实请求", step["detail"])
+        self.assertIn("run-after-dispatch", step["detail"])
+        self.assertEqual(step["command"], "")
+        self.assertNotIn("zero_request", step["evidence"])
 
     def test_dispatch_refused_while_driver_process_is_alive(self) -> None:
         world = self._ready()
