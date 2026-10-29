@@ -1589,6 +1589,8 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 并报总工作量，不只报正式段。逐单元承接新增的承接视图、固定测试树坐标、中断运行的部分完成清单与收尾逐单元承接已入库，但尚未在真实升级里用过
 （收尾仍为 `re-execute` 全集），收益不计。
 
+0.165 轮实测（按上述口径，收尾时回填）：准备段〔　〕，正式段〔　〕，收尾段〔　〕，总工作量〔　〕；收尾逐单元承接的实战结果〔　〕。
+
 [Framework §5.3](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 规定 `VC-0 → VC-1 → … → VC-6` 顺序；
 本部分保留 Codex 专用操作与验收合同。脚本参数、安装及实现细节统一见
 [驱动 README](../tools/arm64_capture_driver/README.md)；旧入口与历史事故只按生成时的收据原文只读解释，
@@ -1650,6 +1652,51 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 两次升级之间只能改 control 层文件；wire_producer／evidence_semantics 层（场景清单、候选采集脚本）与 `TARGET_VERIFIER_SHA256S` 钉住的 5 个
 `tools/ci` 验证器文件，只能随版本登记重封。受管驱动文件必须在 Campaign plan 之前改完。
 
+**登记定稿前，用上一版真实候选证据预演标签与判据。** 登记会写证据标签声明与候选期望清单；登记测试里的观测是手造的，标签错位和判据过严要到 VC-5 封存预览、
+assert-rules 才暴露，而且撞一个修一个（0.164 为此在关键路径上耗约 3 小时）。把上一版候选 attempt 与官方 attempt（连同完整原始证据根，只读拉回本机）交给预演，零写入、零请求：
+`bash driver/chain-rehearsal.sh preview --candidate-evidence <候选 attempt> --candidate-roots-dir <候选原始证据根集合> --official-evidence <官方 attempt> --official-roots-dir <官方原始证据根集合>
+--labels <新版声明> --profile <新版候选期望清单> --rewrite-version <新版本>=<证据版本>`（仓库根也可 `python3 -B -m tools.official_client_capture.tests.registration_preview preview …`）。
+退出码 0 才算过；1 会逐项列出选择器零命中的检查、带标签的帧落在哪、按消息序号解读应落在哪一帧、判据固定值与实际值不符。新版判据里的版本字面量用 `--rewrite-version` 换成证据版本。
+预演**不覆盖** compare、官方侧 seal 的冻结画像与弃用标签延后规则、候选 trace，也看不到本版才有的网关出站改动；所以 VC-5 seal-a 之后、seal-b 之前，对真实新证据再跑一遍。
+
+**帧级标签不写原始帧序号。** 候选网关把一条压缩消息拆成多帧，序号随分片数漂移。用 `event:<事件类型>:<该类型内的序号>`（首选，如 `event:response.create:1`）或 `message:<数据消息序号>`，
+只贴在消息的起始帧；选择键只能依赖消息的结构身份，不能依赖被判据验证的字段取值。没命中任何消息、或同一帧同一标签给出不同取值，载入观测时失败关闭；旧的原始帧序号写法仍合法，已封存证据的重放不变。
+
+**整链空跑与预演都放在登记期间并行做，不占关键路径。** 登记源码一落盘就先预演；工具部署到 ARM64 测试树后，在后台验证之前的空闲窗口跑一遍 `chain-rehearsal.sh rehearse`
+（真实链各约 10 分钟，占用 unshare／docker，与后台验证、采集互斥，先 `background-validate.sh status` 确认空闲）。要真二进制探针和上一版候选证据回放时，先导出
+`REHEARSAL_CODEX_BIN`、`REHEARSAL_PRIOR_CANDIDATE_EVIDENCE`（可加 `…_ROOTS`、`…_OFFICIAL_EVIDENCE`、`…_OFFICIAL_ROOTS`）；没给的探针汇总里标“未执行”，不能当通过。空跑通过（退出码 0）之前不进入口。
+补盲区探针覆盖：TUI 调用点参数交给新版二进制、收尾环境变量下的测试隔离、证据标签对真实候选流、上一版候选 seal 断言回放；新增 TUI 调用点时要同步更新 `replay-history` 用的反向补丁，否则自检探针报“探针出错”而不是“复现”。
+
+**升级工具不要求 keeper（账号保活容器）在场。** 环境探针、Job 演练容器事实、候选采集脚本与 Claude 候选网关快照，在 `docker inspect` 明确报告该名字的容器不存在时如实记为“未部署”
+（探针 `deployed:false`，脚本 `keeper_was_running=false`）并跳过检查与停启，其余四个容器仍必须在跑；只认 `No such object／container`，守护进程故障等一律失败。keeper 重新部署则行为不变，升级前不必建占位容器。
+
+**部署前做一次 CI 等价预跑。** 起后台验证、入口之前，在本机对将要部署的最终提交（工作树干净）一次跑齐 CI 会查、而升级工具门禁覆盖不到的项；本机重负载一次只跑一路：
+① `golangci-lint run --timeout=30m --max-issues-per-linter=0 --max-same-issues=0`，默认、`--build-tags=unit`、`--build-tags=integration` 三遍（缺 `--max-same-issues=0` 会把同类问题折叠漏看）；
+② `driver/local/local-capture-tools-receipt.sh` 跑全量 `make test-capture-tools`（含全部 `test_claude_rule_expectations_*`），红绿都写收据，该收据同时是后台验证与入口的起跑前置；
+③ Go 全包测试 `go test -tags=unit -p 3 ./...`（含冻结测试）与 `-tags=integration`（无 Docker 时只证明编译）；
+④ `make check-egress-spec CODEX_SPEC_SOURCE_ROOT=<目标版本源码>`。
+任何晚于预跑的源码提交都使其结论过期，改完整套重做。0.165 本机实测合计约 41 分钟（不含排队）。
+
+### 流水线脚本集（开工后串起 VC-1～VC-6）
+
+`driver/pipeline/` 把每轮要重复敲的命令串成可续跑的脚本；轮次、版本、路径全部来自本轮参数文件，脚本里不写死。采集主机侧脚本以 root 运行，开发机侧脚本在 `driver/pipeline/local/`。
+
+1. 配置：`pipeline.env.example` 复制成采集主机 `<PREP>/pipeline.env`（至少 `ARM64_VC_ENV=<本轮参数文件路径>`），开发机复制成 `~/.arm64-pipeline.env`（`ARM64_VC_ENV` 写采集主机上的路径，再加 `PIPE_SSH_HOST` 等）。
+2. 参数文件：`render_round_env.py --target <新> --baseline <旧> --round r1 --stamp <STAMP> --out <RUNROOT>/env.sh --set KEY=VALUE …`，名字全由版本号推出；`REPLACE_` 开头的值（账号、Key、摘要、镜像、模型、批准依据等）必须填，没填 `parse_env.py` 拒绝。
+   随后跑 `prepare-round-inputs.sh`（装入参数文件，放入 P0 回退依据与基线画像）和 `prepare-historical-source.sh`；漏跑会让入口便宜检查的 `required-parameters`、`plan-audit` 直接红，`start-entry.sh` 的 C11 起跑前自检先拦。
+3. 部署：开发机 `local/upload-and-deploy.sh <提交> --verify-only`，再真部署；第一次部署时采集主机还是上一版驱动，脚本自动走 `<PREP>/bootstrap/`。有流水线、入口、evolve 在跑时不得部署或换驱动。
+4. 入口：`start-entry.sh --check`（C1～C11，只读，不建任何东西）→ `start-entry.sh`。真起跑先 `preflight-refresh.sh --ensure`，官方采集登录态令牌不足就直连刷新，失败不起跑。自检含：C9 令牌剩余（不足阈值只报 WARN）、
+   C10 入口门禁 Go 编译缓存若在内存盘上总容量须 ≥10 GiB（`GO_CACHE_TMPFS_MIN_GIB` 可调）、C11 本轮输入已准备。`SKIP_BGV_CHECK=1` 与 `SKIP_CAPTURE_ACCOUNT_CHECK=1` 把对应 FAIL 降为 WARN；
+   `SKIP_CAPTURE_ACCOUNT_ON=1` 表示本阶段有意不打开采集账号（依赖账号在线的入口检查项要在 `opening-env.sh` 里带理由跳过，留到账号打开的窗口再核）。
+5. 流水线：`vc-pipeline.sh --check`，再 `start --from VC1 --to VC6 --approver '批准人及依据' --wait-handoff 60`（`setsid -f` 自起，不用 nohup）。VC4 前本机 `local/vc4-handoff.sh <bundle> <DC>`；
+   VC6 前把 `vc6/ORDER.example.txt` 复制成 `<PREP>/vc6/ORDER.txt`，本机另开 `local/vc6-handoff-watch.sh`（需 `VC6_REPO`）。
+6. 失败处理：看 `<PREP>/pipeline/vc-status.txt` 的 `STOPPED`；只有下面清单里的步骤会自动重试（带 `RETRY` 行），其余按恢复链对账，不要盲重跑。
+7. 采集账号：VC5 起跑前自动开，**`VC5_ALL_DONE` 之后才关**（`VC5_ALL_PAUSED` 暂停时不替人关）；VC6 业务验证步骤按 ORDER 的 `capture`／`off` 标志。令牌剩余不足 60 分钟拒绝打开的逻辑不变。
+
+自动重试只用于瞬时失败的只读／幂等步骤。可重试：`round_context` 只读重放、`vc5-precheck --dry-run`（退出码 3 blocked 不重试）、`background-validate preflight`、采集账号开（退出码 3／5）与关（3／5／6）、
+ORDER 里声明 `retry` 的 VC-6 步骤。默认不重试：`arm64-vc4-gates`、`vc4-all`（`PIPE_RETRY_VC4_GATES=1`／`PIPE_RETRY_VC4_ALL=1` 才补跑一次）。绝不重试：`vc23-seq`、`vc1-seal`、`vc5-all`、
+`vc5-precheck --apply`、构建网络批准、`set-env-keys`、BGV `start`、`entry.sh`、受监督部署、直连刷新、VC-6 其余步骤（占批次序号、发真实请求或写批准件账本，需恢复链对账）。
+
 <a id="codex-vc-0"></a>
 ## 4.0 VC-0 冻结升级输入
 
@@ -1671,7 +1718,7 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 
 | 顺序 | 入口负责的工作 | 验收要点 |
 |---|---|---|
-| 1 | 便宜检查、策略兼容／激活认证 | 参数、部署、目标包、源码、场景及环境一次报全；另含模型可用性探测，以及 main 上最近一次 Security Scan 须成功且对应 main 当前头（缺省 36 小时内）。依赖失败项标阻塞；这两项确需跳过只能用 `OPENING_CHECKS_SKIP` 并写 `OPENING_CHECKS_SKIP_REASON`，记为 skipped，不是 passed。ARM64 没有 `gh` 时，在本机核绿后带理由跳过 Security Scan 项 |
+| 1 | 便宜检查、策略兼容／激活认证 | 参数、部署、目标包、源码、场景及环境一次报全；另含模型可用性探测，以及 main 上最近一次 Security Scan 须成功且对应 main 当前头（缺省 36 小时内）。依赖失败项标阻塞；这两项确需跳过只能用 `OPENING_CHECKS_SKIP` 并写 `OPENING_CHECKS_SKIP_REASON`，记为 skipped，不是 passed。ARM64 没有 `gh` 时，在本机核绿后带理由跳过 Security Scan 项。Codex 另查两张起跑前置收据：本机完整 `make test-capture-tools` 通过收据、新版二进制 TUI 零请求预探收据（见“后台验证”） |
 | 2 | 入口门禁与 pre-A3、零请求 smoke、atomic-double | 同一次门禁产出 P0 证据与目标平台预跑记录；沿用 atomic-double 记录时同时核时效窗口；全部通过才建账本 |
 | 3 | 时间账本、ARM64 环境收据、checkpoint、预检 Campaign | `preflight_only` 零请求；账本创建后沿用，不重建计时 |
 | 4 | 完整 Job 演练、客户端启动探测 | 启动／重试／清理链可运行；目标 TUI 能在本地替身上发出首帧，daemon 场景确认实际模式 |
@@ -1698,11 +1745,16 @@ ARM64 后台运行使用 `setsid -f … < /dev/null`；`nohup` 继承的 SIGHUP 
 | 目标客户端 | 宿主和采集容器的官方整包、绝对路径、版本与摘要一致；daemon 所需配套文件齐全，不只拷主二进制 |
 | 镜像与依赖 | 两运行镜像 digest、Compose 渲染摘要、静态容器 IP、挂载、抓包拓扑、代理／CA 与冻结环境一致 |
 | 出口 | 读取受限运维策略，两容器及两端保护通过实时准入；禁止自动学习出口、回退直连或改网络迁就检查 |
-| 资源 | 根盘已用 ≤69%、可用 ≥30 GiB；驱动派发前可用 ≥40 GiB。清理只针对未被收据引用的缓存和临时产物 |
+| 资源 | 根盘已用 ≤69%、可用 ≥30 GiB；驱动派发前可用 ≥40 GiB。清理只针对未被收据引用的缓存和临时产物。入口门禁的 Go 编译缓存若挂在内存盘上，总容量须 ≥10 GiB（见失败矩阵） |
 
 网络配置、接口与切换步骤见[运行时出口运维说明](egress/runtime-egress-operations.md)，本节不重复具体拓扑。
 环境 producer 按当前策略、boot ID、租期和目标 Codex Rust TLS 探针核验；旧环境收据不能替代当前准入。
 经批准的出口策略变更重新准入即可，不因此重签工具身份或作废未受影响证据；真实依赖变化仍按合同核对。
+
+出口地址只在受限运维策略 `/etc/sub2api-egress/policy.json` 里指定，升级工具不把它当任何步骤的输入。更换出口：起草新策略 → 两台机器各 `deploy/egress-ops/egress-ctl apply --dry-run` →
+维护窗口内**先在出口机** `apply --role exit`（成功后打印一行审计记录）→ **再在源端** `apply --role origin --exit-audit-record '<那一行>'`（源端先于任何改动核对两端策略摘要一致，不一致拒绝；
+脚本不 ssh，不需要源端到出口机的凭据）→ 容器内探针与稳定性观察 → 恢复升级派发。每台失败只回滚本机，整体回退用 `rollback` 先出口机后源端；变更写各机 `/var/lib/sub2api-egress/audit.jsonl`。
+进行中的 run 遇出口变化仍会被暂停，所以只在两次运行之间换；新驱动装上后 `environment-p0` 的声明变了，尚未建 Formal 的旧入口记录会判“输入声明变了”重做一次，建议先装好驱动再开新入口。
 
 建账本后的失败重跑同一 `entry.sh`：完整步骤按绑定承接，半成品使用新坐标并保留原记录，启动探测重新执行。
 Formal 已建后创建链冻结，只补收口；已派发首批不得再次派发，转对账恢复。
@@ -1759,6 +1811,12 @@ ARM64 自查设置 `CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1`，不得把缺环�
 3. 执行冻结的 `capture-official run`；每个 track／Job 使用独立证据根，真实性以协议分支和原始事件为准。
 4. 在生成 assertion bundle／manifest 前一次收口权限，再生成 bundle、预览并批准 `capture-official seal`。
 5. 重放恢复、secret scan、inventory 和 finalizer，执行 `account-sealed-official` 核算请求并封存 checkpoint。
+
+**会话内步骤。** `drive_codex_tui.py --step 动作[@保持秒数][:参数]` 可重复，按顺序在同一个 TUI 进程内执行（与 `--prompt` 及预热斜杠流程互斥，同用退出码 2）。动作：`prompt:文本`、
+`effort:档位`（发 `/model --reasoning=档位`）、`model:模型[,档位]`、`effort-up`／`effort-down`（Alt+. ／Alt+,）、`compact`、`slash:/命令`、`wait@秒`；设置类动作默认保持 8 秒。
+真实上游下每个 `prompt` 要给足生成时间（建议 `prompt@60`、`compact@120`），设置动作前一步必须已完成；步骤写错（动作未知、档位或模型名不合法）在启动 TUI 之前以退出码 2 失败。
+推理强度覆盖默认开启后，名字叫 `OpenAI` 的 provider 且模型目录 `supports_reasoning_effort_updates=true` 时，窗口内改 effort 在 `input` 追加 `configuration_update`、请求级 `reasoning.effort` 钉死；
+首轮有 WS 预热（含 WS 握手被拒后回退 HTTP）的不带，`supports_websockets=false` 的采集 provider 首轮必带。哪些模型支持更新以采集账号实测的 `/models` 为准，不凭型号推断。
 
 TUI／daemon 的工作目录、启动参数、模式判定与清理交给冻结场景和驱动；启动探测先在 VC-0 通过。
 发现其它会话遗留 daemon／updater 时先核查，不把它混入本轮证据。官方 seal 的端点删除／弃用取值零命中，
@@ -1898,6 +1956,11 @@ Catalog stage 字节必须与 VC-3 一致；画像变化走批准修订／后继
    仅补齐批准的画像／token 并封存准入。已合法完成时只读复核，失败补偿自身写入，不能盲目重复 apply。
 3. `vc5-all.sh` 派发前调用 `--consume`，核对收据、有效参数和当前事实；漂移先返回准入处理。
 4. 采集前再复算候选源码、镜像、Profile、VC-4 收据与运行环境，一致后才创建 attempt、`run_nonce` 和预约。
+
+VC-4 跑门禁期间就手动跑一次 `vc5-precheck.sh --dry-run`，不要等流水线：报告里 `candidate_prerequisites` 是候选作业的三项库表前置（条件与改法见 [§4.7 失败矩阵](#codex-failure-matrix)；库来自生产同步时天然不满足，
+不满足时顶层 `status=blocked`，提示里写明备份、临时改法与 VC-6 之后的恢复步骤），`ttl` 是令牌与批准件的剩余有效期（令牌富余不足 2 小时会警告；真正让 canonical 前准入失效的是令牌，24 小时令牌签发 12 小时后即低于最小剩余）。
+流水线在准入收据已存在时仍会复查库表前置，被改回去则在起 `vc5-all.sh`、打开采集账号之前停下。启动 `vc5-all.sh` 时带 `VC5_RENEW_APPROVER='批准人及依据'`，canonical 前会自动只续令牌（`--renew` 只续令牌，其余一律拒绝）；
+不带则明确报错退出，不静默。
 
 JWT 按实际 `sub2api-admin-jwt/v1` 合同检查三段结构、HS256 签名及 `user_id/email/role/token_version/iat/exp/nbf`，
 不自行添加 `iss/sub/aud/jti`。凭据为当前执行用户所有的私有普通文件，无符号链接；旧 `0400` 仅作为待规范化输入，
@@ -2103,6 +2166,12 @@ canonical 待执行项清零且 `restored_active` 后，首次 `deliver-candidat
 省掉的代价是约 2 小时后才红。收尾全量门禁中途根盘会比起跑时多涨约 8～9 GiB，起跑前按此核对剩余空间不触 69% 停线，并先删上一轮遗留的 Go 编译缓存。
 `prepare --dry-run` 的第一步重放 Campaign 材料，可提前确认读侧一致。
 
+收尾 `prepare`（含 `--dry-run`）在权威仓库头、以及出候选提交之后各自动跑一次冻结覆盖预检（复用后台验证前置检查的 `freeze-receipts` 一项，秒级只读）。合并候选链进收尾分支后若两边都改过同一个冻结文件，
+自动合并结果没有承接收据，预检就地报出路径；处理：①还原为收尾侧版本一个提交，②恢复合并结果一个提交，③对②生成承接收据（`freeze-successor-generate --before <①> --after <②>`，先 `--dry-run`）一个提交，
+合并后树内容不变，再在新工作根重新 `prepare`。`gates` 起跑前先过两道秒级预检再写开始占位：候选里无未承接冻结路径；收尾注入门禁的环境变量逐个核对白名单（`GATE_ENV_WHITELIST`），
+会被单元继承的变量必须登记在候选测试包 `tools/official_client_capture/tests/__init__.py` 的 `GATE_EXECUTOR_ENV_NAMES`。`codex_closeout.py gates --plan <plan.json> --preflight-only` 可在起跑前单独自查（不起门禁、不写占位）。
+以后要给门禁再加环境变量：先在白名单登记并分类，会被继承的同时加进测试包剔除清单。
+
 **收尾工具**使用 [`tools/codex_closeout.py`](../tools/codex_closeout.py)：read-material／draft 可先生成指南草稿；
 VC-6 收口后再 prepare（先 `--dry-run`）→ gates → 人工批准 → publish。工具同步需要的摘要并生成隔离候选材料，
 第二部分未变时不触发规则画像摘要级联。配置见驱动 README 的“收尾编排”；工具不代替 canary、切换或回滚。
@@ -2112,7 +2181,19 @@ VC-6 收口后再 prepare（先 `--dry-run`）→ gates → 人工批准 → pub
 
 收尾门禁（`codex_closeout.py gates --plan`）缺省重新执行同一候选的全集，不允许按客户端筛选，允许带标注的“补跑通过”单元，发布汇报里单列。
 只有在收尾配置里给出 `gate.unit_inherit`、固定测试树坐标（`gate.work`）与记录库（`gate.record_store`），才允许前序后台验证向收尾提交逐单元承接（来源清单与决策收据须可重放，
-类型翻转、符号链接、子模块变更一票否决）。0.164 未启用，收尾为 `re-execute` 全集。
+类型翻转、符号链接、子模块变更一票否决）。
+
+**逐单元承接（请求后置写法）。** 承接请求绑定候选提交，而候选提交由 `prepare` 生成，所以配置里只写 `gate.unit_inherit={"stage":"pre-ledger"}`（不写请求），`prepare` 之后再生成：
+① `codex_closeout.py inherit-propose --plan <工作根>/plan.json` 对候选提交写承接提案（数分钟，只判定、不跑单元）；② 两类批准（第三方审核、变更批准）对提案 `binding.json` 的 `binding_sha256` 签字，有效期要盖住整轮运行；
+③ `inherit-request --plan … --proposal … --approval A --approval B --clock-source file:<校时样本>` 组装请求（采集主机没有 chronyc，样本由 `clock_sample_daemon.py` 维护，须在 300 秒内）；
+④ `gates --plan … --preflight-only --unit-inherit-request <请求>` 自查；⑤ `gates --plan … --unit-inherit-request <请求>` 起跑。请求只对该候选提交有效，`prepare` 重做就要重新提案、批准、组装。
+`gates` 起跑前复核请求的提交、客户端、阶段、记录库、组合名与门禁全集，任何一项不符即拒绝：运行时执行器只要有一处上下文与请求不逐字段相同就静默回退成整轮重跑。完成后看 `journal/gates-done.json` 的 `unit_inherit`（承接与重跑逐项）。
+承接来源轮必须冻结：`unit_records.EXECUTOR_FILES` 登记的执行器文件、字节码预编译工具、补跑打开时的重试策略与包清单、单元执行器配置与权重／时长文件和并行度，一个字节都不能改，换提交前跑 `freeze_check.py`。
+审计型后台验证（带 `--audit-policy`）不签沿用绑定、不自动接入口空跑，登记单元的新读取会让整轮 failed，不要与门禁用的后台验证共用；承接只省不带审计的耗时，带审计单元约慢 7 倍，评估收益一律按不带审计基线折算。
+中断运行的部分完成清单：后继运行必须在不同的部署上（先重新受监督部署同一树），封存要求原运行单元进程组已退出。该流程在真实执行器上的实战结果〔收尾回填〕；未启用时收尾为 `re-execute` 全集。
+
+先发版再清理（运行镜像已换成发布镜像）时，清理脚本设 `VC6_RELEASE_IMAGE=<发布镜像引用>` 与 `VC6_CLEANUP_APPROVED_BY`，先 `--check` 再执行：运行镜像必须是 VC-6 最终镜像，或该引用解析出的本机镜像 ID 恰等于容器在跑的 ID，
+否则拒绝；发布镜像出现在待删清单里一律拒绝。收据 `reason` 与执行证据 `running_image_kind`／`running_image_ref` 如实记运行的是最终镜像还是发布镜像（仍跑最终镜像时引用为空，即使设了该变量）。
 
 实际清理先 dry-run：从 `cleanup_context.py` 解析当前 VC-5／VC-6／canonical 绑定，列出目标、备份与恢复演练。
 批准、脚本结果和删除验证绑定同一上下文摘要。只删除已归档且无生产／重放依赖的临时产物，
@@ -2139,10 +2220,16 @@ VC-6 收口后再 prepare（先 `--dry-run`）→ gates → 人工批准 → pub
 
 失败之后的“登记演进→对账→恢复预览→批准／授权→续跑”可用 `recovery-plan.sh <参数文件>`：缺省只读预览，列出保留／重验／重采的对象；
 `--apply` 按现场状态跳过已完成步骤、按序执行，重复执行结果相同。写账本的动作各需人工提交的专项批准，缺批准只写意向并停下，不代签。
-0.164 实际恢复仍走手工命令链，写动作端尚未经真实失败实练，首次使用先预览并与手工结果逐项对照。
+0.164 实际恢复仍走手工命令链，写动作端尚未经真实失败实练，首次使用先预览并与手工结果逐项对照；演练可用 `--inject-crash-after` 逐步打断。
+目标 attempt 找不到、且候选就绪静态收据最新一份是失败时（就绪检查零请求退出、不创建 attempt），计划里 `reconcile`／`approve`／`authorize` 标“不适用”，失败的父 run 仍先 `reconcile-runs` 入账，
+`continue` 标“阻塞”并打印同批次重派命令（旧 `vc5-run-batch.out/.pid`、`vc5-all.out` 改名留档，再 `setsid -f bash $RUNROOT/vc5-run-batch.sh`）；命令由人在修好环境前置后执行，计划不代办。
 
-**后台验证**（`background-validate.sh`）：起跑前自动做五项前置检查（冻结收据、基线重封、重部署、准入绑定、主机 Go 不低于 `backend/go.mod`），
-任一项不过拒绝起跑，不得用 `--no-preflight` 绕过。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
+**后台验证**（`background-validate.sh`）：起跑前自动做七项前置检查（冻结收据、基线重封、重部署、准入绑定、主机 Go 不低于 `backend/go.mod`、本机完整测试收据、TUI 预探收据），
+任一项不过拒绝起跑，不得用 `--no-preflight` 绕过。第六项 `local-capture-receipt`：要部署起跑的修复提交须有本机完整 `make test-capture-tools` 通过的本地收据
+（`driver/local/local-capture-tools-receipt.sh`，约 48 分钟，不占门禁，收据上传到 `$RUNROOT/local-receipts/`）；第七项 `tui-prelaunch-receipt`：新版二进制对 compact、ws-idle-close、daemon、guardian
+以及会话内改推理强度／换模型／压缩后续聊（effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws）各 TUI 场景做过零请求启动预探且全部通过（`driver/tui-prelaunch-receipt.sh scenarios／write／verify`，绑定目标版本与登记的二进制摘要，真实请求数必须为 0）。
+两项只对 Codex 做；入口便宜检查同名两项在开工时就查。同一 Campaign 内修一次几个文件时，`background-validate.sh start … --select-base last-passed` 把比对基点取为同一 Campaign 上一个已通过的提交；
+VC-5 准入接受这种子集结论（只拒另一客户端用）。第一次验证不带。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
 及受改动影响的 Claude 重模块照跑；找不到发版基点或选择器出错时回退全集；Claude 轮次、`--opening`、收尾不筛选），子集结论不得冒充全集，也不能被 `reuse` 沿用。失败单元只在“命令正常退出但失败”时补跑一次：同一单元最近 5 轮补跑通过只许 1 次，
 超时、被信号终止、读集未闭合不补跑；Go 门禁先核对包清单完整，再按失败包补跑。补跑通过的单元在结论里单列，两次日志都留；
 结束时在结论目录另出核数偏差报告。
@@ -2216,6 +2303,21 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 - **晋升之后的形态要用模拟晋升树整包预演**：把候选链合并进收尾分支后，用 `egresscatalogpromote` 加 `retire-apply` 做出 Active／Previous 与正式晋升
   一致的本机树，整包跑 `go test -tags=unit ./...`。晋升前全绿、晋升后才红是这一类问题的共同特征：0.164 靠这一步在收尾前查出两处生产缺陷（管理后台“测试 OAuth 生图”漏绑运行态快照，
   晋升后会整条失败；WS→HTTP 桥接延迟正文分支漏置 additional_tools 官方键序）和写死上一版形态的测试（固定到 Active／Previous 里较旧的槽位，断言不放宽），修正先行提交。
+  做法：用一次性工作树取候选链末端，`egresscatalogpromote`（`-campaign-id/-acceptance-sha256/-target-version/-target-profile-digest/-rollback-version/-rollback-profile-digest/-output`）产出晋升产物，
+  把 `catalogdata/runtime/*` 与 `releasecontract/testdata/release-graph.json` 覆盖回去，即得 Active＝目标版本、Previous＝上一版的状态，再整包跑 `internal/service`。红的先分三类：冻结台账摘要（VC-6 收据）、
+  测试对照段假设“Active 是上一版画像”（用 `withoutTargetProfileForWire` 修）、生产缺陷（先用画像开关二分定位责任开关）。
+- **WS→HTTP 降级共用 invocation 摘要**：同一次 invocation 里 WS 与降级 HTTP 共用 Executor 冻结的 invocation 摘要，凡是只对其中一类 attempt 生效的身份事实（如 `WindowAdvances`）
+  都会让降级请求被 `attempt 不能更换 invocation 冻结的 Persona attestation` 拒绝，表现为 502 failover。新增这类事实时必须加一个“WS 失败→HTTP 降级仍成功”的用例
+  （`TestOpenAIForwardWSToHTTPFallbackKeepsInvocationAttestationWhenWindowTracked` 为模板）；现行做法是计划层让后续 attempt 跟随首个 attempt。
+- **候选链期间的生产缺陷修复要避开事实映射钉住的文件**：`candidate_test_fact_map_<版本>.json` 钉住约 19 个生产源码文件的 sha256，Campaign 建好后改其中任何一个都要重绑映射、改受管工具、废 Campaign。
+  先列出映射里的 `source_files`，修复优先落在未被钉住的文件。
+- **发版前先看 Security Scan**：govulncheck 的 x/* 公告多半上游已修、本仓库未同步，先 `git fetch upstream`，在 `git log upstream/main -- backend/go.mod` 里找对应提交。`x/sys`、`x/tools` 是本仓库的直接依赖，
+  上游 go.mod 分组与我们不同，摘取会在 go.mod／go.sum 上冲突：手工改 go.mod 版本号，`GOFLAGS=-mod=mod go mod tidy` 生成 go.sum（顺手恢复 tidy 删掉的与本次无关的行），再核对新增校验和行与上游一致。
+  go.mod、go.sum 都是冻结路径，源码提交后要单独提交 `freeze-successor-generate` 收据；ARM64 候选构建的模块缓存需先有新版 x/*。
+- **入口门禁的 Go 编译缓存在内存盘上时，冷启动会写满**：入口门禁的 `GOCACHE` 是数据根上一级 `entry-gates-work/go-build-cache`。缓存暖时 4 GiB 的内存盘够用，但腾盘清掉 Go 编译缓存后冷启动全量重建超过 4 GiB，
+  写满后多项门禁同时报 `no space left on device`（0.165 为此入口门禁白跑近 2 小时；同提交的后台验证用自己 WORK 下的磁盘缓存，却是绿的）。容量须 ≥10 GiB：`start-entry.sh` 的 C10 起跑前检查；
+  扩容 `mount -o remount,size=10G <挂载点>` 之前先确认可用内存，或卸载后改走磁盘；腾盘清过 Go 缓存之后尤其要复核。重跑同一条起跑命令即可，入口按步骤记录沿用已通过的门禁。
+- **入口起跑前漏跑 `prepare-round-inputs.sh`**：入口便宜检查的 `required-parameters`（缺 P0 回退依据）与 `plan-audit`（缺基线画像）直接红，白占一次起跑；`start-entry.sh` 的 C11 现在先拦。
 - **晋升后判别式门禁会失去判别力**：以 `codexGateDiscriminatingReleaseMode` 取“唯一具备该事实的槽位”的门禁，在下一版登记使两个槽位都具备该事实后会红，
   届时改用 `codexGateTargetReleaseMode` 并另写新版本的判别式门禁。
 - **复杂度守卫用例满载噪声**：分配次数测量（`testing.AllocsPerRun`）会被包内后台 goroutine 的突发分配撞红，
@@ -2234,9 +2336,9 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 - **证据标签的帧索引按原始帧序号声明会指到续帧上**：候选网关向上游发出的压缩 WS 消息会被拆成多个分片帧（coder/websocket 压缩写入，0.160 起就如此），官方是一条消息一帧。
   0.164 登记的 A06 标签把首个业务帧写成帧索引 1，实际预热消息占原始帧 0～6，首个业务消息起始帧是 7，VC-5 seal 预演被 SPEC-WS-005 的 7 条
   `first-business-frame-*` 检查拒收，靠工具演进把索引改成 7 才过。登记测试里的观测是手造的，覆盖不到这一类问题；
-  下次登记在 VC-4 期间用非正式实采的候选证据先离线跑一遍 `_verify_selector_reachability` 与全部检查，并评估标签改按消息序号或事件类型命中，或让候选改单帧写入。
+  现行做法：帧级标签改按消息命中（`event:response.create:N`，见“开工准备与版本登记”），登记阶段用上一版真实候选证据预演一次报全，不再等到 VC-5。
 - **VC-5 断言因判据过严失败走 approval-revision**：SPEC-BODY-003 `main-messages-keep-passthrough` 期望 0，而 A04 是第三方入站，按设计不合成逐项 passthrough，实际为 1，
-  封存后 assert-rules 必然红。登记时同样应在 VC-4 期间用真实候选证据离线试跑全部检查；恢复链为 `reconcile-supervisor-run` → 工具演进基线（`reevaluate`）→ `approval-revision`，
+  封存后 assert-rules 必然红。登记阶段的预演已覆盖这类判据过严；漏网时恢复链为 `reconcile-supervisor-run` → 工具演进基线（`reevaluate`）→ `approval-revision`，
   修订后的评估运行 43 条规则、201 条检查全部通过。
 - **seal 失败遗留的半成品会让后续预览失败（受管工具缺口，0.165 登记时修）**：seal 在 Kilo 后探针之后失败、attempt 被作废时，留下的 `client-after`（有 probe-manifest、无恢复收据）
   仍是“最新 attempt”，`codex_upgrade status` 报“Kilo 后检查点材料不完整或不可信”；在证据根内改名会触发“权限收口后的证据元数据边界漂移”，0.164 的处置是整体移出证据根归档。
