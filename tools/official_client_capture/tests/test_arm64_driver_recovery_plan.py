@@ -546,6 +546,9 @@ class ApplyTests(_WorldCase):
         self.assertIn("request-budget-extend", result.stderr)
         # 环境暂停：干净环境收据（collect／finalize）与环境隔离两条命令模板；批准权限不变，仍由人给出批准摘要与批准人。
         self.assertIn("codex_upgrade_arm64_environment_receipt collect --evidence-root", result.stderr)
+        # 实练（R2）用的阶段是 p0；模板里不再留“<阶段，如 attempt_after>”这种占位。
+        self.assertIn("--phase p0 --subject-id", result.stderr)
+        self.assertNotIn("--phase <", result.stderr)
         self.assertIn("finalize --evidence-root <证据根> --facts <facts.json> --output <receipt.json>", result.stderr)
         self.assertIn(f"environment-isolate --campaign-dir {world.data}/evidence/campaigns/{world.campaign}", result.stderr)
         self.assertIn("--environment-repair-receipt <环境修复记录绝对路径> --clean-environment-receipt", result.stderr)

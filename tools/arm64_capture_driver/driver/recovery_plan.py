@@ -1308,9 +1308,9 @@ def pause_command_templates(params: Mapping[str, str], orchestrator: str, kinds:
     lines: list[str] = []
     if "environment" in kinds:
         lines.append(
-            "干净环境收据（修复环境、起好采集容器后新取，观测时间须晚于污染）：先 "
+            "干净环境收据（修复环境、起好采集容器后新取，观测时间须晚于污染；实练用 --phase p0，命令里的 subject-id 沿用本轮升级标识）：先 "
             f"{prefix}codex_upgrade_arm64_environment_receipt collect --evidence-root <新建的证据根目录> "
-            "--output <facts.json> --phase <阶段，如 attempt_after> --subject-id <标识> --rust-tls-codex-version <目标客户端版本>，"
+            "--output <facts.json> --phase p0 --subject-id <本轮升级标识，沿用上一份环境收据的 subject_id> --rust-tls-codex-version <目标客户端版本>，"
             "再 同一模块 finalize --evidence-root <证据根> --facts <facts.json> --output <receipt.json>（根盘须低于 70%）")
     if "accounting" in kinds:
         lines.append(
