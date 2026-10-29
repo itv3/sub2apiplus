@@ -596,6 +596,117 @@ class EntryGatesExportTests(unittest.TestCase):
             self.assertEqual(entry["pre_a3_executor_summary"], str(out / "pre-a3-executor-summary.json"))
 
 
+class EntryGatesResumeExportTests(unittest.TestCase):
+    """修好接着跑：vc4 组合、续跑回显、全沿用门禁项的起止时间、环境豁免不签 P0、VC-4 门禁产物改写（vc4_gate_records.py）。"""
+
+    DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
+
+    def _export(self, root: Path, profile: str, *, resume: dict | None = None, inherit_all: bool = False, mode: str | None = None,
+                store: Path | None = None, selection: dict | None = None, label: str = "") -> tuple[dict, Path, Path]:
+        tree = root / "tree" if (root / "tree").exists() else _tree(root, EntryGatesPlanTests.CHECKS)
+        manifest = eg.plan_gates(tree, profile=profile, launcher=[], platform="linux")
+        if selection is not None:
+            manifest["selection"] = selection
+        everything = frozenset(unit["unit_id"] for unit in manifest["units"]) | {"test_x"} if inherit_all else frozenset()
+        summary = _summary_for(manifest, inherited=everything, mode=mode or ("full-set-pass" if inherit_all else None), store=str(store or "/store"))
+        published = root / f"unit-manifest{label}.json"
+        published.write_text(json.dumps({"decided_at_utc": "2026-10-29T08:00:00Z", "completed_at_utc": "2026-10-29T08:05:00Z"}), encoding="utf-8")
+        if mode or inherit_all:
+            summary["unit_manifest"]["path"] = str(published)
+        if inherit_all:
+            for gate in summary["gates"]:
+                gate["started_at_utc"] = gate["completed_at_utc"] = None
+        if resume is not None:
+            summary["resume"] = resume
+        if store is not None:
+            (store / "runs").mkdir(parents=True, exist_ok=True)
+            (store / "runs" / f"{RUN_ID}.json").write_text(json.dumps({"run_id": RUN_ID, "manifest_sha256": "m" * 64}), encoding="utf-8")
+        manifest_path, summary_path = root / f"{profile}{label}-manifest.json", root / f"{profile}{label}-summary.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+        out = root / f"out-{profile}{label}"
+        entry = eg.export_records(manifest_path, summary_path, out, source={"commit": "c" * 40, "tree_head": "c" * 40, "bundle": "/b"},
+                                  subject="entry-gates-x", round_id="r1", tree=str(tree), isolation="unshare -m", host="arm64",
+                                  architecture="linux/aarch64", target_version="0.159.3", bytecode_cache="/pyc",
+                                  tool_identity=lambda _tree: {name: "1" * 64 for name in eg.IDENTITY_FIELDS})
+        return entry, out, summary_path
+
+    def test_the_vc4_profile_is_exactly_what_make_test_is_made_of(self) -> None:
+        self.assertEqual(eg.PROFILES["vc4"], eg.MAKE_TEST_GATES)
+        self.assertEqual(eg.profile_gates("vc4"), eg.profile_gates("preflight"))
+        self.assertIn("check-egress-spec", eg.PROFILES["vc4"], "make check-egress-spec 就是其中一个门禁项，不再单独跑一遍")
+
+    def test_resume_is_echoed_and_a_fully_inherited_gate_gets_the_run_window_instead_of_empty_times(self) -> None:
+        resume = {"status": "applied", "reused": 20, "rerun": 0, "layer": 1, "source": {"run_id": "r0"}, "environment_waiver": None}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            entry, out, _summary = self._export(root, "vc4", resume=resume, inherit_all=True, store=root / "store")
+            self.assertEqual(entry["resume"], resume)
+            record = json.loads((out / "logs" / "check-egress-spec.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual((record["started_at_utc"], record["completed_at_utc"], record["time_basis"]),
+                             ("2026-10-29T08:00:00Z", "2026-10-29T08:05:00Z", "run-window"), "全沿用的门禁项没有执行时间，取本次运行的时间窗并写明")
+            regression = json.loads((out / "logs" / "full-regression.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual((regression["started_at_utc"], regression["exit_code"]), ("2026-10-29T08:00:00Z", 0))
+            self.assertNotIn("client_selection", regression, "全集运行的 full-regression 记录与改造前逐字相同")
+            self.assertIn("同提交续跑沿用", json.loads((out / "p0" / "check-egress-spec.json").read_text(encoding="utf-8"))["executed_as"])
+
+    def test_an_environment_waiver_withholds_the_p0_evidence_and_says_why(self) -> None:
+        resume = {"status": "applied", "reused": 20, "rerun": 0, "layer": 1, "environment_waiver": {"reason": "换缓存目录", "names": ["envvar:GOCACHE"]}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            entry, _out, _summary = self._export(root, "full-gates", resume=resume, inherit_all=True, store=root / "store")
+            self.assertEqual(entry["p0_evidence"], {})
+            self.assertIn("环境豁免", " ".join(entry["p0_evidence_withheld"].values()))
+            plain, _out2, _s = self._export(root, "full-gates", resume={**resume, "environment_waiver": None}, inherit_all=True, store=root / "store", label="b")
+            self.assertEqual(len(plain["p0_evidence"]), 2, "没有豁免的续跑照常签 v2 证据")
+
+    def test_a_subset_run_marks_the_full_regression_record_so_it_cannot_pass_for_make_test(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            selection = {"scope": "client-plan", "selection_sha256": "s" * 64, "client": "codex", "modules": {"a": "run", "b": "skip"}, "pulled": [],
+                         "advisories": [], "skipped": [], "base_commit": "b" * 40, "head_commit": "c" * 40}
+            _entry, out, _summary = self._export(root, "vc4", selection=selection)
+            regression = json.loads((out / "logs" / "full-regression.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual(regression["client_selection"], {"gate_scope": "client-plan", "selection_sha256": "s" * 64})
+
+    def test_vc4_records_keep_the_six_piece_set_and_the_implementation_log(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("vc4_gate_records", self.DRIVER / "vc4_gate_records.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            resume = {"status": "applied", "reused": 19, "rerun": 1, "layer": 1, "source": {"run_id": "r0"}, "environment_waiver": None}
+            _entry, out, summary_path = self._export(root, "vc4", resume=resume, mode="full-set-pass", store=root / "store")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            for row in summary["units"]:   # 给逐单元日志一份真实内容
+                log = root / f"{row['unit_id'].replace(':', '_')}.log"
+                log.write_text(f"{row['unit_id']} 的输出\n" * 3, encoding="utf-8")
+                row["log"] = str(log)
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            gates, impl = root / "local-gates", root / "impl-logs"
+            gates.mkdir(); impl.mkdir()
+            import io, contextlib
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                code = module.main(["build", "--entry-out", str(out), "--gates-dir", str(gates), "--impl-dir", str(impl), "--round", "r1",
+                                    "--candidate", "a" * 40, "--executed", "b" * 40, "--receipt", "docs/egress/maintenance/x.json", "--isolation", "隔离"])
+            self.assertEqual((code, captured.getvalue().strip()), (0, "SPEC_RC=0 REG_RC=0"))
+            self.assertEqual(sorted(path.name for path in gates.iterdir()),
+                             sorted(f"{gate}.{kind}" for gate in ("check-egress-spec", "full-regression") for kind in ("gate.json", "stdout.log", "stderr.log")))
+            for gate, command in (("check-egress-spec", ["make", "check-egress-spec"]), ("full-regression", ["make", "test"])):
+                record = json.loads((gates / f"{gate}.gate.json").read_text(encoding="utf-8"))
+                for key in ("gate_id", "command", "working_directory", "host", "architecture", "started_at_utc", "completed_at_utc", "exit_code", "tree", "tree_head"):
+                    self.assertIn(key, record, "build_gate_facts.py 与 vc5-all.sh 读的字段原样都在")
+                self.assertEqual((record["command"], record["exit_code"], record["tree_head"]), (command, 0, "c" * 40))
+                self.assertEqual(record["unit_execution"]["resume"], resume)
+                self.assertNotIn("client_selection", record)
+            self.assertIn("exit_code=0", (impl / "check-egress-spec.log").read_text(encoding="utf-8"))
+            self.assertIn("candidate_commit=" + "a" * 40, (impl / "check-egress-spec.log").read_text(encoding="utf-8"))
+            self.assertIn("=== egress-spec:", (gates / "check-egress-spec.stdout.log").read_text(encoding="utf-8"))
+
+
 class EntryGatesScopeWorkspaceTests(unittest.TestCase):
     """收窄复验保留已绑定实物，身份不符时不能通过重建或补装绕过。"""
 

@@ -833,6 +833,37 @@ class OrchestratorGateScopeTests(OrchestratorTestCase):
             eo._parse(["--gate-scope", "sometimes"])
 
 
+class OrchestratorResumeTests(OrchestratorTestCase):
+    """修好接着跑：入口门禁缺省带 ``--resume-from auto --resume-series entry``；显式重新执行全集、读集审计、全集通过／逐单元承接、``--no-resume`` 都不带。"""
+
+    def entry_gate_calls(self) -> list[list[str]]:
+        return [call for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+
+    def test_the_entry_gate_resumes_by_default_and_only_the_main_call_carries_it(self) -> None:
+        result = self.orchestrate(to_step="atomic-double")
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        [gate] = self.entry_gate_calls()
+        self.assertEqual((_option(gate, "--resume-from"), _option(gate, "--resume-series")), ("auto", "entry"))
+        self.assertNotIn("--resume-waive-env", gate, "环境豁免只能由操作员直接对 entry-gates.sh 显式声明，编排器从不代劳")
+
+    def test_every_flow_that_needs_a_clean_execution_keeps_the_old_command_line(self) -> None:
+        for name, kwargs in {"显式重新执行全集": {"reexecute_gates": True}, "关闭续跑": {"resume": False},
+                             "读集审计": {"reexecute_gates": True, "audit_reads": True}}.items():
+            with self.subTest(name):
+                orchestrator = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / f"resume-{abs(hash(name))}",
+                                               steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, **kwargs)
+                self.assertEqual(orchestrator._gate_resume_args(), [])
+        request = self.fx.root / "full-set.json"
+        request.write_text("{}", encoding="utf-8")
+        full_set = eo.Orchestrator(dict(self.fx.params), driver_dir=self.fx.driver, run_dir=self.fx.root / "resume-full-set", steps_dir=self.fx.steps_dir,
+                                   runner=self.commands, es_runner=self.fx.runner, full_set_request=request, full_set_work=self.fx.root / "w")
+        self.assertEqual(full_set._gate_resume_args(), [], "全集通过模式本来就有自己的承接合同")
+
+    def test_the_command_line_can_switch_resume_off(self) -> None:
+        self.assertFalse(eo._parse([]).no_resume)
+        self.assertTrue(eo._parse(["--no-resume"]).no_resume)
+
+
 class OrchestratorPieceTests(unittest.TestCase):
     def test_strict_audit_options_fail_before_starting_an_invalid_entry(self) -> None:
         cases = [["--audit-strict"], ["--audit-policy", "/missing-policy.json"],

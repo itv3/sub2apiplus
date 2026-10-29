@@ -2289,8 +2289,8 @@ class Arm64GateScriptTests(unittest.TestCase):
 
     * 全量门禁：make test、backend test-unit／test-integration、golangci-lint unit／integration 与 CI 里的部署脚本测试依次全部执行，
       都经 isolated_run（与目标平台门禁同一隔离方式）；任一未通过退出 1 且其余照跑；结论只写 $RUNROOT/full-gates；
-    * VC-4 门禁：DC 上 check-egress-spec 与 make test、C 上只跑 check-egress-spec-ci；产物与本机上传逐字段同格式，
-      上传清单可被 vc4-all.sh 同一核验通过，READY 写在最后；DC 必须恰好是 C 加承接收据，否则不交付；
+    * VC-4 门禁：DC 上 check-egress-spec 与 make test 的全部内容经统一执行器一次运行（入口门禁组合 vc4，带同提交续跑沿用）、C 上只跑 check-egress-spec-ci；
+      产物与本机上传逐字段同格式（vc4_gate_records.py 改写），上传清单可被 vc4-all.sh 同一核验通过，READY 写在最后；DC 必须恰好是 C 加承接收据，否则不交付；
     * 用法错误退出 2，准备失败与并发退出 3。
     """
 
@@ -2316,7 +2316,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "client_table.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
-                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py", "go_compile_warmup.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py", "go_compile_warmup.py", "vc4_gate_records.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
@@ -2545,8 +2545,20 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertIn("ARM64_VC4_GATES_DONE rc=0", result.stdout)
             work_root = fixture.runroot / "arm64-vc4-gates"
             commands = self._commands(record)
-            self.assertEqual([(Path(entry["cwd"]).name, entry["command"]) for entry in commands], [
-                ("wt-D", ["make", "check-egress-spec"]), ("wt-C", ["make", "check-egress-spec-ci"]), ("wt-D", ["make", "test"])])
+            # DC 两项门禁经入口门禁一次运行（执行器替身记下清单与参数）；隔离垫片只见到 C 上的交叉核对。
+            self.assertEqual([(Path(entry["cwd"]).name, entry["command"]) for entry in commands if "command" in entry],
+                             [("wt-C", ["make", "check-egress-spec-ci"])])
+            (call,) = [entry for entry in commands if "args" in entry]
+            self.assertEqual((Path(call["cwd"]).name, call["head"]), ("test-tree", dc))
+            self.assertEqual(call["manifest"]["profile"], "vc4")
+            self.assertEqual([gate["gate_id"] for gate in call["manifest"]["gates"]],
+                             ["backend-go-test", "backend-lint", "frontend-lint", "frontend-typecheck", "frontend-critical", "test-capture-tools",
+                              "test-official-client-control", "check-egress-spec"], "组合 vc4 = make test 的组成，check-egress-spec 门禁项就是 make check-egress-spec")
+            args = call["args"]
+            self.assertEqual((args[args.index("--resume-from") + 1], args[args.index("--resume-series") + 1]), ("auto", "vc4"))
+            binding = json.loads(Path(args[args.index("--resume-binding") + 1]).read_text(encoding="utf-8"))
+            self.assertEqual(binding["extra"], {"vc4": {"candidate": c, "executed": dc, "receipt": receipt}}, "绑定写进候选、承接提交与收据")
+            self.assertNotIn("gate_scope_info", call["manifest"], "第二层缺省关：清单不带筛选信息，full-regression 是 make test 全集")
             gates = fixture.runroot / "local-gates"
             self.assertEqual(sorted(path.name for path in gates.iterdir()), sorted(
                 f"{gate}.{kind}" for gate in ("check-egress-spec", "full-regression") for kind in ("gate.json", "stdout.log", "stderr.log")))
@@ -2575,22 +2587,73 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertEqual((summary["status"], summary["candidate_commit"], summary["executed_on_commit"]), ("passed", c, dc))
             for path in (gates, impl):
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
-            self.assertFalse((work_root / "wt-D").exists())
+            self.assertFalse((work_root / "entry-work" / "test-tree").exists(), "通过后入口门禁删掉 DC 测试树")
             self.assertFalse((work_root / ".lock").exists())
+            self.assertEqual(json.loads((gates / "full-regression.gate.json").read_text(encoding="utf-8"))["unit_execution"]["resume"], None)
 
     def test_vc4_gates_deliver_failed_conclusion_with_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, work, drv, record, env = self._fixture(root, fail_pattern="make test", fail_rc=2)
+            fixture, work, drv, record, env = self._fixture(root, fail_units="frontend:lint")
             c, dc, receipt = self._vc4_chain(fixture, work)
             result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("ARM64_VC4_GATES_FAILED", result.stdout)
-            meta = json.loads((fixture.runroot / "local-gates" / "full-regression.gate.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["exit_code"], 2)
+            gates = fixture.runroot / "local-gates"
+            meta = json.loads((gates / "full-regression.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["exit_code"], 1)
+            self.assertEqual(json.loads((gates / "check-egress-spec.gate.json").read_text(encoding="utf-8"))["exit_code"], 0,
+                             "失败的单元只让包含它的门禁项不通过：check-egress-spec 仍是通过")
+            self.assertIn("frontend:lint", (gates / "full-regression.stderr.log").read_text(encoding="utf-8"), "失败单元的日志进 stderr 拼接日志")
             self.assertTrue((fixture.runroot / "impl-logs" / "READY").is_file(), "门禁结论照常交付，由 VC-4／VC-5 判定")
-            self.assertEqual(_git(fixture.runroot / "arm64-vc4-gates" / "wt-D", "rev-parse", "HEAD"), dc)
+            self.assertEqual(_git(fixture.runroot / "arm64-vc4-gates" / "entry-work" / "test-tree", "rev-parse", "HEAD"), dc, "未通过时保留 DC 测试树供排查")
+
+    def test_vc4_resume_can_be_switched_off_and_the_second_layer_is_opt_in(self) -> None:
+        for name, extra, expect_resume, expect_scope in (("关闭续跑", {"VC4_RESUME": "off"}, False, False),
+                                                         ("第二层显式开启", {"VC4_GATE_SCOPE": "auto"}, True, True),
+                                                         ("环境豁免", {"VC4_RESUME_WAIVE_ENV": "换缓存目录", "VC4_RESUME_WAIVE_ENV_NAMES": "envvar:GOCACHE"}, True, False)):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, work, drv, record, env = self._fixture(root)
+                self._vc4_chain(fixture, work)
+                result = _run(drv / "arm64-vc4-gates.sh", env={**env, **extra}, cwd=root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                (call,) = [entry for entry in self._commands(record) if "args" in entry]
+                self.assertEqual("--resume-from" in call["args"], expect_resume)
+                # --gate-scope 交给门禁清单生成（plan），不在执行器参数里：清单里的 gate_scope_info 才是它的回显。
+                self.assertEqual("gate_scope_info" in call["manifest"], expect_scope)
+                if "VC4_RESUME_WAIVE_ENV" in extra:
+                    self.assertEqual(call["args"][call["args"].index("--resume-waive-env-names") + 1], "envvar:GOCACHE")
+                if expect_scope:
+                    self.assertIn("VC4_GATE_SCOPE=auto", result.stdout)
+
+    def test_entry_gates_hand_the_resume_arguments_to_the_executor_and_register_the_deployment_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            commit = self._candidate(work, "codex/resume")
+            bundle = root / "resume.bundle"
+            _git(work, "bundle", "create", "-q", str(bundle), "main..codex/resume")
+            out = fixture.runroot / "resume-out"
+            result = _run(drv / "entry-gates.sh", "--profile", "full-gates", "--go-warmup", "off", "--work", str(fixture.runroot / "resume-work"), "--out", str(out),
+                          "--resume-from", "auto", "--resume-series", "bgv", "--resume-max-age-hours", "12", "--resume-waive-env", "换缓存",
+                          "--resume-waive-env-names", "envvar:GOCACHE,envvar:GOTMPDIR", str(bundle), "codex/resume", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            (call,) = self._commands(record)
+            args = call["args"]
+            self.assertEqual([args[args.index(flag) + 1] for flag in ("--resume-from", "--resume-series", "--resume-max-age-hours", "--resume-waive-env",
+                                                                      "--resume-waive-env-names")],
+                             ["auto", "bgv", "12", "换缓存", "envvar:GOCACHE,envvar:GOTMPDIR"])
+            binding = json.loads((out / "resume-binding.json").read_text(encoding="utf-8"))
+            self.assertEqual((binding["client"], binding["plan_profile"]), ("codex", "full-gates"))
+            self.assertTrue((out / "resume-plan.json").is_file(), "换提交时第二层要用的规划结果留在主体目录")
+            plain = _run(drv / "entry-gates.sh", "--profile", "full-gates", "--go-warmup", "off", "--work", str(fixture.runroot / "plain-work"),
+                         str(bundle), "codex/resume", commit, env=env, cwd=root)
+            self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
+            self.assertNotIn("--resume-from", self._commands(record)[-1]["args"], "不带 --resume-from 的命令行与改造前逐字相同")
 
     def test_vc4_gates_refuse_chain_drift_and_placeholder_commits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
