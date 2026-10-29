@@ -2,7 +2,7 @@
 
 > 由 `tools/evidence_index.py` 生成，不要手改。
 
-本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.164.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
+本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.165.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
 `sub2api-egress` 被生成器硬禁止；它只能用于第三部分的实现差异比对。
 
 ## 0. 证据类型与边界
@@ -81,7 +81,7 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-WS-001 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-WS-002 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-WS-003 | ③ 自定义 provider 分支 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
-| SPEC-WS-004 | ① OAuth 可见规则 | — 无／不适用（只能实测（L3）） | ✅ 充分 | R | permessage-deflate、RSV1 与上下文接管属于只能从 R 原始帧得出的 L3 结论。 |
+| SPEC-WS-004 | ① OAuth 可见规则 | — 无／不适用（源码读出（L1/L2）） | ✅ 充分 | R | permessage-deflate、RSV1 与上下文接管属于只能从 R 原始帧得出的 L3 结论。 |
 | SPEC-WS-005 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 
 复核口径：`充分` 表示现有证据足以支撑**当前已收窄后的命题**；`部分`／`有限` 表示源码只能给机制、动态 wire 值需实测，或抓包只覆盖受控／结果分支。未带逐运行 manifest／二进制哈希的 P/R/J 证据，其来源依赖采集记录；具备 manifest 的证据还会校验版本、边界与 artifact 哈希。
@@ -199,14 +199,14 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-WS-005 | ① OAuth 可见规则 | 内置 OpenAI OAuth | ✅ 验过 | `clean-tool-20260728T132346Z` | **R** | Lite WS 原始帧与键序 | `raw-scrubbed/clean-tool-20260728T132346Z/` （4 个 .bin） |
 |  |  |  |  | `audit-ws005-nonlite-20260730a` | **R** | 非 Lite WS 原始帧：warmup／增量键序及 instructions／tools 正向形态 | `raw-scrubbed/audit-ws005-nonlite-20260730a/` （4 个 .bin） |
 
-## 2.1 Campaign 封存证据（Active 0.164.0，24 项）
+## 2.1 Campaign 封存证据（Active 0.165.0，24 项）
 
 正文实测以 `assert-SPEC-*` 引用本条候选断言的编号项登记为 C。官方取证与候选断言的原始字节、观测和
 断言结论封存在 ARM64 私有归档，仓库内只登记坐标：
 
-- 终态收据：`docs/egress/maintenance/CODEX_CLI_0163_TO_0164_TERMINAL_STATE_RECEIPT.json`
-- 官方证据 Campaign：`c01640-formal-vc1-r1-20261027t000000z`；canonical Campaign：`c01640-formal-vc1-r1-20261027t000000z`
-- 私有归档：`/root/private-archives/codex-0.164.0-c01640-formal-vc1-r1-20261027t000000z-20261028t052056z.tar.gz`（SHA-256 `e136ad5a632732f3a2ad3ab6fbb5e5b1fa8ee96a270311d149762133f34a276e`，81879356 字节）
+- 终态收据：`docs/egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json`
+- 官方证据 Campaign：`c01650-formal-vc1-r1-20261029t000000z`；canonical Campaign：`c01650-formal-vc1-r1-20261029t000000z`
+- 私有归档：`/root/private-archives/codex-0.165.0-c01650-formal-vc1-r1-20261029t000000z-20261029t191751z.tar.gz`（SHA-256 `01308a8452bc27a6ff8dda31acca0dd28cd77ab7d8a1036ee6bf8a6623f199c9`，91927092 字节）
 
 | 编号项 | 分类 | 验证状态 | 候选断言 |
 |---|---|---|---|
