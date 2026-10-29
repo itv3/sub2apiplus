@@ -572,6 +572,10 @@ class PlanModeTests(unittest.TestCase):
         self.assertEqual([s.request_kind for s in steps], ["prewarm", "turn", "turn", "compaction", "turn", "turn"])
         self.assertIs(steps[0].body["generate"], False)
         self.assertEqual(steps[3].body["input"], [{"type": "compaction_trigger"}])
+        # 压缩帧按官方形态：顶层没有 instructions／tools（否则网关会在 input 最前补 additional_tools 载体）；其余帧仍带
+        self.assertNotIn("tools", steps[3].body)
+        self.assertNotIn("instructions", steps[3].body)
+        self.assertTrue(all("tools" in s.body and "instructions" in s.body for i, s in enumerate(steps) if i != 3))
         marker = driver.PLAN_COMPACTION_MARKER
         replay_marks = [item for item in steps[4].body["input"] if marker in item]
         self.assertEqual(len(replay_marks), 1, "整段重放帧恰有一个压缩项占位，且位于新用户消息之前")

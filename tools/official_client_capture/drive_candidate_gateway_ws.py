@@ -716,6 +716,13 @@ def _plan_body(
             "x-codex-turn-metadata": json.dumps(metadata, separators=(",", ":")),
         },
     }
+    if request_kind == "compaction":
+        # 官方压缩请求帧只有 compaction_trigger 一项，顶层不带 instructions／tools。网关对 Lite 模型会把顶层 tools 搬成 input 最前的
+        # additional_tools 载体（第三方入站的归一化，对每一帧都做），压缩帧带着它就变成 [additional_tools, compaction_trigger]，
+        # 不是官方形态，也让按“input 首项是 compaction_trigger”选帧的判据命不中。真实第三方客户端不会发压缩帧，
+        # 所以压缩帧按官方形态合成，不带顶层 instructions／tools。
+        del body["instructions"]
+        del body["tools"]
     return body
 
 
