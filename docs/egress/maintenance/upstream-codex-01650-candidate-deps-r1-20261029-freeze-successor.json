@@ -1,0 +1,66 @@
+{
+  "base_commit": "4cedd2406f3d8ccef0f88a840e7374b1be6a7956",
+  "changed_path_count": 2,
+  "current_commit": "df93a2bc34384ef6de7ec4486635712b7dcb5be4",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7242,
+  "frozen_path_count": 2318,
+  "identity_sha256": "56a591433c0ce6baef76460bbc731a557c1f733b4b1efd1e738c25e67e4505d5",
+  "issued_at_utc": "2026-10-29T00:11:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01650-candidate-deps-r1-20261029-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/go.mod",
+      "predecessor_sha256s": [
+        "ca4abf36d8b896c2140b236cdb90dee412fb5191c8497f0ad36020f5e28c7b99"
+      ],
+      "reason": "候选链纳入安全依赖修复：登记 backend/go.mod 与 backend/go.sum 的精确后继摘要；旧收据逐字保留。 path=backend/go.mod",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.17-3-security-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "59152072b55a305501d1f023efdfcac1a84842906f731b2ab3a413a06d8788bb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/go.sum",
+      "predecessor_sha256s": [
+        "8af704336dd90aa580ea5d106d688774ee745eefc6ed2e43df75f5a81f50072f"
+      ],
+      "reason": "候选链纳入安全依赖修复：登记 backend/go.mod 与 backend/go.sum 的精确后继摘要；旧收据逐字保留。 path=backend/go.sum",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc2-classify-import-origin-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "aaf678a0a46aaa232df0e32d08506fda1745bd820ba1b6e931455d1035dae6e9"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
