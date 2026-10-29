@@ -2399,6 +2399,16 @@ INHERIT_NARROWING_NAMES = frozenset({"_INHERIT_VIEW_SCHEMA", "_narrowed_source",
                                      "PARTIAL_ORIGIN_STATES", "partial_shape_problems", "partial_problem"})
 INHERIT_NARROWING_AUDIT_REFERENCES = 1
 INHERIT_NARROWING_CHANGED_DEFINITIONS = frozenset({"Current", "check_record", "verify_manifest"})
+# 同提交续跑沿用（“修好接着跑”第一层，门禁续跑 G 批，0.165 收尾并入）对 unit_records.py 的登记：新增一节 resume_*／RESUME_* 名字（只新增，
+# 不碰既有函数体）；verify_manifest 的承接项核对多一个续跑分支（check_record 那一行搬进 else，已在上面“被改写的行”里登记）；main 的回放摘要
+# 多打印一个 resume 块，所以 print 的最后一行被改写、main 里多一条取 resume 的语句（只影响命令行回放的打印，不改退出码判定）。
+RESUME_REWRITTEN_LINES = [
+    '                      "units": len(manifest.get("units") or []), "problems": problems}, ensure_ascii=False, indent=1))',
+]
+RESUME_NAMES = frozenset({"RESUME_SCHEMA", "RESUME_BASIS_SCHEMA", "RESUME_MAX_AGE_HOURS", "RESUME_SCAN_LIMIT", "RESUME_MATCH_LIMIT", "_RESUME_COMMIT",
+                          "resume_basis", "resume_basis_ok", "resume_runs", "resume_record_problems", "resume_manifest_problems",
+                          "resume_failed_units", "resume_source", "resume_decide"})
+RESUME_CHANGED_DEFINITIONS = frozenset({"main"})
 # control 两个 sidecar 文件的字节被执行器登记并在消费时核对（改一个字节，历史 control 凭证重放就报「当前四control执行器缺完整
 # sidecar 绑定或实际字节漂移」），所以写死摘要：谁改了它们，这个测试就红。
 CONTROL_AUDIT_SHA256 = "dc9238ae696880cd12eb17a246a09ac354d6db330b788b66ecf35c3142da2172"
@@ -2479,15 +2489,16 @@ class ControlInvariantTests(unittest.TestCase):
     def test_t_c1_only_declared_names_were_added_and_no_existing_line_was_rewritten(self) -> None:
         removed = [line for line in difflib.unified_diff(self.base_source.splitlines(), self.new_source.splitlines(), lineterm="", n=0)
                    if line.startswith("-") and not line.startswith("---")]
-        self.assertEqual([line[1:] for line in removed], INHERIT_NARROWING_REWRITTEN_LINES,
-                         "对 unit_records.py 只新增行：被改写或删除的行只有承接输入收窄登记的这几行")
+        self.assertEqual([line[1:] for line in removed], INHERIT_NARROWING_REWRITTEN_LINES + RESUME_REWRITTEN_LINES,
+                         "对 unit_records.py 只新增行：被改写或删除的行只有承接输入收窄与同提交续跑登记的这几行")
         base_names, new_names = set(dir(self.base)), set(dir(self.new))
         self.assertEqual(base_names - new_names, set(), "没有名字被删除")
         added = new_names - base_names
         self.assertTrue(added)
-        self.assertTrue(all("declared" in name.lower() or name in INHERIT_NARROWING_NAMES for name in added),
-                        f"新增的名字都属于声明级章节或承接输入收窄：{sorted(added)}")
+        self.assertTrue(all("declared" in name.lower() or name in INHERIT_NARROWING_NAMES or name in RESUME_NAMES for name in added),
+                        f"新增的名字都属于声明级章节、承接输入收窄或同提交续跑：{sorted(added)}")
         self.assertLessEqual(INHERIT_NARROWING_NAMES, added, "登记的承接输入收窄名字都在")
+        self.assertLessEqual(RESUME_NAMES, added, "登记的同提交续跑名字都在")
         frozen = {"DECLARED_REGISTRY_SCHEMA", "DECLARED_SCOPE_SCHEMA", "DECLARED_SAMPLE_SCHEMA", "DECLARED_CONTRACT_SCHEMA", "DECLARED_SCOPE_ENTRY",
                   "DECLARED_COVERAGE_SCOPE", "DECLARED_CLASSES", "DECLARED_TOLERATED_UNRESOLVED", "validate_declared_scope", "declared_coverage",
                   "_declared_scope_inputs", "_check_declared_route", "_check_declared_audit"}
@@ -2529,6 +2540,11 @@ class ControlInvariantTests(unittest.TestCase):
                 self.assertEqual(new_node.body[-2:], inserted, "新字段追加在最后")
                 for stmt in inserted:
                     new_node.body.remove(stmt)
+            elif name in RESUME_CHANGED_DEFINITIONS:
+                # 同提交续跑登记的定义（main）：回放摘要多打印 resume 块，被改写的 print 行由上一个用例逐行登记；这里确认新增的语句确实在、既有的退出码判定仍在。
+                self.assertIn("resume", ast.unparse(new_node))
+                self.assertIn("return 0 if not problems else 1", ast.unparse(new_node))
+                continue
             elif name in INHERIT_NARROWING_CHANGED_DEFINITIONS:
                 # 承接输入收窄登记的定义：函数体的改写由上一个用例的“被改写的行”逐行登记，这里只确认声明级插入仍在原位。
                 if name == "check_record":

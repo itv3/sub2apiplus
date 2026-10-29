@@ -483,8 +483,8 @@ class StructuralConstantsTests(unittest.TestCase):
 
     def test_real_codex_runtime_catalog_resolves_active(self) -> None:
         active = boundary_checks._codex_active(TOOL_ROOT.parents[1])
-        # 0.164.0 收尾：VC-6 晋升后 Runtime Catalog 的 Active 为 0.164.0（Previous 0.163.0）。
-        self.assertEqual(active["version"], "0.164.0")
+        # 0.165.0 收尾：VC-6 晋升后 Runtime Catalog 的 Active 为 0.165.0（Previous 0.164.0）。
+        self.assertEqual(active["version"], "0.165.0")
         self.assertEqual(len(active["files"]), 4)
 
     def test_real_codex_job_shape(self) -> None:
