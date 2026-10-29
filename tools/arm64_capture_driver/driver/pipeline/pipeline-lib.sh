@@ -104,8 +104,9 @@ pl_local_init() {
   REMOTE_PREP=${PIPE_REMOTE_PREP:-/root/pipeline-prep/$(basename "${REMOTE_RUNROOT}")}
   REMOTE_PIPE=${REMOTE_DRIVER}/pipeline
 }
-# 从 pl_local_init 取回的参数文件导出里读一个键（parse_env 的输出形如 export KEY='VALUE'）
-pl_remote_var() { printf '%s\n' "${REMOTE_VARS}" | sed -n "s/^export $1='\(.*\)'\$/\1/p" | head -1; }
+# 从 pl_local_init 取回的参数文件导出里读一个键。parse_env 用 shlex.quote 输出：值只含安全字符时不带引号
+# （export KEY=VALUE，路径、版本号基本都是这种），含空格等字符时才带单引号（export KEY='VALUE'），两种形态都要认。
+pl_remote_var() { printf '%s\n' "${REMOTE_VARS}" | sed -n -e "s/^export $1='\(.*\)'\$/\1/p" -e "s/^export $1=\([^']*\)\$/\1/p" | head -1; }
 # 经 ssh 在采集主机上执行（不吃本机标准输入；带保活）
 pl_ssh() { ssh -n -o ServerAliveInterval=30 "${PIPE_SSH_HOST}" "$@"; }
 # 一轮的第一次部署时，采集主机上安装的还是上一版驱动，没有本目录的新脚本：把需要的脚本连同 pipeline-lib.sh 传到

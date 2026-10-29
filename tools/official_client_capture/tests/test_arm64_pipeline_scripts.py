@@ -857,6 +857,67 @@ class RoundEnvTemplateTests(unittest.TestCase):
             self.assertIn(key, keys)
 
 
+class PlRemoteVarTests(unittest.TestCase):
+    """pl_remote_var 要同时认 parse_env.py 的两种输出形态。
+
+    parse_env.py 用 shlex.quote 输出：值只含安全字符时不带引号（export RUNROOT=/root/x），含空格等字符才带单引号。
+    首次部署时曾只认带引号的形态，local/ 下所有本机脚本都因“取不到 RUNROOT”起不来；流水线测试的 ssh 桩恰好返回带引号形态，没抓到。
+    这里用真实 parse_env.py 的输出当输入。
+    """
+
+    FILL = {
+        "API_KEY_ID": "1", "CAPTURE_RUNTIME_IMAGE": "img", "CODEX_ACCOUNT_ID": "2", "CODEX_BIN_SHA256": "a" * 64,
+        "COMPOSE_BACKUP": "/root/x", "ENTRY_BRANCH": "b", "FRONTEND_DEVIATION_APPROVED_BY": "boss", "HISTORY_TEST_TREE": "/root/h",
+        "JWTGEN_BIN": "/root/j", "KILO_BIN": "/root/k", "KILO_SHA256": "a" * 64, "KILO_VERSION": "1.0.0", "LITE_MODEL": "m1",
+        "MAIN_MODEL": "m2", "OFFICIAL_ASSET_SHA256": "a" * 64, "OFFICIAL_STOP_LEDGER": "/root/l", "OFFICIAL_STOP_RECEIPT": "/root/r",
+        "POLICY_ACTIVATION": "/root/p", "POLICY_COMPAT_RECEIPT": "/root/c", "PREDECESSOR_CAMPAIGN": "pc", "PREVIOUS_POLICY": "/root/pp",
+        "PREV_CANDIDATE": "/root/pcand", "PRODUCTION_IMAGE": "pi", "PROJECT_DEADLINE_UTC": "2099-01-01T00:00:00Z",
+        "RELEASE_CERTIFICATION": "/root/rc", "RETIRE_VERSION": "0.163.0", "TARGET_CODE_MODE_HOST_SHA256": "a" * 64,
+    }
+
+    def _remote_var(self, remote_vars: str, key: str) -> str:
+        """在一个干净的 HOME 下 source 真实 pipeline-lib.sh，对给定的 REMOTE_VARS 调 pl_remote_var。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                source "{PIPELINE}/pipeline-lib.sh"
+                REMOTE_VARS=$(cat "{root}/vars.txt")
+                pl_remote_var "{key}"
+            """)
+            (root / "vars.txt").write_text(remote_vars, encoding="utf-8")
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, cwd=root,
+                                  env={"PATH": os.environ["PATH"], "HOME": str(root), "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout.strip()
+
+    def test_reads_unquoted_value_from_real_parse_env_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env = Path(directory) / "env.sh"
+            sets = [item for key, value in self.FILL.items() for item in ("--set", f"{key}={value}")]
+            rendered = subprocess.run([sys.executable, "-B", str(PIPELINE / "render_round_env.py"), "--target", "0.165.0", "--baseline",
+                                       "0.164.0", "--round", "r1", "--stamp", "20990101t000000z", "--out", str(env), *sets],
+                                      capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            parsed = subprocess.run([sys.executable, "-B", str(REAL_DRIVER / "parse_env.py"), str(env)], capture_output=True, text=True,
+                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(parsed.returncode, 0, parsed.stderr)
+            self.assertIn("export RUNROOT=/root/vc-rounds/c01650-r1\n", parsed.stdout, "真实输出里安全字符的值本来就不带引号")
+            self.assertEqual(self._remote_var(parsed.stdout, "RUNROOT"), "/root/vc-rounds/c01650-r1")
+            self.assertEqual(self._remote_var(parsed.stdout, "TARGET_VERSION"), "0.165.0")
+
+    def test_still_reads_quoted_value(self) -> None:
+        remote_vars = "export RUNROOT='/root/vc rounds/c01650-r1'\nexport ROUND=r1\n"
+        self.assertEqual(self._remote_var(remote_vars, "RUNROOT"), "/root/vc rounds/c01650-r1")
+        self.assertEqual(self._remote_var(remote_vars, "ROUND"), "r1")
+
+    def test_key_match_is_exact_and_missing_key_is_empty(self) -> None:
+        remote_vars = "export RUNROOT_OLD=/root/old\nexport RUNROOT=/root/new\n"
+        self.assertEqual(self._remote_var(remote_vars, "RUNROOT"), "/root/new", "前缀相同的键不能串")
+        self.assertEqual(self._remote_var(remote_vars, "NO_SUCH_KEY"), "")
+
+
 class Vc6EnvTests(SandboxCase):
     def test_vc6_env_refuses_placeholder_values(self) -> None:
         """vc6-env.sh 在 VC-3 之后才有真值的键（画像摘要、候选链 C）仍是占位时拒绝，不带着占位值往下跑。"""
