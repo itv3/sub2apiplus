@@ -1101,7 +1101,7 @@ def _frozen_candidate_branches(
         pcap_sha256 = item.get("pcap_sha256")
         # 失败的 frozen 采集在某个场景失败后不会再跑后面的场景，但采集脚本总是把全部场景写进摘要：没跑过的场景是
         # ``pcap_bytes=0``、空摘要、空动作，且磁盘上没有 ``scenarios/<id>`` 目录。这种条目没有发出过任何请求，不该让整份
-        # 失败归档解析失败（0.165 的失败归档因 A20 失败、A07 等未跑，被后继 attempt 的作业收据经失败重试归档枚举到，
+        # 失败归档解析失败（本轮候选采集的失败归档因 A20 失败、A07 等未跑，被后继 attempt 的作业收据经失败重试归档枚举到，
         # 对账报 provenance 核算失败）。只认 failed 状态、四项特征同时成立、目录确实不存在；其余形状照旧失败关闭。
         if (
             summary.get("status") == "failed"

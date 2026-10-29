@@ -243,17 +243,6 @@ class DeadlineExtensionTests(unittest.TestCase):
             with self.assertRaisesRegex(project.ProjectLedgerError, '仍在执行'):
                 project.abandon_campaign(self.campaign, approved_by='fixture', reason='并发必须拒绝')
 
-    def test_rejection_while_a_batch_runs_tells_the_operator_to_queue_and_retry(self):
-        """0.165 实战：批次执行期间 deadline-extend 被拒，现场只看到一句“待收口后重试”，靠手写重试脚本才在批次间隙抢到。
-        报错要直接说明这是设计内互斥、preview 可安全重试、间隙里怎么做。"""
-
-        with project.deadline_control_scope(self.campaign, executing=True):
-            with self.assertRaises(project.ProjectLedgerError) as caught:
-                self.preview()
-        message = str(caught.exception)
-        for fragment in ('设计内的互斥', '30～60 秒重试', '批次间隙', '重新 preview 再 apply'):
-            self.assertIn(fragment, message)
-
     def test_project_extension_pending_closes_other_campaign(self):
         other = self.campaign.with_name('other-campaign')
         other_ledger = self.root/'other-timing'

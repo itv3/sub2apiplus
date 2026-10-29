@@ -112,7 +112,9 @@ PAUSE_HINTS = {
     "accounting": "账务暂停：按总账未决 operation 执行 accounting-resolve preview/apply（无法核清时需人给出估计上界与来源审计文件）",
     "environment": "环境污染暂停：修复环境、取得晚于污染的干净环境复核与环境修复记录后执行 environment-isolate preview/apply",
     "request_budget": "请求预算耗尽：由人批准新预算后执行 request-budget-extend preview/apply",
-    "deadline": "预算截止暂停：由人批准 deadline-extend preview/apply（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n）",
+    "deadline": ("预算截止暂停：由人批准 deadline-extend preview/apply（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n）。"
+                 "批次／续跑执行期间 deadline-extend 会被设计内的互斥拒绝（“Campaign 仍在执行或变更预算”），preview 被拒不写任何东西，"
+                 "可每隔 30～60 秒重试同一条命令，在批次间隙里 preview 与 apply 紧接着做；apply 因计时账本 head 已前进被拒时重新 preview 再 apply"),
 }
 
 REQUIRED_KEYS = ("ROUND", "D", "RUNROOT", "VC_ENV", "VC_STATE_DIR", "CAMPAIGN", "ATTEMPT", "CANDIDATE", "APPROVER")
@@ -1295,7 +1297,7 @@ def render_plan(plan: Mapping[str, Any], *, mode: str) -> str:
 def pause_command_templates(params: Mapping[str, str], orchestrator: str, kinds: list[str], operation_id: str | None) -> list[str]:
     """对账判暂停时，要由人做的几步的**命令模板**（只打印，本计划不执行、不代签批准；尖括号处由人补全）。
 
-    0.165 实战：停在 reconcile 的提示只有“按总账未决 operation 执行 accounting-resolve……”之类的文字，补账、环境隔离、干净环境收据
+    本轮实战：停在 reconcile 的提示只有“按总账未决 operation 执行 accounting-resolve……”之类的文字，补账、环境隔离、干净环境收据
     三类命令的参数要现场翻文档拼，一次恢复手工拼了 4 条命令。这里把参数名与已知坐标（数据根、Campaign 目录、编排器模块、未决 operation）
     直接填好。``--approve-sha256`` 用预览输出的 ``review_sha256``，``--approved-by`` 是批准人——批准权限不变，仍由人给出。"""
 
@@ -1403,7 +1405,7 @@ class Runner:
     def heal_stale_step_records(self, steps: list[Step]) -> list[str]:
         """现场已判定完成、但 ``steps/<步骤>.json`` 仍是停下时留下的旧记录（needs-operator／failed）：补写一条 passed。
 
-        0.165 实战：approve 先因缺批准停在 needs-operator，补批准后动作做完、记录写入之前进程被打断；重入时现场判定该步已完成、
+        本轮实战：approve 先因缺批准停在 needs-operator，补批准后动作做完、记录写入之前进程被打断；重入时现场判定该步已完成、
         不再执行动作，``steps/approve.json`` 就一直残留旧的 needs-operator，读记录的人会误以为还卡着。只在“现场判已完成且记录
         状态不是 passed”时补写，沿用旧记录的 summary（``reconcile-runs`` 的 revisit 等不丢），原因里写明补写来源与旧状态；
         没有记录的步骤（本轮从没停过）与已是 passed 的不动。返回被补写的步骤名。"""

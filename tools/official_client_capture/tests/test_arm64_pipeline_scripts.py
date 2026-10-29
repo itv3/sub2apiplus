@@ -1423,6 +1423,26 @@ class PipelineStageTests(SandboxCase):
         self.assertIn("== 阶段 VC6", result.stdout)
         self.assertFalse((self.sb.prep / "pipeline" / "vc-status.txt").exists(), "--check 不得写状态文件")
 
+    def test_stage_stop_for_short_deadline_tells_how_to_retry_deadline_extend(self) -> None:
+        """计时账本剩余不足时流水线停下交调度者延期；延期命令在批次执行期间会被设计内的互斥拒绝，停下提示里要写明怎么重试。"""
+
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(4)
+        _write(sb.data / "tools/official_client_capture/codex_upgrade_vc_artifacts.py", """
+            import datetime
+            def effective_deadlines(path):
+                soon = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return {"phase": "VC-5", "execution_deadline_at_utc": soon, "total_deadline_at_utc": soon,
+                        "project_deadline_at_utc": soon, "paused_scopes": []}
+        """, 0o644)
+        result = sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+        self.assertEqual(result.returncode, 1, result.stdout[-800:])
+        text = "\n".join(sb.status_lines())
+        self.assertIn("计时账本剩余不足或已暂停", text)
+        self.assertIn("设计内的互斥拒绝", text)
+        self.assertIn("每 30～60 秒重试同一条命令", text)
+
     def _check_vc6(self, order: str, installed: dict[str, str], *, prep_vc6_env: bool = False) -> subprocess.CompletedProcess:
         """--check --from VC6：ORDER.txt 在 <PREP>/vc6/，脚本与 vc6-env.sh 在已装驱动 pipeline/vc6/（与运行体同一口径）。"""
 

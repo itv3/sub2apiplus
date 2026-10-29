@@ -122,7 +122,7 @@ stage_time_check() { # $1 阶段
   TIME_TXT="账本阶段=${ph} 本阶段所需下限=${need}分 可用剩余=${rem}分（执行层 ${ex}／总 ${tot}／项目 ${proj}，暂停范围 ${paused}）"
   if [ "${paused}" != "-" ] || [ "${rem}" -lt "${need}" ]; then
     [ "${CHECKING:-0}" = 1 ] && return 1
-    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期"
+    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期（批次执行期间 deadline-extend 会被设计内的互斥拒绝，每 30～60 秒重试同一条命令，批次间隙里 preview 与 apply 紧接着做）"
   fi
   return 0
 }

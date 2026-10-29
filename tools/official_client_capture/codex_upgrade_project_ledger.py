@@ -1828,11 +1828,7 @@ def deadline_control_scope(campaign_dir: Path, *, executing: bool = False):
         try:
             fcntl.flock(descriptor, (fcntl.LOCK_SH if executing else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise ProjectLedgerError(
-                "Campaign 仍在执行或变更预算，待收口后重试。这是设计内的互斥：批次／续跑的父 run 持共享锁期间，延期与放弃一律被拒，"
-                "preview 被拒不写任何东西，可每隔 30～60 秒重试同一条命令；等到批次间隙（或批次结束）后 preview 与 apply 紧接着做，"
-                "若 apply 因计时账本 head 已前进而被拒，重新 preview 再 apply"
-            ) from error
+            raise ProjectLedgerError("Campaign 仍在执行或变更预算，待收口后重试") from error
         if not executing:
             _root, _ledger, _manifest, _artifacts, adapter, _timing = _deadline_context(campaign_dir)
             lease = adapter.orchestrator._read_campaign_lease(campaign_dir)

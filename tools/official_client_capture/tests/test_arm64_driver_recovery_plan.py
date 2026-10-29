@@ -528,6 +528,16 @@ class ApplyTests(_WorldCase):
         self.assertEqual(again.returncode, EXIT_OK, again.stderr)
         self.assertEqual(len(world.dispatches()), 1)
 
+    def test_deadline_pause_hint_explains_the_batch_mutex_and_how_to_retry(self) -> None:
+        """批次执行期间 deadline-extend 被设计内的互斥拒绝，实战里靠手写重试脚本才在间隙抢到；提示里要说清楚怎么重试。"""
+
+        world = self.make_world(scenario={"pauses": {"20261021T135838Z-70aa3c8b45478aec": ["deadline"]}})
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        for fragment in ("deadline-extend", "设计内的互斥", "30～60 秒重试同一条命令", "批次间隙", "重新 preview 再 apply"):
+            self.assertIn(fragment, result.stderr)
+        self.assertEqual(world.write_calls(), [])
+
     def test_environment_pause_names_isolate_command(self) -> None:
         world = self.make_world(scenario={"pauses": {"20261021T135838Z-70aa3c8b45478aec": ["environment", "request_budget"]}})
         result = world.run("--apply")
