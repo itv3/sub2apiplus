@@ -1091,6 +1091,7 @@ def _frozen_candidate_branches(
         raise ProvenanceError("Candidate frozen run-summary 形状或状态非法")
     branches: list[dict[str, Any]] = []
     seen: set[str] = set()
+    unexecuted: set[str] = set()
     for index, item in enumerate(scenarios):
         if not isinstance(item, Mapping):
             raise ProvenanceError(f"Candidate frozen scenarios[{index}] 不是对象")
@@ -1098,6 +1099,27 @@ def _frozen_candidate_branches(
         actions = item.get("actions")
         pcap_bytes = item.get("pcap_bytes")
         pcap_sha256 = item.get("pcap_sha256")
+        # 失败的 frozen 采集在某个场景失败后不会再跑后面的场景，但采集脚本总是把全部场景写进摘要：没跑过的场景是
+        # ``pcap_bytes=0``、空摘要、空动作，且磁盘上没有 ``scenarios/<id>`` 目录。这种条目没有发出过任何请求，不该让整份
+        # 失败归档解析失败（0.165 的失败归档因 A20 失败、A07 等未跑，被后继 attempt 的作业收据经失败重试归档枚举到，
+        # 对账报 provenance 核算失败）。只认 failed 状态、四项特征同时成立、目录确实不存在；其余形状照旧失败关闭。
+        if (
+            summary.get("status") == "failed"
+            and isinstance(scenario_id, str)
+            and SAFE_ID_RE.fullmatch(scenario_id)
+            and scenario_id not in seen
+            and scenario_id not in unexecuted
+            and isinstance(actions, Mapping)
+            and not actions
+            and pcap_bytes == 0
+            and not isinstance(pcap_bytes, bool)
+            and pcap_sha256 == ""
+            and item.get("production_forwarded") is False
+            and not (root / "scenarios" / scenario_id).exists()
+            and not (root / "scenarios" / scenario_id).is_symlink()
+        ):
+            unexecuted.add(scenario_id)
+            continue
         if (
             not isinstance(scenario_id, str)
             or not SAFE_ID_RE.fullmatch(scenario_id)
@@ -1138,6 +1160,9 @@ def _frozen_candidate_branches(
         if len(parsed) != 1:
             raise ProvenanceError("Candidate frozen 场景缺少唯一 relay 权威来源")
         branches.extend(parsed)
+    if not seen:
+        # 一个场景都没执行过的失败归档没有可核算的权威来源，保持失败关闭（只放行“部分场景没跑”，不放行“全部没跑”）。
+        raise ProvenanceError("Candidate frozen run-summary 没有任何已执行的场景")
     scenario_root = root / "scenarios"
     actual = {
         path.name
