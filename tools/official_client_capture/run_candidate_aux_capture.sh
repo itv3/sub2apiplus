@@ -1004,10 +1004,11 @@ fi
 custom_ca_baseline_absent=1
 # keeper（账号保活容器）已下线不再部署：容器不存在就如实视为未部署（keeper_was_running=false），
 # 后面的停、启、恢复核验自然全部跳过；在场时与以往完全一致（读运行状态，在跑则先停、退出时按原状态恢复）。
-# 只认 docker 明确报告 No such object／container；守护进程不可达等其它失败照旧失败退出。
+# 只认 docker 明确报告 no such object／container，且大小写不敏感（旧版 Docker 写 No such container，Docker 29 写小写
+# `error: no such object: <名>`）；守护进程不可达等其它失败照旧失败退出。
 if keeper_probe=$(docker inspect -f '{{.State.Running}}' "$keeper_container" 2>&1); then
   keeper_was_running=$keeper_probe
-elif [[ $keeper_probe == *"No such object"* || $keeper_probe == *"No such container"* ]]; then
+elif grep -Eqi 'no such (object|container)' <<<"$keeper_probe"; then
   keeper_was_running=false
   echo "keeper 容器不存在（未部署），跳过停启：$keeper_container" >&2
 else

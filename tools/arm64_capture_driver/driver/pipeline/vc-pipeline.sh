@@ -122,7 +122,7 @@ stage_time_check() { # $1 阶段
   TIME_TXT="账本阶段=${ph} 本阶段所需下限=${need}分 可用剩余=${rem}分（执行层 ${ex}／总 ${tot}／项目 ${proj}，暂停范围 ${paused}）"
   if [ "${paused}" != "-" ] || [ "${rem}" -lt "${need}" ]; then
     [ "${CHECKING:-0}" = 1 ] && return 1
-    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期"
+    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期（批次执行期间 deadline-extend 会被设计内的互斥拒绝，每 30～60 秒重试同一条命令，批次间隙里 preview 与 apply 紧接着做）"
   fi
   return 0
 }
@@ -586,7 +586,9 @@ run_VC5() {
   capture_on || stop VC5 "采集账号打开失败（访问令牌剩余 <60 分钟会被拒绝，见 ${PDIR}/capture-account.out）"
   : > "${mark}"
   : > "${RR}/vc5-all.out"
-  ( cd "${DRV}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
+  # vc5-all 在 canonical 前做准入守卫（lib.sh vc5_admission_guard）：管理令牌 consume 窗口过期时，只有进程环境里有 VC5_RENEW_APPROVER 才会自动续签。
+  # 起跑时传了 --approver 就是调度者授权本流水线签 VC-5 准入的同一批准人，续签沿用它；环境里已有 VC5_RENEW_APPROVER 的以环境为准；都没有则留空（守卫按“未设”处理）。
+  ( cd "${DRV}" && export VC5_RENEW_APPROVER="${VC5_RENEW_APPROVER:-${APPROVER}}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
   log "STEP vc5-all 已起（候选采集 → Kilo 双入口 → seal → compare → accept → canonical）"
   fi
   # 监视循环。采集账号要到 VC5_ALL_DONE 之后才关：seal checkpoint 的“Kilo 后环境恢复门禁”拿 Kilo 后探针（client-after）对比
@@ -740,10 +742,13 @@ check_stage() {
       while read -r k nm ar fl; do
         [ "${k}" = run ] || continue
         nrun=$((nrun + 1))
+        # 与运行体（run_VC6）同一口径：绝对路径照用，相对名相对已装驱动的 ${PIPE_HOME}/vc6/（不是 ${PREP}/vc6/，那里只放本轮的 ORDER.txt）
+        case "${ar}" in /*) ;; *) ar=${PIPE_HOME}/vc6/${ar} ;; esac
         if [ ! -f "${ar}" ]; then echo "    缺脚本：${nm} -> ${ar}"; nbad=$((nbad + 1)); elif ! bash -n "${ar}" 2>/dev/null; then echo "    语法不通过：${ar}"; nbad=$((nbad + 1)); fi
       done < "${ord}"
       [ "${nbad}" = 0 ] && ck OK "ORDER 引用的 ${nrun} 个 run 脚本都在位且 bash -n 通过" || ck 不通过 "ORDER 引用的脚本有 ${nbad} 个缺失或语法不通过"
-      [ -f "${PREP}/vc6/vc6-env.sh" ] && ck OK "vc6-env.sh 在位（公共前导）" || ck 缺 "${PREP}/vc6/vc6-env.sh"
+      # 公共前导 vc6-env.sh 由各 vc6-*.sh 用 source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh" 引入，即已装驱动里与脚本同目录的那份
+      [ -f "${PIPE_HOME}/vc6/vc6-env.sh" ] && ck OK "vc6-env.sh 在位（公共前导，${PIPE_HOME}/vc6/）" || ck 缺 "${PIPE_HOME}/vc6/vc6-env.sh"
     else
       ck 缺 "${PREP}/vc6/ORDER.txt 与 VC-6 脚本集"
     fi

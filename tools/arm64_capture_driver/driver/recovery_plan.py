@@ -112,7 +112,9 @@ PAUSE_HINTS = {
     "accounting": "账务暂停：按总账未决 operation 执行 accounting-resolve preview/apply（无法核清时需人给出估计上界与来源审计文件）",
     "environment": "环境污染暂停：修复环境、取得晚于污染的干净环境复核与环境修复记录后执行 environment-isolate preview/apply",
     "request_budget": "请求预算耗尽：由人批准新预算后执行 request-budget-extend preview/apply",
-    "deadline": "预算截止暂停：由人批准 deadline-extend preview/apply（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n）",
+    "deadline": ("预算截止暂停：由人批准 deadline-extend preview/apply（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n）。"
+                 "批次／续跑执行期间 deadline-extend 会被设计内的互斥拒绝（“Campaign 仍在执行或变更预算”），preview 被拒不写任何东西，"
+                 "可每隔 30～60 秒重试同一条命令，在批次间隙里 preview 与 apply 紧接着做；apply 因计时账本 head 已前进被拒时重新 preview 再 apply"),
 }
 
 REQUIRED_KEYS = ("ROUND", "D", "RUNROOT", "VC_ENV", "VC_STATE_DIR", "CAMPAIGN", "ATTEMPT", "CANDIDATE", "APPROVER")
@@ -704,6 +706,57 @@ def successor_rows(params: Mapping[str, str], phase: str | None, siblings: list[
     return rows
 
 
+def zero_request_evidence(params: Mapping[str, str], review: str, successors: list[str]) -> dict[str, Any]:
+    """续跑进程非零退出后，磁盘上能否证明它**没有真正开始采集**：派发占位写下之后没有新的监督器 run、目标 attempt 之后也没有后继 attempt。
+
+    续跑脚本在派发真实批次之前就会因准入（管理令牌过期、收据绑定漂移）、环境前置等原因退出，此时既没有新的父 run 也没有预约后继
+    attempt。只读判定，不代表“可以自动重派”——是否重派仍由人定，本计划只据此给出换新轮次的重派命令。``zero`` 为真需同时满足：
+    占位文件与监督器状态目录可读、占位之后没有任何 run 目录或其 json 文件被写过、没有后继 attempt。时间基准取占位文件的修改时间
+    （它在进程派生之前落盘，派生出的进程不可能更早写 run 目录）。"""
+
+    state_dir = Path(params["VC_STATE_DIR"])
+    evidence: dict[str, Any] = {"zero": False, "new_runs": [], "successors": list(successors), "reason": None}
+    try:
+        threshold = (_launch_dir(params) / f"{review}.inflight.json").stat().st_mtime
+    except OSError:
+        evidence["reason"] = "读不到派发占位文件的时间，无法比较"
+        return evidence
+    if not state_dir.is_dir() or state_dir.is_symlink():
+        evidence["reason"] = f"监督器状态目录不可读：{state_dir}"
+        return evidence
+    for run in sorted(state_dir.glob("run-*")):
+        try:
+            newest = max([run.stat().st_mtime, *(item.stat().st_mtime for item in run.glob("*.json"))])
+        except OSError:
+            evidence["reason"] = f"{run.name} 读不出修改时间"
+            return evidence
+        if newest >= threshold:
+            evidence["new_runs"].append(run.name)
+    evidence["zero"] = not evidence["new_runs"] and not successors
+    return evidence
+
+
+def next_round_id(round_id: str) -> str:
+    """新轮次名：末尾是数字就加一（vc5r1 → vc5r2），否则追加 -r2。"""
+
+    match = re.fullmatch(r"(.*?)([0-9]+)", round_id)
+    return f"{match.group(1)}{int(match.group(2)) + 1}" if match else f"{round_id}-r2"
+
+
+def new_round_command(params: Mapping[str, str]) -> tuple[str, str]:
+    """零请求退出后的重派命令（打印给人，本计划不执行）：复制参数文件改轮次，再用新轮次 ``--apply``。
+
+    批准意向、续跑占位、对账暂停对象都按轮次存放，所以新轮次不继承“已派发过”的占位；已批准、已授权的恢复预览属于 Campaign，
+    仍然有效（派发前的接受检查会兜底）。返回 (新参数文件路径, 命令)。"""
+
+    new_round = next_round_id(params["ROUND"])
+    source = Path(params["PARAMS_PATH"])
+    target = source.with_name(f"{source.stem}-{new_round}{source.suffix}")
+    command = (f"sed -E 's/^ROUND=.*/ROUND={new_round}/' {shlex.quote(str(source))} > {shlex.quote(str(target))} && "
+               f"bash {shlex.quote(str(DRV / 'recovery-plan.sh'))} {shlex.quote(str(target))} --apply")
+    return str(target), command
+
+
 def continuation_state(params: Mapping[str, str], siblings: list[str], rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """续跑派发的现场状态（不依赖任何内存状态）。
 
@@ -735,6 +788,8 @@ def continuation_state(params: Mapping[str, str], siblings: list[str], rows: lis
                     state.update(state="lost", pid=pid, log=str(log))
                 else:
                     state.update(state="finished-ok" if code == "0" else "finished-failed", exit_code=code, log=str(log), pid=pid)
+                    if code != "0":
+                        state["zero_request"] = zero_request_evidence(params, last["review"], successors)
     if state["state"] == "none" and successors:
         state["state"] = "successor-exists"
     return state
@@ -1029,7 +1084,23 @@ def derive_steps(params: Mapping[str, str], facts: Mapping[str, Any]) -> list[St
             reasons = {"inflight": "派发占位存在但没有启动记录（执行结果不确定）",
                        "lost": "续跑进程已消失且没有结束标记（被杀？）",
                        "finished-failed": f"续跑进程以 {cont.get('exit_code')} 结束"}
-            steps["continue"] = Step("continue", BLOCKED, reasons[state] + "：禁止自动重派，人工核对后换新轮次", {"state": state})
+            zero = cont.get("zero_request") if state == "finished-failed" else None
+            if zero and zero.get("zero"):
+                # 续跑进程非零退出，且启动之后没有新的监督器 run、没有后继 attempt：它在派发真实批次之前就退出了（准入、环境前置等），
+                # 零请求。仍然不自动重派（退出原因没修好重派只会再失败一次，且同根因重试有上限），但给出可直接执行的新轮次命令。
+                target, command = new_round_command(params)
+                steps["continue"] = Step(
+                    "continue", BLOCKED,
+                    f"{reasons[state]}，且启动之后没有新的监督器 run、没有后继 attempt（判为零请求退出）：本计划不自动重派；"
+                    f"先看续跑日志 {cont.get('log')} 末尾修好退出原因（常见：管理令牌过期或准入收据绑定漂移要先 vc5-precheck.sh --apply／--renew），"
+                    "再用新轮次重派",
+                    {"state": state, "zero_request": True, "new_params_path": target, "_next_hint": (
+                        f"修好退出原因后人工执行（本计划不代办）：{command}")},
+                    command)
+            else:
+                why = f"（未能证明零请求：{zero['reason']}）" if zero and zero.get("reason") else (
+                    f"（启动之后已有新的监督器 run {zero['new_runs']} 或后继 attempt {zero['successors']}，可能已发出真实请求）" if zero else "")
+                steps["continue"] = Step("continue", BLOCKED, reasons[state] + "：禁止自动重派，人工核对后换新轮次" + why, {"state": state})
         elif preview is None or (separate and steps["authorize"].status != DONE) or steps["reconcile"].status != DONE:
             steps["continue"] = Step("continue", WAITING, "等前序步骤")
         else:
@@ -1223,8 +1294,44 @@ def render_plan(plan: Mapping[str, Any], *, mode: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def judge(result: CliResult, step: str) -> tuple[str, str, str]:
-    """对账结果归类（受管输出的判定直接用 ``fix_and_continue.judge_reconciliation``），提示换成本计划的续跑口径。"""
+def pause_command_templates(params: Mapping[str, str], orchestrator: str, kinds: list[str], operation_id: str | None) -> list[str]:
+    """对账判暂停时，要由人做的几步的**命令模板**（只打印，本计划不执行、不代签批准；尖括号处由人补全）。
+
+    本轮实战：停在 reconcile 的提示只有“按总账未决 operation 执行 accounting-resolve……”之类的文字，补账、环境隔离、干净环境收据
+    三类命令的参数要现场翻文档拼，一次恢复手工拼了 4 条命令。这里把参数名与已知坐标（数据根、Campaign 目录、编排器模块、未决 operation）
+    直接填好。``--approve-sha256`` 用预览输出的 ``review_sha256``，``--approved-by`` 是批准人——批准权限不变，仍由人给出。"""
+
+    data, campaign = shlex.quote(params["D"]), shlex.quote(params["C"])
+    prefix = f"cd {data} && PYTHONPATH={data} python3 -B -m tools.official_client_capture."
+    cli = prefix + orchestrator
+    approve = "批准后在同一条命令末尾加 --approve-sha256 <预览输出的 review_sha256> --approved-by '<批准人>'"
+    lines: list[str] = []
+    if "environment" in kinds:
+        lines.append(
+            "干净环境收据（修复环境、起好采集容器后新取，观测时间须晚于污染）：先 "
+            f"{prefix}codex_upgrade_arm64_environment_receipt collect --evidence-root <新建的证据根目录> "
+            "--output <facts.json> --phase <阶段，如 attempt_after> --subject-id <标识> --rust-tls-codex-version <目标客户端版本>，"
+            "再 同一模块 finalize --evidence-root <证据根> --facts <facts.json> --output <receipt.json>（根盘须低于 70%）")
+    if "accounting" in kinds:
+        lines.append(
+            f"补账预览（零写入）：{cli} accounting-resolve --campaign-dir {campaign} "
+            f"--operation-id {shlex.quote(operation_id) if operation_id else '<总账未决集合里本 Campaign 的 operation>'} "
+            "--estimated-count <请求数批准上界> --evidence <来源审计文件绝对路径> --reason '<理由>'"
+            "（按当前证据已能核清时去掉 --estimated-count 与 --evidence；没发过请求写 --estimated-count 0 并在来源审计里说明）；" + approve)
+    if "environment" in kinds:
+        lines.append(
+            f"环境隔离预览（零写入）：{cli} environment-isolate --campaign-dir {campaign} "
+            "--environment-repair-receipt <环境修复记录绝对路径> --clean-environment-receipt <上面 finalize 出的 receipt.json 绝对路径> "
+            "--reason '<修复说明>'；" + approve)
+    if lines:
+        lines.append("以上做完后重新执行同一条命令（实练顺序：干净环境收据 → 补账 → 环境隔离）")
+    return lines
+
+
+def judge(result: CliResult, step: str, *, command_context: Mapping[str, Any] | None = None) -> tuple[str, str, str]:
+    """对账结果归类（受管输出的判定直接用 ``fix_and_continue.judge_reconciliation``），提示换成本计划的续跑口径。
+
+    ``command_context``（``params``、``orchestrator``、``operation_id``）给出时，账务／环境暂停的提示后追加命令模板。"""
 
     category, reason, _hint, _resume = FC.judge_reconciliation(result.payload, result.rc, result.stderr, step=step)
     payload = result.payload
@@ -1242,7 +1349,12 @@ def judge(result: CliResult, step: str) -> tuple[str, str, str]:
                     "项目总账根因重试达上限：由人执行 record-root-cause-repair（修复提交、回归收据、部署收据三项绑定）")
             else:
                 actions.append(PAUSE_HINTS.get(kind, f"暂停种类 {kind}：按受管工具提示处理"))
-        return category, reason, "；".join(actions) + "；处理后重新执行同一条命令" + suffix
+        templates: list[str] = []
+        if command_context is not None:
+            templates = pause_command_templates(command_context["params"], command_context["orchestrator"], FC.pause_kinds(payload),
+                                                command_context.get("operation_id"))
+        rendered = "".join(f"\n  命令模板：{line}" for line in templates)
+        return category, reason, "；".join(actions) + "；处理后重新执行同一条命令" + suffix + rendered
     if category == "stop":
         return category, reason, "永久停线或需审核由人裁定" + suffix
     return category, reason, "按报错修复后重新执行同一条命令" + suffix
@@ -1289,6 +1401,27 @@ class Runner:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
         os.chmod(self.out / "history.ndjson", 0o600)
         return record
+
+    def heal_stale_step_records(self, steps: list[Step]) -> list[str]:
+        """现场已判定完成、但 ``steps/<步骤>.json`` 仍是停下时留下的旧记录（needs-operator／failed）：补写一条 passed。
+
+        本轮实战：approve 先因缺批准停在 needs-operator，补批准后动作做完、记录写入之前进程被打断；重入时现场判定该步已完成、
+        不再执行动作，``steps/approve.json`` 就一直残留旧的 needs-operator，读记录的人会误以为还卡着。只在“现场判已完成且记录
+        状态不是 passed”时补写，沿用旧记录的 summary（``reconcile-runs`` 的 revisit 等不丢），原因里写明补写来源与旧状态；
+        没有记录的步骤（本轮从没停过）与已是 passed 的不动。返回被补写的步骤名。"""
+
+        healed: list[str] = []
+        for step in steps:
+            if step.status != DONE:
+                continue
+            path = self.out / "steps" / f"{step.id}.json"
+            old = _load_json(path, f"步骤记录 {step.id}") if path.exists() else None
+            if not isinstance(old, dict) or old.get("status") in {None, "passed"}:
+                continue
+            self.record(step.id, "passed", reason=f"现场判定该步骤已完成（上次执行停在 {old.get('status')} 或被打断，记录补写）",
+                        summary=old.get("summary") if isinstance(old.get("summary"), dict) else None)
+            healed.append(step.id)
+        return healed
 
     def maybe_crash(self, step: str) -> None:
         """验收用打断注入：动作做完、步骤记录写入之前结束进程（等价 kill -9）。"""
@@ -1398,9 +1531,15 @@ class Runner:
             raise Stop("failed", f"工具演进登记失败（rc={applied.rc}）：{FC._tail(applied.stderr)}", "按报错处理后重新执行同一条命令")
         return {"review_sha256": review, "receipt_sha256": applied.payload.get("receipt_sha256")}
 
+    def _command_context(self, operation_id: str) -> dict[str, Any]:
+        """暂停提示里命令模板要用的坐标；operation 是该对账在总账里的 operation（补账时以总账未决集合为准，模板里已注明）。"""
+
+        return {"params": self.params, "orchestrator": self.backend.orchestrator, "operation_id": operation_id}
+
     def _reconcile_object(self, label: str, kind: str, subject: str, args: list[str]) -> CliResult:
         result = self.cli("reconcile-runs", label, args)
-        category, reason, hint = judge(result, "reconcile-runs")
+        operation = f"reconcile-supervisor-run:{subject}" if kind == "supervisor-run" else f"reconcile-attempt:{subject}"
+        category, reason, hint = judge(result, "reconcile-runs", command_context=self._command_context(operation))
         if kind == "supervisor-run" and category == "failed" and FC.parse_redirect(result.stderr) is not None:
             return result  # 改走 attempt 对账：调用方处理
         if category != "recoverable":
@@ -1452,7 +1591,7 @@ class Runner:
 
     def act_reconcile(self, facts: Mapping[str, Any]) -> dict[str, Any]:
         result = self._reconcile_target("reconcile", "reconcile", [])
-        category, reason, hint = judge(result, "reconcile")
+        category, reason, hint = judge(result, "reconcile", command_context=self._command_context(f"reconcile-attempt:{self.params['ATTEMPT']}"))
         if category != "recoverable":
             raise Stop("failed" if category == "failed" else "needs-operator", f"目标 attempt 对账：{reason}", hint)
         payload = result.payload
@@ -1601,11 +1740,13 @@ class Runner:
         for _ in range(MAX_ITERATIONS):
             facts = self.facts()
             steps = derive_steps(self.params, facts)
+            self.heal_stale_step_records(steps)
             current = next((step for step in steps if step.status in {PENDING, BLOCKED}), None)
             if current is None:
                 return self.finish(facts, steps)
             if current.status == BLOCKED:
-                hint = (f"人工执行（本计划不代办）：{current.command}；之后重新执行同一条命令" if current.command else "排除阻塞后重新执行同一条命令")
+                hint = current.evidence.get("_next_hint") or (
+                    f"人工执行（本计划不代办）：{current.command}；之后重新执行同一条命令" if current.command else "排除阻塞后重新执行同一条命令")
                 return self.stop(current.id, Stop("needs-operator", current.detail, hint))
             progressed[current.id] = progressed.get(current.id, 0) + 1
             if progressed[current.id] > 3:

@@ -223,6 +223,7 @@ class Sandbox:
         _write(d / "vc5-all.sh", f"""
             #!/bin/bash
             echo "VC5_ALL_START"
+            echo "RENEW_APPROVER=${{VC5_RENEW_APPROVER:-}}" >> "{self.log}"
             /bin/sleep 0.2
             echo "KILO_DONE"
             /bin/sleep 0.5
@@ -356,6 +357,32 @@ class CaptureAccountOrderTests(SandboxCase):
         self.assertEqual(offs[0], "OFF done=1 kilo=1", "关账号时 vc5-all 必须已经打出 VC5_ALL_DONE")
         self.assertIn("PASS VC5", "\n".join(self.sb.status_lines()))
         self.assertIn("VC5ALL_FINISHED", self.sb.events())
+
+    def _renew_approver_seen_by_vc5_all(self, *argv: str, **extra: str) -> str:
+        """跑一遍 VC5 阶段，返回假 vc5-all.sh 看到的 VC5_RENEW_APPROVER（没设时为空串）。"""
+
+        self._install_account_stubs()
+        self._prepare_vc5()
+        result = self.sb.stage_pipeline("--from", "VC5", "--to", "VC5", *argv, **extra)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+        seen = [line for line in self.sb.events() if line.startswith("RENEW_APPROVER=")]
+        self.assertEqual(len(seen), 1, seen)
+        return seen[0].split("=", 1)[1]
+
+    def test_approver_is_handed_to_vc5_all_for_token_auto_renewal(self) -> None:
+        """0.165 实战：流水线起 vc5-all 时没传 VC5_RENEW_APPROVER，consume 窗口过期后 canonical 前不会自动续签（手工 --renew 才通过）。
+        起跑传了 --approver 就必须把同一批准人交给 vc5-all。"""
+
+        self.assertEqual(self._renew_approver_seen_by_vc5_all("--approver", "老板·测试批准依据"), "老板·测试批准依据")
+
+    def test_existing_vc5_renew_approver_environment_wins_over_pipeline_approver(self) -> None:
+        self.assertEqual(
+            self._renew_approver_seen_by_vc5_all("--approver", "流水线批准人", VC5_RENEW_APPROVER="环境里的续签批准人"),
+            "环境里的续签批准人",
+        )
+
+    def test_without_any_approver_vc5_all_gets_empty_value_not_inherited_garbage(self) -> None:
+        self.assertEqual(self._renew_approver_seen_by_vc5_all(), "")
 
     def test_premature_close_is_caught_by_this_test_mutation(self) -> None:
         """变异验证：把脚本改回上一版的错误行为（见到 KILO_DONE 就关账号），上面那条不变量必须被打破——
@@ -1395,6 +1422,58 @@ class PipelineStageTests(SandboxCase):
         result = self.sb.run(["bash", str(self.sb.pipe / "vc-pipeline.sh"), "--check", "--from", "VC6", "--to", "VC6"])
         self.assertIn("== 阶段 VC6", result.stdout)
         self.assertFalse((self.sb.prep / "pipeline" / "vc-status.txt").exists(), "--check 不得写状态文件")
+
+    def test_stage_stop_for_short_deadline_tells_how_to_retry_deadline_extend(self) -> None:
+        """计时账本剩余不足时流水线停下交调度者延期；延期命令在批次执行期间会被设计内的互斥拒绝，停下提示里要写明怎么重试。"""
+
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(4)
+        _write(sb.data / "tools/official_client_capture/codex_upgrade_vc_artifacts.py", """
+            import datetime
+            def effective_deadlines(path):
+                soon = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return {"phase": "VC-5", "execution_deadline_at_utc": soon, "total_deadline_at_utc": soon,
+                        "project_deadline_at_utc": soon, "paused_scopes": []}
+        """, 0o644)
+        result = sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+        self.assertEqual(result.returncode, 1, result.stdout[-800:])
+        text = "\n".join(sb.status_lines())
+        self.assertIn("计时账本剩余不足或已暂停", text)
+        self.assertIn("设计内的互斥拒绝", text)
+        self.assertIn("每 30～60 秒重试同一条命令", text)
+
+    def _check_vc6(self, order: str, installed: dict[str, str], *, prep_vc6_env: bool = False) -> subprocess.CompletedProcess:
+        """--check --from VC6：ORDER.txt 在 <PREP>/vc6/，脚本与 vc6-env.sh 在已装驱动 pipeline/vc6/（与运行体同一口径）。"""
+
+        sb = self.sb
+        (sb.prep / "vc6").mkdir(parents=True, exist_ok=True)
+        (sb.prep / "vc6" / "ORDER.txt").write_text(order, encoding="utf-8")
+        (sb.pipe / "vc6" / "vc6-env.sh").unlink()   # 沙箱里带的是真实副本；这里只留 installed 里写明的
+        for name, body in installed.items():
+            _write(sb.pipe / "vc6" / name, body)
+        if prep_vc6_env:
+            _write(sb.prep / "vc6" / "vc6-env.sh", "#!/bin/bash\n")
+        return sb.run(["bash", str(sb.pipe / "vc-pipeline.sh"), "--check", "--from", "VC6", "--to", "VC6"])
+
+    def test_check_vc6_resolves_relative_scripts_and_vc6_env_in_the_installed_driver(self) -> None:
+        """0.165 实战：--check --from VC6 把 ORDER 里的相对脚本名当作当前目录的文件、vc6-env.sh 去 <PREP>/vc6/ 找，
+        而真实运行用已装驱动 pipeline/vc6/ 里的同名文件，两边口径不一致（检查红、运行绿）。"""
+
+        result = self._check_vc6("run     step-a    step-a.sh\n", {"step-a.sh": "#!/bin/bash\nexit 0\n", "vc6-env.sh": "#!/bin/bash\n"})
+        self.assertIn("ORDER 引用的 1 个 run 脚本都在位且 bash -n 通过", result.stdout, result.stdout)
+        self.assertIn("vc6-env.sh 在位", result.stdout)
+        self.assertNotIn("缺脚本", result.stdout)
+        self.assertNotRegex(result.stdout, r"\[缺\] .*vc6-env\.sh")
+
+    def test_check_vc6_still_reports_missing_or_broken_scripts_and_missing_env(self) -> None:
+        result = self._check_vc6("run     step-a    step-a.sh\nrun     step-b    step-b.sh\nrun     step-c    /nonexistent/abs.sh\n",
+                                 {"step-b.sh": "#!/bin/bash\nif then\n"}, prep_vc6_env=True)
+        self.assertIn(f"缺脚本：step-a -> {self.sb.pipe}/vc6/step-a.sh", result.stdout)
+        self.assertIn(f"语法不通过：{self.sb.pipe}/vc6/step-b.sh", result.stdout)
+        self.assertIn("缺脚本：step-c -> /nonexistent/abs.sh", result.stdout)
+        self.assertIn("ORDER 引用的脚本有 3 个缺失或语法不通过", result.stdout)
+        self.assertRegex(result.stdout, r"\[缺\] .*pipeline/vc6/vc6-env\.sh", "vc6-env.sh 只在 <PREP>/vc6/ 有、已装驱动里没有：运行会失败，检查必须报缺")
 
     def test_background_validation_preflight_is_not_counted_as_other_orchestration(self) -> None:
         """上一版第一次停顿：操作员的 --check 还在后台跑 background_validation.py preflight，被流水线的 others_running 当成别的编排而停。

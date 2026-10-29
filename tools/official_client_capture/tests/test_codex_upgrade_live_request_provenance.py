@@ -644,6 +644,75 @@ class LiveRequestProvenanceTests(unittest.TestCase):
                     with self.assertRaisesRegex(provenance.ProvenanceError, "run-summary 形状或状态非法"):
                         provenance._root_branches(root, target_version=version)
 
+    def _failed_frozen_root(self, parent: Path, *, executed: tuple[str, ...], unexecuted: tuple[str, ...], status: str = "failed") -> Path:
+        """真实形状的失败 frozen 采集根：摘要列全部场景，没跑的场景 pcap_bytes=0、空摘要、空动作且没有场景目录
+        （取自 0.165 候选采集在 A20 失败后留下的失败归档）。"""
+
+        root = parent / "c01650-candidate-r1-candidate-frozen-core.failed-attempt1"
+        rows = []
+        for scenario in executed:
+            pcap = root / "scenarios" / scenario / "egress.pcap"
+            pcap.parent.mkdir(parents=True)
+            pcap.write_bytes(f"pcap-{scenario}".encode() * 4)
+            relay = pcap.parent / "relay"
+            relay.mkdir()
+            (relay / "conn001.client_to_upstream.bin").write_bytes(_h1_post(RESPONSES, {"model": "gpt-5.5", "n": scenario}))
+            rows.append({"scenario_id": scenario, "actions": {"responses_http_success": 1}, "production_forwarded": False,
+                         "pcap_bytes": pcap.stat().st_size, "pcap_sha256": hashlib.sha256(pcap.read_bytes()).hexdigest()})
+        for scenario in unexecuted:
+            rows.append({"scenario_id": scenario, "actions": {}, "production_forwarded": False, "pcap_bytes": 0, "pcap_sha256": ""})
+        _write_json(root / "run-summary.json", {
+            "schema_version": "candidate-core-capture/v1", "codex_version": "0.165.0", "run_id": "c01650-candidate-r1-candidate-frozen-core",
+            "status": status, "exit_code": 1, "explicit_gate": True, "production_forwarding_enabled": False, "scenarios": rows})
+        return root
+
+    def test_failed_frozen_run_with_unexecuted_scenarios_is_parsed_and_counts_only_executed_ones(self) -> None:
+        """0.165 实战：A20 失败后 A07 等场景没跑，摘要里它们是 pcap_bytes=0；后继 attempt 的作业收据经失败重试归档枚举到这份失败归档时，
+        整份核算报“Candidate frozen scenarios[4] 非法”，恢复入口卡住（手工把归档改名才绕过）。没跑过的场景没发请求，不该挡住核算。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._failed_frozen_root(Path(directory) / "runs", executed=("A03", "A04", "A20"), unexecuted=("A07", "A08", "A21"))
+            kind, branches = provenance._root_branches(root, target_version="0.165.0")
+            self.assertEqual(kind, "candidate_frozen")
+            self.assertEqual(sorted(branch["scenario"] for branch in branches), ["A03", "A04", "A20"])
+            self.assertEqual(sum(len(branch["requests"]) for branch in branches), 3, "已执行场景的请求照常入账")
+
+    def test_failed_frozen_run_unexecuted_tolerance_fails_closed_on_every_other_shape(self) -> None:
+        def mutate(root: Path, change) -> None:
+            path = root / "run-summary.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            change(data, root)
+            _write_json(path, data)
+
+        def scenario(data, scenario_id):
+            return next(item for item in data["scenarios"] if item["scenario_id"] == scenario_id)
+
+        cases = {
+            # 完整（complete）的摘要里不允许有没跑的场景：放行只给 failed。
+            "complete_status": lambda data, root: data.update(status="complete"),
+            # 没跑的场景却带了动作、摘要或字节：不是“没发请求”，不能静默跳过。
+            "actions_present": lambda data, root: scenario(data, "A07").update(actions={"responses_http_success": 1}),
+            "sha_present": lambda data, root: scenario(data, "A07").update(pcap_sha256="a" * 64),
+            "pcap_bytes_small": lambda data, root: scenario(data, "A07").update(pcap_bytes=10),
+            "production_forwarded_unknown": lambda data, root: scenario(data, "A07").pop("production_forwarded"),
+            # 磁盘上却有场景目录：说明跑过一部分，必须按完整形状核算。
+            "directory_exists": lambda data, root: (root / "scenarios" / "A07").mkdir(),
+            # 重复的场景 id。
+            "duplicate_id": lambda data, root: data["scenarios"].append(dict(scenario(data, "A07"))),
+        }
+        for name, change in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                root = self._failed_frozen_root(Path(directory) / "runs", executed=("A03",), unexecuted=("A07",))
+                mutate(root, change)
+                with self.assertRaises(provenance.ProvenanceError):
+                    provenance._root_branches(root, target_version="0.165.0")
+        # 一个场景都没执行过：没有可核算的权威来源，失败关闭。
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._failed_frozen_root(Path(directory) / "runs", executed=(), unexecuted=("A03", "A04"))
+            (root / "scenarios").mkdir()
+            with self.assertRaisesRegex(provenance.ProvenanceError, "没有任何已执行的场景"):
+                provenance._root_branches(root, target_version="0.165.0")
+
     def test_compact_driver_fact_without_error_type_stays_unresolved(self) -> None:
         """turn 0 但驱动没有记录错误类型或协议记录数时，不能当零。"""
 

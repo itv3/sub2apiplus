@@ -3,7 +3,7 @@
 keeper 已下线不再部署。六个宿主脚本（五个 Codex 脚本与 Claude 候选脚本）在读 keeper 运行状态时：
 
 * 容器在场：与以往一致，记录运行状态（在跑则先停、退出时按原状态恢复）；
-* docker 明确报告容器不存在（No such object／container）：如实视为未部署，``keeper_was_running=false``，
+* docker 明确报告容器不存在（no such object／container，大小写不敏感）：如实视为未部署，``keeper_was_running=false``，
   后面的停、启与恢复核验自然全部跳过；
 * 其它失败（守护进程不可达等）：不得当成缺席，照旧失败退出。
 
@@ -41,7 +41,12 @@ case "$KEEPER_MODE" in
   stopped) echo false ;;
   absent) echo "Error response from daemon: No such object: $4" >&2; exit 1 ;;
   absent_legacy) echo "Error: No such container: $4" >&2; exit 1 ;;
+  # 真实 Docker 29.1.2（ARM64 采集主机，只读 ``docker inspect -f '{{.State.Running}}' <不存在的名字>`` 取样）：
+  # 退出码 1，标准输出一个空行，标准错误是全小写的 ``error: no such object: <名>``。
+  absent_docker29) echo; echo "error: no such object: $4" >&2; exit 1 ;;
   broken) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit 1 ;;
+  # Docker 29 CLI 守护进程不可达的措辞（含 ``no such file or directory``，但不是容器缺席，必须失败关闭）。
+  broken_docker29) echo "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory" >&2; exit 1 ;;
 esac
 """
 
@@ -91,7 +96,7 @@ class KeeperOptionalScriptTests(unittest.TestCase):
 
     def test_absent_is_treated_as_not_deployed_and_skips_stop_start(self) -> None:
         for script in SCRIPTS:
-            for mode in ("absent", "absent_legacy"):
+            for mode in ("absent", "absent_legacy", "absent_docker29"):
                 with self.subTest(script=script, mode=mode):
                     result = self.run_block(script, mode)
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -100,11 +105,23 @@ class KeeperOptionalScriptTests(unittest.TestCase):
 
     def test_daemon_failure_is_not_mistaken_for_absence(self) -> None:
         for script in SCRIPTS:
+            for mode in ("broken", "broken_docker29"):
+                with self.subTest(script=script, mode=mode):
+                    result = self.run_block(script, mode)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("无法读取 keeper 容器状态", result.stderr)
+                    self.assertNotIn("keeper_was_running=", result.stdout)
+
+    def test_docker29_lowercase_absence_regression(self) -> None:
+        """0.165 的 VC-5 第一次失败：Docker 29.1.2 对不存在的容器输出小写 ``error: no such object:``，
+        旧判断只认大写 ``No such object`` 而落到“无法读取 keeper 容器状态”退出 1。六个脚本都必须识别。"""
+
+        for script in SCRIPTS:
             with self.subTest(script=script):
-                result = self.run_block(script, "broken")
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("无法读取 keeper 容器状态", result.stderr)
-                self.assertNotIn("keeper_was_running=", result.stdout)
+                result = self.run_block(script, "absent_docker29")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "keeper_was_running=false")
+                self.assertNotIn("无法读取 keeper 容器状态", result.stderr)
 
     def test_stop_and_start_are_only_guarded_by_keeper_was_running(self) -> None:
         """每个 docker stop／start keeper 都紧跟在 ``keeper_was_running == true``（或停过才启的标志）守卫之内。"""

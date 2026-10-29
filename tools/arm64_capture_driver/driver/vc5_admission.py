@@ -39,6 +39,17 @@ REQUIRED_CLAIMS = ("user_id", "email", "role", "token_version", "iat", "exp", "n
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
 
 
+# 失败原因码 -> 处理提示（只给人读，写在 dry-run 摘要与 --consume／--apply 的错误 JSON 里；不改变任何批准权限，批准件仍须人签）。
+REMEDIATION_HINTS = {
+    "admission_receipt_binding_drift": (
+        "准入收据绑定的环境指纹、候选、构建或画像摘要已与当前事实不同（常见原因：登记了工具演进、换了部署或重装了驱动），"
+        "旧收据不能再用。须用绑定当前 admission_key 与 actions 的批准件重新 --apply（流水线起跑传 --approver 会自动签；"
+        "手工：bash vc5-precheck.sh --dry-run 取 admission_key 与 actions，写批准件后 bash vc5-precheck.sh --apply --approval <批准件>），再 --consume"
+    ),
+    "admission_not_ready": "准入当前不是 ready：先 bash vc5-precheck.sh --dry-run 看 actions 与 ttl（令牌快过期用 --renew --approver，其余走批准件 --apply）",
+}
+
+
 class AdmissionError(ValueError):
     """只包含静态错误码，不能带凭证内容或签发器原始输出。"""
 
@@ -709,6 +720,22 @@ class Admission:
             return [{"check": "candidate_database", "status": "blocked", "reason": reason,
                      "detail": "库表前置没能核对（postgres 容器、账号或 psql 不可用）；先让采集主机的数据库可查，再重做只读预览"}]
 
+    def receipt_drift(self, report: dict[str, Any]) -> dict[str, str] | None:
+        """只读：已有准入收据的绑定／凭据与当前事实不一致时返回 ``{"reason", "hint"}``，否则 None。
+
+        只在现场事实本身就绪（``status == ready``）时才判：未就绪时 actions 已经说明要做什么，收据不一致是必然的。判据与 ``consume`` 逐项相同
+        （绑定、凭据），所以这里返回非 None 恰好等价于 ``--consume`` 会报 ``admission_receipt_binding_drift``。收据不存在、读不出来都不在此处判。"""
+
+        if report.get("status") != "ready" or not self.receipt.exists():
+            return None
+        try:
+            receipt = read_json(self.receipt, private=True)
+        except Exception:   # noqa: BLE001 - 读不出来由 consume 自己报，这里只做提示
+            return None
+        if receipt.get("bindings") != report["bindings"] or receipt.get("credential") != report["credential"]:
+            return {"reason": "admission_receipt_binding_drift", "hint": REMEDIATION_HINTS["admission_receipt_binding_drift"]}
+        return None
+
     def dry_run_report(self, *, skip_database: bool = False) -> dict[str, Any]:
         """``--dry-run`` 的完整只读报告：准入检查（原样）＋令牌／批准件剩余有效期＋库表前置。
 
@@ -717,6 +744,13 @@ class Admission:
 
         report = dict(self.inspect())
         report["ttl"] = self.ttl_report()
+        drift = self.receipt_drift(report)
+        if drift is not None:
+            # 现场事实全部通过（status=ready、actions=[]）但已有的准入收据与当前绑定对不上：--consume 必然失败，必须重新 --apply。
+            # 此前 dry-run 在这里报 ready，操作员到 --consume 才撞上（工具演进登记后两次都如此）。
+            report["receipt_drift"] = drift
+            report["checks"] = [*report["checks"], {"check": "admission_receipt", "status": "needs_apply", "reason": drift["reason"]}]
+            report["status"] = "needs_apply"
         prerequisites = [] if skip_database else self.database_prerequisites()
         report["candidate_prerequisites"] = prerequisites
         blocked = [row for row in prerequisites if row["status"] == "blocked"]
@@ -892,6 +926,9 @@ def dry_run_summary(report: dict[str, Any]) -> str:
     if (approval.get("pending") or {}).get("remaining_seconds") is not None:
         lines.append(f"  待用批准件：剩余 {approval['pending']['remaining_seconds']} 秒（{approval['pending']['status']}）")
     lines.extend(f"  ! {warning}" for warning in ttl.get("warnings", []))
+    drift = report.get("receipt_drift")
+    if drift:
+        lines.append(f"  ! 准入收据已失效（{drift['reason']}）：{drift['hint']}")
     for row in report.get("candidate_prerequisites") or []:
         lines.append(f"  库表前置 {row['check']}：{row['status']}" + (f"（{row['reason']}）" if row["status"] != "passed" else ""))
         if row["status"] == "blocked":
@@ -943,7 +980,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         # 外部库、签发器或 JSON 解码异常也不能向控制台回显凭证。
         reason = str(error) if isinstance(error, AdmissionError) else "admission_verification_failed"
-        print(json.dumps({"status": "blocked", "reason": reason}, ensure_ascii=False), file=sys.stderr)
+        payload = {"status": "blocked", "reason": reason}
+        if reason in REMEDIATION_HINTS:
+            payload["hint"] = REMEDIATION_HINTS[reason]   # 静态文案，不含任何运行时数据
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 3
 
 
