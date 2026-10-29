@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -103,11 +104,42 @@ func equalOfficialOpenAIWSBusinessHistory(original, candidate map[string]any) (b
 		if !leftOK {
 			return true, nil
 		}
-		if !reflect.DeepEqual(lv, rv) {
+		if !reflect.DeepEqual(lv, rv) && !equalOfficialOpenAIWSHistoryItemAfterReasoningReplay(lv, rv) {
 			return false, nil
 		}
 		li, ri = nextLeft, nextRight
 	}
+}
+
+// equalOfficialOpenAIWSHistoryItemAfterReasoningReplay 判断候选项是否恰为“原始项经入站兼容层的推理历史清理后”的结果。
+//
+// 入站兼容层（normalizeOpenAIResponsesReasoningContentReplay）会删掉 reasoning 项里非空数组形式的 content，
+// 这是跨模型旧会话（先用别家模型、后切 GPT）历史必需的受控清理。校验器不另写一套条件，而是把原始项逐项副本包成
+// 最小请求体，直接调用同一个清理函数；清理有效时再与候选项比较，其余字段（summary、encrypted_content、id 等）
+// 必须与清理结果完全一致，所以除这一种差异外不会额外放行任何改动。清理函数不认的形态（空数组、字符串、null、
+// 非 reasoning 项等）原样返回，此处判为不等。
+//
+// 只在逐项比较已经不等时才调用，相等的项（绝大多数）不产生任何额外开销；只编码单项副本，不为长历史生成整段 JSON，
+// 也不改动原始项与候选项。任何编码、清理或解码失败都按“不等”处理（保守拒绝）。
+func equalOfficialOpenAIWSHistoryItemAfterReasoningReplay(original, candidate any) bool {
+	item, ok := original.(map[string]any)
+	if !ok {
+		return false
+	}
+	body, err := json.Marshal(map[string]any{"input": []any{item}})
+	if err != nil {
+		return false
+	}
+	cleaned, changed, err := normalizeOpenAIResponsesReasoningContentReplay(body)
+	if err != nil || !changed {
+		return false
+	}
+	payload, err := decodeOfficialJSONObjectUseNumber(cleaned)
+	if err != nil {
+		return false
+	}
+	items, _ := payload["input"].([]any)
+	return len(items) == 1 && reflect.DeepEqual(items[0], candidate)
 }
 
 func officialOpenAIWSHistoryInput(payload map[string]any) ([]any, error) {
