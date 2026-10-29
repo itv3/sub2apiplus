@@ -141,6 +141,7 @@ func TestCodexImagesWireReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
 			return codexGateAcceptAfterIdentity(profile, officialCodexEndpointImagesGenerations) &&
 				codexGateAcceptAfterIdentity(profile, officialCodexEndpointImagesEdits)
 		})
+	skipUnlessSlotIsPreUUIDv7Form(t, mode)
 	server := startCodexGateWireServer(t, nil)
 	gate := newCodexGateService(t, mode, server)
 	gate.seedCookie("__cf_bm", "promotion-gate")

@@ -210,6 +210,7 @@ func TestGPT61SolNonLiteInboundIsShapedAsLiteOnOAuthWSEgressFromHTTPIngress(t *t
 // WS 上游、WS 入站：第三方 WS 客户端首帧是非 Lite 形态（顶层 tools 与 instructions），网关派生出 Lite 的预热帧与业务帧。
 func TestGPT61SolNonLiteInboundIsShapedAsLiteOnOAuthWSEgressFromWSIngress(t *testing.T) {
 	mode := codexGateTargetReleaseMode(t, "基础指令走 input 载体且列出 responses_ws", codexGateBaseInstructionsCarrierDeclared)
+	skipUnlessSlotIsPreUUIDv7Form(t, mode)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	control, hasControl := codexGateControlReleaseMode(t, mode)

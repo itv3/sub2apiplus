@@ -15,6 +15,7 @@ func TestOAuthInputInternalMetadata(t *testing.T) {
 	// WS 入口在 0.164 起按画像保留官方形态的逐项 passthrough（见 official_egress_openai_input_passthrough_test.go），
 	// 本用例断言的“整体剥离”是 0.163 形态，WS 一行固定在较旧槽位；其余入口各版本都剥离。
 	olderSlotConfig := olderSlotProfileConfigForTest(t)
+	olderSlotPreUUIDv7 := olderSlotIsPreUUIDv7Form(t)
 	tests := []struct {
 		name      string
 		normalize func([]byte) ([]byte, bool, error)
@@ -40,6 +41,10 @@ func TestOAuthInputInternalMetadata(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "OAuth websocket" && !olderSlotPreUUIDv7 {
+				t.Skip("较旧槽位的画像已是增量窗口方案（IDScheme=uuidv7）：WS 入口按画像保留逐项 passthrough，“整体剥离”的旧形态在此槽位不可达；" +
+					"新方案的对应语义由 official_egress_openai_input_passthrough_test.go 与晋升后门禁覆盖")
+			}
 			out, _, err := tt.normalize([]byte(body))
 			require.NoError(t, err)
 			require.Equal(t, !tt.strip, gjson.GetBytes(out, "input.0."+field).Exists())

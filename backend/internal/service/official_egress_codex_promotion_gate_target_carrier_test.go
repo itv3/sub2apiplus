@@ -31,6 +31,7 @@ func TestCodexBaseInstructionsCarrierReplaysApprovedSemanticsOnTargetRelease(t *
 	// 判别式门禁（IDScheme／refresh_reason／图像头等，见 official_egress_codex_promotion_gate_0164_test.go）覆盖。
 	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 input 里 developer 消息形态的基础指令载体（HTTP 与 WS）",
 		codexGateBaseInstructionsCarrierDeclared)
+	skipUnlessSlotIsPreUUIDv7Form(t, mode)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	require.Equal(t, "input_developer_message", section.Carrier)

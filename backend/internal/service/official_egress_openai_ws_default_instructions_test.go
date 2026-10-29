@@ -392,6 +392,7 @@ func useOfficialCodexBaseInstructionsCarrierProfile(t *testing.T, svc *OpenAIGat
 	t.Helper()
 	mode := codexGateTargetReleaseMode(t, "基础指令走 input 载体且列出 responses_ws", codexGateBaseInstructionsCarrierDeclared)
 	t.Logf("固定到载体画像槽位=%s", mode)
+	skipUnlessSlotIsPreUUIDv7Form(t, mode)
 	if svc.cfg == nil {
 		svc.cfg = &config.Config{}
 	}

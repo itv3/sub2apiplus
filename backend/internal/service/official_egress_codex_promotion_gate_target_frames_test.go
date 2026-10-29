@@ -63,6 +63,7 @@ func TestCodexWebSocketFrameSlotsReplaysApprovedSemanticsOnTargetRelease(t *test
 		func(profile profilecontract.ExecutableProfile) bool {
 			return codexGateResponsesClosedFieldsWithoutInstructions(profile) && codexGateBaseInstructionsCarrierDeclared(profile)
 		})
+	skipUnlessSlotIsPreUUIDv7Form(t, mode)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	text := codexGateBaseInstructionsText

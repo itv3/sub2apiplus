@@ -1327,6 +1327,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBridg
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeadersUsePromptCacheAndTurnState(t *testing.T) {
+	skipUnlessOlderSlotIsPreUUIDv7Form(t)
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
