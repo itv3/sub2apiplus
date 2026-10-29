@@ -553,6 +553,46 @@ class AdmissionTests(unittest.TestCase):
             self.subject.renew("批准人")
         self.assertEqual(self.facts.issued, 1)
 
+    def test_dry_run_reports_needs_apply_when_the_existing_receipt_no_longer_matches(self):
+        """0.165 实战：登记工具演进后 dry-run 仍报 ready、actions=[]，--consume 却报 admission_receipt_binding_drift，要用批准件重新 --apply。
+        现在 dry-run 先说破：status=needs_apply，并写明原因与办法。"""
+
+        self.subject.apply(self.approval())
+        steady = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(steady["status"], "ready")
+        self.assertNotIn("receipt_drift", steady, "收据与现场一致时报告形状不变")
+        self.facts.generation += 1   # 部署变了（工具演进登记、重装驱动都会这样）：环境指纹变，旧收据作废
+        report = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(report["actions"], [], "现场事实本身就绪，没有待补的动作")
+        self.assertEqual(report["status"], "needs_apply")
+        self.assertEqual(report["receipt_drift"]["reason"], "admission_receipt_binding_drift")
+        self.assertIn("重新 --apply", report["receipt_drift"]["hint"])
+        self.assertIn({"check": "admission_receipt", "status": "needs_apply", "reason": "admission_receipt_binding_drift"}, report["checks"])
+        with self.assertRaisesRegex(admission.AdmissionError, "admission_receipt_binding_drift"):
+            self.subject.consume()   # 与 --consume 的真实结果一致
+        self.assertIn("重新 --apply", admission.dry_run_summary(report))
+        # 按提示用批准件重新 apply 之后恢复 ready，consume 通过。
+        self.subject.apply(self.approval(approval_id="fixture-approval-2"))
+        again = self.subject.dry_run_report(skip_database=True)
+        self.assertEqual(again["status"], "ready")
+        self.assertNotIn("receipt_drift", again)
+        self.assertEqual(self.subject.consume()["status"], "ready")
+
+    def test_consume_binding_drift_error_carries_the_reapply_hint_without_secrets(self):
+        self.subject.apply(self.approval())
+        self.facts.generation += 1
+        # 替身的官方 Campaign 判定在调用时回头取模块里的 ManagedFacts；下面要把它整体换成桩，所以先把结果固定下来。
+        official = self.facts.official_campaign()
+        self.facts.official_campaign = lambda: official
+        with mock.patch.dict(sys.modules, {"driver_config": mock.Mock(load_config=lambda: self.config)}), \
+                mock.patch.object(admission, "_require_client_admission"), mock.patch.object(admission, "ManagedFacts", return_value=self.facts), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(admission.main(["--consume"]), 3)
+        payload = json.loads(error.getvalue().strip().splitlines()[-1])
+        self.assertEqual(payload["reason"], "admission_receipt_binding_drift")
+        self.assertIn("重新 --apply", payload["hint"])
+        self.assertNotIn(token().decode(), error.getvalue())
+
     def test_renew_flag_is_wired_through_main_and_the_shell_entry(self):
         script = (SCRIPTS / "vc5-precheck.sh").read_text()
         self.assertIn("--dry-run|--apply|--consume|--renew)", script)
