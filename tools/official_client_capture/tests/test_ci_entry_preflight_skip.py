@@ -27,6 +27,10 @@ from tools.official_client_capture.tests import test_ci_opening_checks as base
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
 SCRIPT = DRIVER / "entry-preflight.sh"
+# 门禁（arm64-vc4-gates.sh）起 make test 时，进程环境里带着本轮参数文件导出的全部键，包括这三个入口键。被测的 entry-preflight.sh
+# 检查函数读的就是进程环境里的 ENTRY_COMMIT 等：夹具用“harness 里不写 ENTRY_COMMIT”表示参数文件缺该键，继承来的值会让它走错分支。
+# 所以起子进程前必须先剔除，由夹具自己决定要不要在 harness 里写。
+INHERITED_ENTRY_KEYS = ("ENTRY_COMMIT", "ENTRY_BUNDLE", "ENTRY_BRANCH")
 OTHER_CHECKS = ("required-parameters|guard-pre-plan|deployment-identity|target-client|official-package|plan-audit|environment-probe"
                 "|local-capture-receipt|tui-prelaunch-receipt")
 
@@ -76,7 +80,7 @@ class PreflightSkipBehaviourTests(unittest.TestCase):
 
     def run_checks(self, **environment: str) -> tuple[int, dict, dict[str, str]]:
         clean = {key: value for key, value in os.environ.items()
-                 if not key.startswith(("MODEL_PROBE", "SECURITY_SCAN", "OPENING_CHECKS"))}
+                 if not key.startswith(("MODEL_PROBE", "SECURITY_SCAN", "OPENING_CHECKS")) and key not in INHERITED_ENTRY_KEYS}
         completed = subprocess.run(["bash", str(self.harness)], capture_output=True, text=True, timeout=120,
                                    env={**clean, "PATH": f"{self.bin}:{clean['PATH']}", "PYTHONDONTWRITEBYTECODE": "1", **environment})
         summary = json.loads((self.out / "summary.json").read_text(encoding="utf-8"))
@@ -212,7 +216,7 @@ class ReceiptCheckBehaviourTests(unittest.TestCase):
         harness = self.root / "harness.sh"
         extra = f"CT_CLIENT={client}\n" + (f"ENTRY_COMMIT={commit}\n" if commit else "")
         harness.write_text(self.prelude + extra + self.body, encoding="utf-8")
-        clean = {key: value for key, value in os.environ.items() if not key.startswith("OPENING_CHECKS")}
+        clean = {key: value for key, value in os.environ.items() if not key.startswith("OPENING_CHECKS") and key not in INHERITED_ENTRY_KEYS}
         completed = subprocess.run(["bash", str(harness)], capture_output=True, text=True, timeout=120,
                                    env={**clean, "PYTHONDONTWRITEBYTECODE": "1", **environment})
         self.completed = completed
