@@ -26,7 +26,7 @@ Claude 单元约占一半核·秒），Codex 升级时这些测试几乎不会�
 4. 联动文件（版本登记机械改动的 Claude 场景清单、期望画像、冻结摘要）：只并入直接验证它们的模块；
 5. 非 Python 改动：按路径字面量反向索引与受管树内数据文件的读取者并入；
 6. 失败关闭：改动路径不在已登记的目录范围、Python 文件解析失败、受管树内数据文件找不到任何读取者——并入全部重模块；
-   归属表或选择器自己在改动里——本轮不筛选（全集）；改动的 Python 文件**没有任何静态使用者**（导入图里没有入边、别的文件文本里也没提到它的名字），
+   归属表、选择器或执行器自己（执行器的 14 个版本文件与调度策略文件，含驱动目录副本）在改动里——本轮不筛选（全集）；改动的 Python 文件**没有任何静态使用者**（导入图里没有入边、别的文件文本里也没提到它的名字），
    而某个重模块可达的文件里有**解析不了目标的动态加载**（目标既不含像名字的字符串字面量、也不是函数参数转发、也不是绑定过字面量的名字，
    或取自数据表）——并入这些重模块：这个文件除了被它们动态加载，想不出别的用处。有静态使用者的文件按导入边处理（1 跳口径）。
 
@@ -88,6 +88,16 @@ _DYNAMIC_CALLS = frozenset({"import_module", "__import__", "spec_from_file_locat
 # 按名字加载的字符串字面量：整串是小写标识符（脚本 stem 的写法）。
 _BARE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 DRIVER_DIR = "tools/arm64_capture_driver/driver/"
+# 执行器自己与调度策略（修好接着跑的第二层要求：它们在改动里就不筛选、整轮全集）。执行器版本文件＝统一执行器记录的 ``executor.files`` 的 14 个文件
+# （``unit_records.EXECUTOR_FILES`` 的 10 个固定计入，加运行期追加的字节码预编译、补跑、按包 go test、声明级采样 4 个）；调度策略文件＝参与调度策略摘要的
+# 配置、权重表与时长表。改了它们，上一轮记录对本轮的执行器版本／调度策略就不再相同，按改动选模块的假设（“基点之后只有这一小段改动影响结果”）不成立。
+# 每个文件在 tools/ci 与驱动目录各有一份（只在驱动目录的 entry-gates.sh、bytecode_cache.py 只在那里出现）；不存在的路径永远不会出现在改动里，列出来无害。
+EXECUTOR_VERSION_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "read_audit_runtime.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh",
+                          "full_set_receipt.py", "target_platform_gate.py", "unit_inherit.py", "bytecode_cache.py", "retry_policy.py", "go_test_packages.py",
+                          "declared_sampler.py")
+SCHEDULING_POLICY_FILES = ("unit_executor.json", "capture_test_weights.json", "capture_test_durations.json")
+EXECUTOR_SELF_PATHS = tuple(sorted({f"tools/ci/{name}" for name in (*EXECUTOR_VERSION_FILES, *SCHEDULING_POLICY_FILES)}
+                                   | {f"{DRIVER_DIR}{name}" for name in (*EXECUTOR_VERSION_FILES, *SCHEDULING_POLICY_FILES)}))
 
 
 class OwnershipError(ValueError):
@@ -1006,6 +1016,8 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     for status, path in changes:
         if path in SELF_PATHS:
             fallback.append(f"归属表或选择器本身在改动里：{path}")
+        elif path in EXECUTOR_SELF_PATHS:
+            fallback.append(f"执行器版本文件或调度策略文件在改动里：{path}")
     if include_claude:
         pull(selector.heavy, "手动开关 --include-claude")
     elif not fallback:
