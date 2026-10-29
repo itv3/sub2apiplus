@@ -3668,6 +3668,19 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
             p.add_argument("--decide-only", action="store_true",
                            help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
+            # 同提交续跑沿用（修好接着跑第一层）：上一轮同一门禁、同一提交里已通过且记录完整的单元直接沿用，只重跑其余单元。
+            p.add_argument("--resume-from", default=None, metavar="auto|<运行ID>",
+                           help="同提交续跑：auto 取这道门禁（--resume-series）最新的同提交运行作来源，也可指定运行 ID（指定的不可用就报错）；"
+                                "提交、部署绑定、执行器、调度策略、环境指纹都相同才沿用，其余整次重跑并写明原因；要给记录库与 --resume-binding；"
+                                "不与读集审计、B-09／B-10、逐单元承接同用")
+            p.add_argument("--resume-series", default=None, help="这道门禁的系列名（来源只在同系列里找）；缺省取清单的组合名")
+            p.add_argument("--resume-binding", type=Path, default=None,
+                           help="调用方登记的部署／门禁绑定（JSON 对象，例如部署收据摘要、工具五摘要）：来源与本次必须逐项相同才沿用；续跑必给")
+            p.add_argument("--resume-max-age-hours", type=float, default=24.0, help="续跑沿用的期限（小时），缺省 24，只能调小")
+            p.add_argument("--resume-waive-env", default=None, metavar="理由",
+                           help="操作员显式声明：环境指纹的变化不影响已通过单元的正确性（写明理由，记入清单）；必须同时用 --resume-waive-env-names 点名变化的条目")
+            p.add_argument("--resume-waive-env-names", default=None, metavar="条目名,…",
+                           help="环境豁免点名的指纹条目（例如 envvar:GOCACHE）；点名之外的环境差异仍然拒绝沿用")
             p.add_argument("--target-platform-request", type=Path, help="B-10 目标平台单元承接请求；不得与 B-09 请求混用")
             p.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；任一条件失效则全量重跑")
             p.add_argument("--full-set-deployment", type=Path, help="入口本次核对的实际部署收据")
@@ -4199,6 +4212,68 @@ def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, stor
     )
 
 
+_RESUME_RUN_ID = re.compile(r"^[0-9A-Za-z._-]{1,128}$")
+
+
+def _tree_state(cwd: Path) -> tuple[str | None, list[str]]:
+    """测试树的提交与未提交／未跟踪改动（取不到提交时返回 None）：续跑只在干净的树上登记出处、沿用。"""
+
+    try:
+        head = subprocess.run(["git", "--no-optional-locks", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=60)
+        status = subprocess.run(["git", "--no-optional-locks", "-C", str(cwd), "status", "--porcelain=v1", "--untracked-files=all"],
+                                capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None, []
+    commit = head.stdout.strip()
+    if head.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", commit) or status.returncode != 0:
+        return None, []
+    return commit, [line for line in status.stdout.splitlines() if line]
+
+
+def _resume_binding(args: argparse.Namespace) -> dict[str, Any]:
+    """调用方登记的部署／门禁绑定：JSON 对象；没给就是空对象（这样的运行登记了出处也不会被任何续跑匹配上）。"""
+
+    path = getattr(args, "resume_binding", None)
+    if path is None:
+        return {}
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ExecutorError(f"--resume-binding 读不出来：{error}") from error
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ExecutorError("--resume-binding 必须是 JSON 对象")
+    return value
+
+
+def _check_resume_args(args: argparse.Namespace, records: Any, *, request_path: Path | None, unit_inherit_mode: bool,
+                       has_scopes: bool, audit_policy: Any) -> None:
+    """``--resume-from`` 的参数核对：只与重新执行模式、有记录库、有部署绑定、没有读集审计／承接请求同用。"""
+
+    requested = getattr(args, "resume_from", None)
+    waive, names = getattr(args, "resume_waive_env", None), getattr(args, "resume_waive_env_names", None)
+    if requested is None:
+        if waive is not None or names is not None:
+            raise ExecutorError("--resume-waive-env／--resume-waive-env-names 只与 --resume-from 同用")
+        return
+    if requested != "auto" and not _RESUME_RUN_ID.fullmatch(str(requested)):
+        raise ExecutorError(f"--resume-from 只接受 auto 或来源运行 ID：{requested!r}")
+    if args.mode != records.RE_EXECUTE:
+        raise ExecutorError("--resume-from 只与 --mode re-execute 同用（沿用后清单是全集通过形态，由执行器自己定）")
+    if request_path or unit_inherit_mode or args.unit_inherit_request is not None or args.unit_inherit_propose is not None:
+        raise ExecutorError("续跑沿用不与 B-09／B-10 请求、逐单元承接同用")
+    if args.audit_reads or args.audit_strict or args.audit_host_inputs or has_scopes or audit_policy is not None:
+        raise ExecutorError("续跑沿用不与读集审计、读集合同、收窄提案同用（同提交输入逐字节相同，不需要审计；审计运行必须全集重跑）")
+    if args.record_store is None:
+        raise ExecutorError("续跑沿用要给记录库：--record-store")
+    if not _resume_binding(args):
+        raise ExecutorError("续跑沿用要给非空的部署绑定：--resume-binding")
+    if not 0 < float(args.resume_max_age_hours) <= records.RESUME_MAX_AGE_HOURS:
+        raise ExecutorError(f"续跑期限只能在 0～{records.RESUME_MAX_AGE_HOURS:g} 小时之间（只能调小）")
+    if (waive is None) != (names is None) or (waive is not None and (not str(waive).strip() or not [n for n in str(names).split(",") if n.strip()])):
+        raise ExecutorError("环境豁免要同时给理由（--resume-waive-env）和点名的指纹条目（--resume-waive-env-names）")
+
+
 def _check_unit_inherit_args(args: argparse.Namespace, records: Any, request_path: Path | None) -> None:
     """逐单元承接（B5a-08）的参数核对：不与 B-09／B-10 请求混用，请求与提案只配 ``--mode unit-inherit``，要给记录库；有请求或
     要写提案时另要客户端与 control 目录（现算上下文用）。没给请求的 ``unit-inherit`` 不要求这些——它整次重新执行。"""
@@ -4414,6 +4489,49 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
             args.mode = records.RE_EXECUTE
         max_age = min(max_age, 24)
+    # 同提交续跑沿用（修好接着跑第一层）。三件事：核对参数；给每次运行（有记录库、测试树干净时）登记续跑出处 resume_doc，让以后的
+    # 续跑能把它当来源；带 --resume-from 时在来源里给每个单元找可沿用的记录。出处与结论都写进清单（resume_basis、resume）。
+    _check_resume_args(args, records, request_path=request_path, unit_inherit_mode=unit_inherit_mode, has_scopes=bool(scopes), audit_policy=audit_policy)
+    resume_doc = resume_block = resume_source_manifest = None
+    resume_waive_names: list[str] = []
+    resume_max_age = min(max_age, float(args.resume_max_age_hours))
+    # 出处只登记给带了 --resume-binding 的调用（入口门禁、后台验证、VC-4 门禁的缺省都带）：没带的运行，清单与改造前逐字相同。
+    if store is not None and _resume_binding(args):
+        tree_head, tree_dirty = _tree_state(Path.cwd())
+        if tree_head is not None and not tree_dirty:
+            resume_doc = records.resume_basis(
+                commit=tree_head, series=args.resume_series or str(manifest.get("profile") or "default"), profile=manifest.get("profile"),
+                gates=[gate.gate_id for gate in gates], planned=[unit.unit_id for unit in units], binding=_resume_binding(args),
+                selection_sha256=(client_selection or {}).get("selection_sha256"))
+    if args.resume_from is not None:
+        resume_waive_names = [name.strip() for name in str(args.resume_waive_env_names or "").split(",") if name.strip()]
+        resume_block = {"schema_version": records.RESUME_SCHEMA, "layer": 1, "requested": args.resume_from, "status": "refused", "source": None,
+                        "reasons": [], "reused": 0, "rerun": len(units), "max_age_hours": resume_max_age, "environment_waiver": None}
+        if resume_doc is None:
+            resume_block["reasons"] = ["测试树不干净或取不到提交：输入不完整，续跑不沿用"]
+        else:
+            resume_source_manifest, why = records.resume_source(store, resume_doc, run_id=None if args.resume_from == "auto" else args.resume_from)
+            if resume_source_manifest is None:
+                if args.resume_from != "auto":
+                    raise ExecutorError(f"指定的续跑来源 {args.resume_from} 不可用：{'；'.join(why)}")
+                resume_block.update(status="no-source", reasons=why)
+            else:
+                decisions = records.resume_decide(store, resume_source_manifest, resume_doc, currents, facts, max_age_hours=resume_max_age,
+                                                  waive_names=resume_waive_names)
+                reused = sum(1 for decision in decisions.values() if decision.inherit)
+                source_basis = resume_source_manifest["resume_basis"]
+                resume_block.update(
+                    status="applied" if reused else "nothing-reusable", reused=reused, rerun=len(units) - reused,
+                    source={"run_id": resume_source_manifest["run_id"], "manifest_sha256": resume_source_manifest["manifest_sha256"],
+                            "completed_at_utc": resume_source_manifest.get("completed_at_utc"), "commit": source_basis["commit"],
+                            "basis_sha256": source_basis["basis_sha256"]},
+                    source_failed_units=records.resume_failed_units(resume_source_manifest)[:200])
+                if args.resume_waive_env is not None:
+                    resume_block["environment_waiver"] = {"reason": str(args.resume_waive_env).strip(), "names": resume_waive_names}
+                if reused:
+                    args.mode = records.FULL_SET_PASS
+                    max_age = resume_max_age
+                    facts.max_age_hours = max_age
     # B5a-08：逐单元承接的排队前复核（只判定时另可写承接提案）。运行目录提前确定：只判定时证据快照写在运行目录，不进记录库。
     inherit = inherit_verdict = inherit_context = None
     early_out_dir = None
@@ -4478,6 +4596,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
                                             "record_sha256": (decisions[unit.unit_id].record or {}).get("record_sha256")} for unit in units}}
         if inherit_verdict is not None:
             payload["unit_inherit_decision"] = inherit_verdict
+        if resume_block is not None:
+            payload["resume"] = resume_block
         _write_json(out_dir / "decisions.json", payload)
         _write_binding(out_dir, mode=args.mode, policy=policy, environment_sha256=facts.environment_sha256, executor=executor, units=units,
                        currents=currents, gates=gates)
@@ -4523,6 +4643,31 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         scheduler.auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents, strict=False)
         scheduler.auditor.declared_only = True
     try:
+        # 续跑沿用：锁可能排队很久，重算输入与环境、按新事实重做每个单元的沿用判定，沿用集合只能缩小（不会因为复核多出新的沿用）。
+        if resume_source_manifest is not None and any(d.inherit for d in decisions.values()):
+            current_now = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                         manifest=manifest, timeout=config.unit_timeout_seconds)
+            original_resume_basis = resume_basis(current_now)
+            currents = current_now
+            recorder.currents = currents
+            _declared_sync_auditor(scheduler, currents)
+            fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+            facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment), now=time.time())
+            environment = fresh_environment
+            recorder.environment = environment
+            recorder.environment_sha256 = facts.environment_sha256
+            again = records.resume_decide(store, resume_source_manifest, resume_doc, current_now, facts, max_age_hours=resume_max_age,
+                                          waive_names=resume_waive_names)
+            decisions = {unit_id: (again[unit_id] if again[unit_id].inherit and before.inherit
+                                   and again[unit_id].record["record_sha256"] == before.record["record_sha256"]
+                                   else records.Decision(reasons=before.reasons if not before.inherit else
+                                                         ["取得调度锁后复核：" + ("；".join(again[unit_id].reasons) or "沿用的记录与复核前不同")]))
+                         for unit_id, before in decisions.items()}
+            to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
+            reused = len(units) - len(to_run)
+            resume_block.update(reused=reused, rerun=len(to_run), status="applied" if reused else "nothing-reusable")
+            if not reused:
+                args.mode = recorder.mode = records.RE_EXECUTE
         # 锁可能排队很久：重新读请求、现场身份、输入、环境和动态凭证。
         if full_set_verdict is not None and any(d.inherit for d in decisions.values()):
             try:
@@ -4644,6 +4789,12 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             # 筛选的运行：完整的 selection 封进运行清单（收尾校验与差集核对据此现算比对），重新封存清单自摘要。
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
                                           "client_selection": client_selection}, "manifest_sha256")
+        if resume_doc is not None or resume_block is not None:
+            # 续跑出处（每次有记录库、树干净的运行都登记，让以后的续跑能把它当来源）与本次续跑的结论（带 --resume-from 才有；
+            # 拒绝续跑时没有出处，只留结论与原因）。
+            extra = {**({"resume_basis": resume_doc} if resume_doc is not None else {}), **({"resume": resume_block} if resume_block is not None else {})}
+            unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"}, **extra},
+                                         "manifest_sha256")
         if full_set_verdict is not None:
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
                                           decision_key: full_set_verdict}, "manifest_sha256")
@@ -4708,6 +4859,10 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         })
         if inherit_verdict is not None:
             summary["unit_inherit_decision"] = inherit_verdict
+        if resume_block is not None:
+            summary["resume"] = resume_block
+            if resume_block["status"] == "applied":
+                summary["inheritance"]["mode_label"] = "同提交续跑沿用"
         if client_selection is not None:
             summary["client_selection"] = _client_selection_summary(client_selection)
             for group_row in summary["test_groups"].values():

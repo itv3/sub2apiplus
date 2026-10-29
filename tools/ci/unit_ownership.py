@@ -965,8 +965,11 @@ class Selector:
 
 
 def select(tree: Path, *, client: str, base: str, head: str | None = None, data: Mapping[str, Any] | None = None,
-           include_claude: bool = False, graph: Graph | None = None) -> dict[str, Any]:
-    """算出门禁清单里的 ``selection`` 块（见模块说明里的并入规则）。出错（数据坏、基点不对、树不干净）一律抛 ``OwnershipError``。"""
+           include_claude: bool = False, graph: Graph | None = None, force_modules: Iterable[str] = ()) -> dict[str, Any]:
+    """算出门禁清单里的 ``selection`` 块（见模块说明里的并入规则）。出错（数据坏、基点不对、树不干净）一律抛 ``OwnershipError``。
+
+    ``force_modules``（修好接着跑第二层）：上一轮失败或没执行完的测试模块，不论改动是否影响它都并入（原因“上一轮失败”）；不在测试树里的名字
+    记进 ``force_modules_unknown``。缺省空时 selection 与改造前逐字相同（不多任何键）。"""
 
     tree = Path(tree)
     data = validate_data(dict(data)) if data is not None else load_data(tree)
@@ -1018,6 +1021,9 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
                 fail_closed.append({"reason": f"改动的 Python 文件没有任何静态使用者，而重模块 {module} 可达的 {sites[0]} 里有解析不了目标的动态加载，它可能被加载",
                                     "file": unused[0]})
                 pull([module], f"失败关闭：含解析不了的动态加载（{sites[0]}），改动的 {unused[0]} 没有静态使用者")
+    forced = sorted({str(name) for name in force_modules})
+    if forced and not fallback:
+        pull([module for module in forced if module in present], "上一轮失败或没执行完，必须重跑")
     state = {module: RUN for module in found}
     if not fallback:
         for module in selector.heavy:
@@ -1058,6 +1064,9 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         "fail_closed": sorted(fail_closed, key=lambda item: (item["file"], item["reason"])),
         "fallback_reasons": sorted(fallback),
     }
+    if forced:
+        selection["force_modules"] = forced
+        selection["force_modules_unknown"] = sorted(name for name in forced if name not in present)
     return seal(selection)
 
 
