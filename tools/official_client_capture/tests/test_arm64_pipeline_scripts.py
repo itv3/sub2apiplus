@@ -678,6 +678,25 @@ class Vc6CleanupTests(SandboxCase):
         self.assertNotIn("发布镜像", reason)
         self.assertFalse(self.junk.exists(), "清单内目录应已删除")
 
+    def test_still_running_final_image_never_records_a_release_image_ref(self) -> None:
+        """容器仍跑最终镜像、但环境里设了 VC6_RELEASE_IMAGE（先清理后发版时提前声明）：执行证据 running_image_ref 必须为空。"""
+
+        self._docker(running=self.FINAL)
+        check = self._run("--check", release=self.RELEASE_REF)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        report = json.loads(check.stdout.splitlines()[0])
+        self.assertEqual(report["running_image_kind"], "final")
+        self.assertEqual(report["running_image_ref"], "", "预检报告同样不得带发布镜像引用")
+        result = self._run(release=self.RELEASE_REF)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        post = self._execution()["post_checks"]
+        self.assertEqual(post["running_image_kind"], "final")
+        self.assertEqual(post["running_image_ref"], "")
+        self.assertEqual(post["production_image_id"], self.FINAL)
+        reason = self._executed_receipt()["facts"]["assertions"]["reason"]
+        self.assertIn("运行镜像仍是退休后最终镜像", reason)
+        self.assertNotIn(self.RELEASE_REF, reason)
+
     def test_execute_after_release_swap_writes_truthful_receipt(self) -> None:
         """先发版后清理：脚本放行，生成“已执行”收据，收据如实写明运行的是发布镜像（引用与 ID），而不是“仍是退休后最终镜像”。"""
 
