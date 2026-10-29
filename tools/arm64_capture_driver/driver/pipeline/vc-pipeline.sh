@@ -742,10 +742,13 @@ check_stage() {
       while read -r k nm ar fl; do
         [ "${k}" = run ] || continue
         nrun=$((nrun + 1))
+        # 与运行体（run_VC6）同一口径：绝对路径照用，相对名相对已装驱动的 ${PIPE_HOME}/vc6/（不是 ${PREP}/vc6/，那里只放本轮的 ORDER.txt）
+        case "${ar}" in /*) ;; *) ar=${PIPE_HOME}/vc6/${ar} ;; esac
         if [ ! -f "${ar}" ]; then echo "    缺脚本：${nm} -> ${ar}"; nbad=$((nbad + 1)); elif ! bash -n "${ar}" 2>/dev/null; then echo "    语法不通过：${ar}"; nbad=$((nbad + 1)); fi
       done < "${ord}"
       [ "${nbad}" = 0 ] && ck OK "ORDER 引用的 ${nrun} 个 run 脚本都在位且 bash -n 通过" || ck 不通过 "ORDER 引用的脚本有 ${nbad} 个缺失或语法不通过"
-      [ -f "${PREP}/vc6/vc6-env.sh" ] && ck OK "vc6-env.sh 在位（公共前导）" || ck 缺 "${PREP}/vc6/vc6-env.sh"
+      # 公共前导 vc6-env.sh 由各 vc6-*.sh 用 source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh" 引入，即已装驱动里与脚本同目录的那份
+      [ -f "${PIPE_HOME}/vc6/vc6-env.sh" ] && ck OK "vc6-env.sh 在位（公共前导，${PIPE_HOME}/vc6/）" || ck 缺 "${PIPE_HOME}/vc6/vc6-env.sh"
     else
       ck 缺 "${PREP}/vc6/ORDER.txt 与 VC-6 脚本集"
     fi

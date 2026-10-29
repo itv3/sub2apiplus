@@ -1423,6 +1423,38 @@ class PipelineStageTests(SandboxCase):
         self.assertIn("== 阶段 VC6", result.stdout)
         self.assertFalse((self.sb.prep / "pipeline" / "vc-status.txt").exists(), "--check 不得写状态文件")
 
+    def _check_vc6(self, order: str, installed: dict[str, str], *, prep_vc6_env: bool = False) -> subprocess.CompletedProcess:
+        """--check --from VC6：ORDER.txt 在 <PREP>/vc6/，脚本与 vc6-env.sh 在已装驱动 pipeline/vc6/（与运行体同一口径）。"""
+
+        sb = self.sb
+        (sb.prep / "vc6").mkdir(parents=True, exist_ok=True)
+        (sb.prep / "vc6" / "ORDER.txt").write_text(order, encoding="utf-8")
+        (sb.pipe / "vc6" / "vc6-env.sh").unlink()   # 沙箱里带的是真实副本；这里只留 installed 里写明的
+        for name, body in installed.items():
+            _write(sb.pipe / "vc6" / name, body)
+        if prep_vc6_env:
+            _write(sb.prep / "vc6" / "vc6-env.sh", "#!/bin/bash\n")
+        return sb.run(["bash", str(sb.pipe / "vc-pipeline.sh"), "--check", "--from", "VC6", "--to", "VC6"])
+
+    def test_check_vc6_resolves_relative_scripts_and_vc6_env_in_the_installed_driver(self) -> None:
+        """0.165 实战：--check --from VC6 把 ORDER 里的相对脚本名当作当前目录的文件、vc6-env.sh 去 <PREP>/vc6/ 找，
+        而真实运行用已装驱动 pipeline/vc6/ 里的同名文件，两边口径不一致（检查红、运行绿）。"""
+
+        result = self._check_vc6("run     step-a    step-a.sh\n", {"step-a.sh": "#!/bin/bash\nexit 0\n", "vc6-env.sh": "#!/bin/bash\n"})
+        self.assertIn("ORDER 引用的 1 个 run 脚本都在位且 bash -n 通过", result.stdout, result.stdout)
+        self.assertIn("vc6-env.sh 在位", result.stdout)
+        self.assertNotIn("缺脚本", result.stdout)
+        self.assertNotRegex(result.stdout, r"\[缺\] .*vc6-env\.sh")
+
+    def test_check_vc6_still_reports_missing_or_broken_scripts_and_missing_env(self) -> None:
+        result = self._check_vc6("run     step-a    step-a.sh\nrun     step-b    step-b.sh\nrun     step-c    /nonexistent/abs.sh\n",
+                                 {"step-b.sh": "#!/bin/bash\nif then\n"}, prep_vc6_env=True)
+        self.assertIn(f"缺脚本：step-a -> {self.sb.pipe}/vc6/step-a.sh", result.stdout)
+        self.assertIn(f"语法不通过：{self.sb.pipe}/vc6/step-b.sh", result.stdout)
+        self.assertIn("缺脚本：step-c -> /nonexistent/abs.sh", result.stdout)
+        self.assertIn("ORDER 引用的脚本有 3 个缺失或语法不通过", result.stdout)
+        self.assertRegex(result.stdout, r"\[缺\] .*pipeline/vc6/vc6-env\.sh", "vc6-env.sh 只在 <PREP>/vc6/ 有、已装驱动里没有：运行会失败，检查必须报缺")
+
     def test_background_validation_preflight_is_not_counted_as_other_orchestration(self) -> None:
         """上一版第一次停顿：操作员的 --check 还在后台跑 background_validation.py preflight，被流水线的 others_running 当成别的编排而停。
         preflight 是只读检查，不该算；start／run 才算。"""
