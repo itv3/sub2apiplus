@@ -1,0 +1,52 @@
+{
+  "base_commit": "eb5ec811a09b13a2da151f52d2f765a065f08fc8",
+  "changed_path_count": 4,
+  "current_commit": "84b8a7780aaae1eff9d75b3e454df66a9eb83cec",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7248,
+  "frozen_path_count": 2318,
+  "identity_sha256": "fab29f9290dfde012a43ee176406b10f6356f95747f7e81eca94c17cee2a0699",
+  "issued_at_utc": "2026-10-29T01:39:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0165-changeset3-forward-plan-20261029-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "predecessor_sha256s": [
+        "12fb9750af538ad0c22247161139756ffcc6c5bda4068a80130b84eb93548696"
+      ],
+      "reason": "openai_forward_plan.go 被 changeset3 最终线上冻结钉住，其承接单列：窗口跟踪画像下 WS 降级 HTTP 的 attempt 沿用同一次 invocation 的窗口口径（调度者核载荷签字，记录见 local-analysis/opt-0165/reports/SIGNOFF-forward-plan.md）。 path=backend/internal/service/openai_forward_plan.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e5f8fbc1cea7f1e92d35ee556d8bf21b4f6fb20cba07113b7d42689c6ff0786b"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/internal/service/official_egress_http_root_turn_test.go",
+    "backend/internal/service/official_egress_ws_http_fallback_window_test.go",
+    "backend/internal/service/openai_target_profile_wire_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
