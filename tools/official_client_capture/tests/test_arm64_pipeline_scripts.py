@@ -1044,6 +1044,72 @@ class WaitMarkerFailureWordsTests(unittest.TestCase):
         self.assertIn(f"'{self.BAD_VC4}'", text)
 
 
+class EntryCoordinatesNotInheritedByGatesTests(unittest.TestCase):
+    """门禁里的测试不得继承入口坐标 ENTRY_COMMIT／ENTRY_BUNDLE／ENTRY_BRANCH。
+
+    parse_env 把本轮参数文件里的全部键导出，其中三个入口坐标是入口编排器自己的参数；``source lib.sh`` 之后起 ``make test`` 的脚本若不清掉，
+    测试进程继承到它们，test_ci_entry_preflight_skip 等用例把它们当成“入口正在运行”的信号而红（0.165 的 VC-4 门禁因此红过一次）。
+    """
+
+    NAMES = ("ENTRY_COMMIT", "ENTRY_BUNDLE", "ENTRY_BRANCH")
+    # 在驱动脚本里直接起门禁（make）的脚本：新增这类脚本时本集合会对不上，逼着作者想清楚要不要清入口坐标。
+    GATE_LAUNCHERS = {"arm64-vc4-gates.sh", "gates.sh", "vc5-gate-target.sh"}
+
+    def _code(self, path: Path) -> list[str]:
+        return [line for _, line in _code_lines(path)]
+
+    def test_isolated_run_does_not_pass_entry_coordinates_to_the_gate(self) -> None:
+        """行为：取 lib.sh 里真实的 isolated_run，把 unshare 换成只打印环境的桩，父 shell 里导出三个入口坐标。"""
+
+        text = (REAL_DRIVER / "lib.sh").read_text(encoding="utf-8")
+        match = re.search(r"^isolated_run\(\) \{\n.*?^\}\n", text, re.S | re.M)
+        self.assertIsNotNone(match, "找不到 isolated_run")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tree").mkdir()
+            _write(root / "bin" / "unshare", f"#!/bin/bash\nenv > '{root}/seen.env'\n")
+            wrapper = _write(root / "call.sh", f"""
+                #!/bin/bash
+                HISTORICAL_SOURCE_ROOT=/x
+                export ENTRY_COMMIT={'1' * 40} ENTRY_BUNDLE=/b/entry.bundle ENTRY_BRANCH=feature/entry CODEX_UPGRADE_IDENTITY_MEMO=/memo KEEP_ME=yes
+                {match.group(0)}
+                isolated_run "{root}/tree" . "{root}/pyc" "{root}/out" "{root}/err" make test
+            """)
+            done = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, env={"PATH": f"{root}/bin:/usr/bin:/bin"})
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            seen = (root / "seen.env").read_text(encoding="utf-8")
+        for name in self.NAMES + ("CODEX_UPGRADE_IDENTITY_MEMO",):
+            self.assertNotIn(f"{name}=", seen, f"{name} 不得进入门禁进程的环境")
+        self.assertIn("KEEP_ME=yes", seen, "只清指定的变量，其余环境照旧")
+        self.assertIn("PYTHONPYCACHEPREFIX=", seen)
+
+    def test_every_gate_launcher_clears_the_entry_coordinates(self) -> None:
+        launchers = set()
+        for path in sorted(REAL_DRIVER.glob("*.sh")):
+            code = "\n".join(self._code(path))
+            if re.search(r"exec make |isolated_run [^\n]* make ", code):
+                launchers.add(path.name)
+        self.assertEqual(launchers, self.GATE_LAUNCHERS, "驱动里起门禁的脚本变了：新增的要清入口坐标，并登记到本测试")
+        # arm64-vc4-gates.sh 经 lib.sh 的 isolated_run 起门禁（上一条行为测试覆盖）；另外两个自己用 env -u 清。
+        for name in ("gates.sh", "vc5-gate-target.sh"):
+            code = "\n".join(self._code(REAL_DRIVER / name))
+            line = next(item for item in code.splitlines() if "exec make" in item)
+            for variable in self.NAMES:
+                self.assertIn(f"-u {variable}", line.split("unshare")[0], f"{name} 起 make test 前必须 env -u {variable}")
+        isolated = "\n".join(self._code(REAL_DRIVER / "lib.sh"))
+        self.assertIn("unset CODEX_UPGRADE_IDENTITY_MEMO ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH", isolated)
+
+    def test_vc6_gates_clear_them_right_after_sourcing_vc6_env(self) -> None:
+        """VC-6 post-promotion 门禁直接起计划里的 go test：vc6-env.sh 要用 ENTRY_COMMIT 做占位断言，用完立刻清。"""
+
+        code = self._code(PIPELINE / "vc6" / "vc6-gates.sh")
+        source = next(i for i, line in enumerate(code) if "vc6-env.sh" in line and line.lstrip().startswith("source"))
+        unset = next(i for i, line in enumerate(code) if line.strip() == "unset ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH")
+        self.assertGreater(unset, source)
+        run = next(i for i, line in enumerate(code) if "subprocess.run" in line)
+        self.assertGreater(run, unset, "清除必须在起门禁命令之前")
+
+
 class PlRemoteVarTests(unittest.TestCase):
     """pl_remote_var 要同时认 parse_env.py 的两种输出形态。
 

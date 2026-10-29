@@ -217,7 +217,9 @@ isolated_run() {
   local tree="$1" workdir="$2" pyc="$3" out="$4" err="$5" rc=0
   shift 5
   # 门禁跑的是测试树：字节码用调用方给的测试树前缀；身份记忆化不混用生产缓存，交给统一调度执行器在本次记录目录里新建。
-  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
+  # 入口坐标（ENTRY_COMMIT／ENTRY_BUNDLE／ENTRY_BRANCH）是入口编排器自己的参数，parse_env 会一并导出；门禁里的测试不该继承它们
+  # （test_ci_entry_preflight_skip 等用例会把它们当成“入口正在运行”的信号而红），所以起测试前一并清掉。
+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH && export PYTHONPYCACHEPREFIX="$pyc" CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
       CAPTURE_TYPESCRIPT_MODULE="$tree/frontend/node_modules/typescript/lib/typescript.js" \
       && unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"' isolated-gate "$@" ) \
     > "$out" 2> "$err" || rc=$?

@@ -7,6 +7,8 @@ D=${D:-/root/docker/capture-cli/data}; cd "$D"; export PYTHONPATH=. PYTHONDONTWR
 unset PYTHONPYCACHEPREFIX
 # 本轮取值一律从参数文件现取（见同目录 vc6-env.sh），不写死 Campaign／候选／提交号／摘要／镜像号
 source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"
+# 入口坐标是入口编排器的参数，门禁里的测试不该继承（见 lib.sh isolated_run 的说明）；vc6-env.sh 已用完它们。
+unset ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH
 N=$NEWDIR
 B=$D/candidates/$CAND
 P=$B/production-tree

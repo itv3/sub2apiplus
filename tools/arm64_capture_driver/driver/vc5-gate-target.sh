@@ -46,7 +46,7 @@ if [ -n "${VC5_TARGET_REQUEST:-}" ]; then
   RC=$?; set -e; END=$(utc_now)
   if [ "$RC" = 0 ] && [ ! -f "$GATE/target-units/evidence.json" ]; then RC=3; fi
 else
-set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
+set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO -u ENTRY_COMMIT -u ENTRY_BUNDLE -u ENTRY_BRANCH unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
 fi
 echo "target-platform rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
 cd "$D"; python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" "$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION" | cut -c1-160
