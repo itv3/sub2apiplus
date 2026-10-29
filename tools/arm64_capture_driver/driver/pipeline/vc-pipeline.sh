@@ -523,14 +523,27 @@ run_BGV() {
   bash "${DRV}/background-validate.sh" require-passed >/dev/null 2>&1 || stop BGV "require-passed 不认当前部署的后台验证结论"
   log "PASS BGV"
 }
+# 准入收据已存在（consume 通过）时仍要复查采集账号／分组／Key 的库表前置：consume 只验收据与令牌，不看库表；重启流水线时库表若被改回去
+# （例如 #90 的 model_mapping 又被同步脚本填上），候选作业会在 vc5-all 里跑到一半才红。只看 dry-run 报告里的 candidate_prerequisites，
+# 不因别的检查项（准入已批准后 inspect 的状态）停下；dry-run 本身跑不出 JSON 也停下（失败关闭，此时还没起 vc5-all，代价很小）。
+vc5_recheck_db_prerequisites() {
+  local rep=${PDIR}/vc5-admission-recheck.json rc blocked
+  recheck_once() { ( cd "${DRV}" && bash vc5-precheck.sh --dry-run > "${rep}" 2> "${PDIR}/vc5-admission-recheck.err" ); }
+  pl_retry "vc5-precheck --dry-run（复查库表前置）" "1,2,4,5,6,7" recheck_once; rc=$?
+  [ ${rc} -eq 3 ] || [ ${rc} -eq 0 ] || stop VC5 "准入收据已存在，但复查库表前置的 vc5-precheck --dry-run 异常 rc=${rc}；详见 ${PDIR}/vc5-admission-recheck.err"
+  blocked=$(python3 -B -c "import json,sys; print([(c.get('check'), c.get('reason')) for c in json.load(open(sys.argv[1])).get('candidate_prerequisites', []) if c.get('status')=='blocked'] or '')" "${rep}") \
+    || stop VC5 "准入收据已存在，但复查库表前置的 dry-run 输出不是 JSON；详见 ${PDIR}/vc5-admission-recheck.err"
+  [ -z "${blocked}" ] || stop VC5 "准入收据已存在，但库表前置被改回去了：${blocked} | 每项怎么改见 ${PDIR}/vc5-admission-recheck.err（人读摘要）与 ${rep}"
+  log "STEP VC-5 库表前置复查通过（准入收据已存在，仍复查）"
+}
 vc5_admission() {
   local rep=${PDIR}/vc5-admission-dryrun.json rc
-  ( cd "${DRV}" && bash vc5-precheck.sh --consume >/dev/null 2>&1 ) && { log "STEP VC-5 准入收据已存在且 consume 通过"; return 0; }
+  ( cd "${DRV}" && bash vc5-precheck.sh --consume >/dev/null 2>&1 ) && { log "STEP VC-5 准入收据已存在且 consume 通过"; vc5_recheck_db_prerequisites; return 0; }
   dryrun_once() { ( cd "${DRV}" && bash vc5-precheck.sh --dry-run > "${rep}" 2> "${PDIR}/vc5-admission-dryrun.err" ); }
   pl_retry "vc5-precheck --dry-run（只读预览）" "1,2,4,5,6,7" dryrun_once; rc=$?
   [ ${rc} -eq 3 ] || [ ${rc} -eq 0 ] || stop VC5 "vc5-precheck --dry-run 异常 rc=${rc}"
   local status; status=$(python3 -B -c "import json,sys; print(json.load(open(sys.argv[1])).get('status'))" "${rep}") || stop VC5 "dry-run 输出不是 JSON"
-  [ "${status}" = blocked ] && stop VC5 "VC-5 准入 blocked：$(python3 -B -c "import json,sys; print([c for c in json.load(open(sys.argv[1])).get('checks',[]) if c.get('status')=='blocked'])" "${rep}" | cut -c1-400)"
+  [ "${status}" = blocked ] && stop VC5 "VC-5 准入 blocked：$(python3 -B -c "import json,sys; print([c for c in json.load(open(sys.argv[1])).get('checks',[]) if c.get('status')=='blocked'])" "${rep}" | cut -c1-400) | 每项怎么改（含库表前置的备份、临时改法与 VC-6 之后的恢复）见 ${PDIR}/vc5-admission-dryrun.err"
   [ -n "${APPROVER}" ] || stop VC5 "待调度者：VC-5 准入批准件需要起跑时传 --approver '批准人及依据'（工具不代签，批准绑定 admission_key 与完整 actions）"
   local ap=${RR}/vc5-admission-approval-$(date -u +%Y%m%dt%H%M%Sz).json
   APPROVER="${APPROVER}" python3 -B - "${rep}" "${ap}" <<'PY' || stop VC5 "写准入批准件失败"

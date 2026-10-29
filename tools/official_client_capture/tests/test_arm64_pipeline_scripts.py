@@ -204,9 +204,19 @@ class Sandbox:
             echo "HOUSEKEEPING $*" >> "{self.log}"
             exit 0
         """)
+        # 假 vc5-precheck.sh：--consume 恒通过（＝准入收据已存在）；--dry-run 回放 precheck_dryrun.json（缺省为库表前置全绿的 ready 报告），
+        # 退出码取 precheck_dryrun.rc（缺省 0）。写 precheck_consume.rc 可让 --consume 失败（＝收据不存在）。
         _write(d / "vc5-precheck.sh", f"""
             #!/bin/bash
             echo "PRECHECK $*" >> "{self.log}"
+            case "$1" in
+              --consume) [ -f "{self.root}/precheck_consume.rc" ] && exit "$(cat "{self.root}/precheck_consume.rc")" ;;
+              --dry-run)
+                if [ -f "{self.root}/precheck_dryrun.json" ]; then cat "{self.root}/precheck_dryrun.json"
+                else echo '{{"status": "ready", "checks": [], "candidate_prerequisites": [{{"check": "model_mapping_empty", "status": "passed"}}]}}'; fi
+                echo "人读摘要：库表前置如何改" >&2
+                [ -f "{self.root}/precheck_dryrun.rc" ] && exit "$(cat "{self.root}/precheck_dryrun.rc")" ;;
+            esac
             exit 0
         """)
         # 假 vc5-all.sh：先报 Kilo 完成，隔一会儿才打 VC5_ALL_DONE（真实流程里 seal／compare／accept 还要跑很久）
@@ -414,6 +424,72 @@ class CaptureAccountOrderTests(SandboxCase):
         result, account_log = self._run_paused_vc5_all()
         self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
         self.assertTrue(self._off_lines(account_log), "变异版应当在暂停时关了账号")
+
+    # ---- 准入收据已存在时的库表前置复查 ----
+    BLOCKED_REPORT = {"status": "blocked", "checks": [], "candidate_prerequisites": [
+        {"check": "model_mapping_empty", "status": "blocked", "reason": "model_mapping_not_empty", "detail": "怎么改"},
+        {"check": "group_allow_live", "status": "passed"}]}
+
+    def _stage_vc5_with_existing_receipt(self, report: object | None = None, rc: int | None = None) -> subprocess.CompletedProcess:
+        self._install_account_stubs()
+        self._prepare_vc5()
+        if report is not None:
+            (self.root / "precheck_dryrun.json").write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
+        if rc is not None:
+            (self.root / "precheck_dryrun.rc").write_text(str(rc), encoding="utf-8")
+        return self.sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+
+    def test_existing_receipt_still_rechecks_db_prerequisites_and_passes_when_ok(self) -> None:
+        result = self._stage_vc5_with_existing_receipt()
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+        calls = self.sb.log.read_text(encoding="utf-8")
+        self.assertIn("PRECHECK --consume", calls)
+        self.assertIn("PRECHECK --dry-run", calls, "收据已存在也要跑一次只读 dry-run 复查库表前置")
+        self.assertNotIn("PRECHECK --apply", calls)
+        self.assertIn("库表前置复查通过", "\n".join(self.sb.status_lines()))
+
+    def test_existing_receipt_but_db_prerequisite_reverted_stops_before_vc5_all(self) -> None:
+        """V1 验收建议：准入收据存在时 consume 直接返回，库表被改回去的重启场景拦不住。现在在起 vc5-all 之前停下并指出是哪一项。"""
+
+        result = self._stage_vc5_with_existing_receipt(self.BLOCKED_REPORT, rc=3)
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("库表前置被改回去了", text)
+        self.assertIn("model_mapping_empty", text)
+        self.assertIn("vc5-admission-recheck.err", text, "停下的提示要指向人读摘要文件")
+        self.assertNotIn("vc5-all 已起", text)
+        self.assertNotIn("VC5ALL_FINISHED", self.sb.events())
+        account_log = self.root / "account.log"   # 开关桩只在被调用时才写它
+        self.assertFalse(account_log.exists() and "ON" in account_log.read_text(encoding="utf-8"), "库表前置不过时不得先打开采集账号")
+
+    def test_existing_receipt_ignores_other_blocked_checks_outside_db_prerequisites(self) -> None:
+        """复查只看 candidate_prerequisites：dry-run 报告顶层 blocked 但库表前置全绿（别的检查项状态）不拦。"""
+
+        report = {"status": "blocked", "checks": [{"check": "x", "status": "blocked"}], "candidate_prerequisites": [{"check": "a", "status": "passed"}]}
+        result = self._stage_vc5_with_existing_receipt(report, rc=3)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-1500:])
+
+    def test_existing_receipt_with_unparseable_dryrun_fails_closed(self) -> None:
+        result = self._stage_vc5_with_existing_receipt("这不是 JSON", rc=0)
+        self.assertEqual(result.returncode, 1)
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("STOPPED VC5", text)
+        self.assertIn("dry-run 输出不是 JSON", text)
+
+    def test_blocked_stop_message_points_to_dryrun_err(self) -> None:
+        """没有收据（consume 不通过）走完整准入：blocked 的停止提示要指出详细“怎么改”在 vc5-admission-dryrun.err。"""
+
+        self._install_account_stubs()
+        self._prepare_vc5()
+        (self.root / "precheck_consume.rc").write_text("2", encoding="utf-8")
+        (self.root / "precheck_dryrun.json").write_text(json.dumps(self.BLOCKED_REPORT), encoding="utf-8")
+        (self.root / "precheck_dryrun.rc").write_text("3", encoding="utf-8")
+        result = self.sb.stage_pipeline("--from", "VC5", "--to", "VC5")
+        self.assertEqual(result.returncode, 1, result.stdout[-1500:] + result.stderr[-1500:])
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("VC-5 准入 blocked", text)
+        self.assertIn("vc5-admission-dryrun.err", text)
 
     def test_capture_on_retry_classification(self) -> None:
         """采集账号开关脚本文档保证幂等：退出码 5（管理接口失败）可重试；退出码 4（访问令牌快过期，确定性拒绝）不重试。"""
