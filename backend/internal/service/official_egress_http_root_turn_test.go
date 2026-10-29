@@ -107,7 +107,11 @@ func TestOfficialCodexHTTPRootTurnIDFactFollowsProfile(t *testing.T) {
 	require.Len(t, samples, 7)
 	var sawCompaction bool
 
-	// 画像不声明：不产生事实（旧画像的身份与摘要不变）。
+	// 画像不声明：不产生事实（旧画像的身份与摘要不变）。Active 槽位晋升为目标版本后自带 DynamicKeys，所以对照段显式清空它，
+	// 不依赖槽位里是否已经有目标版本画像（候选态与集成态本来就没有，清空是恒等操作）。
+	withClientMetadataSectionProfile(t, mode, func(section *profilecontract.ClientMetadataSection) {
+		section.DynamicKeys = nil
+	})
 	for _, sample := range samples {
 		require.Empty(t, replayHTTPIdentityFacts(t, sample, nil).RootTurnID.Value,
 			"请求 %d：画像没有声明 DynamicKeys 时不产生 HTTP 根回合事实", sample.Index)
@@ -164,7 +168,10 @@ func TestOfficialCodexHTTPRootTurnIDOnlyForRootThreads(t *testing.T) {
 		}
 		return built
 	}
-	// 画像不声明：任何线程都不产生。
+	// 画像不声明：任何线程都不产生。对照段显式清空 DynamicKeys（理由同上：晋升后 Active 槽位自带该键集合）。
+	withClientMetadataSectionProfile(t, mode, func(section *profilecontract.ClientMetadataSection) {
+		section.DynamicKeys = nil
+	})
 	require.Empty(t, officialCodexHTTPRootTurnID(mode, build("", "", turn), false))
 
 	withClientMetadataSectionProfile(t, mode, func(section *profilecontract.ClientMetadataSection) {

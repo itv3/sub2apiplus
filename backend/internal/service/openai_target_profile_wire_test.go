@@ -79,6 +79,76 @@ func applyProfileRulePatches(t *testing.T, doc *profilecontract.SnapshotDoc, pat
 	}
 }
 
+// removeProfileRulePatches 是 applyProfileRulePatches 的逆操作：把补丁清单里的字段从快照文档的可选节摘掉，返回实际摘掉的个数。
+// 节不存在或字段不存在则跳过（上一版画像本来就没有这些字段）；字段存在但取值与补丁不同直接失败（说明槽位里是别的画像）。
+func removeProfileRulePatches(t *testing.T, doc *profilecontract.SnapshotDoc, patches []profileRulePatch) int {
+	t.Helper()
+	removed := 0
+	for _, patch := range patches {
+		require.Equal(t, "add", patch.Op, "补丁 %s", patch.Path)
+		segments := strings.Split(strings.TrimPrefix(patch.Path, "/"), "/")
+		require.Len(t, segments, 2, "补丁路径必须是 /<节>/<字段>：%s", patch.Path)
+		field := reflect.ValueOf(doc).Elem().FieldByName(segments[0])
+		require.True(t, field.IsValid() && field.Type() == reflect.TypeOf(json.RawMessage{}), "快照文档没有可选节 %s", segments[0])
+		raw, rawIsJSON := field.Interface().(json.RawMessage)
+		require.True(t, rawIsJSON, "可选节 %s 不是 json.RawMessage", segments[0])
+		if len(raw) == 0 {
+			continue
+		}
+		section := map[string]json.RawMessage{}
+		require.NoError(t, json.Unmarshal(raw, &section))
+		existing, exists := section[segments[1]]
+		if !exists {
+			continue
+		}
+		require.JSONEq(t, string(patch.After), string(existing), "补丁 %s 的目标字段已存在但取值与补丁不同，不是上一版画像加补丁", patch.Path)
+		delete(section, segments[1])
+		encoded, err := json.Marshal(section)
+		require.NoError(t, err)
+		field.Set(reflect.ValueOf(json.RawMessage(encoded)))
+		removed++
+	}
+	return removed
+}
+
+// withoutTargetProfileForWire 把 Active 槽位换成“去掉目标版本补丁字段”的上一版画像（service 层与真实 Executor 同时生效），
+// 供各用例的“对照：目标画像之前”一段使用，随后由 withTargetProfileForWire 再把补丁加回去。
+//
+// Active 还是上一版（集成态、候选态）时，补丁字段本来就不存在，本函数是恒等操作；Active 已晋升为目标版本（补丁字段已入库）时，
+// 它把这些开关摘掉，对照段看到的仍是“目标画像之前”的线上形态——否则对照段会把已经带开关的 Active 当成上一版，断言“没有开关”而失败。
+func withoutTargetProfileForWire(t *testing.T, mode string) {
+	t.Helper()
+	require.Equal(t, officialClientProfileModeActive, normalizeOfficialClientProfileMode(mode), "还原上一版画像只替换 Active 槽位")
+	patches := loadTargetProfileRulePatches(t)
+	removed := 0
+	withMutatedOfficialProfile(t, mode, func(doc *profilecontract.SnapshotDoc) {
+		removed = removeProfileRulePatches(t, doc, patches)
+	})
+	if removed == 0 {
+		return
+	}
+	doc := replayTestProfileDocs[normalizeOfficialClientProfileMode(mode)]
+	catalog, err := officialegress.DefaultReleaseCatalog().WithActiveProfileOverrideForTest(doc)
+	require.NoError(t, err)
+	previous := targetProfileWireCatalog
+	targetProfileWireCatalog = &catalog
+	t.Cleanup(func() { targetProfileWireCatalog = previous })
+
+	// 摘除结果必须让 service 层与 Executor 层都看不到目标版本的任何补丁字段。
+	for label, optional := range map[string]profilecontract.OptionalSections{
+		"service":  officialCodexOptionalSectionsForMode(mode),
+		"executor": executorActiveOptional(t, catalog),
+	} {
+		require.False(t, optional.WebSocketContinuation != nil && optional.WebSocketContinuation.ReplayOnSameConnection, label)
+		require.False(t, optional.TurnState != nil && optional.TurnState.ResetOnNewTurn, label)
+		require.False(t, optional.TurnMetadata != nil &&
+			(optional.TurnMetadata.WindowTracking || optional.TurnMetadata.WSCompactionRequests ||
+				optional.TurnMetadata.HTTPCompactionRequests || optional.TurnMetadata.RootThreadKeys), label)
+		require.False(t, optional.ClientMetadata != nil && len(optional.ClientMetadata.DynamicKeys) > 0, label)
+		require.False(t, optional.ReasoningEffort != nil && fmt.Sprint(optional.ReasoningEffort.ConfigurationUpdate) != "", label)
+	}
+}
+
 // withTargetProfileForWire 把 Active 槽位换成“上一版画像＋目标版本补丁”合成的目标画像，service 层与真实 Executor 同时生效。
 func withTargetProfileForWire(t *testing.T, mode string) {
 	t.Helper()
@@ -246,7 +316,8 @@ func TestTargetProfileHTTPWireClientMetadataCarriesRootTurnID(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			// 对照：目标画像之前（上一版画像）HTTP 请求没有 root_turn_id。
+			// 对照：目标画像之前（上一版画像）HTTP 请求没有 root_turn_id。Active 已晋升时先摘掉补丁字段，见 withoutTargetProfileForWire。
+			withoutTargetProfileForWire(t, mode)
 			legacyServer := startCodexGateWireServer(t, nil)
 			legacyBody, legacyIngress := codexGateRootIngress(t, mutate)
 			legacy := forwardTargetAwareHTTPWire(t, mode, legacyServer, legacyIngress, legacyBody)
@@ -313,7 +384,8 @@ func TestTargetProfileHTTPWireTurnMetadataWindowAndRootKeys(t *testing.T) {
 		}
 	}
 
-	// 对照：上一版画像（没有这些开关）——四个键都不写，窗口号恒为 0，哪怕入站头是窗口 1。
+	// 对照：上一版画像（没有这些开关）——四个键都不写，窗口号恒为 0，哪怕入站头是窗口 1。Active 已晋升时先摘掉补丁字段。
+	withoutTargetProfileForWire(t, mode)
 	legacyTM, legacyWire := forwardWire(t, "1", nil)
 	for _, key := range []string{"agent_name", "root_turn_id", "window_number", "context_window_id"} {
 		require.False(t, legacyTM.Get(key).Exists(), "上一版画像不写 %s", key)
@@ -423,7 +495,8 @@ func TestTargetProfileHTTPWireCompactionRequestMatchesOfficial(t *testing.T) {
 		return turnMetadata, wire
 	}
 
-	// 对照：上一版画像——压缩请求按普通回合请求处理。
+	// 对照：上一版画像——压缩请求按普通回合请求处理。Active 已晋升时先摘掉补丁字段。
+	withoutTargetProfileForWire(t, mode)
 	legacyTM, legacyWire := forward(t, compactionMutate)
 	require.Equal(t, "compaction", legacyTM.Get("request_kind").String())
 	for _, key := range []string{"model", "reasoning_effort", "turn_trigger"} {
