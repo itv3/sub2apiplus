@@ -970,6 +970,127 @@ class PlRemoteVarTests(unittest.TestCase):
         self.assertEqual(self._remote_var(remote_vars, "NO_SUCH_KEY"), "")
 
 
+class StartEntryPrecheckTests(unittest.TestCase):
+    """start-entry.sh 起跑前自检新增的 C10（Go 编译缓存容量）、C11（本轮输入已准备）及相关开关。
+
+    start-entry.sh 本体读 /proc 与真实 docker／psql，不在开发机上整体运行；检查逻辑放在 pipeline-lib.sh 的函数里单测，
+    脚本接线用静态合同守。
+    """
+
+    START_ENTRY = PIPELINE / "start-entry.sh"
+
+    def _call(self, root: Path, call: str, stat_type: str = "tmpfs", df_m: str = "4096") -> subprocess.CompletedProcess:
+        """stat／df 换成桩（开发机的 stat -f -c 与 df -BM 参数不兼容），然后 source 真实 pipeline-lib.sh 调一个函数。"""
+
+        stubs = root / "bin"
+        _write(stubs / "stat", f"#!/bin/bash\necho '{stat_type}'\n")
+        _write(stubs / "df", f"#!/bin/bash\nprintf 'Filesystem 1048576-blocks Used Available Capacity Mounted\\ntmpfs {df_m}M 1M 1M 1%% /x\\n'\n")
+        wrapper = _write(root / "call.sh", f"""
+            #!/bin/bash
+            source "{PIPELINE}/pipeline-lib.sh"
+            {call}
+        """)
+        return subprocess.run(["bash", str(wrapper)], capture_output=True, text=True, cwd=root,
+                              env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(root), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_go_cache_on_small_tmpfs_is_refused_with_remount_hint(self) -> None:
+        """0.165 事故：4 GiB 的 tmpfs 在腾盘清空 Go 缓存后冷启动写满。小于 10 GiB 的内存盘必须在起跑前拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            done = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "4096")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("4 GiB < 10 GiB", done.stdout)
+            self.assertIn("remount,size=10G", done.stdout)
+
+    def test_go_cache_on_big_enough_tmpfs_passes_and_threshold_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            ok = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "10240")
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+            self.assertIn("10 GiB ≥ 10 GiB", ok.stdout)
+            low = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 4', "tmpfs", "4096")
+            self.assertEqual(low.returncode, 0, "阈值可调：要求 4 GiB 时 4 GiB 的内存盘通过")
+            self.assertEqual(self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "10239").returncode, 1)
+
+    def test_go_cache_on_disk_or_missing_dir_is_not_applicable(self) -> None:
+        """缓存在磁盘上（含目录还不存在、父目录在磁盘上）由根盘检查约束，本检查不拦。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            disk = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "ext2/ext3", "1024")
+            self.assertEqual(disk.returncode, 0, disk.stdout + disk.stderr)
+            self.assertIn("在磁盘上", disk.stdout)
+            missing = self._call(root, f'pl_check_go_cache_capacity "{root}/not/yet/created" 10', "ext2/ext3", "1024")
+            self.assertEqual(missing.returncode, 0, missing.stdout + missing.stderr)
+
+    def test_go_cache_on_tmpfs_with_unreadable_size_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cache").mkdir()
+            done = self._call(root, f'pl_check_go_cache_capacity "{root}/cache" 10', "tmpfs", "")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("读不出容量", done.stdout)
+
+    def test_round_inputs_check_requires_both_prepare_outputs(self) -> None:
+        """漏跑 prepare-round-inputs.sh：P0 回退依据与基线画像都缺，入口便宜检查两项会红；起跑前自检要先拦下并指向该脚本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rr, data = root / "run", root / "data"
+            call = f'pl_check_round_inputs "{rr}" "{data}" in-x'
+            both_missing = self._call(root, call)
+            self.assertEqual(both_missing.returncode, 1)
+            self.assertIn("rollback-catalog-promotion-receipt.json", both_missing.stdout)
+            self.assertIn("baseline-profile.json", both_missing.stdout)
+            self.assertIn("prepare-round-inputs.sh", both_missing.stdout)
+            rr.mkdir()
+            (rr / "rollback-catalog-promotion-receipt.json").write_text("{}", encoding="utf-8")
+            one_missing = self._call(root, call)
+            self.assertEqual(one_missing.returncode, 1)
+            self.assertNotIn("rollback-catalog-promotion-receipt.json", one_missing.stdout)
+            self.assertIn("baseline-profile.json", one_missing.stdout)
+            (data / "control" / "in-x").mkdir(parents=True)
+            (data / "control" / "in-x" / "baseline-profile.json").write_text("", encoding="utf-8")
+            self.assertEqual(self._call(root, call).returncode, 1, "空文件不算就绪")
+            (data / "control" / "in-x" / "baseline-profile.json").write_text("{}", encoding="utf-8")
+            ready = self._call(root, call)
+            self.assertEqual(ready.returncode, 0, ready.stdout)
+            self.assertIn("prepare-round-inputs.sh 已跑", ready.stdout)
+
+    def test_round_inputs_check_honours_explicit_rollback_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data" / "control" / "in-x").mkdir(parents=True)
+            (root / "data" / "control" / "in-x" / "baseline-profile.json").write_text("{}", encoding="utf-8")
+            (root / "elsewhere.json").write_text("{}", encoding="utf-8")
+            done = self._call(root, f'pl_check_round_inputs "{root}/run" "{root}/data" in-x "{root}/elsewhere.json"')
+            self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_start_entry_wires_the_new_checks_and_switches(self) -> None:
+        """脚本接线（静态）：C10／C11 调用函数且失败计 FAIL；--check 不建目录；SKIP_CAPTURE_ACCOUNT_ON 先于 capture-account-on.sh 判断。"""
+
+        code = [line for _, line in _code_lines(self.START_ENTRY)]
+        text = "\n".join(code)
+        self.assertRegex(text, r'pl_check_go_cache_capacity "\$\(dirname "\$\{D\}"\)/entry-gates-work/go-build-cache"')
+        self.assertRegex(text, r'else fail "C10 ')
+        self.assertRegex(text, r'pl_check_round_inputs "\$\{RUNROOT\}" "\$\{D\}" "\$\{IN\}"')
+        self.assertRegex(text, r'else fail "C11 ')
+        self.assertIn('[ "${MODE}" = check ] || mkdir -p "${P}"', text)
+        self.assertNotRegex(text, r"(?m)^mkdir -p \"\$\{P\}\"")
+        skip = text.index('"${SKIP_CAPTURE_ACCOUNT_ON:-0}" = 1')
+        self.assertLess(skip, text.index('bash "${PIPE_HOME}/capture-account-on.sh"'), "跳过判断必须在调用 capture-account-on.sh 之前")
+        self.assertIn("warn \"SKIP_CAPTURE_ACCOUNT_ON=1", text, "跳过要留 WARN，不静默")
+
+    def test_start_entry_documents_the_switches_in_header(self) -> None:
+        head = "\n".join(self.START_ENTRY.read_text(encoding="utf-8").splitlines()[:30])
+        self.assertIn("SKIP_CAPTURE_ACCOUNT_ON=1", head)
+        self.assertIn("GO_CACHE_TMPFS_MIN_GIB", head)
+
+
 class Vc6EnvTests(SandboxCase):
     def test_vc6_env_refuses_placeholder_values(self) -> None:
         """vc6-env.sh 在 VC-3 之后才有真值的键（画像摘要、候选链 C）仍是占位时拒绝，不带着占位值往下跑。"""
