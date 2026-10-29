@@ -135,7 +135,7 @@ wait_marker() {
     if [ -f "${f}" ]; then
       grep -Eq "${ok}" "${f}" && return 0
       # “=== ”开头的是脚本自己打印的阶段标题行，措辞里带“拒绝”“失败”只是描述（如“VC-3 前重放离线报告，拒绝批准后的输入漂移”），
-      # 不是失败；0.165 因此误报过 STOPPED VC2。失败字样只在其余行里找（进程替换，不用管道，避免 pipefail 下 grep -q 提前退出的假阴性）。
+      # 不是失败；曾因此误报过 STOPPED VC2。失败字样只在其余行里找（进程替换，不用管道，避免 pipefail 下 grep -q 提前退出的假阴性）。
       [ -n "${bad}" ] && grep -Eq "${bad}" <(grep -v '^=== ' "${f}") && return 3
     fi
     if [ -n "${pat}" ]; then

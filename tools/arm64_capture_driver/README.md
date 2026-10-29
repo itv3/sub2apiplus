@@ -1091,8 +1091,8 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 
 | 位置（`driver/pipeline/`） | 作用 |
 |---|---|
-| `vc-pipeline.sh` | VC1→VC2→VC3→VC4→BGV→VC5→VC6 无人值守编排；`--check` 只读自检，`start` 前台自检后 `setsid -f` 起运行体，状态写 `<PREP>/pipeline/vc-status.txt`，最后一行必为 `EXIT rc=N` |
-| `start-entry.sh`、`opening-env.example.sh` | 正式入口（`entry.sh`）的起跑自检与后台运行；开工检查环境变量模板（复制到 `<PREP>/opening-env.sh`） |
+| `vc-pipeline.sh` | VC1→VC2→VC3→VC4→BGV→VC5→VC6 无人值守编排；`--check` 只读自检，`start` 前台自检后 `setsid -f` 起运行体，状态写 `<PREP>/pipeline/vc-status.txt`，最后一行必为 `EXIT rc=N`。VC5 准入收据已存在（`--consume` 通过）时仍只读复查库表前置（`vc5-precheck.sh --dry-run` 的 `candidate_prerequisites`），被改回去则在起 `vc5-all.sh`、开采集账号之前停下，人读摘要在 `<PREP>/pipeline/vc5-admission-recheck.err`；等待日志里的失败字样时，脚本自己打印的 `=== ` 标题行不算失败 |
+| `start-entry.sh`、`opening-env.example.sh` | 正式入口（`entry.sh`）的起跑自检（C1～C11）与后台运行；开工检查环境变量模板（复制到 `<PREP>/opening-env.sh`）。`--check` 只读、不建任何目录。C10：入口门禁 Go 编译缓存（数据根上一级 `entry-gates-work/go-build-cache`）在 tmpfs 上时总容量须 ≥10 GiB（`GO_CACHE_TMPFS_MIN_GIB`），冷启动全量重建 >4 GiB 会写满；C11：`prepare-round-inputs.sh` 的产物（P0 回退依据、基线画像）在位。`SKIP_BGV_CHECK=1`／`SKIP_CAPTURE_ACCOUNT_CHECK=1` 把 C4b／C6 的 FAIL 降为 WARN，`SKIP_CAPTURE_ACCOUNT_ON=1` 本阶段有意不打开采集账号（起跑留 WARN） |
 | `deploy-commit.sh`、`history-tree-refresh.sh`、`sync-data-root-backend.sh`、`prepare-*.sh`、`set-env-keys.sh`、`post-bgv.sh` | 受监督部署、历史测试树跟进、数据根 backend 同步、输入目录与历史门禁源码准备、参数文件定点改键、后台验证取证 |
 | `preflight-refresh.sh` | 官方采集登录态（capture-cli 的 `auth.json`）访问令牌的剩余有效期检查与直连刷新：`--remaining` 只读，`--ensure [--min N]` 不足就用官方客户端自带 app-server 的 `account/read {refreshToken:true}` 无代理直连刷新一次，失败明确退出非零。`start-entry.sh` 起跑前（C9 自检＋真起跑时 `--ensure`）和 `vc-pipeline.sh` 的 VC1 阶段（首批没开始就刷新、已在跑则明确停下）自动调用；阈值 `PIPE_TOKEN_MIN_MINUTES`，缺省 150 分钟（VC-1 预计时长＋1 小时）。采集账号开关“剩余不足 60 分钟拒绝打开”的逻辑不变 |
 | `capture-account-on.sh`／`capture-account-off.sh`、`capture_admin.py` | 采集账号开关（只改 `status`／`schedulable`，幂等）与采集专用用户／Key 建立；账号号取 `CAPTURE_ACCOUNT_ID` 或参数文件的采集账号 |
