@@ -809,6 +809,34 @@ class InterruptionTests(_WorldCase):
         self.assertEqual(again.returncode, EXIT_OPERATOR, again.stderr)
         self.assertEqual(len(world.dispatches()), 1, "占位存在而启动记录缺失：不重派")
 
+    def test_interrupted_step_does_not_leave_a_stale_needs_operator_record_behind(self) -> None:
+        """0.165 实战：approve 先因缺批准停在 needs-operator，补批准后动作做完、记录写入之前被打断；重入时现场判该步已完成、
+        不再执行，``steps/approve.json`` 一直残留旧的 needs-operator。重入后必须补写成 passed（原因写明来源），summary 不丢。"""
+
+        world = self.make_world()
+        stopped = world.run("--apply")
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, stopped.stderr)
+        record = world.out_dir() / "steps" / "approve.json"
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["status"], "needs-operator")
+        self.assertEqual(len(world.approve_from_intents()), 2)
+        self.assertEqual(world.run("--apply", **world.crash("approve")).returncode, 137)
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["status"], "needs-operator", "打断时动作已做完但记录还是旧的")
+        again = world.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OK, again.stderr)
+        healed = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(healed["status"], "passed")
+        self.assertIn("现场判定该步骤已完成", healed["reason"])
+        self.assertIn("needs-operator", healed["reason"], "写明补写前的旧状态")
+        world.wait_continue_finished()
+        for name in ("reconcile", "approve", "authorize", "continue"):
+            data = json.loads((world.out_dir() / "steps" / f"{name}.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["status"], "passed", name)
+        # 只读预览与计划摘要不受影响；再执行一次不再补写（已是 passed）。
+        before = (world.out_dir() / "history.ndjson").read_text(encoding="utf-8")
+        self.assertEqual(world.run("--apply").returncode, EXIT_OK)
+        after = (world.out_dir() / "history.ndjson").read_text(encoding="utf-8")
+        self.assertEqual(before.count('"step": "approve"'), after.count('"step": "approve"'))
+
     def test_interrupt_leaves_no_partial_state_files(self) -> None:
         world = self._chain()
         self.assertEqual(world.run("--apply", **world.crash("approve")).returncode, 137)

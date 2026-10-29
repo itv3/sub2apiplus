@@ -1290,6 +1290,27 @@ class Runner:
         os.chmod(self.out / "history.ndjson", 0o600)
         return record
 
+    def heal_stale_step_records(self, steps: list[Step]) -> list[str]:
+        """现场已判定完成、但 ``steps/<步骤>.json`` 仍是停下时留下的旧记录（needs-operator／failed）：补写一条 passed。
+
+        0.165 实战：approve 先因缺批准停在 needs-operator，补批准后动作做完、记录写入之前进程被打断；重入时现场判定该步已完成、
+        不再执行动作，``steps/approve.json`` 就一直残留旧的 needs-operator，读记录的人会误以为还卡着。只在“现场判已完成且记录
+        状态不是 passed”时补写，沿用旧记录的 summary（``reconcile-runs`` 的 revisit 等不丢），原因里写明补写来源与旧状态；
+        没有记录的步骤（本轮从没停过）与已是 passed 的不动。返回被补写的步骤名。"""
+
+        healed: list[str] = []
+        for step in steps:
+            if step.status != DONE:
+                continue
+            path = self.out / "steps" / f"{step.id}.json"
+            old = _load_json(path, f"步骤记录 {step.id}") if path.exists() else None
+            if not isinstance(old, dict) or old.get("status") in {None, "passed"}:
+                continue
+            self.record(step.id, "passed", reason=f"现场判定该步骤已完成（上次执行停在 {old.get('status')} 或被打断，记录补写）",
+                        summary=old.get("summary") if isinstance(old.get("summary"), dict) else None)
+            healed.append(step.id)
+        return healed
+
     def maybe_crash(self, step: str) -> None:
         """验收用打断注入：动作做完、步骤记录写入之前结束进程（等价 kill -9）。"""
 
@@ -1601,6 +1622,7 @@ class Runner:
         for _ in range(MAX_ITERATIONS):
             facts = self.facts()
             steps = derive_steps(self.params, facts)
+            self.heal_stale_step_records(steps)
             current = next((step for step in steps if step.status in {PENDING, BLOCKED}), None)
             if current is None:
                 return self.finish(facts, steps)
