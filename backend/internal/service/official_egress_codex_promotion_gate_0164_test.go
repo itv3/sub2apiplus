@@ -20,9 +20,11 @@ import (
 //   - 画像 BaseInstructions 节声明 IDScheme=uuidv7（BODY-003／BODY-006／WS-005：Lite 窗口开头的 additional_tools 与基础指令
 //     消息 id 改为记录时随机的 <前缀>_<UUIDv7>，预热帧 input 为空，前缀由第一条业务帧带出）。
 //
-// 用例一律用 codexGateDiscriminatingReleaseMode 按画像结构事实定位目标槽位——候选态目标装在 previous，晋升后在 active，
-// 两个阶段都成立，不写死槽位名；另一槽位（0.163.0）作对照，证明行为由画像驱动。0.163 起已继承的结构事实另有按继承特征
-// 重放的门禁（official_egress_codex_promotion_gate_target_*_test.go）。
+// 用例一律用 codexGateTargetReleaseMode 按画像结构事实定位槽位，不写死槽位名：本轮判别时只有目标槽位具备该事实，
+// 候选态目标装在 previous、晋升后在 active，另一槽位（0.163.0）作对照，证明行为由画像驱动。下一轮升级的候选进入
+// previous 之后，两个槽位都具备这些事实（继承特征），门禁不再承担判别职责，改在较旧槽位（批准这些语义的发布）上重放，
+// 作为既有批准语义的回归，对照段随之省略；0.163 起已继承的结构事实另有同样做法的门禁
+// （official_egress_codex_promotion_gate_target_*_test.go）。
 // ============================================================================
 
 // codexGateUUIDv7Pattern 匹配规范 UUID 且版本位是 7、变体位是 RFC 4122。
@@ -78,7 +80,7 @@ func codexGateDeclaresImageTurnHeaders(profile profilecontract.ExecutableProfile
 //
 // 对照：另一槽位的画像没有 refresh_reason，请求体与引入之前相同，只有三个字段。
 func TestCodexOAuthRefreshReasonReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "oauth_refresh 的封闭 Body 声明 refresh_reason", codexGateDeclaresRefreshReason)
+	mode := codexGateTargetReleaseMode(t, "oauth_refresh 的封闭 Body 声明 refresh_reason", codexGateDeclaresRefreshReason)
 	profile := codexGateExecutableProfile(t, mode)
 	require.Equal(t, "auth.openai.com", codexGateMustEndpoint(t, profile, officialCodexEndpointOAuthRefresh).Host)
 
@@ -120,7 +122,7 @@ func TestCodexOAuthRefreshReasonReplaysApprovedSemanticsOnTargetRelease(t *testi
 //
 // 对照：另一槽位没有这两个头，线序以 version, authorization 开头。
 func TestCodexImagesTurnHeadersReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "images_generations 与 images_edits 声明 x-codex-image-turn-id 与 x-codex-turn-metadata",
+	mode := codexGateTargetReleaseMode(t, "images_generations 与 images_edits 声明 x-codex-image-turn-id 与 x-codex-turn-metadata",
 		codexGateDeclaresImageTurnHeaders)
 	section := codexGateExecutableProfile(t, mode).Optional().TurnMetadata
 	require.NotNil(t, section, "目标画像必须声明 TurnMetadata 节")
@@ -222,7 +224,7 @@ func codexGateRequireLitePrefix(t *testing.T, raw []byte, kind string, wantV7 bo
 //
 // 对照：另一槽位（0.163.0）同一入站得到同样的承载位置，但 additional_tools 没有 id、基础指令消息 id 是 UUIDv5 方案，证明形态由画像 IDScheme 驱动。
 func TestCodexLiteTopLevelOmissionReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
+	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	request := codexGateLiteThirdPartyHTTPRequest(t, mode)
@@ -260,7 +262,7 @@ func TestCodexLiteTopLevelOmissionReplaysApprovedSemanticsOnTargetRelease(t *tes
 //
 // 对照：另一槽位（0.163.0）的前缀 id 是 UUIDv5 方案、passthrough 只有 content_item_kinds，前缀在预热帧里。
 func TestCodexLiteAdditionalToolsItemFormReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
+	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	_, handshakes := codexGateRunWSIngress(t, mode, codexGateLiteThirdPartyWSSteps(t))
@@ -329,7 +331,7 @@ func codexGateLiteThirdPartyWSSteps(t *testing.T) []func(string) []byte {
 //
 // 对照：另一槽位（0.163.0）预热帧自己带前缀（input 非空），业务帧不带。
 func TestCodexLiteWarmupFrameReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
+	mode := codexGateTargetReleaseMode(t, "BaseInstructions 节声明 IDScheme=uuidv7", codexGateDeclaresUUIDv7BaseInstructions)
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	_, handshakes := codexGateRunWSIngress(t, mode, codexGateLiteThirdPartyWSSteps(t))
