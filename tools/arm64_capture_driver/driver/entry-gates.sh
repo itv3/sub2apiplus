@@ -44,6 +44,15 @@
 #   --gate-scope auto（升级流程的缺省，入口编排器与 vc0-gate-target.sh 带上）：基点缺省取测试树里最近的发版 tag（--select-base 可显式覆盖）；能筛选就筛选，组合／模式／
 #   客户端／读集审计等要求全集或任何一步失败（选择器出错、找不到 tag、归属表与执行器 discover 的全集身份对不上）都回退全集并写明原因（gates-manifest.json 的 gate_scope_info、
 #   entry-gates.json 的 gate_scope），不报错也不静默。
+# 同提交续跑沿用（修好接着跑第一层）与换提交补跑（第二层）：--resume-from auto|<来源运行 ID> [--resume-series <系列名，缺省取组合名>]
+#   [--resume-binding-extra <JSON 对象>] [--resume-max-age-hours <小时，缺省 24>] [--resume-waive-env <理由> --resume-waive-env-names <条目名,…>]。
+#   第一层：这道门禁（系列）上一轮若是同一提交（并且部署绑定、执行器、调度策略、环境指纹都没变），已通过且记录完整的单元直接沿用，只重跑失败、未完成、记录不完整
+#   的单元；沿用的来源运行、提交、绑定写进运行清单的 resume 块，总摘要 entry-gates.json 的 resume 回显。失败的、补跑才通过的、诊断的记录永不沿用；跨提交第一层不生效。
+#   第二层（只在 --gate-scope auto／client-plan 且没显式给 --select-base 时）：提交不同时，以这道门禁里最近一次全集运行的提交（须是本次的祖先）作比对基点，
+#   只看这一小段改动，并把沿途失败的测试模块强制并入；归属表、选择器自己在改动里仍整轮回退全集（auto 的既有规则）。第二层的结论是子集，只给 Codex 准入用。
+#   只有带 --resume-from 的运行才把自己登记成以后续跑的来源（清单里的 resume_basis）；不带的命令行、运行清单与改造前逐字相同。所以第一次运行也要带（编排器、后台验证、VC-4 门禁缺省都带）。
+#   环境豁免：环境指纹是硬条件；操作员确认“环境修复不影响已通过单元的正确性”时用 --resume-waive-env 写理由、--resume-waive-env-names 点名变化的指纹条目，
+#   记入清单；点名之外的环境差异仍然拒绝沿用，带豁免的运行不签 P0 证据。续跑不与读集审计、B-09／B-10、逐单元承接、--bind-only 同用。
 # 环境（E3-01）：门禁清单生成与执行器都在白名单环境里运行（env -i 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、
 #   Go／Docker／Node／pnpm 的变量，再显式给字节码、历史源码与 TypeScript 的设置）：单元能看到的环境就是环境指纹里的那一份，
 #   本轮参数文件导出的键（D、STAMP、各认证坐标……）不再进入单元环境。
@@ -55,7 +64,7 @@
 #   executor/（执行器记录与逐单元日志）、executor.log。不写候选门禁目录、候选目录、时间账本与 Campaign，零模型请求。
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
-#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
+#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|vc4|pre-a3|regression] \
 #     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] \
@@ -79,7 +88,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|vc4|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] [--declared-sample off|always|every:N] [--bind-only] [--gate-scope full|client-plan|auto [--select-base <40 位提交>] [--include-claude]] [--resume-from auto|<运行ID> [--resume-series <系列>] [--resume-binding-extra <JSON>] [--resume-max-age-hours <小时>] [--resume-waive-env <理由> --resume-waive-env-names <条目,…>]] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -92,6 +101,7 @@ BIND_ONLY=false; BIND_ARGS=()
 DECLARED_SAMPLE=off
 UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
 GATE_SCOPE=full; SELECT_BASE=""; INCLUDE_CLAUDE=false; SCOPE_ARGS=()
+RESUME_FROM=""; RESUME_SERIES=""; RESUME_BINDING_EXTRA="{}"; RESUME_MAX_AGE=""; RESUME_WAIVE=""; RESUME_WAIVE_NAMES=""; RESUME_ARGS=(); FORCE_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -114,6 +124,12 @@ while [ "$#" -gt 0 ]; do
     --gate-scope) GATE_SCOPE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --select-base) SELECT_BASE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --include-claude) INCLUDE_CLAUDE=true; shift ;;
+    --resume-from) RESUME_FROM="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --resume-series) RESUME_SERIES="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --resume-binding-extra) RESUME_BINDING_EXTRA="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --resume-max-age-hours) RESUME_MAX_AGE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --resume-waive-env) RESUME_WAIVE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --resume-waive-env-names) RESUME_WAIVE_NAMES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
@@ -133,7 +149,7 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 2; fi
 PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/frontend}"
-case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
+case "$PROFILE" in entry|full-gates|preflight|vc4|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gates 是逗号分隔的门禁项：$WITH_GATES" >&2; exit 2; fi
 if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
 case "$GO_WARMUP" in auto|off) ;; *) echo "未知的 Go 预热模式：$GO_WARMUP" >&2; exit 2 ;; esac
@@ -185,13 +201,36 @@ fi
 # auto 是升级流程的缺省（入口编排器、VC-0 预跑脚本带上）：能筛选就筛选，不能就保持全集，不报错——组合没有采集工具测试组、非 Codex 客户端、模式或请求要求全集、
 # 读集审计／合同／收窄提案／固定79接线在用，都只打一行原因后保持全集；基点缺省取测试树里最近的发版 tag，选择器失败、归属表与执行器的全集身份对不上也回退全集
 # （原因写进门禁清单的 gate_scope_info 与入口门禁总摘要的 gate_scope，不静默）。
+# 同提交续跑沿用（见文件头）：只与重新执行全集同用；点名与理由成对；系列名缺省取组合名。环境豁免也可以经环境变量
+# ENTRY_RESUME_WAIVE_ENV／ENTRY_RESUME_WAIVE_ENV_NAMES 声明（入口编排器、后台验证起的入口门禁没有这两个选项）；变量不进任何输入合同，豁免本身写进运行清单。
+if [ -n "$RESUME_FROM" ] && [ -z "$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then
+  RESUME_WAIVE="${ENTRY_RESUME_WAIVE_ENV:-}"; RESUME_WAIVE_NAMES="${ENTRY_RESUME_WAIVE_ENV_NAMES:-}"
+fi
+if [ -n "$RESUME_FROM" ]; then
+  if ! [[ "$RESUME_FROM" =~ ^(auto|[0-9A-Za-z._-]{1,128})$ ]]; then echo "--resume-from 只接受 auto 或来源运行 ID：$RESUME_FROM" >&2; exit 2; fi
+  if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ] || [ "$AUDIT_READS" = true ] \
+      || [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ] \
+      || [ "$BIND_ONLY" = true ] || [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then
+    echo "续跑沿用只与重新执行全集同用，不能与读集审计、读集合同、收窄提案、B-09／B-10、逐单元承接、--bind-only 同用" >&2; exit 2
+  fi
+  RESUME_SERIES="${RESUME_SERIES:-$PROFILE}"
+  if ! [[ "$RESUME_SERIES" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then echo "--resume-series 只允许字母、数字与 ._-：$RESUME_SERIES" >&2; exit 2; fi
+  if [ -n "$RESUME_MAX_AGE" ] && ! [[ "$RESUME_MAX_AGE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then echo "--resume-max-age-hours 是小时数：$RESUME_MAX_AGE" >&2; exit 2; fi
+  if { [ -n "$RESUME_WAIVE" ] && [ -z "$RESUME_WAIVE_NAMES" ]; } || { [ -z "$RESUME_WAIVE" ] && [ -n "$RESUME_WAIVE_NAMES" ]; }; then
+    echo "环境豁免要同时给理由（--resume-waive-env）和点名的指纹条目（--resume-waive-env-names）" >&2; exit 2
+  fi
+  python3 -B -c 'import json, sys; value = json.loads(sys.argv[1]); sys.exit(0 if isinstance(value, dict) else 1)' "$RESUME_BINDING_EXTRA" \
+    || { echo "--resume-binding-extra 必须是 JSON 对象：$RESUME_BINDING_EXTRA" >&2; exit 2; }
+elif [ -n "$RESUME_SERIES$RESUME_MAX_AGE$RESUME_WAIVE$RESUME_WAIVE_NAMES" ]; then
+  echo "--resume-series／--resume-max-age-hours／--resume-waive-env* 只与 --resume-from 同用" >&2; exit 2
+fi
 case "$GATE_SCOPE" in full|client-plan|auto) ;; *) echo "未知的门禁范围：${GATE_SCOPE}（只有 full、client-plan、auto）" >&2; exit 2 ;; esac
 if [ "$GATE_SCOPE" = full ]; then
   if [ -n "$SELECT_BASE" ] || [ "$INCLUDE_CLAUDE" = true ]; then echo "--select-base、--include-claude 只在 --gate-scope client-plan／auto 下有意义" >&2; exit 2; fi
 elif [ "$GATE_SCOPE" = auto ]; then
   if [ -n "$SELECT_BASE" ] && ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--select-base 必须是 40 位小写提交：$SELECT_BASE" >&2; exit 2; fi
   AUTO_SKIP=""
-  case "$PROFILE" in entry|full-gates|preflight) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac
+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) AUTO_SKIP="组合 ${PROFILE} 没有采集工具测试组" ;; esac
   if [ "$CT_CLIENT" != codex ]; then AUTO_SKIP="本版只启用 codex 计划"; fi
   if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then
     AUTO_SKIP="模式或请求要求全集（全集通过、逐单元承接）"
@@ -209,7 +248,7 @@ elif [ "$GATE_SCOPE" = auto ]; then
   fi
 else
   if ! [[ "$SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "--gate-scope client-plan 必须同时给 --select-base（40 位小写提交）：$SELECT_BASE" >&2; exit 2; fi
-  case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight）：$PROFILE" >&2; exit 2 ;; esac
+  case "$PROFILE" in entry|full-gates|preflight|vc4) ;; *) echo "按客户端筛选只用于含采集工具测试组的全量组合（entry、full-gates、preflight、vc4）：$PROFILE" >&2; exit 2 ;; esac
   if [ "$MODE" != re-execute ] || [ -n "$FULL_SET_REQUEST" ] || [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$UNIT_INHERIT_PROPOSE" ]; then
     echo "按客户端筛选只许 --mode re-execute，不能与全集请求、逐单元承接同用（子集不能承接，也不能冒充全集）" >&2; exit 2
   fi
@@ -528,11 +567,55 @@ fi
 GATES_STATUS=passed
 if [ "$RUN_GATES" = true ]; then
 private_directory "$STORE"
+if [ -n "$RESUME_FROM" ]; then
+  # 续跑沿用：登记部署／门禁绑定（来源与本次逐项相同才沿用）；换了提交时（第二层）取比对基点与上一轮失败的模块。
+  python3 -B - "$OUT/resume-binding.json" "$CT_CLIENT" "$PLAN_PROFILE" "$PRE_A3_MODE" "${DEPLOY:-}" "${TREE_FILES:-}" "${DEPLOY_OTHERS:-}" "$RESUME_BINDING_EXTRA" <<'PYBIND'
+import hashlib, json, os, sys
+out, client, plan_profile, pre_a3, deploy, tool_files, others, extra = sys.argv[1:]
+binding = {"client": client, "plan_profile": plan_profile, "pre_a3": pre_a3,
+           "deploy_receipt_sha256": hashlib.sha256(open(deploy, "rb").read()).hexdigest() if deploy else None,
+           "tool_files_sha256": tool_files or None, "deploy_others": others or None, "extra": json.loads(extra)}
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump(binding, handle, ensure_ascii=False, sort_keys=True, indent=1)
+PYBIND
+  RESUME_ARGS=(--resume-from "$RESUME_FROM" --resume-series "$RESUME_SERIES" --resume-binding "$OUT/resume-binding.json")
+  if [ -n "$RESUME_MAX_AGE" ]; then RESUME_ARGS+=(--resume-max-age-hours "$RESUME_MAX_AGE"); fi
+  if [ -n "$RESUME_WAIVE" ]; then RESUME_ARGS+=(--resume-waive-env "$RESUME_WAIVE" --resume-waive-env-names "$RESUME_WAIVE_NAMES"); fi
+  if python3 -B "$DRV/entry_gates.py" resume-plan --record-store "$STORE" --series "$RESUME_SERIES" --tree "$TREE" > "$OUT/resume-plan.json" 2> "$OUT/resume-plan.err"; then
+    FORCE_ARGS=(--resume-plan "$OUT/resume-plan.json")
+    # 第二层只在筛选（auto／client-plan）下起作用，且不覆盖操作员显式给的基点。
+    RESUME_LAYER2=$(python3 -B -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d["layer"], d.get("base_commit") or "-", ",".join(d.get("force_modules") or []) or "-")' "$OUT/resume-plan.json")
+    read -r RESUME_LAYER RESUME_BASE RESUME_FORCE <<< "$RESUME_LAYER2"
+    echo "续跑沿用：系列 ${RESUME_SERIES}，$(python3 -B -c 'import json, sys; print("；".join(json.load(open(sys.argv[1]))["reasons"]))' "$OUT/resume-plan.json")"
+    if [ "$RESUME_LAYER" = 2 ] && [ "${#SCOPE_ARGS[@]}" -gt 0 ]; then
+      if [ -z "$SELECT_BASE" ] && [ "$RESUME_BASE" != "-" ]; then SCOPE_ARGS+=(--select-base "$RESUME_BASE"); fi
+      if [ "$RESUME_FORCE" != "-" ]; then FORCE_ARGS+=(--force-run-modules "$RESUME_FORCE"); fi
+    fi
+  else
+    echo "续跑规划没做出来（忽略，按原样规划；原因 $(tail -n 1 "$OUT/resume-plan.err" | cut -c1-200)）"
+  fi
+fi
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
-    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} \
+    ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} ${FORCE_ARGS[@]+"${FORCE_ARGS[@]}"} \
     --with-gates "$WITH_GATES" ${INPUT_SCOPE_ARGS[@]+"${INPUT_SCOPE_ARGS[@]}"} ${AUDIT_POLICY_ARGS[@]+"${AUDIT_POLICY_ARGS[@]}"} --output "$OUT/gates-manifest.json" ) | cut -c1-400
+if [ -n "$RESUME_FROM" ] && [ "$GO_WARMUP_ACTIVE" = true ]; then
+  # 续跑：先只判定一遍（不执行、不写记录），后端 go test 三组全被沿用就不必再做 Go 预编译预热。
+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/unit_executor.py" run-gates --out-dir "$OUT/resume-decide" --manifest "$OUT/gates-manifest.json" \
+      --mode re-execute --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} "${RESUME_ARGS[@]}" --decide-only ) > "$OUT/resume-decide.log" 2>&1 < /dev/null || true
+  if python3 -B - "$OUT/resume-decide/decisions.json" <<'PYDECIDE'
+import json, sys
+try:
+    units = json.load(open(sys.argv[1], encoding="utf-8"))["units"]
+except (OSError, ValueError, KeyError):
+    sys.exit(1)   # 判定没做出来：保守起见照常预热
+go = [name for name in ("backend:go-test", "backend:unit", "backend:integration") if name in units]
+sys.exit(0 if go and all(units[name]["inherit"] for name in go) else 1)
+PYDECIDE
+  then GO_WARMUP_ACTIVE=false; echo "续跑：后端 go test 各组都沿用上一轮的通过记录，跳过 Go 预编译预热"; fi
+fi
 if [ "$GO_WARMUP_ACTIVE" = true ]; then
   ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/go_compile_warmup.py" --tree "$TREE" --work "$WORK" \
       --manifest "$OUT/gates-manifest.json" --output "$OUT/go-compile-warmup.json" \
@@ -567,7 +650,7 @@ if [ "$MODE" = unit-inherit ]; then
   fi
 fi
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
-    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} ${BIND_ARGS[@]+"${BIND_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240
 if [ "$BIND_ONLY" = true ]; then
   # 同树重部署沿用（优化第 5 项）：只现算运行绑定，不执行任何测试。部署绑定核对、清单与输入计算都已做过（和真实运行同一条路径）；留下 binding.json，删测试树。

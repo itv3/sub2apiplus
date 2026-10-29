@@ -231,8 +231,9 @@ class Orchestrator:
                  unit_inherit_request: Path | None = None, gate_parallel: int | None = None,
                  unit_inherit_full_gates_request: Path | None = None,
                  audit_strict: bool = False, audit_policy: Path | None = None, declared_sample: str = "off",
-                 gate_scope: str = "auto", select_base: str | None = None) -> None:
+                 gate_scope: str = "auto", select_base: str | None = None, resume: bool = True) -> None:
         self.params = dict(params)
+        self.resume = resume
         if audit_strict and not audit_reads:
             raise OrchestratorError("--audit-strict 必须同时启用 --audit-reads")
         if audit_policy is not None:
@@ -469,6 +470,16 @@ class Orchestrator:
             return []
         return ["--gate-scope", self.gate_scope, *(["--select-base", self.select_base] if self.select_base else [])]
 
+    def _gate_resume_args(self) -> list[str]:
+        """入口门禁这一步要带的续跑参数（修好接着跑）：同提交且部署绑定、执行器、调度策略、环境指纹都没变时，上一轮已通过且记录完整的单元直接沿用，
+        只重跑失败、未完成的单元；换了提交时（第二层）取上一轮全集运行的提交作基点并强制重跑沿途失败的模块（只在 auto 筛选下起作用）。
+        ``--reexecute-gates``（显式要求重新执行全集）、全集通过／逐单元承接、读集审计、``--no-resume`` 都不带——命令行与改造前逐字相同。"""
+
+        if (not self.resume or self.reexecute_gates or self._gates_mode() != "re-execute"
+                or self.audit_reads or self.audit_strict or self.audit_policy is not None):
+            return []
+        return ["--resume-from", "auto", "--resume-series", "entry"]
+
     def _unit_inherit_request_for(self, profile: str) -> Path | None:
         """只按本次实际门禁组合选择原文件；授权、来源与实时复核仍由 unit-inherit 合同核对。"""
 
@@ -614,7 +625,7 @@ class Orchestrator:
                                           *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                           *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
-                                          *self.gate_scope_args,
+                                          *self.gate_scope_args, *self._gate_resume_args(),
                                           *audit_args, *source], env=self.gate_env())
             summary = out / "entry-gates.json"
             try:
@@ -1274,6 +1285,8 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
                         help="入口门禁的测试范围：auto（缺省；Codex 升级走按客户端筛选，基点取测试树里最近的发版 tag，筛选不了或任何一步失败都回退全集并写明原因；"
                              "全集通过、逐单元承接、读集审计、--reexecute-gates、Claude 一律保持全集）、full（强制全集）、client-plan（显式基点，选择器失败就报错）")
     parser.add_argument("--select-base", help="筛选的基点：最近一次发版的 40 位提交（缺省 auto 取测试树里最近的发版 tag；client-plan 必须给）")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="不做同提交续跑沿用／换提交补跑（缺省开：入口门禁重跑时，同提交里上一轮已通过且记录完整的单元直接沿用，只重跑失败、未完成的单元）")
     return parser.parse_args(argv)
 
 
@@ -1341,7 +1354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel,
                                 unit_inherit_full_gates_request=args.unit_inherit_full_gates_request,
                                 audit_strict=args.audit_strict, audit_policy=args.audit_policy, declared_sample=args.declared_sample,
-                                gate_scope=args.gate_scope, select_base=args.select_base)
+                                gate_scope=args.gate_scope, select_base=args.select_base, resume=not args.no_resume)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:
