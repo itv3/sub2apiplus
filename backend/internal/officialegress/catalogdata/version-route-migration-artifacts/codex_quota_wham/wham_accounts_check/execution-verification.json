@@ -16,10 +16,10 @@
   "evidence_id": "wham_accounts_check",
   "backend": "http_upstream",
   "adapter_id": "officialegress.http_upstream",
-  "transport_id": "codex-0.163.0-http-ubuntu24-native-long-lived",
-  "wire_fixture_sha256": "7b95bd2e43caa50441fa0e2fc2b2b1c5c3991968427717471f3e65eeba012089",
+  "transport_id": "codex-0.164.0-http-ubuntu24-native-long-lived",
+  "wire_fixture_sha256": "4631d049ddee42dc84d70ee77eca9876cd0ad12cc6b48e87c2585a97fbe24f88",
   "profile_digests": [
-    "3da20c7b13f93d98d2181b1de30b9e5cc4f86c1f6d5be94bc6d03cfc642618b6",
+    "26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681",
     "871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d"
   ],
   "terminal_guard_allow": true,
