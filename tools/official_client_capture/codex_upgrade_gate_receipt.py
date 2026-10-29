@@ -81,6 +81,10 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
             # 部分完成清单、收尾逐单元承接）并入之前的生成器；本次同步 target_platform_gate／unit_records／read_audit 三个验证器钉住值之前的版本。
             # 按「修改前已部署版本」规则登记，仅供该版本已生成收据的只读重放，新收据仍绑定当前生成器摘要。
             "1c007eb4357dbcc2d706fad05546677e934c001cf671e870b358f5e4cc633d97",
+            # 80bf9603：0.165 Campaign 期间部署到 ARM64 的受管版本（VC-5 准入、canonical、VC-6 的外部门禁收据由它生成），本次（0.165 收尾，
+            # 门禁续跑 G 批改 unit_records.py）同步 unit_records.py 钉住值之前的生成器；按「修改前已部署版本」规则登记，
+            # 仅供该版本已生成收据的只读重放，新收据仍绑定当前生成器摘要。
+            "80bf9603a75a8fede653d249becc8d98490ea3963faa3af42196a843d63c28f8",
         }
     ),
 }
@@ -89,7 +93,7 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
 TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "9f1461a99850907f807d70bec152e4c8f2e52403502702a40082cd1ea9d67baf",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
-    "unit_records.py": "53bf0adc72cefce9ba7b94b562f9cfc0c026909d2f98ed3f7f9a784bc1a0c031",
+    "unit_records.py": "aa01d3ea59a20a41151a26d88d7e15cf52ae46b934cbba82425b0eb458125edc",
     "read_audit.py": "863a1e90b406ee29ae03f460459fe171479779be19096a9d5e6caa98bf17be52",
     "read_audit_runtime.py": "47927d277c74290136d6204aa1c4d531b8df8a4cca6c6120210699f17ec8d13a"
 }
