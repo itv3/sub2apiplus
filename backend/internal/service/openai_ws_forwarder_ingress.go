@@ -1722,6 +1722,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					markOpenAIWSClientVisibleFailure(c, eventType, upstreamMessage)
 				}
 			}
+			// fork 钩子：invalid_encrypted_content 的 error 已写给客户端，真实上游随后不发终态也不断连，
+			// 不在此结束本轮会一直占着连接与内存预算（见 openai_ws_encrypted_recovery.go）。
+			if endErr := endOpenAIWSTurnOnInvalidEncryptedContent(lease, eventType, upstreamMessage, tokenEventCount, account.ID, turn); endErr != nil {
+				return nil, endErr
+			}
 			if isTerminalEvent {
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
@@ -2021,7 +2026,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		skipBeforeTurn = false
 		// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 		// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
-		if invalidDigests := s.openAIWSIngressRecoverySnapshot(c, frameBody, groupID, sessionHash, account); len(invalidDigests) > 0 {
+		if invalidDigests := s.openAIWSIngressRecoverySnapshot(c, frameBody, groupID, sessionHash, account, currentOriginalPayload); len(invalidDigests) > 0 {
 			strippedPayload, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
 				currentPayload, invalidDigests, "ingress_ws_invalid_encrypted_lineage_strip", account.ID, turn,
 			)

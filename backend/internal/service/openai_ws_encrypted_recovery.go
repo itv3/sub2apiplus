@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -19,22 +20,42 @@ import (
 // 这带来两个问题：一是把请求里合法的 GPT 密文也一并标坏、剥掉；二是进场清理只改“待发送帧”，出站业务历史校验
 // 仍拿客户端原帧比对，把清理判成 input was modified，转 1008 断流，客户端反复重连反复失败。
 //
-// 本文件只放 fork 自己的逻辑，对上游文件只通过三个钩子接入（各一两行）：
+// 本文件只放 fork 自己的逻辑，对上游文件只通过四个钩子接入（各一两行）：
 //  1. recordOpenAIWSRejectedEncryptedContent：上游拒绝后，按错误里的密文片段精确定位被拒的那一项，只记它；
+//     被拒项是“带非空 content 数组的推理项”时，同请求里所有同类推理项一并记（见下文“结构性扩展”）；
 //     记录挂在“账号 + 协议 + 会话”作用域键下，换号、换协议、换会话不会复用；
 //  2. openAIWSIngressRecoverySnapshot：下次请求进场时，对同一作用域键取一次摘要快照，同一份快照既交给上游
 //     剥离函数做清理，也交给出站业务历史校验（见 official_egress_ws_body.go），清理与校验不会错位；
-//  3. emitOpenAIWSRecoveryValidationFailure：恢复清理之后校验仍失败时，先给客户端一个明确的错误事件再关连接。
+//     同时登记客户端本轮原帧（只存引用，不复制），供结构性扩展判断“哪些推理项原本带 content”；
+//  3. emitOpenAIWSRecoveryValidationFailure：恢复清理之后校验仍失败时，先给客户端一个明确的错误事件再关连接；
+//  4. endOpenAIWSTurnOnInvalidEncryptedContent：上游 error 事件已写给客户端之后结束本轮并释放连接与内存预算（见下文“结束本轮”）。
+//
+// 结束本轮：真实上游对 invalid_encrypted_content 只发 error 事件，既不发 response.failed 等终态、也不断连。
+// 转发循环只认终态事件，会在 error 之后继续阻塞读上游，handler 不返回，该连接的 WS 内存预留（按大历史首帧加权）
+// 一直占着；客户端收到 error 重连时，新连接读首帧要先过同一个共享预算的准入，被拒就读不到首帧、也无法抢占旧连接，
+// 重连次数用尽后只剩 websocket closed by server before response.completed。所以 error 写出之后必须结束本轮：
+// 以“客户端自行结束”的 1000 关闭码退出（handler 的 openAIWSIngressEndedByClient 认它是正常结束，
+// 不上报账号调度失败、不触发熔断；这类输入校验失败本就与账号健康无关）。Codex 客户端对服务端 Close 帧
+// 一律按“websocket closed by server before response.completed”的流错误处理并重连，不区分关闭码。
 //
 // 恢复边界（下列情形一律不记录，客户端照常收到上游的原始错误，历史不会被静默改写）：
 //   - 被拒项是 compaction／compaction_summary：它可能是早期上下文的唯一副本，请求里没有可信的替代历史，不得静默删除；
-//   - 本次请求已经向客户端输出过文字或工具调用（见 outputCommitted）：不是纯输入校验失败，不做推断；
+//   - 本次请求已经向客户端输出过文字或工具调用（见 outputCommitted）：不是纯输入校验失败，不做推断，也不提前结束本轮；
 //   - 无法唯一定位且嫌疑范围里还有压缩项：被拒的可能正是压缩项，不做整包恢复（嫌疑范围见 decideOpenAIWSEncryptedRecovery）；
 //   - 同一作用域键在窗口内已记录 openAIWSEncryptedRecoveryMaxMarks 次：视为不可恢复，不再记录。
 //
 // 无法唯一定位、但嫌疑范围里只有推理项时，允许一次（同一作用域键窗口内仅一次）有边界的“整包类”恢复，
 // 见 decideOpenAIWSEncryptedRecovery；这是上游原有行为的收紧版：不含压缩项、限一次、挂在账号作用域下，
 // 并且片段同时吻合多项时只记吻合的那几项，不吻合的有效项不动。
+//
+// 结构性扩展（一次清完）：先用别家模型、后切 GPT 的旧会话里，失效的推理项往往不止一个，而上游一次只点名一项、
+// 客户端重连上限只有 5 次，逐项剥离会在清完之前耗尽重试。别家模型留下的推理项带非空 content 数组（OpenAI 自家格式的
+// 推理项只有 summary、没有 content），这是结构特征，不是密文外观；被唯一定位的被拒项是推理项且带非空 content 时，
+// 把同一请求里全部“带非空 content 数组的推理项”一并记为失效，一次记录、只算一次恢复计次、不占整包预算。
+// 判断一律只看结构（类型与 content 是否为非空数组），不看密文长度、前缀、结尾或模型名；压缩项永远不扩展；
+// 被拒项不带 content（例如 OpenAI 格式密文因跨账号失效）时只记它自己，行为不变。
+// 注意入站兼容层会在转发上游前删掉推理项的 content，所以“是否带 content”须看客户端原帧（见钩子 2），
+// 转发给上游的帧里已经没有 content 了。
 //
 // 日志只记摘要个数、结果与原因，不记密文、片段、认证信息或会话正文。
 
@@ -115,10 +136,20 @@ type openAIWSEncryptedCandidate struct {
 	// kind 是 reasoning 或 compaction（compaction／compaction_summary 都归 compaction；同一摘要出现在两种项里时按 compaction 保守处理）。
 	kind    string
 	matched bool
+	// hasContent 表示该项带非空 content 数组（别家模型留下的可见推理块；OpenAI 自家格式的推理项没有）。
+	// 只是结构特征，供“结构性扩展”使用；同一摘要出现在多个项里时，任一项带 content 即为真。
+	hasContent bool
+}
+
+// openAIWSItemHasNonEmptyContentArray 判断一个历史项是否带非空 content 数组（与入站兼容层清理 content 的判据一致）。
+func openAIWSItemHasNonEmptyContentArray(item gjson.Result) bool {
+	content := item.Get("content")
+	return content.IsArray() && len(content.Array()) > 0
 }
 
 // collectOpenAIWSEncryptedCandidates 扫描 input，收集 lineage 覆盖类型（reasoning、compaction、compaction_summary）里
-// 带非空字符串密文的项，按摘要去重；同时标出哪些与错误片段吻合。payload 须遵守 replay 所有权不变式（零拷贝视图只读解析）。
+// 带非空字符串密文的项，按摘要去重；同时标出哪些与错误片段吻合、哪些推理项带非空 content 数组。
+// payload 须遵守 replay 所有权不变式（零拷贝视图只读解析）。
 func collectOpenAIWSEncryptedCandidates(payload []byte, hint openAIWSCiphertextHint) []openAIWSEncryptedCandidate {
 	if len(payload) == 0 {
 		return nil
@@ -145,15 +176,17 @@ func collectOpenAIWSEncryptedCandidates(payload []byte, hint openAIWSCiphertextH
 		}
 		digest := openAIEncryptedContentDigest(value)
 		matched := hint.matches(value)
+		hasContent := kind == openAIWSCandidateReasoning && openAIWSItemHasNonEmptyContentArray(item)
 		if at, seen := indexByDigest[digest]; seen {
 			if kind == openAIWSCandidateCompaction {
 				candidates[at].kind = openAIWSCandidateCompaction
 			}
 			candidates[at].matched = candidates[at].matched || matched
+			candidates[at].hasContent = candidates[at].hasContent || hasContent
 			return
 		}
 		indexByDigest[digest] = len(candidates)
-		candidates = append(candidates, openAIWSEncryptedCandidate{digest: digest, kind: kind, matched: matched})
+		candidates = append(candidates, openAIWSEncryptedCandidate{digest: digest, kind: kind, matched: matched, hasContent: hasContent})
 	}
 	switch {
 	case input.IsArray():
@@ -167,14 +200,58 @@ func collectOpenAIWSEncryptedCandidates(payload []byte, hint openAIWSCiphertextH
 	return candidates
 }
 
+// markOpenAIWSClientContentBearingCandidates 按客户端原帧补记“带非空 content 数组”的推理候选。
+//
+// 入站兼容层会在转发上游之前删掉推理项的 content，所以发往上游的帧（collectOpenAIWSEncryptedCandidates 的输入）
+// 里已经没有 content 了，必须回看客户端原帧。只按摘要对号入座：原帧里带非空 content 的推理项，
+// 其摘要若在候选里就置 hasContent；候选里没有的摘要不新增（候选范围以实际发往上游的帧为准）。
+// 只对推理项、只对确实带 content 的项计算摘要，常态下（没有跨模型历史）一个都不会算。original 只读解析，不保留。
+func markOpenAIWSClientContentBearingCandidates(candidates []openAIWSEncryptedCandidate, original []byte) {
+	if len(candidates) == 0 || len(original) == 0 {
+		return
+	}
+	input := gjson.Get(openAIWSPayloadStringView(original), "input")
+	if !input.Exists() {
+		return
+	}
+	indexByDigest := make(map[string]int, len(candidates))
+	for index, candidate := range candidates {
+		indexByDigest[candidate.digest] = index
+	}
+	mark := func(item gjson.Result) {
+		if strings.TrimSpace(item.Get("type").String()) != "reasoning" || !openAIWSItemHasNonEmptyContentArray(item) {
+			return
+		}
+		encrypted := item.Get("encrypted_content")
+		if encrypted.Type != gjson.String || encrypted.String() == "" {
+			return
+		}
+		if at, ok := indexByDigest[openAIEncryptedContentDigest(encrypted.String())]; ok {
+			candidates[at].hasContent = true
+		}
+	}
+	switch {
+	case input.IsArray():
+		input.ForEach(func(_, item gjson.Result) bool {
+			mark(item)
+			return true
+		})
+	case input.IsObject():
+		mark(input)
+	}
+}
+
 // 恢复决策的动作与结果取值（也是日志里的 located / result 字段）。
 //
-// precise 是唯一定位到一项；broad 是“没能唯一定位而一次记录多项”的整包类动作（候选全部推理项，或片段同时吻合的那几项），
+// precise 是唯一定位到一项；structural 是唯一定位到的推理项带 content，扩展为同请求里全部带 content 的推理项，
+// 只算一次恢复计次、不占整包预算；broad 是“没能唯一定位而一次记录多项”的整包类动作（候选全部推理项，或片段同时吻合的那几项），
 // 受“每个窗口一次”的整包预算约束；none 是不记录。进场清理与出站校验只消费摘要集合，不看这里的动作。
 const (
 	openAIWSRecoveryActionPrecise = "precise"
-	openAIWSRecoveryActionBroad   = "broad"
-	openAIWSRecoveryActionNone    = "none"
+	// structural 是唯一定位到一项带 content 的推理项后，按结构特征扩展到同请求里全部带 content 的推理项（一次记完）。
+	openAIWSRecoveryActionStructural = "structural"
+	openAIWSRecoveryActionBroad      = "broad"
+	openAIWSRecoveryActionNone       = "none"
 
 	openAIWSRecoveryResultRecorded      = "recorded"
 	openAIWSRecoveryResultUnrecoverable = "unrecoverable"
@@ -195,6 +272,9 @@ type openAIWSEncryptedRecoveryDecision struct {
 //  2. 没有任何候选：无事可记；
 //  3. 候选只有一个（按摘要去重）：它就是被拒项；多个时用错误片段唯一定位，片段必须恰好吻合一个候选；
 //  4. 定位到的是压缩项：不记录（不得静默删除可能唯一的早期上下文）；
+//     定位到的是推理项：若它带非空 content 数组（别家模型的推理项），按结构性扩展把同请求里全部
+//     “带非空 content 数组的推理项”一并记为失效（structural），因为这类项同属一个来源、会被上游逐个点名，
+//     而客户端重连次数有限；不带 content 则只记它自己（precise）。扩展只看结构，不看密文外观，压缩项永不入列；
 //  5. 无法唯一定位时，先划定“嫌疑范围”，再看范围里有没有压缩项：
 //     a. 没有片段（no_fragment）或片段一个也对不上（fragment_no_match）：嫌疑范围是请求里的全部候选。
 //     范围里没有压缩项，才允许一次有边界的整包推理项恢复（只含推理项）；有压缩项则不做；
@@ -252,6 +332,19 @@ func decideOpenAIWSEncryptedRecovery(candidates []openAIWSEncryptedCandidate, hi
 		}
 		decision.action = openAIWSRecoveryActionPrecise
 		decision.digests = []string{candidates[located].digest}
+		if candidates[located].hasContent {
+			// 结构性扩展：同请求里全部“带非空 content 数组的推理项”（含被定位的这一项）。压缩项的 kind 不是 reasoning，不会入列。
+			expanded := make([]string, 0, len(candidates))
+			for _, candidate := range candidates {
+				if candidate.kind == openAIWSCandidateReasoning && candidate.hasContent {
+					expanded = append(expanded, candidate.digest)
+				}
+			}
+			if len(expanded) > 1 {
+				decision.action = openAIWSRecoveryActionStructural
+				decision.digests = expanded
+			}
+		}
 		decision.result, decision.reason = openAIWSRecoveryResultRecorded, reason
 		return decision
 	}
@@ -321,6 +414,7 @@ func (s *OpenAIGatewayService) recordOpenAIWSRejectedEncryptedContent(
 ) {
 	hint := parseOpenAIWSRejectedCiphertextHint(rejectMessage)
 	candidates := collectOpenAIWSEncryptedCandidates(payload, hint)
+	markOpenAIWSClientContentBearingCandidates(candidates, openAIWSRecoveryClientFrame(c))
 	decision := decideOpenAIWSEncryptedRecovery(candidates, hint, outputCommitted)
 
 	attempts := 0
@@ -385,16 +479,36 @@ func (s *OpenAIGatewayService) recordOpenAIWSRejectedEncryptedContent(
 	}
 }
 
+// openAIWSRecoveryClientFrameKey 是 gin.Context 里登记“客户端本轮原帧”的键。
+const openAIWSRecoveryClientFrameKey = "openai_ws_recovery_client_frame"
+
+// openAIWSRecoveryClientFrame 取本轮登记的客户端原帧；没有登记（或 c 为空）返回 nil。
+func openAIWSRecoveryClientFrame(c *gin.Context) []byte {
+	if c == nil {
+		return nil
+	}
+	value, _ := c.Get(openAIWSRecoveryClientFrameKey)
+	frame, _ := value.([]byte)
+	return frame
+}
+
 // openAIWSIngressRecoverySnapshot 是上游文件里“进场剥离失效密文”处的钩子：对本会话的恢复作用域键取一次摘要快照。
 // 返回的快照交给上游的剥离函数做清理，同时写入 frameBody，供随后的出站业务历史校验使用同一份——清理与校验之间
 // 缓存即使变化，两者看到的也是同一个集合。没有记录（常态）或作用域缺失时返回 nil，并清空 frameBody 里的旧快照。
+//
+// clientOriginal 是客户端本轮原帧：只登记引用（不复制、不解析），供上游 error 事件到来时判断哪些推理项原本带 content。
+// 转发循环本来就在整轮持有这份原帧，登记引用不延长它的生命周期。
 func (s *OpenAIGatewayService) openAIWSIngressRecoverySnapshot(
 	c *gin.Context,
 	frameBody *officialWSFrameBody,
 	groupID int64,
 	sessionHash string,
 	account *Account,
+	clientOriginal []byte,
 ) map[string]struct{} {
+	if c != nil {
+		c.Set(openAIWSRecoveryClientFrameKey, clientOriginal)
+	}
 	var digests map[string]struct{}
 	if scopeKey := openAIWSEncryptedRecoveryScopeKey(sessionHash, account); scopeKey != "" {
 		digests = s.sessionInvalidEncryptedContentDigests(groupID, scopeKey)
@@ -409,6 +523,46 @@ func (s *OpenAIGatewayService) openAIWSIngressRecoverySnapshot(
 		)
 	}
 	return digests
+}
+
+// openAIWSEndTurnCloseReason 是结束本轮时给客户端 Close 帧的原因文本（客户端据此重连并重发历史）。
+const openAIWSEndTurnCloseReason = "encrypted content rejected by upstream, please reconnect"
+
+// endOpenAIWSTurnOnInvalidEncryptedContent 是上游文件里“上游 error 事件已写给客户端之后”的钩子：
+// 对 invalid_encrypted_content 的 error 事件结束本轮，返回一个关闭码为 1000 的客户端关闭错误，让 handler 立即返回并释放预算。
+//
+// 为什么必须结束：真实上游只发这个 error 事件，既不发终态事件也不断连；转发循环只认终态，会一直阻塞读上游，
+// 连接与它占着的 WS 内存预留都不释放，客户端重连时新连接读首帧被共享预算拒绝（见文件头“结束本轮”）。
+// error 事件本身已由调用方原样写给客户端（事件内容与顺序不变），本函数只负责收尾。
+//
+// 为什么用 1000 而不是 1008／1011／1013：handler 把“1000 的客户端关闭错误”认作正常结束（openAIWSIngressEndedByClient），
+// 不会走 ReportOpenAIAccountScheduleResult(false) 与 API Key 健康熔断；其余关闭码都会被记成账号故障。
+// 这类输入校验失败与账号健康无关，不能触发账号冷却、不可调度、失败计数或限流信号。
+// 返回的错误不是 openAIWSIngressTurnError，所以不会被当作可换连接重试的读写错误，也不会补发 upstream_websocket_error 事件。
+//
+// 以下情形返回 nil，保持原有行为：不是 error 事件、不是 invalid_encrypted_content、本轮已有 token 输出
+// （已经向客户端输出过内容，不是纯输入校验失败，由上游自己的终态事件收尾）。
+func endOpenAIWSTurnOnInvalidEncryptedContent(
+	lease interface{ MarkBroken() },
+	eventType string,
+	upstreamMessage []byte,
+	tokenEventCount int,
+	accountID int64,
+	turn int,
+) error {
+	if eventType != "error" || tokenEventCount > 0 {
+		return nil
+	}
+	code, errType, message := parseOpenAIWSErrorEventFields(upstreamMessage)
+	if reason, _ := classifyOpenAIWSErrorEventFromRaw(code, errType, message); reason != openAIWSFallbackReasonInvalidEncryptedContent {
+		return nil
+	}
+	// 上游会话状态不可信，连接不得回池复用。
+	if lease != nil {
+		lease.MarkBroken()
+	}
+	logOpenAIWSModeInfo("ingress_ws_encrypted_recovery stage=turn_end account_id=%d turn=%d close_status=%d", accountID, turn, int(coderws.StatusNormalClosure))
+	return NewOpenAIWSClientCloseError(coderws.StatusNormalClosure, openAIWSEndTurnCloseReason, nil)
 }
 
 // setInvalidEncryptedRecovery 保存本轮进场清理取的失效摘要快照（只读，调用方不得再修改）。nil 接收者安全。
