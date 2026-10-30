@@ -316,6 +316,23 @@ class BuildTableTests(unittest.TestCase):
         self.assertEqual([names[i] for i in row["listed"]], [TESTS], "只有测试自己列的目录；导入 tools 包时的 FileFinder 列目录不算")
 
 
+    def test_the_real_tracer_does_not_change_the_interpreter_environment_of_the_traced_test(self) -> None:
+        """追踪钩子放进 PYTHONPATH 的 sitecustomize 会遮住解释器自带的那份（Homebrew 的会设置 sys.executable），钩子末尾必须把它链式补回来：
+        被追踪的测试进程看到的 sys.executable，要与不带钩子、门禁同样方式（裸名 python3）起的解释器一致。"""
+
+        files = {**WORLD, f"{TESTS}/test_traced_env.py": ("import os\nimport subprocess\nimport sys\nimport unittest\n\n\nclass Traced(unittest.TestCase):\n"
+                                                         "    def test_executable_matches_a_plain_interpreter(self) -> None:\n"
+                                                         "        clean = {k: v for k, v in os.environ.items() if k not in {'PYTHONPATH', 'TRACE_OUT', 'TRACE_ROOT'}}\n"
+                                                         "        plain = subprocess.run(['python3', '-c', 'import sys; print(sys.executable)'], env=clean, capture_output=True, text=True)\n"
+                                                         "        self.assertEqual(sys.executable, plain.stdout.strip())\n")}
+        world = World(self, files, CALIBRATION)
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(out, ignore_errors=True))
+        results = dt.run(world.root, out, ["test_traced_env"], 1)
+        self.assertEqual([(name, code) for name, code, _seconds in results], [("test_traced_env", 0)],
+                         "钩子改变了被追踪进程的 sys.executable：追踪会让依赖解释器路径的用例假红、整个模块进 unobserved")
+
+
 class MutationTests(unittest.TestCase):
     """变异用例：依赖渠道被改动而依赖它的模块没被选中＝漏选，这里每个用例都让一种渠道变异，断言被抓住。"""
 

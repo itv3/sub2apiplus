@@ -96,6 +96,21 @@ if _OUT and _ROOT:
             pass
 
     atexit.register(_dump)
+
+# 链式加载被本文件遮住的下一份 sitecustomize：Homebrew 的 Python 在自己的 sitecustomize 里设置 sys.executable，
+# 本文件放进 PYTHONPATH 后会把它遮住，被追踪进程的 sys.executable 就与门禁里的不一样（test_arm64_capture_driver 有一条用例比对两者）。
+# 追踪不能改变被测进程的解释器环境，所以把它补回来；找不到下一份或加载失败都忽略。
+try:
+    _here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    _saved = list(sys.path)
+    sys.path[:] = [item for item in sys.path if os.path.realpath(item or os.getcwd()) != _here]
+    sys.modules.pop("sitecustomize", None)
+    try:
+        import sitecustomize
+    finally:
+        sys.path[:] = _saved
+except Exception:
+    pass
 '''
 
 
@@ -107,9 +122,10 @@ def trace_module(repo: Path, out: Path, site: Path, module: str) -> tuple[str, i
     env = dict(os.environ, TRACE_OUT=str(folder), TRACE_ROOT=str(repo), PYTHONPATH=str(site) + os.pathsep + str(repo), PYTHONDONTWRITEBYTECODE="1")
     started = time.time()
     try:
-        # 子进程用 PATH 里的 python3（与门禁入口 ``python3 -B -m unittest`` 同一个解释器路径），不用 sys.executable：框架版 Python 的 sys.executable 是
-        # 真实路径而不是符号链接路径，test_arm64_capture_driver 里有一条用例比对的正是后者，用 sys.executable 追踪会让它假红、整个模块进 unobserved。
-        completed = subprocess.run([shutil.which("python3") or sys.executable, "-B", "-m", "unittest", f"{TESTS_PACKAGE}.{module}"], cwd=repo, env=env, capture_output=True,
+        # 子进程的 argv[0] 写裸名 ``python3``，与门禁入口 ``python3 -B -m unittest`` 同一种启动方式（不用 sys.executable：它在不同安装方式下可能是真实路径或符号链接路径）；
+        # PATH 里找不到 python3 时才退回 sys.executable。被追踪进程的 sys.executable 与门禁一致，靠上面 SITECUSTOMIZE 末尾的链式加载保证。
+        interpreter = "python3" if shutil.which("python3", path=env.get("PATH")) else sys.executable
+        completed = subprocess.run([interpreter, "-B", "-m", "unittest", f"{TESTS_PACKAGE}.{module}"], cwd=repo, env=env, capture_output=True,
                                    text=True, timeout=MODULE_TIMEOUT_SECONDS, check=False)
         code, tail = completed.returncode, (completed.stderr or "")[-400:]
     except subprocess.TimeoutExpired:
