@@ -455,6 +455,9 @@ COMMAND_WORLD = {
 CONTROL_UNIT = "egress-spec:test-official-client-control"
 
 
+EGRESS_GO_UNIT_IDS = sorted(f"egress-spec:{target}" for target in uo.EGRESS_GO_UNITS)
+
+
 def decided(selection: dict[str, Any], decision: str) -> list[str]:
     """门禁项一级的决定（scope=gate）；单元级的决定（出站控制工具单测）单独用 ``control_decision`` 看。"""
 
@@ -472,7 +475,8 @@ class CommandSelectionTests(unittest.TestCase):
     def test_nothing_touching_backend_or_frontend_skips_all_nine_gates_and_says_why(self) -> None:
         selection = self.pick(COMMAND_WORLD, (f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
         self.assertEqual(decided(selection, "skip"), ALL_COMMAND_GATES)
-        self.assertEqual(selection["commands"]["skipped_gates"], sorted([*ALL_COMMAND_GATES, CONTROL_UNIT]), "九个门禁项加出站控制单测这个单元级的决定")
+        self.assertEqual(selection["commands"]["skipped_gates"], sorted([*ALL_COMMAND_GATES, CONTROL_UNIT, *EGRESS_GO_UNIT_IDS]),
+                         "九个门禁项，加出站控制单测与 egress-spec 里的 Go 子检查这些单元级的决定")
         self.assertEqual(control_decision(selection), "skip")
         self.assertEqual(selection["commands"]["model"], uo.COMMAND_MODEL)
         self.assertTrue(uo.seal_ok(selection), "commands 在自摘要之内：被改动就验不过")
@@ -566,6 +570,23 @@ class CommandSelectionTests(unittest.TestCase):
                 selection = self.pick(COMMAND_WORLD, (change, text if not change.endswith((".md", "Makefile")) else "changed\n"))
                 self.assertEqual(control_decision(selection), expected)
 
+    def test_the_go_egress_spec_checks_follow_the_backend_inputs_plus_the_makefile(self) -> None:
+        for change, expected in (("backend/main.go", "run"), ("backend/go.mod", "run"), ("Makefile", "run"), ("docs/egress/notes/n.txt", "run"),
+                                 (f"{CAPTURE}/loose_data.json", "skip"), ("tools/ci/helper.py", "skip"), ("frontend/src/app.ts", "skip"),
+                                 ("docs/other.md", "skip")):
+            with self.subTest(change=change):
+                files = {**COMMAND_WORLD, "docs/egress/notes/n.txt": "x\n"}
+                text = "x = 2\n" if not change.endswith(("go", "mod", "txt", "md", "Makefile")) else "changed\n"
+                selection = self.pick(files, (change, '{"v": 2}\n' if change.endswith(".json") else text))
+                for unit in EGRESS_GO_UNIT_IDS:
+                    self.assertEqual(selection["commands"]["gates"][unit]["decision"], expected, unit)
+
+    def test_a_frozen_or_backend_named_tool_file_runs_the_go_egress_spec_checks_too(self) -> None:
+        files = {**COMMAND_WORLD, "backend/internal/svc/frozen_test.go": 'package svc\n\nvar f = "tools/official_client_capture/far_dep.py"\n'}
+        selection = self.pick(files, (f"{CAPTURE}/far_dep.py", "FAR = 8\n"))
+        self.assertEqual({selection["commands"]["gates"][unit]["decision"] for unit in EGRESS_GO_UNIT_IDS}, {"run"})
+        self.assertEqual(control_decision(selection), "skip")
+
     def test_deleting_a_tool_file_the_backend_names_runs_the_go_gates(self) -> None:
         files = {**COMMAND_WORLD, "backend/internal/svc/frozen_test.go": 'package svc\n\nvar f = "tools/official_client_capture/far_dep.py"\n'}
         selection = self.pick(files, (f"{CAPTURE}/far_dep.py", None))
@@ -581,7 +602,8 @@ class CommandGateManifestTests(unittest.TestCase):
 
     def manifest(self) -> dict[str, Any]:
         gates = [("backend-unit", ["backend:unit"]), ("lint-unit", ["backend:lint-unit"]), ("frontend-lint", ["frontend:lint"]),
-                 ("test-official-client-control", [CONTROL_UNIT]), ("check-egress-spec", ["egress-spec:x", CONTROL_UNIT]),
+                 ("test-official-client-control", [CONTROL_UNIT]),
+                 ("check-egress-spec", ["egress-spec:x", CONTROL_UNIT, "egress-spec:egress-spec-go-test", "egress-spec:egress-spec-go-vet"]),
                  ("deploy-scripts", ["deploy:y"])]
         unit_ids = [unit_id for _gate, members in gates for unit_id in members]
         return {"schema_version": "unit-executor-gates/v1", "profile": "full-gates", "test_groups": [],
@@ -609,10 +631,11 @@ class CommandGateManifestTests(unittest.TestCase):
     def test_skipped_gates_leave_the_manifest_with_their_units_and_the_rest_stays_closed(self) -> None:
         manifest, selection = self.apply((f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
         self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["check-egress-spec", "deploy-scripts"])
-        self.assertEqual([gate["units"] for gate in manifest["gates"]], [["egress-spec:x"], ["deploy:y"]], "共用的出站控制单测从 check-egress-spec 里也拿掉了")
+        self.assertEqual([gate["units"] for gate in manifest["gates"]], [["egress-spec:x"], ["deploy:y"]],
+                         "共用的出站控制单测与 Go 子检查从 check-egress-spec 里也拿掉了，Python 台账子检查留着")
         self.assertEqual(sorted(unit["unit_id"] for unit in manifest["units"]), ["deploy:y", "egress-spec:x"])
         self.assertEqual(manifest["command_gates_skipped"], ["backend-unit", "frontend-lint", "lint-unit", "test-official-client-control"])
-        self.assertEqual(manifest["command_units_skipped"], [CONTROL_UNIT])
+        self.assertEqual(manifest["command_units_skipped"], sorted([CONTROL_UNIT, "egress-spec:egress-spec-go-test", "egress-spec:egress-spec-go-vet"]))
         self.assertTrue(uo.seal_ok(selection))
         self.assertEqual(self.loads(manifest), ["check-egress-spec", "deploy-scripts"], "执行器读得进，没有游离单元")
 
@@ -620,7 +643,7 @@ class CommandGateManifestTests(unittest.TestCase):
         manifest, _selection = self.apply(("tools/official_client_control/receipts.py", "READ = 'docs/legal/terms.md'\nX = 1\n"))
         self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["test-official-client-control", "check-egress-spec", "deploy-scripts"])
         self.assertEqual(manifest["gates"][1]["units"], ["egress-spec:x", CONTROL_UNIT])
-        self.assertEqual(manifest["command_units_skipped"], [])
+        self.assertEqual(manifest["command_units_skipped"], ["egress-spec:egress-spec-go-test", "egress-spec:egress-spec-go-vet"], "控制树没动但 Go 子检查与它不相干")
         self.assertEqual(self.loads(manifest), ["test-official-client-control", "check-egress-spec", "deploy-scripts"])
 
     def test_a_backend_change_keeps_the_go_and_lint_gates_and_drops_the_frontend_and_the_control_unit_test(self) -> None:
@@ -703,6 +726,33 @@ class RealTreeGuardTests(unittest.TestCase):
         self.assertLess(core["modules"], 387)
         for module in ("test_candidate_gateway_ws", "test_candidate_core_capture"):
             self.assertIn(module, tool_leaf["pulled"], "直接测这个脚本的模块必须在")
+
+    def test_every_go_egress_spec_check_recipe_is_a_single_backend_go_command_that_reads_only_backend_and_the_ledger(self) -> None:
+        """单元级筛选把 EGRESS_GO_UNITS 当"输入同后端 go test＋Makefile"：逐条核对 Makefile 里它们的配方——整条是 ``cd backend && go|gofmt …``，
+        不含 python3／git／docker／curl，用到的 ``$(CURDIR)/…`` 路径都在 docs/egress/ 或 backend/ 之下。配方一变（加了别的命令、读了别的路径）这里先红，
+        得重新审核分类，而不是悄悄把读别处的检查也跳过。同时核对清单里每个目标确实在 make print-egress-spec-checks 里。"""
+
+        import re
+        import subprocess
+
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        listed = subprocess.run(["make", "-s", "--no-print-directory", "print-egress-spec-checks"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
+        for target in uo.EGRESS_GO_UNITS:
+            with self.subTest(target=target):
+                self.assertIn(target, listed, "清单里的目标必须是现行的 egress-spec 子检查")
+                match = re.search(rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n)+)", makefile, re.M)
+                self.assertIsNotNone(match, f"Makefile 里找不到 {target} 的配方")
+                recipe = re.sub(r"\\\n\t?", " ", match.group(1)).strip()
+                self.assertTrue(recipe.startswith("@cd backend && "), recipe[:120])
+                self.assertFalse(re.search(r"python3 (?!-c )", recipe), f"{target} 的配方跑了 python3 脚本（只许 python3 -c 内联解析自己的输出）：输入不再只是后端与台账")
+                for banned in ("git ", "docker", "curl", "wget", "npm ", "pnpm", "../tools/", " --root .."):
+                    self.assertNotIn(banned, recipe, f"{target} 的配方含 {banned!r}：输入不再只是后端与台账")
+                for variable in re.findall(r"\$\(([A-Z0-9_]+)\)", recipe):
+                    definition = re.search(rf"^{variable}\s*:?=\s*(.*)$", makefile, re.M)
+                    if definition is None:
+                        continue
+                    for path in re.findall(r"\$\(CURDIR\)/([^,\s)]+)", definition.group(1)):
+                        self.assertTrue(path.startswith(("docs/egress/", "backend/")), f"{target} 的变量 {variable} 引用了 {path}")
 
     def test_the_reviewed_files_exist_and_each_has_a_written_reason(self) -> None:
         reviewed = self.data["dependency"]["reviewed_files"]

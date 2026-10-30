@@ -50,7 +50,7 @@ Python 解析失败、闭包里有解析不了的动态加载时全部照选；�
 
 命令门禁项（OPT-02 第二轮）：依赖精度下，后端 go test／lint 与前端三项、出站控制单测这些命令单元占去 5 千多核·秒（4 核约 25 分钟），模块筛得再窄也装不进 15 分钟。
 选择器（``CommandInputs``／``command_decisions``）按真实输入路径为它们各登记一条决定（run／skip，写明命中的改动与原因，进 selection 的自摘要），
-入口门禁据此把跳过的门禁项连同命令单元从清单里拿掉；``check-egress-spec`` 的其余子检查、``deploy-scripts``、``capture:prerequisites``、pre-A3 场景一律照跑。
+入口门禁据此把跳过的门禁项连同命令单元从清单里拿掉；``check-egress-spec`` 里配方整条是 ``cd backend && go …`` 的那批 Go 子检查按后端的输入筛选（再加 Makefile），其余 Python 台账子检查、``deploy-scripts``、``capture:prerequisites``、pre-A3 场景一律照跑。
 输入取向保守：后端 go test 读 ``backend/``、``docs/egress/``、冻结台账登记的路径（取 ``tools.upstream_merge.freeze`` 的权威算法，算不出来就失败关闭）和后端源码里提到的
 仓库路径；lint 读 ``backend/``；前端读 ``frontend/``、``Makefile`` 和前端源码里提到的路径；改动路径不认识时全部照跑。
 
@@ -1264,12 +1264,23 @@ COMMAND_GATE_KINDS = {
 }
 # 单元级筛选：属于多个门禁项的命令单元（check-egress-spec 的子检查同时是它自己的门禁项）按单元 ID 判定，跳过时从所有引用它的门禁项里一起拿掉。
 # test-official-client-control 是 tools/official_client_control 的单元测试，两个受管根互不导入（受管根自包含），输入就是这棵树加它提到的文件。
-COMMAND_UNIT_KINDS = {"egress-spec:test-official-client-control": "control"}
+# 另有 egress-spec 里配方整条都是 ``cd backend && go …`` 的那批子检查（种类 egress-go）：输入与后端 go test 相同再加 Makefile（配方在 Makefile 里）。
+# 其余 egress-spec 子检查是 Python 台账检查（读冻结工作区、台账、全仓库），输入说不窄，照跑；egress-spec-runtime-catalog 虽以 cd backend 开头，配方里还跑
+# tools/check_runtime_catalog_projection.py 并带 --root ..，也照跑。清单与 Makefile 配方由测试逐条核对（只许 python3 -c 内联解析自己的输出），配方一变测试先红。
+EGRESS_GO_UNITS = (
+    "egress-spec-go-test", "egress-spec-go-build", "egress-spec-go-vet", "egress-spec-gofmt", "egress-spec-service-guard",
+    "egress-spec-repository-guard", "egress-spec-httpclient-guard", "egress-spec-egressscan-self-test", "egress-scanner-check",
+    "egress-spec-wire-diff", "egress-spec-profile-snapshot", "egress-spec-profile-enums",
+    "egress-spec-release-graph", "egress-spec-release-bindings", "egress-spec-sink-stats",
+)
+COMMAND_UNIT_KINDS = {"egress-spec:test-official-client-control": "control",
+                      **{f"egress-spec:{target}": "egress-go" for target in EGRESS_GO_UNITS}}
 COMMAND_MODEL = "command-inputs/v1"
 # 种类 → 一定算输入的路径前缀／文件（再加下面扫描出来的 tools/docs 等仓库内引用）。go 门禁项读冻结台账目录（docs/egress/）整个——冻结类 Go 测试把台账登记的
 # 摘要与仓库文件当前摘要比对；lint 只读后端源码与 backend/.golangci.yml（都在 backend/ 里）；前端的关键用例经 make 目标跑，Makefile 算输入。
-COMMAND_PREFIXES = {"go": ("backend/", "docs/egress/"), "lint": ("backend/",), "frontend": ("frontend/",), "control": ("tools/official_client_control/",)}
-COMMAND_FILES = {"go": (), "lint": (), "frontend": ("Makefile",), "control": ("Makefile",)}
+COMMAND_PREFIXES = {"go": ("backend/", "docs/egress/"), "lint": ("backend/",), "frontend": ("frontend/",), "control": ("tools/official_client_control/",),
+                    "egress-go": ("backend/", "docs/egress/")}
+COMMAND_FILES = {"go": (), "lint": (), "frontend": ("Makefile",), "control": ("Makefile",), "egress-go": ("Makefile",)}
 # 扫描谁提到的仓库路径：种类 → （根目录前缀, 文件后缀）。
 _COMMAND_SCAN = {"go": (("backend/",), (".go", ".json", ".yaml", ".yml", ".sh", ".txt")),
                  "frontend": (("frontend/",), (".ts", ".js", ".mjs", ".cjs", ".vue", ".json", ".md", ".html", ".css")),
@@ -1310,7 +1321,7 @@ class CommandInputs:
     def tokens(self, kind: str) -> set[str]:
         """后端（go）或前端（frontend）源码里提到的"像文件名或路径"的片段。"""
 
-        scan = "go" if kind in ("go", "lint") else kind
+        scan = "go" if kind in ("go", "lint", "egress-go") else kind
         if scan not in self._tokens:
             roots, suffixes = _COMMAND_SCAN[scan]
             out: set[str] = set()
@@ -1387,15 +1398,15 @@ class CommandInputs:
                 return f"改动落在 {prefix} 下"
         if path in COMMAND_FILES[kind]:
             return f"改动的 {path} 是这类命令的输入文件"
-        if kind == "go":
+        if kind in ("go", "egress-go"):
             frozen = self.frozen()
             if frozen is None:
                 return f"{self._frozen_error}，对后端测试失败关闭"
             if path in frozen:
                 return "改动的路径在冻结台账里登记（冻结类 Go 测试比对它的当前摘要）"
-        if kind in ("go", "frontend", "control"):
+        if kind in ("go", "egress-go", "frontend", "control"):
             tokens = self.tokens(kind)
-            who = {"go": "后端", "frontend": "前端", "control": "出站控制工具"}[kind]
+            who = {"go": "后端", "egress-go": "后端", "frontend": "前端", "control": "出站控制工具"}[kind]
             for suffix in self._suffixes(path):
                 if suffix in tokens:
                     return f"{who}源码里提到了 {suffix}"
