@@ -747,3 +747,76 @@ func TestOpenAIWSInvalidEncryptedContentPlainSessionUnaffected(t *testing.T) {
 	require.True(t, frames[0].has(recoveryCipher("B")))
 	require.Empty(t, h.recordedDigests(h.gate.account.ID))
 }
+
+// 12) 片段同时吻合多项（历史里 3 个推理候选，错误片段吻合其中 2 个）：只记吻合的 2 个；重连重发后这 2 项的密文被清，
+// 未吻合的有效推理项 B 与不吻合的加密压缩项 C 原样发往上游，进场清理与出站校验用同一份快照，不 1008、不伪造 completed。
+func TestOpenAIWSInvalidEncryptedContentAmbiguousFragmentOnlyRecoversMatchedItems(t *testing.T) {
+	for _, profile := range reasoningReplayProfiles() {
+		t.Run(profile.name, func(t *testing.T) {
+			mode := officialClientProfileModeActive
+			profile.apply(t, mode)
+			h := newRecoveryWireHarness(t, mode)
+			bad, twin := recoveryCipher("A"), recoverySiblingCipher("A")
+			h.rejectCipher(bad, recoveryHintMessage(bad))
+			// 历史：A（被拒）、B（有效）、A2（与 A 首尾相同的另一条推理密文，同样吻合片段）、C（有效的加密压缩项，不吻合）。
+			frame := recoveryFrame(t, "pck-ambiguous", recoveryColdHistory(
+				recoveryRaw(recoveryReasoningItemWithCipher("A2", twin)),
+				recoveryRaw(recoveryCompactionItem("C")),
+			)...)
+
+			first := h.start(t, h.gate.account, recoveryHeader(), frame)
+			turn := recoveryReadTurn(t, first)
+			require.NotEmpty(t, turn.errorEvent, "客户端收到上游的明确错误事件")
+			require.Empty(t, turn.completedID)
+			require.Equal(t, coderws.StatusCode(0), turn.closeStatus)
+			first.close(t)
+			require.Equal(t, recoveryDigests(bad, twin), h.recordedDigests(h.gate.account.ID), "只记片段吻合的两项，有效项 B 与压缩项 C 不被标坏")
+
+			second := h.start(t, h.gate.account, recoveryHeader(), frame)
+			retry := recoveryReadTurn(t, second)
+			require.Empty(t, retry.errorEvent, "重连后不再被拒")
+			require.NotEmpty(t, retry.completedID, "校验按同一份快照放行：%v closeStatus=%d", retry.eventTypes, retry.closeStatus)
+			require.Equal(t, coderws.StatusCode(0), retry.closeStatus, "没有 1008")
+			second.close(t)
+
+			frames := h.businessFrames()
+			require.GreaterOrEqual(t, len(frames), 2)
+			require.True(t, frames[0].has(bad) && frames[0].has(twin), "首次发往上游的帧原样带着两条吻合的密文")
+			last := frames[len(frames)-1]
+			recoveryRequireRecoveredFrame(t, last) // A 的密文已清、B 的密文原样、中文正文与工具调用原样
+			require.False(t, last.has(twin), "吻合的另一项 A2 的密文也已清理")
+			require.Contains(t, last.text(), "摘要-A2", "A2 只清密文，推理骨架保留")
+			require.True(t, last.has(recoveryCipher("C")), "不吻合的加密压缩项原样保留")
+			require.Contains(t, last.text(), "compaction")
+		})
+	}
+}
+
+// 13) 吻合的几项里有压缩项：不可恢复，不记录；重发时两条吻合的密文（含压缩项）原样发往上游，客户端每次都收到明确错误，从不 1008、从不 completed。
+func TestOpenAIWSInvalidEncryptedContentAmbiguousFragmentWithMatchedCompactionIsNeverRecovered(t *testing.T) {
+	mode := officialClientProfileModeActive
+	withoutTargetProfileForWire(t, mode)
+	h := newRecoveryWireHarness(t, mode)
+	bad, twin := recoveryCipher("A"), recoverySiblingCipher("A")
+	h.rejectCipher(bad, recoveryHintMessage(bad))
+	frame := recoveryFrame(t, "pck-ambiguous-cmp", recoveryColdHistory(
+		recoveryRaw(recoveryCompactionItemWithCipher("A2", twin)),
+	)...)
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		ws := h.start(t, h.gate.account, recoveryHeader(), frame)
+		turn := recoveryReadTurn(t, ws)
+		require.NotEmpty(t, turn.errorEvent, "第 %d 次：客户端收到明确错误", attempt)
+		require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
+		require.Empty(t, turn.completedID)
+		require.Equal(t, coderws.StatusCode(0), turn.closeStatus, "不是裸关连接")
+		ws.close(t)
+	}
+	require.Empty(t, h.recordedDigests(h.gate.account.ID), "吻合项里有压缩项：不记录任何清理")
+	frames := h.businessFrames()
+	require.Len(t, frames, 3)
+	for _, sent := range frames {
+		require.True(t, sent.has(bad) && sent.has(twin), "两条吻合的密文每次都原样发往上游，未被静默丢弃")
+		require.True(t, sent.has(recoveryCipher("B")), "没有任何整包清理")
+	}
+}

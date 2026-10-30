@@ -54,6 +54,24 @@ func recoveryCompactionItem(label string) string {
 	return `{"type":"compaction","id":"cmp_` + label + `","encrypted_content":"` + recoveryCipher(label) + `"}`
 }
 
+// recoverySiblingCipher 构造与 recoveryCipher(label) 首 4 位、末 4 位都相同、中间不同的另一条密文：
+// 错误片段“首 4 位...末 4 位”会同时吻合两者，用来造“片段同时吻合多项”的场景。
+func recoverySiblingCipher(label string) string {
+	value := recoveryCipher(label)
+	return value[:10] + "diff" + value[14:]
+}
+
+// recoveryReasoningItemWithCipher 是带指定密文的推理项（带非空 content 数组，贴近跨模型旧会话的真实形态）。
+func recoveryReasoningItemWithCipher(id, cipher string) string {
+	return `{"type":"reasoning","id":"rs_` + id + `","summary":[{"type":"summary_text","text":"摘要-` + id +
+		`"}],"content":[{"type":"reasoning_text","text":"别家模型的可见推理"}],"encrypted_content":"` + cipher + `"}`
+}
+
+// recoveryCompactionItemWithCipher 是带指定密文的压缩项。
+func recoveryCompactionItemWithCipher(id, cipher string) string {
+	return `{"type":"compaction","id":"cmp_` + id + `","encrypted_content":"` + cipher + `"}`
+}
+
 func recoveryUserMessage(text string) string {
 	return `{"type":"message","role":"user","content":[{"type":"input_text","text":"` + text + `"}]}`
 }
@@ -197,10 +215,14 @@ func TestCollectOpenAIWSEncryptedCandidates(t *testing.T) {
 	require.Nil(t, collectOpenAIWSEncryptedCandidates(nil, openAIWSCiphertextHint{form: openAIWSHintNone}))
 }
 
-// 恢复决策表：只能由“唯一候选”或“恰好吻合一个候选的错误片段”定位；定位不到时才允许一次整包推理项恢复，
+// 恢复决策表：只能由“唯一候选”或“恰好吻合一个候选的错误片段”定位；定位不到时才允许一次整包类恢复
+// （没有片段／片段对不上：全部推理候选；片段同时吻合多项：只记吻合的那几项），
 // 压缩项、已输出内容、没有候选一律不记录。
 func TestDecideOpenAIWSEncryptedRecovery(t *testing.T) {
 	good1, good2, bad, cmp := recoveryCipher("good1"), recoveryCipher("good2"), recoveryCipher("bad"), recoveryCipher("cmp1")
+	// twin 与 twinSibling 首 4 位、末 4 位相同、中间不同：错误片段“首...尾”会同时吻合两者。
+	// 片段同时吻合多项时，嫌疑范围只取吻合的那几项（被拒的一定在其中），不吻合的有效项不记、不动。
+	twin, twinSibling := recoveryCipher("twin"), recoverySiblingCipher("twin")
 	reasoningPayload := recoveryPayload(recoveryReasoningItem("good1"), recoveryReasoningItem("bad"), recoveryReasoningItem("good2"))
 	withCompaction := recoveryPayload(recoveryReasoningItem("good1"), recoveryReasoningItem("bad"), recoveryCompactionItem("cmp1"))
 	decide := func(payload []byte, message string, outputCommitted bool) openAIWSEncryptedRecoveryDecision {
@@ -232,9 +254,7 @@ func TestDecideOpenAIWSEncryptedRecovery(t *testing.T) {
 		require.Equal(t, openAIWSRecoveryActionBroad, decision.action)
 		require.Equal(t, "no_fragment", decision.reason)
 	})
-	t.Run("片段吻合多个候选（首尾相同）：整包推理项恢复，不挑一个猜", func(t *testing.T) {
-		twin := recoveryCipher("twin")
-		twinSibling := twin[:10] + "diff" + twin[14:] // 首 4 位、尾 4 位与 twin 相同，中间不同
+	t.Run("片段吻合多个候选（首尾相同）：不挑一个猜，吻合的几项都记", func(t *testing.T) {
 		payload := recoveryPayload(
 			`{"type":"reasoning","id":"rs_t1","summary":[],"encrypted_content":"`+twin+`"}`,
 			`{"type":"reasoning","id":"rs_t2","summary":[],"encrypted_content":"`+twinSibling+`"}`,
@@ -243,6 +263,57 @@ func TestDecideOpenAIWSEncryptedRecovery(t *testing.T) {
 		require.Equal(t, openAIWSRecoveryActionBroad, decision.action)
 		require.Equal(t, "fragment_ambiguous", decision.reason)
 		require.Len(t, decision.digests, 2)
+	})
+	t.Run("片段同时吻合 3 个推理候选里的 2 个：只记那 2 个，仍是整包类动作", func(t *testing.T) {
+		payload := recoveryPayload(
+			recoveryReasoningItemWithCipher("t1", twin),
+			recoveryReasoningItem("good1"),
+			recoveryReasoningItemWithCipher("t2", twinSibling),
+		)
+		decision := decide(payload, recoveryHintMessage(twin), false)
+		require.Equal(t, openAIWSRecoveryActionBroad, decision.action, "仍记为整包类，受每窗口一次的整包预算约束")
+		require.Equal(t, openAIWSRecoveryResultRecorded, decision.result)
+		require.Equal(t, "fragment_ambiguous", decision.reason)
+		require.Equal(t, 2, decision.matched)
+		require.ElementsMatch(t, []string{openAIEncryptedContentDigest(twin), openAIEncryptedContentDigest(twinSibling)}, decision.digests)
+		require.NotContains(t, decision.digests, openAIEncryptedContentDigest(good1), "片段对不上的有效推理项不记")
+	})
+	t.Run("吻合的几项里有压缩项：不可恢复，不记录", func(t *testing.T) {
+		payload := recoveryPayload(
+			recoveryReasoningItemWithCipher("t1", twin),
+			recoveryReasoningItem("good1"),
+			recoveryCompactionItemWithCipher("t2", twinSibling),
+		)
+		decision := decide(payload, recoveryHintMessage(twin), false)
+		require.Equal(t, openAIWSRecoveryActionNone, decision.action)
+		require.Equal(t, openAIWSRecoveryResultUnrecoverable, decision.result)
+		require.Equal(t, "fragment_ambiguous_with_compaction", decision.reason)
+		require.Equal(t, 2, decision.matched)
+		require.Empty(t, decision.digests)
+	})
+	t.Run("吻合的几项都是推理项、另有不吻合的压缩项：记吻合的推理项，压缩项不在嫌疑内", func(t *testing.T) {
+		payload := recoveryPayload(
+			recoveryReasoningItemWithCipher("t1", twin),
+			recoveryCompactionItem("cmp1"),
+			recoveryReasoningItemWithCipher("t2", twinSibling),
+			recoveryReasoningItem("good1"),
+		)
+		decision := decide(payload, recoveryHintMessage(twin), false)
+		require.Equal(t, openAIWSRecoveryActionBroad, decision.action)
+		require.Equal(t, openAIWSRecoveryResultRecorded, decision.result)
+		require.Equal(t, "fragment_ambiguous", decision.reason)
+		require.ElementsMatch(t, []string{openAIEncryptedContentDigest(twin), openAIEncryptedContentDigest(twinSibling)}, decision.digests)
+		require.NotContains(t, decision.digests, openAIEncryptedContentDigest(cmp), "不吻合的压缩项不记，也不影响判断")
+		require.NotContains(t, decision.digests, openAIEncryptedContentDigest(good1))
+	})
+	t.Run("只有一个候选：不看片段直接定位，片段对不上也照记（only_candidate）", func(t *testing.T) {
+		// 候选集合含请求里所有带非空密文的历史项，只有一个候选时上游拒的只能是它；片段对不上只说明文案格式与解析不一致。
+		decision := decide(recoveryPayload(recoveryReasoningItem("bad")), recoveryHintMessage(recoveryCipher("other")), false)
+		require.Equal(t, openAIWSRecoveryActionPrecise, decision.action)
+		require.Equal(t, openAIWSRecoveryResultRecorded, decision.result)
+		require.Equal(t, "only_candidate", decision.reason)
+		require.Equal(t, 0, decision.matched, "片段确实一个都没对上")
+		require.Equal(t, []string{openAIEncryptedContentDigest(bad)}, decision.digests)
 	})
 	t.Run("定位到压缩项：不可恢复，不记录", func(t *testing.T) {
 		decision := decide(withCompaction, recoveryHintMessage(cmp), false)
@@ -393,6 +464,140 @@ func TestRecordOpenAIWSRejectedEncryptedContentBoundaries(t *testing.T) {
 	require.Equal(t, recoveryDigests(bad), recoveryScopedDigests(svc, 3, "s-ok", account))
 }
 
+// 片段同时吻合多项：记录、进场清理、出站校验三者用同一份摘要快照，只动吻合的那几项。
+//   - (a) 3 个推理候选里 2 个吻合：只记 2 个，未吻合项的密文在进场清理后原样保留，出站校验通过；
+//   - (c) 吻合项全是推理项、另有一个不吻合的压缩项：记吻合的推理项，压缩项原样保留，出站校验通过。
+//
+// 两种情形都占用整包预算：同一作用域键再来一次无法定位的拒绝，不再记录。
+func TestRecordOpenAIWSRejectedEncryptedContentAmbiguousFragmentOnlyMarksMatched(t *testing.T) {
+	twin, twinSibling := recoveryCipher("twin"), recoverySiblingCipher("twin")
+	cases := []struct {
+		name string
+		// kept 是不吻合、必须原样保留的项的密文。
+		kept     []string
+		keptItem []string
+	}{
+		{
+			name:     "(a) 3 个推理候选里 2 个吻合",
+			kept:     []string{recoveryCipher("good1")},
+			keptItem: []string{recoveryReasoningItemWithContent("good1")},
+		},
+		{
+			name:     "(c) 吻合项全是推理项、另有不吻合的压缩项",
+			kept:     []string{recoveryCipher("good1"), recoveryCipher("cmp1")},
+			keptItem: []string{recoveryReasoningItemWithContent("good1"), recoveryCompactionItem("cmp1")},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := recoveryTestService()
+			c := recoveryTestContext()
+			account := recoveryTestAccount(90)
+			items := []string{
+				recoveryUserMessage("第一问"),
+				recoveryReasoningItemWithCipher("t1", twin),
+			}
+			items = append(items, tc.keptItem...)
+			items = append(items, recoveryReasoningItemWithCipher("t2", twinSibling), recoveryUserMessage("第二问"))
+			original := recoveryPayload(items...)
+
+			svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 1, original, recoveryHintMessage(twin), false)
+			recorded := recoveryScopedDigests(svc, 3, "s", account)
+			require.Equal(t, recoveryDigests(twin, twinSibling), recorded, "只记片段吻合的两项")
+			for _, cipher := range tc.kept {
+				require.NotContains(t, recorded, openAIEncryptedContentDigest(cipher), "不吻合的项不被标坏")
+			}
+
+			// 下一次进场：清理与校验用同一份快照。吻合的两项密文被清掉，不吻合的项原样保留，校验放行。
+			body := &officialWSFrameBody{}
+			snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+			require.Equal(t, recoveryDigests(twin, twinSibling), snapshot)
+			candidate := recoveryPipeline(t, original, snapshot)
+			require.NotContains(t, string(candidate), twin)
+			require.NotContains(t, string(candidate), twinSibling)
+			for _, cipher := range tc.kept {
+				require.Contains(t, string(candidate), cipher, "不吻合项的密文在进场清理后原样保留")
+			}
+			require.True(t, recoveryEqual(t, original, candidate, body.invalidEncryptedRecovery()), "出站校验通过")
+			require.False(t, recoveryEqual(t, original, candidate, nil), "没有恢复依据时同一候选仍判被修改，说明放行确实来自快照")
+
+			// 占用了整包预算：同一作用域键再来一次没有片段的拒绝，不再记录，也不扩大已有记录。
+			svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 2,
+				recoveryPayload(recoveryReasoningItem("q1"), recoveryReasoningItem("q2")), "The encrypted content could not be verified", false)
+			require.Equal(t, recoveryDigests(twin, twinSibling), recoveryScopedDigests(svc, 3, "s", account), "不另开预算")
+		})
+	}
+}
+
+// (b) 吻合项中有压缩项：判不可恢复，什么都不记；之后重发同一份历史，帧原样（不做任何清理）通过校验。
+func TestRecordOpenAIWSRejectedEncryptedContentAmbiguousFragmentWithMatchedCompactionIsUnrecoverable(t *testing.T) {
+	svc := recoveryTestService()
+	c := recoveryTestContext()
+	account := recoveryTestAccount(90)
+	twin, twinSibling := recoveryCipher("twin"), recoverySiblingCipher("twin")
+	original := recoveryPayload(
+		recoveryUserMessage("第一问"),
+		recoveryReasoningItemWithCipher("t1", twin),
+		recoveryReasoningItem("good1"),
+		recoveryCompactionItemWithCipher("t2", twinSibling),
+		recoveryUserMessage("第二问"),
+	)
+
+	logs := captureOpenAIWSRecoveryLogs(t, func() {
+		svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 1, original, recoveryHintMessage(twin), false)
+	})
+	require.False(t, svc.getOpenAIWSStateStore().HasAnySessionInvalidEncryptedContent(), "吻合项里有压缩项：不记录任何摘要，也不动预算键")
+	require.Nil(t, recoveryScopedDigests(svc, 3, "s", account))
+	require.Contains(t, logs, "result=unrecoverable")
+	require.Contains(t, logs, "reason=fragment_ambiguous_with_compaction")
+	require.Contains(t, logs, "marked=0")
+	require.Contains(t, logs, "located=none")
+
+	// 没有记录就没有清理：进场快照为空，帧原样，校验照旧。
+	body := &officialWSFrameBody{}
+	require.Nil(t, svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account))
+	candidate := recoveryPipeline(t, original, body.invalidEncryptedRecovery())
+	for _, cipher := range []string{twin, twinSibling, recoveryCipher("good1")} {
+		require.Contains(t, string(candidate), cipher)
+	}
+
+	// 不可恢复不占用整包预算：同一作用域键之后遇到“没有片段、只有推理项”的拒绝，仍可做一次整包恢复。
+	svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 2,
+		recoveryPayload(recoveryReasoningItem("q1"), recoveryReasoningItem("q2")), "The encrypted content could not be verified", false)
+	require.Len(t, recoveryScopedDigests(svc, 3, "s", account), 2)
+}
+
+// 只有一个候选且片段对不上：仍按 only_candidate 精确记录。候选集合含请求里所有带非空密文的历史项，
+// 只有一个候选时上游拒的只能是它；片段对不上只说明错误文案格式与解析不一致，不能据此否定定位。
+func TestRecordOpenAIWSRejectedEncryptedContentSingleCandidateIgnoresMismatchedFragment(t *testing.T) {
+	svc := recoveryTestService()
+	c := recoveryTestContext()
+	account := recoveryTestAccount(90)
+	bad := recoveryCipher("bad")
+	// 历史里除了这一条推理项，没有任何其它带密文的项（消息、工具调用不算候选）。
+	original := recoveryPayload(recoveryUserMessage("第一问"), recoveryReasoningItemWithContent("bad"), recoveryUserMessage("第二问"))
+
+	logs := captureOpenAIWSRecoveryLogs(t, func() {
+		svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 1, original, recoveryHintMessage(recoveryCipher("other")), false)
+	})
+	require.Equal(t, recoveryDigests(bad), recoveryScopedDigests(svc, 3, "s", account), "片段对不上，仍精确记录唯一候选")
+	for _, want := range []string{"hint=ellipsis", "candidates=1", "matched=0", "marked=1", "located=precise", "result=recorded", "reason=only_candidate"} {
+		require.Contains(t, logs, want)
+	}
+
+	// 记录之后进场清理与校验照常一致。
+	body := &officialWSFrameBody{}
+	snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+	candidate := recoveryPipeline(t, original, snapshot)
+	require.NotContains(t, string(candidate), bad)
+	require.True(t, recoveryEqual(t, original, candidate, body.invalidEncryptedRecovery()))
+
+	// 唯一候选是压缩项时，即便片段对不上也不记录（压缩项不得静默删除）。
+	svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s-cmp", 1,
+		recoveryPayload(recoveryCompactionItem("cmp1")), recoveryHintMessage(recoveryCipher("other")), false)
+	require.Nil(t, recoveryScopedDigests(svc, 3, "s-cmp", account))
+}
+
 // 日志不得出现密文、片段或会话正文。
 func TestRecordOpenAIWSRejectedEncryptedContentLogsNoSecrets(t *testing.T) {
 	svc := recoveryTestService()
@@ -408,7 +613,10 @@ func TestRecordOpenAIWSRejectedEncryptedContentLogsNoSecrets(t *testing.T) {
 		emitOpenAIWSRecoveryValidationFailure(body, func([]byte) error { return nil }, account.ID, 2, errors.New("OpenAI official egress WebSocket input was modified"))
 	})
 	require.Contains(t, logs, "stage=upstream_reject")
-	require.Contains(t, logs, "request_id=req-recovery-test")
+	// 取值来自 ctx 里的 ClientRequestID，日志键必须叫 client_request_id；上游文件的日志键叫 request_id，两者不是一回事。
+	require.Contains(t, logs, "client_request_id=req-recovery-test")
+	require.Equal(t, 2, strings.Count(logs, "client_request_id=req-recovery-test"), "upstream_reject 与 entry 两条日志都带")
+	require.NotContains(t, strings.ReplaceAll(logs, "client_request_id=", ""), "request_id=", "不再出现裸的 request_id 键")
 	require.Contains(t, logs, "account_id=90")
 	require.Contains(t, logs, "model=gpt-6.1-sol")
 	require.Contains(t, logs, "matched=1")

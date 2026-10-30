@@ -29,11 +29,12 @@ import (
 // 恢复边界（下列情形一律不记录，客户端照常收到上游的原始错误，历史不会被静默改写）：
 //   - 被拒项是 compaction／compaction_summary：它可能是早期上下文的唯一副本，请求里没有可信的替代历史，不得静默删除；
 //   - 本次请求已经向客户端输出过文字或工具调用（见 outputCommitted）：不是纯输入校验失败，不做推断；
-//   - 无法唯一定位且请求里还有压缩项：被拒的可能正是压缩项，不做整包恢复；
+//   - 无法唯一定位且嫌疑范围里还有压缩项：被拒的可能正是压缩项，不做整包恢复（嫌疑范围见 decideOpenAIWSEncryptedRecovery）；
 //   - 同一作用域键在窗口内已记录 openAIWSEncryptedRecoveryMaxMarks 次：视为不可恢复，不再记录。
 //
-// 无法唯一定位、但请求里只有推理项时，允许一次（同一作用域键窗口内仅一次）有边界的“整包推理项”恢复，
-// 见 decideOpenAIWSEncryptedRecovery；这是上游原有行为的收紧版：不含压缩项、限一次、挂在账号作用域下。
+// 无法唯一定位、但嫌疑范围里只有推理项时，允许一次（同一作用域键窗口内仅一次）有边界的“整包类”恢复，
+// 见 decideOpenAIWSEncryptedRecovery；这是上游原有行为的收紧版：不含压缩项、限一次、挂在账号作用域下，
+// 并且片段同时吻合多项时只记吻合的那几项，不吻合的有效项不动。
 //
 // 日志只记摘要个数、结果与原因，不记密文、片段、认证信息或会话正文。
 
@@ -167,6 +168,9 @@ func collectOpenAIWSEncryptedCandidates(payload []byte, hint openAIWSCiphertextH
 }
 
 // 恢复决策的动作与结果取值（也是日志里的 located / result 字段）。
+//
+// precise 是唯一定位到一项；broad 是“没能唯一定位而一次记录多项”的整包类动作（候选全部推理项，或片段同时吻合的那几项），
+// 受“每个窗口一次”的整包预算约束；none 是不记录。进场清理与出站校验只消费摘要集合，不看这里的动作。
 const (
 	openAIWSRecoveryActionPrecise = "precise"
 	openAIWSRecoveryActionBroad   = "broad"
@@ -191,7 +195,13 @@ type openAIWSEncryptedRecoveryDecision struct {
 //  2. 没有任何候选：无事可记；
 //  3. 候选只有一个（按摘要去重）：它就是被拒项；多个时用错误片段唯一定位，片段必须恰好吻合一个候选；
 //  4. 定位到的是压缩项：不记录（不得静默删除可能唯一的早期上下文）；
-//  5. 无法唯一定位：请求里没有压缩项时，才允许一次有边界的整包推理项恢复（只含推理项），有压缩项则不做。
+//  5. 无法唯一定位时，先划定“嫌疑范围”，再看范围里有没有压缩项：
+//     a. 没有片段（no_fragment）或片段一个也对不上（fragment_no_match）：嫌疑范围是请求里的全部候选。
+//     范围里没有压缩项，才允许一次有边界的整包推理项恢复（只含推理项）；有压缩项则不做；
+//     b. 片段同时吻合多项（fragment_ambiguous）：被拒的一定在吻合的那几项里，嫌疑范围缩小为这几项，
+//     只把它们写进 digests，片段对不上的有效项（含压缩项）一律不记、不动；吻合的项里有压缩项则不做
+//     （reason 为 fragment_ambiguous_with_compaction），不吻合的压缩项不在嫌疑范围内，不影响判断。
+//     a、b 都记为整包（broad）类动作，共用同一个“每窗口一次”的整包预算，不另开预算。
 //
 // 不依据密文长度、外观或模型名做任何判断。
 func decideOpenAIWSEncryptedRecovery(candidates []openAIWSEncryptedCandidate, hint openAIWSCiphertextHint, outputCommitted bool) openAIWSEncryptedRecoveryDecision {
@@ -213,7 +223,11 @@ func decideOpenAIWSEncryptedRecovery(candidates []openAIWSEncryptedCandidate, hi
 
 	located := -1
 	reason := ""
+	// matchedOnly 为 true 表示片段同时吻合多项：嫌疑范围只取吻合的那几项，不吻合的候选不在嫌疑内。
+	matchedOnly := false
 	switch {
+	// 只有一个候选时不看片段、直接定位到它，这是对的：候选集合包含请求里所有带非空密文的历史项，
+	// 只有一个候选就意味着上游拒绝的只能是它；此时片段与它对不上，只说明错误文案的格式和我们的解析不一致，不能据此否定定位。
 	case len(candidates) == 1:
 		located, reason = 0, "only_candidate"
 	case hint.form == openAIWSHintNone:
@@ -228,6 +242,7 @@ func decideOpenAIWSEncryptedRecovery(candidates []openAIWSEncryptedCandidate, hi
 		reason = "fragment_no_match"
 	default:
 		reason = "fragment_ambiguous"
+		matchedOnly = true
 	}
 
 	if located >= 0 {
@@ -241,16 +256,24 @@ func decideOpenAIWSEncryptedRecovery(candidates []openAIWSEncryptedCandidate, hi
 		return decision
 	}
 
-	// 无法唯一定位。请求里有压缩项时，被拒的可能正是它，清掉推理项既无益又会损失上下文，直接判不可恢复。
+	// 无法唯一定位：先划定嫌疑范围。片段同时吻合多项时只取吻合的那几项，其余情形取全部候选。
+	suspects := make([]openAIWSEncryptedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
+		if matchedOnly && !candidate.matched {
+			continue
+		}
+		suspects = append(suspects, candidate)
+	}
+	// 嫌疑范围里有压缩项时，被拒的可能正是它，清掉推理项既无益又会损失上下文，直接判不可恢复。
+	for _, candidate := range suspects {
 		if candidate.kind != openAIWSCandidateReasoning {
 			decision.result, decision.reason = openAIWSRecoveryResultUnrecoverable, reason+"_with_compaction"
 			return decision
 		}
 	}
 	decision.action = openAIWSRecoveryActionBroad
-	decision.digests = make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
+	decision.digests = make([]string, 0, len(suspects))
+	for _, candidate := range suspects {
 		decision.digests = append(decision.digests, candidate.digest)
 	}
 	decision.result, decision.reason = openAIWSRecoveryResultRecorded, reason
@@ -270,8 +293,10 @@ func openAIWSEncryptedRecoveryScopeKey(sessionHash string, account *Account) str
 		"|" + strings.TrimSpace(account.Platform) + "/" + strings.TrimSpace(account.Type) + "/" + account.GetAPIProtocol()
 }
 
-// openAIWSRecoveryRequestID 取客户端请求编号用于日志；没有时返回 "-"。
-func openAIWSRecoveryRequestID(c *gin.Context) string {
+// openAIWSRecoveryClientRequestID 取客户端请求编号用于日志；没有时返回 "-"。
+// 取值来源是请求 ctx 里的 ctxkey.ClientRequestID（客户端自己带的请求编号），不是网关生成的 request_id，
+// 所以日志键写 client_request_id，避免与其它日志里的 request_id 混为一谈。
+func openAIWSRecoveryClientRequestID(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return "-"
 	}
@@ -339,8 +364,8 @@ func (s *OpenAIGatewayService) recordOpenAIWSRejectedEncryptedContent(
 		accountID = account.ID
 	}
 	logOpenAIWSModeInfo(
-		"ingress_ws_encrypted_recovery stage=upstream_reject request_id=%s account_id=%d turn=%d model=%s candidates=%d hint=%s matched=%d marked=%d located=%s result=%s reason=%s attempts=%d output_committed=%v",
-		openAIWSRecoveryRequestID(c),
+		"ingress_ws_encrypted_recovery stage=upstream_reject client_request_id=%s account_id=%d turn=%d model=%s candidates=%d hint=%s matched=%d marked=%d located=%s result=%s reason=%s attempts=%d output_committed=%v",
+		openAIWSRecoveryClientRequestID(c),
 		accountID,
 		turn,
 		truncateOpenAIWSLogValue(model, openAIWSLogValueMaxLen),
@@ -377,8 +402,8 @@ func (s *OpenAIGatewayService) openAIWSIngressRecoverySnapshot(
 	frameBody.setInvalidEncryptedRecovery(digests)
 	if len(digests) > 0 && account != nil {
 		logOpenAIWSModeInfo(
-			"ingress_ws_encrypted_recovery stage=entry request_id=%s account_id=%d known_digests=%d",
-			openAIWSRecoveryRequestID(c),
+			"ingress_ws_encrypted_recovery stage=entry client_request_id=%s account_id=%d known_digests=%d",
+			openAIWSRecoveryClientRequestID(c),
 			account.ID,
 			len(digests),
 		)
