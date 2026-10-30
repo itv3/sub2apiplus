@@ -4919,15 +4919,20 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InvalidEncrypted
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
+	// 第一条上游连接只发 invalid_encrypted_content 的 error（真实上游既不发终态也不断连）；网关写出 error 后结束本轮、
+	// 关闭客户端连接并丢弃这条上游连接，客户端重连后由第二条上游连接承接。
 	upstreamConn := &openAIWSCaptureConn{
 		events: [][]byte{
 			[]byte(`{"type":"error","error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content could not be verified"}}`),
-			[]byte(`{"type":"response.failed","response":{"id":"resp_enc_lineage_1","model":"gpt-5.1","error":{"code":"invalid_encrypted_content","message":"The encrypted content could not be verified"}}}`),
+		},
+	}
+	upstreamConn2 := &openAIWSCaptureConn{
+		events: [][]byte{
 			[]byte(`{"type":"response.completed","response":{"id":"resp_enc_lineage_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
 	dialer := &openAIWSQueueDialer{
-		conns: []openAIWSClientConn{upstreamConn},
+		conns: []openAIWSClientConn{upstreamConn, upstreamConn2},
 	}
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(dialer)
@@ -4957,7 +4962,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InvalidEncrypted
 		},
 	}
 
-	serverErrCh := make(chan error, 1)
+	serverErrCh := make(chan error, 2)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
 			CompressionMode: coderws.CompressionContextTakeover,
@@ -4993,43 +4998,55 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InvalidEncrypted
 	}))
 	defer wsServer.Close()
 
-	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
-	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
-	cancelDial()
-	require.NoError(t, err)
-	defer func() {
-		_ = clientConn.CloseNow()
-	}()
-
-	writeMessage := func(payload string) {
+	// 两个会话共用同一个 prompt_cache_key，即同一个恢复作用域。
+	const turn1 = `{"type":"response.create","model":"gpt-5.1","stream":false,"prompt_cache_key":"pck-lineage","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"stale-cipher","summary":[]},{"type":"input_text","text":"hi"}]}`
+	const turn2 = `{"type":"response.create","model":"gpt-5.1","stream":false,"prompt_cache_key":"pck-lineage","input":[{"type":"reasoning","id":"rs_1","encrypted_content":"stale-cipher","summary":[]},{"type":"input_text","text":"hi"},{"type":"input_text","text":"again"}]}`
+	dialClient := func() *coderws.Conn {
+		dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelDial()
+		conn, _, dialErr := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+		require.NoError(t, dialErr)
+		t.Cleanup(func() { _ = conn.CloseNow() })
+		return conn
+	}
+	writeMessage := func(conn *coderws.Conn, payload string) {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		require.NoError(t, clientConn.Write(writeCtx, coderws.MessageText, []byte(payload)))
+		require.NoError(t, conn.Write(writeCtx, coderws.MessageText, []byte(payload)))
 	}
-	readMessage := func() []byte {
+	readMessage := func(conn *coderws.Conn) []byte {
 		readCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		msgType, message, readErr := clientConn.Read(readCtx)
+		msgType, message, readErr := conn.Read(readCtx)
 		require.NoError(t, readErr)
 		require.Equal(t, coderws.MessageText, msgType)
 		return message
 	}
 
-	// turn1：携带失效密文，上游以 invalid_encrypted_content 拒绝（error + response.failed 透传给客户端）。
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"input":[{"type":"reasoning","id":"rs_1","encrypted_content":"stale-cipher","summary":[]},{"type":"input_text","text":"hi"}]}`)
-	firstEvent := readMessage()
+	// 连接一：携带失效密文，上游以 invalid_encrypted_content 拒绝（只发 error）。error 原样透传给客户端后，
+	// 网关结束本轮并关闭连接（不再等上游终态，否则会一直占着连接与内存预算），服务端以 1000 退出、不记账号故障。
+	firstConn := dialClient()
+	writeMessage(firstConn, turn1)
+	firstEvent := readMessage(firstConn)
 	require.Equal(t, "error", gjson.GetBytes(firstEvent, "type").String())
 	require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(firstEvent, "error.code").String())
-	secondEvent := readMessage()
-	require.Equal(t, "response.failed", gjson.GetBytes(secondEvent, "type").String())
+	select {
+	case serverErr := <-serverErrCh:
+		var closeErr *OpenAIWSClientCloseError
+		require.ErrorAs(t, serverErr, &closeErr)
+		require.Equal(t, coderws.StatusNormalClosure, closeErr.StatusCode())
+	case <-time.After(5 * time.Second):
+		t.Fatal("error 写出后网关没有结束本轮")
+	}
 
-	// turn2：客户端历史仍带同一失效密文，进场应被 lineage 预剥离后再发上游。
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"input":[{"type":"reasoning","id":"rs_1","encrypted_content":"stale-cipher","summary":[]},{"type":"input_text","text":"hi"},{"type":"input_text","text":"again"}]}`)
-	thirdEvent := readMessage()
+	// 连接二：客户端重连并重发同一份历史，进场应被 lineage 预剥离后再发上游。
+	secondConn := dialClient()
+	writeMessage(secondConn, turn2)
+	thirdEvent := readMessage(secondConn)
 	require.Equal(t, "response.completed", gjson.GetBytes(thirdEvent, "type").String())
 	require.Equal(t, "resp_enc_lineage_2", gjson.GetBytes(thirdEvent, "response.id").String())
 
-	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	require.NoError(t, secondConn.Close(coderws.StatusNormalClosure, "done"))
 	select {
 	case serverErr := <-serverErrCh:
 		require.NoError(t, serverErr)
@@ -5038,14 +5055,18 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InvalidEncrypted
 	}
 
 	upstreamConn.mu.Lock()
-	writes := append([]map[string]any(nil), upstreamConn.writes...)
+	firstWrites := append([]map[string]any(nil), upstreamConn.writes...)
 	upstreamConn.mu.Unlock()
-	require.Len(t, writes, 2, "两轮各应发送一次上游请求")
+	upstreamConn2.mu.Lock()
+	secondWrites := append([]map[string]any(nil), upstreamConn2.writes...)
+	upstreamConn2.mu.Unlock()
+	require.Len(t, firstWrites, 1, "第一条上游连接收到一次请求")
+	require.Len(t, secondWrites, 1, "第二条上游连接收到一次请求")
 
-	firstUpstream := requestToJSONString(writes[0])
+	firstUpstream := requestToJSONString(firstWrites[0])
 	require.Equal(t, "stale-cipher", gjson.Get(firstUpstream, "input.0.encrypted_content").String(), "首轮请求原样携带密文")
 
-	secondUpstream := requestToJSONString(writes[1])
+	secondUpstream := requestToJSONString(secondWrites[0])
 	secondInput := gjson.Get(secondUpstream, "input").Array()
 	require.Len(t, secondInput, 3, "剥离仅移除 encrypted_content 字段，reasoning 骨架保留")
 	for _, item := range secondInput {

@@ -372,9 +372,9 @@ func TestRecordOpenAIWSRejectedEncryptedContentScopeIsolation(t *testing.T) {
 
 	// 进场快照同样只读自己的作用域键。
 	body := &officialWSFrameBody{}
-	require.Equal(t, recoveryDigests(bad), svc.openAIWSIngressRecoverySnapshot(c, body, 8, "session-1", accountA))
+	require.Equal(t, recoveryDigests(bad), svc.openAIWSIngressRecoverySnapshot(c, body, 8, "session-1", accountA, nil))
 	require.Equal(t, recoveryDigests(bad), body.invalidEncryptedRecovery())
-	require.Nil(t, svc.openAIWSIngressRecoverySnapshot(c, body, 8, "session-1", accountB))
+	require.Nil(t, svc.openAIWSIngressRecoverySnapshot(c, body, 8, "session-1", accountB, nil))
 	require.Nil(t, body.invalidEncryptedRecovery(), "取不到记录时清空旧快照")
 }
 
@@ -387,7 +387,7 @@ func TestOpenAIWSIngressRecoverySnapshotIsStableAcrossStoreChanges(t *testing.T)
 	svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 1, recoveryPayload(recoveryReasoningItem("first")), "", false)
 
 	body := &officialWSFrameBody{}
-	snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+	snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account, nil)
 	require.Equal(t, recoveryDigests(first), snapshot)
 
 	svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 2, recoveryPayload(recoveryReasoningItem("second")), "", false)
@@ -510,7 +510,7 @@ func TestRecordOpenAIWSRejectedEncryptedContentAmbiguousFragmentOnlyMarksMatched
 
 			// 下一次进场：清理与校验用同一份快照。吻合的两项密文被清掉，不吻合的项原样保留，校验放行。
 			body := &officialWSFrameBody{}
-			snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+			snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account, nil)
 			require.Equal(t, recoveryDigests(twin, twinSibling), snapshot)
 			candidate := recoveryPipeline(t, original, snapshot)
 			require.NotContains(t, string(candidate), twin)
@@ -555,7 +555,7 @@ func TestRecordOpenAIWSRejectedEncryptedContentAmbiguousFragmentWithMatchedCompa
 
 	// 没有记录就没有清理：进场快照为空，帧原样，校验照旧。
 	body := &officialWSFrameBody{}
-	require.Nil(t, svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account))
+	require.Nil(t, svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account, nil))
 	candidate := recoveryPipeline(t, original, body.invalidEncryptedRecovery())
 	for _, cipher := range []string{twin, twinSibling, recoveryCipher("good1")} {
 		require.Contains(t, string(candidate), cipher)
@@ -587,7 +587,7 @@ func TestRecordOpenAIWSRejectedEncryptedContentSingleCandidateIgnoresMismatchedF
 
 	// 记录之后进场清理与校验照常一致。
 	body := &officialWSFrameBody{}
-	snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+	snapshot := svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account, nil)
 	candidate := recoveryPipeline(t, original, snapshot)
 	require.NotContains(t, string(candidate), bad)
 	require.True(t, recoveryEqual(t, original, candidate, body.invalidEncryptedRecovery()))
@@ -609,7 +609,7 @@ func TestRecordOpenAIWSRejectedEncryptedContentLogsNoSecrets(t *testing.T) {
 	logs := captureOpenAIWSRecoveryLogs(t, func() {
 		svc.recordOpenAIWSRejectedEncryptedContent(c, account, 3, "s", 1, payload, recoveryHintMessage(bad), false)
 		body := &officialWSFrameBody{}
-		svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account)
+		svc.openAIWSIngressRecoverySnapshot(c, body, 3, "s", account, nil)
 		emitOpenAIWSRecoveryValidationFailure(body, func([]byte) error { return nil }, account.ID, 2, errors.New("OpenAI official egress WebSocket input was modified"))
 	})
 	require.Contains(t, logs, "stage=upstream_reject")

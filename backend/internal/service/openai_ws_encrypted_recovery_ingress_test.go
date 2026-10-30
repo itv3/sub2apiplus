@@ -44,6 +44,9 @@ type recoveryWireHarness struct {
 	outputFirst bool
 	// dropOnce 为 true 时，下一个带历史的业务帧到达时关掉所有上游连接且不应答（模拟断线，触发网关换连接重试）。
 	dropOnce bool
+	// errorOnly 为 true 时，拒绝只发 error 事件：不发 response.failed 等任何终态、也不断开连接（线上真实上游的行为）。
+	// 为 false 时 error 之后紧跟 response.failed（旧场景）。
+	errorOnly bool
 }
 
 func newRecoveryWireHarness(t *testing.T, mode string) *recoveryWireHarness {
@@ -73,6 +76,12 @@ func (h *recoveryWireHarness) setOutputFirst(enabled bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.outputFirst = enabled
+}
+
+func (h *recoveryWireHarness) setErrorOnly(enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.errorOnly = enabled
 }
 
 func (h *recoveryWireHarness) armDropOnce() {
@@ -122,8 +131,12 @@ func (h *recoveryWireHarness) respond(request codexGateWireRequest, frame codexG
 	}
 	events = append(events,
 		[]byte(`{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":`+string(quoted)+`}}`),
-		[]byte(`{"type":"response.failed","response":{"id":"`+responseID+`","status":"failed","error":{"code":"invalid_encrypted_content","message":`+string(quoted)+`}}}`),
 	)
+	if !h.errorOnly {
+		events = append(events,
+			[]byte(`{"type":"response.failed","response":{"id":"`+responseID+`","status":"failed","error":{"code":"invalid_encrypted_content","message":`+string(quoted)+`}}}`),
+		)
+	}
 	return events
 }
 
@@ -347,6 +360,10 @@ func (h *recoveryWireHarness) rawKeyCount() int {
 	return count
 }
 
+// recoveryEndTurnStatus 是网关在 invalid_encrypted_content 的 error 写出后结束本轮时给客户端的关闭码：
+// 1000 会被 handler 认作“客户端自行结束”，不记账号调度失败（见 endOpenAIWSTurnOnInvalidEncryptedContent）。
+const recoveryEndTurnStatus = coderws.StatusNormalClosure
+
 func recoveryRaw(item string) json.RawMessage { return json.RawMessage(item) }
 
 // recoveryFrame 构造客户端的整段历史帧：同一个 promptCacheKey 即同一个会话。
@@ -356,7 +373,8 @@ func recoveryFrame(t *testing.T, promptCacheKey string, items ...any) []byte {
 }
 
 // recoveryColdHistory 是旧会话恢复出的完整历史：A 是别家模型留下的推理项（带 content 数组，密文 GPT 无法验证），
-// B 是有效的 GPT 推理项（也带 content），另有配对的工具调用与输出、助手消息。
+// B 是有效的 GPT 推理项（OpenAI 自家格式：只有 summary，没有 content——带 content 的推理项会被结构性扩展一并记为失效），
+// 另有配对的工具调用与输出、助手消息。
 func recoveryColdHistory(extra ...any) []any {
 	items := []any{
 		replayBaseItem(),
@@ -366,7 +384,7 @@ func recoveryColdHistory(extra ...any) []any {
 		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "第一答"}}},
 		map[string]any{"type": "function_call", "id": "fc_sample_0001", "call_id": "call_sample_0001", "name": "lookup", "arguments": `{"q":"one"}`},
 		map[string]any{"type": "function_call_output", "call_id": "call_sample_0001", "output": "ok"},
-		recoveryRaw(recoveryReasoningItemWithContent("B")),
+		recoveryRaw(recoveryReasoningItem("B")),
 	}
 	items = append(items, extra...)
 	return append(items, codexGateMessage("user", "第二问"))
@@ -377,7 +395,7 @@ func recoveryHeader() http.Header {
 }
 
 // recoveryRequireRecoveredFrame 断言成功的那一帧：被拒项 A 的密文与 content 都没了、骨架（摘要）保留；
-// 有效项 B 的密文原样、只做第一轮的 content 清理；消息、工具调用与输出原样。
+// 有效项 B 的密文与骨架原样；消息、工具调用与输出原样。
 func recoveryRequireRecoveredFrame(t *testing.T, frame recoveryBusinessFrame) {
 	t.Helper()
 	require.False(t, frame.has(recoveryCipher("A")), "被拒项的密文已被清理")
@@ -395,58 +413,71 @@ func recoveryRequireRecoveredFrame(t *testing.T, frame recoveryBusinessFrame) {
 
 // 1) 完整失败链：恢复完整历史 → 上游拒绝被拒项 → 客户端重连并重发原历史 → 进场清理与校验按同一规则完成 → 成功。
 // 同时覆盖：只记被拒的一项（有效项不被整包标坏）、组合清理（content + 密文）、不再 1008、不伪造 response.completed。
+//
+// 上游的两种形态都要覆盖：error 之后紧跟 response.failed（旧场景），以及只发 error、不发终态、不断连（线上真实上游）。
+// 两种形态下网关都在 error 写出后结束本轮，客户端行为一致。
 func TestOpenAIWSInvalidEncryptedContentFullFailureChainRecoversOnReconnect(t *testing.T) {
-	for _, profile := range reasoningReplayProfiles() {
-		t.Run(profile.name, func(t *testing.T) {
-			mode := officialClientProfileModeActive
-			profile.apply(t, mode)
-			h := newRecoveryWireHarness(t, mode)
-			bad := recoveryCipher("A")
-			h.rejectCipher(bad, recoveryHintMessage(bad))
-			frame := recoveryFrame(t, "pck-chain", recoveryColdHistory()...)
-
-			logs := captureOpenAIWSRecoveryLogs(t, func() {
-				// 第一次：整段历史被上游拒绝，客户端收到明确的错误事件，没有 response.completed，连接没有被 1008 关闭。
-				first := h.start(t, h.gate.account, recoveryHeader(), frame)
-				turn := recoveryReadTurn(t, first)
-				require.NotEmpty(t, turn.errorEvent, "客户端收到上游的明确错误事件")
-				require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
-				require.Empty(t, turn.completedID, "不伪造 response.completed")
-				require.False(t, turn.closed, "错误事件之后连接不是被裸关闭")
-				require.Equal(t, coderws.StatusCode(0), turn.closeStatus)
-				first.close(t)
-				require.Equal(t, recoveryDigests(bad), h.recordedDigests(h.gate.account.ID), "只记被拒的那一项，有效项与其余密文不被标坏")
-				require.Zero(t, h.rawKeyCount(), "不写上游原有的“分组 + 会话”键")
-
-				// 重连并重发同一份原历史：进场只清被拒项，校验按同一份快照放行，成功完成。
-				second := h.start(t, h.gate.account, recoveryHeader(), frame)
-				retry := recoveryReadTurn(t, second)
-				require.Empty(t, retry.errorEvent, "重连后不再被拒")
-				require.NotEmpty(t, retry.completedID, "重连后完成压缩前的这一轮")
-				require.False(t, retry.closed)
-				second.close(t)
+	for _, shape := range []struct {
+		name      string
+		errorOnly bool
+	}{{"error后带response.failed", false}, {"只发error不发终态", true}} {
+		for _, profile := range reasoningReplayProfiles() {
+			t.Run(shape.name+"/"+profile.name, func(t *testing.T) {
+				recoveryFullFailureChain(t, profile, shape.errorOnly)
 			})
+		}
+	}
+}
 
-			frames := h.businessFrames()
-			require.GreaterOrEqual(t, len(frames), 2)
-			require.True(t, frames[0].has(bad), "首次发往上游的帧原样带着被拒密文")
-			recoveryRequireRecoveredFrame(t, frames[len(frames)-1])
-			// 定位日志：请求编号、账号、模型、阶段、命中摘要数、结果都在，且没有密文、片段、会话正文。
-			for _, want := range []string{"stage=upstream_reject", "account_id=" + strconv.FormatInt(h.gate.account.ID, 10),
-				"model=gpt-6.1-sol", "matched=1", "marked=1", "result=recorded", "reason=fragment", "stage=entry", "known_digests=1", "stripped_items="} {
-				require.Contains(t, logs, want)
-			}
-			// 全部日志里不得出现完整密文或会话正文；本次新增的恢复日志里也不得出现错误文案回显的“首...尾”片段
-			// （上游原有的 ingress_ws_error_event 日志会回显该片段，不在本次改动范围内）。
-			for _, secret := range []string{bad, recoveryCipher("B"), "第一问", "第二问", "摘要-A"} {
-				require.NotContains(t, logs, secret)
-			}
-			for _, line := range strings.Split(logs, "\n") {
-				if strings.Contains(line, "ingress_ws_encrypted_recovery") {
-					require.NotContains(t, line, bad[:4]+"..."+bad[len(bad)-4:])
-				}
-			}
-		})
+func recoveryFullFailureChain(t *testing.T, profile reasoningReplayProfileCase, errorOnly bool) {
+	mode := officialClientProfileModeActive
+	profile.apply(t, mode)
+	h := newRecoveryWireHarness(t, mode)
+	h.setErrorOnly(errorOnly)
+	bad := recoveryCipher("A")
+	h.rejectCipher(bad, recoveryHintMessage(bad))
+	frame := recoveryFrame(t, "pck-chain", recoveryColdHistory()...)
+
+	logs := captureOpenAIWSRecoveryLogs(t, func() {
+		// 第一次：整段历史被上游拒绝，客户端收到明确的错误事件，没有 response.completed，连接没有被 1008 关闭。
+		first := h.start(t, h.gate.account, recoveryHeader(), frame)
+		turn := recoveryReadTurn(t, first)
+		require.NotEmpty(t, turn.errorEvent, "客户端收到上游的明确错误事件")
+		require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
+		require.Empty(t, turn.completedID, "不伪造 response.completed")
+		require.True(t, turn.closed, "error 写出后网关结束本轮并关闭连接，客户端据此重连")
+		require.Equal(t, recoveryEndTurnStatus, turn.closeStatus)
+		first.close(t)
+		require.Equal(t, recoveryDigests(bad), h.recordedDigests(h.gate.account.ID), "只记被拒的那一项，有效项与其余密文不被标坏")
+		require.Zero(t, h.rawKeyCount(), "不写上游原有的“分组 + 会话”键")
+
+		// 重连并重发同一份原历史：进场只清被拒项，校验按同一份快照放行，成功完成。
+		second := h.start(t, h.gate.account, recoveryHeader(), frame)
+		retry := recoveryReadTurn(t, second)
+		require.Empty(t, retry.errorEvent, "重连后不再被拒")
+		require.NotEmpty(t, retry.completedID, "重连后完成压缩前的这一轮")
+		require.False(t, retry.closed)
+		second.close(t)
+	})
+
+	frames := h.businessFrames()
+	require.GreaterOrEqual(t, len(frames), 2)
+	require.True(t, frames[0].has(bad), "首次发往上游的帧原样带着被拒密文")
+	recoveryRequireRecoveredFrame(t, frames[len(frames)-1])
+	// 定位日志：请求编号、账号、模型、阶段、命中摘要数、结果都在，且没有密文、片段、会话正文。
+	for _, want := range []string{"stage=upstream_reject", "account_id=" + strconv.FormatInt(h.gate.account.ID, 10),
+		"model=gpt-6.1-sol", "matched=1", "marked=1", "result=recorded", "reason=fragment", "stage=entry", "known_digests=1", "stripped_items="} {
+		require.Contains(t, logs, want)
+	}
+	// 全部日志里不得出现完整密文或会话正文；本次新增的恢复日志里也不得出现错误文案回显的“首...尾”片段
+	// （上游原有的 ingress_ws_error_event 日志会回显该片段，不在本次改动范围内）。
+	for _, secret := range []string{bad, recoveryCipher("B"), "第一问", "第二问", "摘要-A"} {
+		require.NotContains(t, logs, secret)
+	}
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "ingress_ws_encrypted_recovery") {
+			require.NotContains(t, line, bad[:4]+"..."+bad[len(bad)-4:])
+		}
 	}
 }
 
@@ -562,7 +593,7 @@ func TestOpenAIWSInvalidEncryptedContentRecoveryIsolatedByAccountAndSession(t *t
 	viaOther := h.start(t, other, recoveryHeader(), frame)
 	turn := recoveryReadTurn(t, viaOther)
 	require.NotEmpty(t, turn.errorEvent, "换号后不复用 A 号的清理记录")
-	require.Equal(t, coderws.StatusCode(0), turn.closeStatus)
+	require.Equal(t, recoveryEndTurnStatus, turn.closeStatus)
 	viaOther.close(t)
 	frames := h.businessFrames()
 	require.True(t, frames[before].has(bad), "换号后被拒密文原样发往上游")
@@ -595,7 +626,7 @@ func TestOpenAIWSInvalidEncryptedContentCompactionItemIsNeverSilentlyDropped(t *
 		require.NotEmpty(t, turn.errorEvent, "第 %d 次：客户端收到明确错误", attempt)
 		require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
 		require.Empty(t, turn.completedID)
-		require.Equal(t, coderws.StatusCode(0), turn.closeStatus, "不是裸关连接")
+		require.Equal(t, recoveryEndTurnStatus, turn.closeStatus, "error 之后以 1000 结束本轮，不是 1008")
 		ws.close(t)
 	}
 	require.Empty(t, h.recordedDigests(h.gate.account.ID), "压缩项被拒：不记录任何清理")
@@ -692,7 +723,7 @@ func TestOpenAIWSInvalidEncryptedContentUnlocatedRecoveryIsBoundedToOnce(t *test
 		retry := recoveryReadTurn(t, ws)
 		require.NotEmpty(t, retry.errorEvent, "第 %d 次：明确错误", attempt)
 		require.Empty(t, retry.completedID)
-		require.Equal(t, coderws.StatusCode(0), retry.closeStatus)
+		require.Equal(t, recoveryEndTurnStatus, retry.closeStatus)
 		ws.close(t)
 	}
 	require.Equal(t, recoveryDigests(bad, recoveryCipher("B")), h.recordedDigests(h.gate.account.ID), "整包恢复已用掉：不再扩大记录")
@@ -768,7 +799,7 @@ func TestOpenAIWSInvalidEncryptedContentAmbiguousFragmentOnlyRecoversMatchedItem
 			turn := recoveryReadTurn(t, first)
 			require.NotEmpty(t, turn.errorEvent, "客户端收到上游的明确错误事件")
 			require.Empty(t, turn.completedID)
-			require.Equal(t, coderws.StatusCode(0), turn.closeStatus)
+			require.Equal(t, recoveryEndTurnStatus, turn.closeStatus)
 			first.close(t)
 			require.Equal(t, recoveryDigests(bad, twin), h.recordedDigests(h.gate.account.ID), "只记片段吻合的两项，有效项 B 与压缩项 C 不被标坏")
 
@@ -809,7 +840,7 @@ func TestOpenAIWSInvalidEncryptedContentAmbiguousFragmentWithMatchedCompactionIs
 		require.NotEmpty(t, turn.errorEvent, "第 %d 次：客户端收到明确错误", attempt)
 		require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
 		require.Empty(t, turn.completedID)
-		require.Equal(t, coderws.StatusCode(0), turn.closeStatus, "不是裸关连接")
+		require.Equal(t, recoveryEndTurnStatus, turn.closeStatus, "error 之后以 1000 结束本轮，不是 1008")
 		ws.close(t)
 	}
 	require.Empty(t, h.recordedDigests(h.gate.account.ID), "吻合项里有压缩项：不记录任何清理")
@@ -818,5 +849,117 @@ func TestOpenAIWSInvalidEncryptedContentAmbiguousFragmentWithMatchedCompactionIs
 	for _, sent := range frames {
 		require.True(t, sent.has(bad) && sent.has(twin), "两条吻合的密文每次都原样发往上游，未被静默丢弃")
 		require.True(t, sent.has(recoveryCipher("B")), "没有任何整包清理")
+	}
+}
+
+// openUpstreamConnections 返回假上游当前仍打开的连接数（网关关闭上游连接后会降下来）。
+func (h *recoveryWireHarness) openUpstreamConnections() int {
+	h.server.mu.Lock()
+	defer h.server.mu.Unlock()
+	return len(h.server.open)
+}
+
+// 14) 线上缺陷（0.2.18-4 复测仍断流）：真实上游对 invalid_encrypted_content 只发 error，既不发终态也不断连。
+// 网关必须在 error 原样写给客户端之后结束本轮并关闭连接，释放上游连接（以及 handler 里随之释放的内存预算）；
+// 否则旧连接一直卡在读上游，客户端重连的新连接读不到首帧、抢占不了旧连接。
+// 关闭码是 1000：handler 认作“客户端自行结束”，不记账号调度失败。
+func TestOpenAIWSInvalidEncryptedContentErrorOnlyUpstreamEndsTurnAndReleasesConnections(t *testing.T) {
+	for _, profile := range reasoningReplayProfiles() {
+		t.Run(profile.name, func(t *testing.T) {
+			mode := officialClientProfileModeActive
+			profile.apply(t, mode)
+			h := newRecoveryWireHarness(t, mode)
+			h.setErrorOnly(true)
+			bad := recoveryCipher("A")
+			h.rejectCipher(bad, recoveryHintMessage(bad))
+			frame := recoveryFrame(t, "pck-error-only", recoveryColdHistory()...)
+
+			logs := captureOpenAIWSRecoveryLogs(t, func() {
+				first := h.start(t, h.gate.account, recoveryHeader(), frame)
+				turn := recoveryReadTurn(t, first)
+				// error 事件原样写给客户端，之后网关主动结束：不是等到读超时才发现。
+				require.Equal(t, "invalid_encrypted_content", gjson.GetBytes(turn.errorEvent, "error.code").String())
+				require.Equal(t, "error", turn.eventTypes[len(turn.eventTypes)-1], "error 是客户端收到的最后一个事件，没有伪造终态")
+				require.Empty(t, turn.completedID)
+				require.False(t, turn.failed)
+				require.True(t, turn.closed)
+				require.Equal(t, recoveryEndTurnStatus, turn.closeStatus)
+				first.close(t)
+			})
+			require.Contains(t, logs, "stage=turn_end")
+
+			// 上游连接随之关闭，没有残留的挂起连接。
+			require.Eventually(t, func() bool { return h.openUpstreamConnections() == 0 }, 3*time.Second, 20*time.Millisecond, "网关结束本轮后应关闭上游连接")
+			require.Equal(t, recoveryDigests(bad), h.recordedDigests(h.gate.account.ID), "照常记录被拒项")
+
+			// 重连后恢复成功：新连接用的是新的上游连接，历史已被清理。
+			second := h.start(t, h.gate.account, recoveryHeader(), frame)
+			retry := recoveryReadTurn(t, second)
+			require.NotEmpty(t, retry.completedID)
+			second.close(t)
+			recoveryRequireRecoveredFrame(t, h.businessFrames()[len(h.businessFrames())-1])
+		})
+	}
+}
+
+// 15) 一次清完：失效的推理项不止一个（都是别家模型留下的、带非空 content），上游一次只点名一项，
+// 客户端重连上限只有 5 次，逐项剥离会在清完之前耗尽。结构性扩展把同请求里全部带 content 的推理项一次记完：
+// 一次重连就成功；OpenAI 格式（无 content）的有效推理项与加密压缩项原样保留。
+func TestOpenAIWSInvalidEncryptedContentStructuralClearsAllContentBearingReasoningInOneReconnect(t *testing.T) {
+	for _, shape := range []struct {
+		name      string
+		errorOnly bool
+	}{{"error后带response.failed", false}, {"只发error不发终态", true}} {
+		for _, profile := range reasoningReplayProfiles() {
+			t.Run(shape.name+"/"+profile.name, func(t *testing.T) {
+				mode := officialClientProfileModeActive
+				profile.apply(t, mode)
+				h := newRecoveryWireHarness(t, mode)
+				h.setErrorOnly(shape.errorOnly)
+				// 上游把别家模型留下的三个推理项都视为失效，但一次只点名最先遇到的那一项（A，其次 A2、A3）。
+				a, a2, a3 := recoveryCipher("A"), recoveryCipher("A2"), recoveryCipher("A3")
+				for _, cipher := range []string{a, a2, a3} {
+					h.rejectCipher(cipher, recoveryHintMessage(cipher))
+				}
+				frame := recoveryFrame(t, "pck-structural", recoveryColdHistory(
+					recoveryRaw(recoveryReasoningItemWithContent("A2")),
+					recoveryRaw(recoveryCompactionItem("C")),
+					recoveryRaw(recoveryReasoningItemWithContent("A3")),
+				)...)
+
+				logs := captureOpenAIWSRecoveryLogs(t, func() {
+					first := h.start(t, h.gate.account, recoveryHeader(), frame)
+					turn := recoveryReadTurn(t, first)
+					require.NotEmpty(t, turn.errorEvent)
+					require.Equal(t, recoveryEndTurnStatus, turn.closeStatus)
+					first.close(t)
+					require.Equal(t, recoveryDigests(a, a2, a3), h.recordedDigests(h.gate.account.ID), "一次记完全部带 content 的推理项；有效项 B 与压缩项 C 不记")
+
+					// 只重连这一次就成功：第二个连接发往上游的帧里三个失效密文都已清理。
+					second := h.start(t, h.gate.account, recoveryHeader(), frame)
+					retry := recoveryReadTurn(t, second)
+					require.Empty(t, retry.errorEvent, "一次重连就不再被拒")
+					require.NotEmpty(t, retry.completedID, "%v closeStatus=%d", retry.eventTypes, retry.closeStatus)
+					require.Equal(t, coderws.StatusCode(0), retry.closeStatus, "没有 1008")
+					second.close(t)
+				})
+
+				frames := h.businessFrames()
+				require.Len(t, frames, 2, "一次清完：只需要被拒一次、重连一次")
+				require.True(t, frames[0].has(a) && frames[0].has(a2) && frames[0].has(a3))
+				last := frames[1]
+				for _, cipher := range []string{a, a2, a3} {
+					require.False(t, last.has(cipher), "失效密文已清理")
+				}
+				require.True(t, last.has(recoveryCipher("B")), "OpenAI 格式（无 content）的有效推理项密文原样保留")
+				require.True(t, last.has(recoveryCipher("C")), "加密压缩项原样保留")
+				for _, text := range []string{"摘要-A", "摘要-A2", "摘要-A3", "第一问", "第二问"} {
+					require.Contains(t, last.text(), text, "推理骨架与正文保留")
+				}
+				for _, want := range []string{"located=structural", "marked=3", "matched=1", "result=recorded", "attempts=1"} {
+					require.Contains(t, logs, want)
+				}
+			})
+		}
 	}
 }
