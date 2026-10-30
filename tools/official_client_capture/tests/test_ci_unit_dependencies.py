@@ -31,6 +31,10 @@ class DepWorld(World):
     def __init__(self, case: unittest.TestCase, files: dict[str, str] | None = None, *, observed: dict[str, tuple[list[str], list[str]]] | None = None,
                  unobserved: dict[str, str] | None = None, calibration: dict[str, float] | None = None) -> None:
         super().__init__(case, files, calibration)
+        # 合成数据登记的目录范围里补上前端与部署目录（真实数据里本来就有）：否则这两处的改动会因"路径不认识"而失败关闭，测不到命令门禁项自己的判定。
+        self.data = {**self.data, "recognized_areas": [*self.data["recognized_areas"], "frontend/", "deploy/"]}
+        self.write_data()
+        self.base = self.commit("补登记目录范围")
         self.traced = self.base
         self.install_table(observed or {}, unobserved or {})
 
@@ -426,6 +430,195 @@ class SecondLayerSharesTheDependencyDataTests(unittest.TestCase):
         self.assertEqual(skipped(selection), sorted(["test_ci_shared_thing", "test_claude_cheap", "test_claude_heavy_b",
                                                      "test_claude_heavy_c", "test_claude_heavy_d"]))
         self.assertEqual(manifest["gate_scope_info"]["applied"], "client-plan")
+
+
+# --------------------------------------------------------------------------------------------- 命令门禁项的筛选（OPT-02 第二轮）
+
+GO_GATES = ["backend-go-test", "backend-integration", "backend-unit"]
+LINT_GATES = ["backend-lint", "lint-integration", "lint-unit"]
+FRONTEND_GATES = ["frontend-critical", "frontend-lint", "frontend-typecheck"]
+ALL_COMMAND_GATES = sorted(GO_GATES + LINT_GATES + FRONTEND_GATES)
+COMMAND_WORLD = {
+    **WORLD,
+    "backend/go.mod": "module example.invalid/backend\n\ngo 1.22\n",
+    "backend/go.sum": "",
+    "backend/internal/svc/svc_test.go": "package svc\n\nfunc TestX() {}\n",
+    "frontend/package.json": '{"name": "frontend"}\n',
+    "frontend/src/app.ts": "export const a = 1\n",
+    "deploy/config.example.yaml": "a: 1\n",
+    "docs/legal/terms.md": "terms\n",
+}
+
+
+def decided(selection: dict[str, Any], decision: str) -> list[str]:
+    return sorted(gate for gate, row in selection["commands"]["gates"].items() if row["decision"] == decision)
+
+
+class CommandSelectionTests(unittest.TestCase):
+    def pick(self, files: dict[str, str], *changes: tuple[str, str | None]) -> dict[str, Any]:
+        return DepWorld(self, files).pick(*changes)
+
+    def test_nothing_touching_backend_or_frontend_skips_all_nine_gates_and_says_why(self) -> None:
+        selection = self.pick(COMMAND_WORLD, (f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
+        self.assertEqual(decided(selection, "skip"), ALL_COMMAND_GATES)
+        self.assertEqual(selection["commands"]["skipped_gates"], ALL_COMMAND_GATES)
+        self.assertEqual(selection["commands"]["model"], uo.COMMAND_MODEL)
+        self.assertTrue(uo.seal_ok(selection), "commands 在自摘要之内：被改动就验不过")
+
+    def test_one_changed_line_in_backend_runs_every_go_and_lint_gate_but_not_the_frontend(self) -> None:
+        selection = self.pick(COMMAND_WORLD, ("backend/main.go", "package main\n// 变了\n"))
+        self.assertEqual(decided(selection, "run"), sorted(GO_GATES + LINT_GATES))
+        self.assertEqual(decided(selection, "skip"), FRONTEND_GATES)
+        hit = selection["commands"]["gates"]["backend-unit"]["hits"][0]
+        self.assertEqual((hit["file"], hit["status"]), ("backend/main.go", "M"))
+        self.assertIn("backend/", hit["reason"])
+
+    def test_go_mod_go_sum_and_new_or_deleted_backend_files_all_count(self) -> None:
+        for change in (("backend/go.mod", "module example.invalid/backend\n\ngo 1.23\n"), ("backend/go.sum", "x v1 h1:abc\n"),
+                       ("backend/internal/svc/new_test.go", "package svc\n"), ("backend/internal/svc/svc_test.go", None),
+                       ("backend/.golangci.yml", "run: {}\n")):
+            with self.subTest(change=change[0]):
+                selection = self.pick(COMMAND_WORLD, change)
+                self.assertEqual(decided(selection, "run"), sorted(GO_GATES + LINT_GATES))
+
+    def test_a_new_or_changed_or_deleted_frontend_file_runs_the_frontend_gates_only(self) -> None:
+        for change in (("frontend/src/brand_new.ts", "export const b = 2\n"), ("frontend/src/app.ts", "export const a = 2\n"),
+                       ("frontend/src/app.ts", None), ("frontend/package.json", '{"name": "frontend2"}\n'), ("Makefile", "all:\n\t@true\n")):
+            with self.subTest(change=change[0]):
+                selection = self.pick(COMMAND_WORLD, change)
+                self.assertEqual(decided(selection, "run"), FRONTEND_GATES)
+                self.assertEqual(decided(selection, "skip"), sorted(GO_GATES + LINT_GATES))
+
+    def test_a_tool_file_named_in_the_backend_sources_runs_the_go_gates_but_not_lint_or_the_frontend(self) -> None:
+        files = {**COMMAND_WORLD,
+                 "backend/internal/svc/frozen_test.go": 'package svc\n\nvar frozen = map[string]string{"tools/official_client_capture/kernel_util.py": "abc"}\n'}
+        selection = self.pick(files, (f"{CAPTURE}/kernel_util.py", "VALUE = 7\n"))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+        self.assertIn("后端源码里提到了", selection["commands"]["gates"]["backend-unit"]["hits"][0]["reason"])
+
+    def test_a_path_joined_from_literals_in_the_backend_sources_counts(self) -> None:
+        files = {**COMMAND_WORLD, "backend/internal/svc/join_test.go": ('package svc\n\nfunc root() string {\n'
+                                                                        '\treturn filepath.Join(repo, "tools", "official_client_capture", "far_dep.py")\n}\n')}
+        selection = self.pick(files, (f"{CAPTURE}/far_dep.py", "FAR = 7\n"))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+
+    def test_a_bare_file_name_in_the_backend_sources_counts_wherever_the_changed_file_lives(self) -> None:
+        files = {**COMMAND_WORLD, "backend/internal/svc/name_test.go": 'package svc\n\nconst n = "config.example.yaml"\n'}
+        selection = self.pick(files, ("deploy/config.example.yaml", "a: 2\n"))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+
+    def test_a_directory_named_in_the_backend_sources_counts_for_every_file_below_it(self) -> None:
+        files = {**COMMAND_WORLD, "backend/internal/svc/dir_test.go": 'package svc\n\nconst d = "docs/legal"\n',
+                 "docs/legal/more/deeper.md": "x\n"}
+        selection = self.pick(files, ("docs/legal/more/deeper.md", "y\n"))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+
+    def test_the_frontend_reading_a_file_outside_frontend_counts(self) -> None:
+        files = {**COMMAND_WORLD, "frontend/src/Dialog.vue": "import doc from '../../../docs/legal/terms.md?raw'\n"}
+        selection = self.pick(files, ("docs/legal/terms.md", "new terms\n"))
+        self.assertEqual(decided(selection, "run"), FRONTEND_GATES)
+        self.assertEqual(decided(selection, "skip"), sorted(GO_GATES + LINT_GATES))
+
+    def test_everything_under_the_freeze_ledger_directory_runs_the_go_gates(self) -> None:
+        files = {**COMMAND_WORLD, "docs/egress/notes/n.txt": "x\n"}
+        selection = self.pick(files, ("docs/egress/notes/n.txt", "y\n"))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+
+    def test_a_ledger_that_cannot_be_read_fails_closed_for_the_go_gates_only(self) -> None:
+        """台账目录在、但冻结台账登记路径算不出来（合成仓库没有 tools.upstream_merge）：后端测试对不在 backend/ 的改动也照跑，lint 与前端不受影响。"""
+
+        files = {**COMMAND_WORLD, "docs/egress/maintenance/receipt.json": "{}\n"}
+        selection = self.pick(files, (f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+        self.assertIn("失败关闭", selection["commands"]["gates"]["backend-go-test"]["hits"][0]["reason"])
+        self.assertEqual(decided(selection, "skip"), sorted(LINT_GATES + FRONTEND_GATES))
+
+    def test_an_unrecognized_path_runs_every_command_gate(self) -> None:
+        selection = self.pick(COMMAND_WORLD, ("brand_new_top/dir/file.txt", "x\n"))
+        self.assertEqual(decided(selection, "run"), ALL_COMMAND_GATES)
+
+    def test_the_old_rule_and_a_whole_set_fallback_carry_no_command_decisions(self) -> None:
+        world = DepWorld(self, COMMAND_WORLD)
+        old = world.pick(("backend/main.go", "package main\n// 变了\n"), precision="owner")
+        self.assertNotIn("commands", old)
+        full = DepWorld(self, COMMAND_WORLD).pick(("tools/ci/unit_executor.py", "# x\n"))
+        self.assertNotIn("commands", full)
+        self.assertEqual(full["scope"], uo.SCOPE_FULL)
+
+    def test_deleting_a_tool_file_the_backend_names_runs_the_go_gates(self) -> None:
+        files = {**COMMAND_WORLD, "backend/internal/svc/frozen_test.go": 'package svc\n\nvar f = "tools/official_client_capture/far_dep.py"\n'}
+        selection = self.pick(files, (f"{CAPTURE}/far_dep.py", None))
+        self.assertEqual(decided(selection, "run"), GO_GATES)
+
+
+class CommandGateManifestTests(unittest.TestCase):
+    """入口门禁清单：被跳过的门禁项连同命令单元一起拿掉，决定与原因留在 selection.commands；清单仍满足执行器的闭合要求。"""
+
+    @staticmethod
+    def unit(unit_id: str) -> dict[str, Any]:
+        return {"unit_id": unit_id, "argv": ["true"], "cwd": "/tmp", "cores": 1, "memory_mb": 128, "timeout_seconds": 60, "weight": 1.0}
+
+    def manifest(self) -> dict[str, Any]:
+        gates = [("backend-unit", "backend:unit"), ("lint-unit", "backend:lint-unit"), ("frontend-lint", "frontend:lint"),
+                 ("check-egress-spec", "egress-spec:x"), ("deploy-scripts", "deploy:y")]
+        return {"schema_version": "unit-executor-gates/v1", "profile": "full-gates", "test_groups": [],
+                "units": [self.unit(unit_id) for _gate, unit_id in gates],
+                "gates": [{"gate_id": gate, "units": [unit_id]} for gate, unit_id in gates], "scheduling": {}}
+
+    def apply(self, *changes: tuple[str, str | None]) -> tuple[dict[str, Any], dict[str, Any]]:
+        from tools.ci import entry_gates as eg
+
+        world = DepWorld(self, COMMAND_WORLD)
+        world.data = {**world.data, "dependency": {"precision": "auto", "reason": "t"}}
+        world.write_data()
+        world.base = world.commit("开启 auto")
+        for rel, text in changes:
+            if text is None:
+                (world.root / rel).unlink()
+            else:
+                world.write(rel, text)
+        world.commit("候选")
+        manifest = self.manifest()
+        eg.apply_gate_scope(manifest, world.root, gates_wanted=["test-capture-tools"], gate_scope="client-plan", select_base=world.base,
+                            select_client="codex", include_claude=False, audit_policy=None, input_scopes=[], recorded_bridge=None)
+        return manifest, manifest["selection"]
+
+    def test_skipped_gates_leave_the_manifest_with_their_units_and_the_rest_stays_closed(self) -> None:
+        manifest, selection = self.apply((f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
+        self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["check-egress-spec", "deploy-scripts"])
+        self.assertEqual(sorted(unit["unit_id"] for unit in manifest["units"]), ["deploy:y", "egress-spec:x"])
+        self.assertEqual(manifest["command_gates_skipped"], ["backend-unit", "frontend-lint", "lint-unit"])
+        self.assertEqual(selection["commands"]["skipped_gates"], ALL_COMMAND_GATES, "清单里没有的门禁项（这里的 profile 只有三个可筛选的）也有决定，但只拿掉清单里有的")
+        self.assertTrue(uo.seal_ok(selection))
+        self.assertEqual(self.loads(manifest), ["check-egress-spec", "deploy-scripts"], "执行器读得进，没有游离单元")
+
+    def test_a_backend_change_keeps_the_go_and_lint_gates_and_drops_only_the_frontend(self) -> None:
+        manifest, _selection = self.apply(("backend/main.go", "package main\n// 变了\n"))
+        self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["backend-unit", "lint-unit", "check-egress-spec", "deploy-scripts"])
+        self.assertEqual(manifest["command_gates_skipped"], ["frontend-lint"])
+
+    def test_the_egress_spec_group_and_deploy_scripts_are_never_filtered(self) -> None:
+        for change in ((f"{CAPTURE}/loose_data.json", '{"v": 2}\n'), ("docs/other.md", "# 变了\n"), ("frontend/src/app.ts", "export const a = 3\n")):
+            with self.subTest(change=change[0]):
+                manifest, _selection = self.apply(change)
+                kept = [gate["gate_id"] for gate in manifest["gates"]]
+                self.assertIn("check-egress-spec", kept)
+                self.assertIn("deploy-scripts", kept)
+
+    def test_a_whole_set_fallback_leaves_the_manifest_untouched(self) -> None:
+        manifest, _selection = self.apply(("tools/ci/unit_executor.py", "# x\n"))
+        self.assertEqual(len(manifest["gates"]), 5)
+        self.assertNotIn("command_gates_skipped", manifest)
+
+    @staticmethod
+    def loads(manifest: dict[str, Any]) -> list[str]:
+        from tools.ci import unit_executor as ue
+
+        path = Path(tempfile.mkdtemp()) / "gates.json"
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        _groups, _units, gates, _payload = ue.load_gates_manifest(path, machine_cores=4)
+        shutil.rmtree(path.parent, ignore_errors=True)
+        return [gate.gate_id for gate in gates]
 
 
 # --------------------------------------------------------------------------------------------- 真实仓库的守卫
