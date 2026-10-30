@@ -1584,6 +1584,22 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 
 **0.165.0 会话中途改档的上游行为**（W1 实采，Campaign 之外，没有账本；ARM64，官方 0.165.0 TUI 经真实上游字节中继，WS，`gpt-6.1-sol`，采集登录态副本）：每组用 5 道需要推理的同类计数题，禁用 shell 工具以免模型改用代码计算，改档放在第 1、2 题之间（high→low→high 一组例外：改低在第 2、3 题之间、改回 high 在第 3、4 题之间），以 `usage.output_tokens_details.reasoning_tokens` 为信号。中途改档后，请求级 `reasoning.effort` 始终钉在窗口基线，上游回显的 effort 也等于基线，但推理量跟随 `input` 里的 `configuration_update`：第 2 至第 5 题的推理量合计（下称后四题合计），全程 low 1247±93（4 次）、全程 high 1836±154（4 次）、high→low 1407±294（4 次，其中 1 次末题 1204 为离群，其余三次合计约 1260，与全程 low 无差别）、low→high 1424±57（4 次，只部分跟随）、high→low→high 1621±72（3 次，最后一次改回 high 之后的两题为 281、933，回到全程 high 的 269、941 水平，而不是全程 low 的 188、691）。结论：上游执行 `configuration_update`，且以最后一条为准，不是忽略，也不是只回显请求级字段；low→high 方向只部分跟随，样本量不足以区分是上游衰减还是题目所致。限制：只采了 WS 传输，没有 HTTP 传输和 low→xhigh 的放大对照。网关“生效 effort 取 `input` 里最后一条 `configuration_update`”（`openai_effective_reasoning_effort.go` 的 `lastConfigurationUpdateEffort`）与此一致，无需改动。证据在 ARM64 `/root/codex-0165-prep/opt1030/w1/`（`results-hard3.txt` 为主表，请求字节已脱敏）。第二部分 SPEC-BODY-006 里“官方抓包未核实：上游确实按最后一条 update 执行”一句据此已核实；第二部分是冻结章（摘要被各版场景清单、规则清单和工具常量钉住，改动要连锁重算 23 个文件，见 0.165 收尾的第二章摘要连锁），那一句按冻结保持原样，以本段为准。
 
+**第二部分是冻结章：新结论写在哪里，改它要付什么代价。** 第二部分（“第二部分 Codex CLI 客户端规则画像”一级标题到“第三部分”一级标题之间的全部内容，含全部 SPEC-* 规则）的整章摘要由 `candidate_rule_assertion.source_spec_section_sha256(指南, "第二章")` 计算，现值是 `c7af79366e8a59c2eec0b812d9ce76b5f3588ecde64053d00ef6c5880979258b`。它被 0.149.1 至 0.165.0 九个版本的 `codex_upgrade_scenarios_*.json` 与 `candidate_rule_expectations_*.json`、`candidate_rule_assertion.py`、`candidate_test_trace.py` 等工具常量钉住；改第二部分里的任何一个字节（哪怕删一个链接）都会让摘要变化，`make test-capture-tools` 里十来个单元报“场景清单规格第二章摘要不一致”，而冻结承接的 dry-run（`freeze-successor-generate --dry-run`）、`make check-egress-spec` 与 Go 测试全绿，拦不住这一层。要真改第二部分，必须连锁重算约 23 个文件的摘要（一行一替换，由脚本产出），再重建驱动 manifest、重绑事实映射、重封身份守恒基线并补冻结承接收据，是一整轮工作（先例是 0.165 收尾提交 `563d6a30a0`）。因此约定：**两次版本登记之间，新的实测结论、已知边界、操作规程一律写在第三部分 3.9 末尾或第四部分，第二部分保持原样**；第二部分里已有的旧说法（如 SPEC-BODY-006 里“官方抓包未核实：上游确实按最后一条 update 执行”）不改，在新位置注明以新位置为准（本节上一段就是这样处理 W1 实采结论的）。下一次 Codex 升级的版本登记本来就要重算第二章摘要连锁，到那时再把累积的新结论并入第二部分。改指南前后都先核对摘要，也可以直接跑推送前预检的 `guide-part2-digest` 项（见 §4.8.2）：
+
+```
+PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib;from tools.official_client_capture.candidate_rule_assertion import source_spec_section_sha256 as f;print(f(pathlib.Path('docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md'),'第二章'))"
+```
+
+**0.165.0 发版后 WebSocket 断流的三轮修复（v0.2.18-3／4／5）与验收盲区。** 现象始终是同一个：同一会话前期用过非 GPT 模型（留下该模型的推理历史），后来切到 GPT 模型再恢复旧会话，客户端自动压缩后反复重连，最终报 `websocket closed by server before response.completed`。三轮修复各解决一层，前两轮的验收都通过了，线上仍断流，原因是验收只验“出站字节像不像官方”，没有验“上游真实行为”：
+
+| 版本 | 根因 | 修法与落点 |
+|---|---|---|
+| v0.2.18-3 | WS 兼容层 `normalizeOpenAIResponsesReasoningContentReplay` 会删 `reasoning` 项里的非空数组 `content`；出站历史校验仍以客户端原始帧为基准逐项比较，不认这种清理，返回 `input was modified`，转成 1008 关闭；重试带同一历史，再次触发 | 只改 fork 独有文件 `official_egress_ws_body.go`：逐项比较不等时，对原始项的副本重放同一清理再比较 |
+| v0.2.18-4 | 第一轮修好后，旧历史里别家模型留下的加密推理项被真实上游拒绝（`invalid_encrypted_content`）；网关每次原样转发同一历史，客户端重试永远复现 | 按错误里的首尾片段在历史里唯一定位失效项、记录其摘要，下次进场清理；压缩项不静默删除；恢复不了时先给客户端发该错误事件再关连接。新逻辑在 fork 独有的 `openai_ws_encrypted_recovery.go`，上游转发文件只有几处调用点。限制：每次重连只剥离一项，N 个失效项要 N+1 次重试，而客户端重连上限是 5 次 |
+| v0.2.18-5 | 真实上游对失效密文只发 `error` 事件，既不发终态也不断连；网关的终态判断不含 `error`，转发循环继续等终态，旧连接（处理函数未返回）一直占着按大历史首帧加权的 WS 内存预留（共享预算 256 MiB）；新连接读首帧要先过内存准入，被拒则读不到首帧、也无法抢占旧连接，同一时刻他人的 HTTP 请求也被同一预算拒 | `error` 写给客户端后以关闭码 1000 结束本轮并释放连接与预算（已有 token 输出时不结束）；一次拒绝记完全部失效项，不再逐项剥离。上游转发文件只加调用点，主体仍在 fork 独有文件 |
+
+**验收盲区**（升级前行为验收套件逐条补上，见 §4.8.3）：①假上游在 `error` 后带了终态（`response.failed`），测不出“只发 `error`、不发终态、不断连”；②Go 测试走 service 层，绕过 handler 的内存准入；③没有大历史首帧；④没有把共享预算压到只够一个连接；⑤只有一个失效项，测不出逐项剥离用尽客户端 5 次重连。**结论**：v0.2.18-5 在 DMIT 用原会话复测成功，经 1 次重连正常返回；这 1 次重连是首次发现失效项的一次性成本（约 5 秒），失效记录在进程内存，网关重启后丢失会再来一次。去掉它的两条路（无上游确认的预剥离、网关内静默重放）风险或改动偏大，已决定不做。**已知限制**：①“一次清完”依赖“OpenAI 自家推理项不带非空 `content`”这个结构假设，万一不成立会误清有效推理上下文（质量下降、无报错）；②已有 token 输出之后只来 `error`、不来终态的情形仍不结束连接（原有行为）；③压缩项被拒这类恢复不了的情形同样是 `error` 加正常关闭，客户端重连用满后只剩通用报错；④上游原有的 `ingress_ws_error_event` 日志照打上游文案，真实上游若给完整密文会进日志；⑤清理后剩下的空推理壳（`{"type":"reasoning","summary":[]}`）是否被上游接受，只有原会话复测能证明，假上游证明不了（本次复测正常）。三轮修复对上游文件的改动只有 `openai_ws_forwarder_ingress.go`（非测试，4 个调用点）和一个上游测试用例，其余都在 fork 独有文件。
+
 ---
 
 # 第四部分 Codex CLI 版本演进流程
@@ -1663,7 +1679,7 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 编排器的受支持升级对与文件名清单、该版本的定向样本、各处源码根版本号、`tools/spec_ref_anchors.json` 与依赖清单，并对第二部分的源码引用做增量复核；
 登记完成后、建 Campaign 之前用 `test_codex_identity_conservation --seal-baseline` 重封基线（缺漏会被守恒测试拦下）；改完跑全量 `make test-capture-tools`。
 两次升级之间只能改 control 层文件；wire_producer／evidence_semantics 层（场景清单、候选采集脚本）与 `TARGET_VERIFIER_SHA256S` 钉住的 5 个
-`tools/ci` 验证器文件，只能随版本登记重封。受管驱动文件必须在 Campaign plan 之前改完。
+`tools/ci` 验证器文件，只能随版本登记重封。受管驱动文件必须在 Campaign plan 之前改完。登记之后、本 Campaign 第一次后台验证之前，还要重新追踪依赖追踪表（本机约 20 分钟，规则见 [§4.8.1](#codex-opt02-dependency-selection)；事实映射重绑、基线重封、manifest 与追踪整条链用一条命令跑，见 [§4.8.6](#codex-reseal-chain)）；推 main 之前先跑一键预检（[§4.8.2](#codex-prepush-check)），登记涉及的第二章摘要连锁见 3.9 末尾的冻结章说明。
 
 **登记定稿前，用上一版真实候选证据预演标签与判据。** 登记会写证据标签声明与候选期望清单；登记测试里的观测是手造的，标签错位和判据过严要到 VC-5 封存预览、
 assert-rules 才暴露，而且撞一个修一个（0.164 为此在关键路径上耗约 3 小时）。把上一版候选 attempt 与官方 attempt（连同完整原始证据根，只读拉回本机）交给预演，零写入、零请求：
@@ -2242,7 +2258,7 @@ VC-6 收口后再 prepare（先 `--dry-run`）→ gates → 人工批准 → pub
 （`driver/local/local-capture-tools-receipt.sh`，约 48 分钟，不占门禁，收据上传到 `$RUNROOT/local-receipts/`）；第七项 `tui-prelaunch-receipt`：新版二进制对 compact、ws-idle-close、daemon、guardian
 以及会话内改推理强度／换模型／压缩后续聊（effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws）各 TUI 场景做过零请求启动预探且全部通过（`driver/tui-prelaunch-receipt.sh scenarios／write／verify`，绑定目标版本与登记的二进制摘要，真实请求数必须为 0）。
 两项只对 Codex 做；入口便宜检查同名两项在开工时就查。同一 Campaign 内修一次几个文件时，`background-validate.sh start … --select-base last-passed` 把比对基点取为同一 Campaign 上一个已通过的提交；
-VC-5 准入接受这种子集结论（只拒另一客户端用）。第一次验证不带。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
+VC-5 准入接受这种子集结论（只拒另一客户端用）。第一次验证不带。基点不是发版 tag 提交时，选择器还按依赖精度把碰不到改动的模块剔除，机制、实测与估时见 [§4.8.1](#codex-opt02-dependency-selection)。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
 及受改动影响的 Claude 重模块照跑；找不到发版基点或选择器出错时回退全集；Claude 轮次、`--opening`、收尾不筛选），子集结论不得冒充全集，也不能被 `reuse` 沿用。失败单元只在“命令正常退出但失败”时补跑一次：同一单元最近 5 轮补跑通过只许 1 次，
 超时、被信号终止、读集未闭合不补跑；Go 门禁先核对包清单完整，再按失败包补跑。补跑通过的单元在结论里单列，两次日志都留；
 结束时在结论目录另出核数偏差报告。
@@ -2291,7 +2307,7 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   `usage_logs` 逐行计数并按作业时间窗拆分。环境隔离作废且一个作业结果都没有的 attempt 是合法续跑来源，全部冻结作业重跑。
 - **重新部署受管工具之后**：VC-5 准入要求当前部署的后台验证 passed。只有全集重新执行、带沿用绑定的通过结论可被 `background-validate.sh reuse` 沿用：
   工具身份五摘要、提交、门禁集合、执行器、调度策略、输入清单、平台环境七项绑定全部不变且自来源完成起不超过 24 小时才沿用，被拒会写明原因。
-  按客户端筛选的子集结论既不能沿用也不能作沿用来源，缺省（Codex 子集）起跑多半被拒，此时直接重起后台验证（子集约 1.2 小时；全集约 2 小时），通过后再派恢复批次；
+  按客户端筛选的子集结论既不能沿用也不能作沿用来源，缺省（Codex 子集）起跑多半被拒，此时直接重起后台验证（缺省子集约 1.2 小时；全集约 2 小时；用 `--select-base last-passed` 的依赖精度子集见 §4.8.1，驱动文件类修复约 42 分钟），通过后再派恢复批次；
   阶段预算在等待期间到期用 `deadline-extend preview／apply --scope stage`（`--preview` 取 Campaign 内 `control/deadlines/` 的规范预览）；
   准入收据绑定漂移用 `vc5-precheck.sh --apply`（动作为空）重签。
 - **候选采集脚本的主机名**：Sub2API 一侧的主机名必须取容器真实名称。监督器按 64 位完整容器 ID 钉住 `CAPTURE_CONTAINER`，
@@ -2393,8 +2409,10 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 - **失败归档里“没跑过的场景”不得让请求核算整体失败**：frozen 采集中途失败后，摘要仍列全部场景，没跑的是零字节、空摘要、空动作且磁盘上没有场景目录；
   严格形状校验因此报“scenarios[n] 非法”，provenance 整体失败。之前的失败都发生在最后一个场景，所以没暴露。现仅当摘要状态为 failed 且该场景的上述特征全部符合时才放行。
   不要靠把 `.failed-attemptN` 改名藏出 `_all_attempt_roots` 解决：那等于把真实发过的请求从核算里藏掉。放行的副作用是这类归档里已按估计上界入过账的请求会再按精确键入一次，只会多计、不会少计。
-- **后台验证 `--select-base last-passed` 在改受管工具文件时省得有限**：仍选 387／425 个模块（归属表粒度粗，改受管工具文件即影响全部 Codex 单元），两次实测各约 1 小时
-  （466 单元、补跑 0、60 分 18 秒；另一次 57 分 16 秒）。VC-5 准入接受该子集结论，但“15 分钟出结论”没有达成，不要据此排计划。
+- **后台验证 `--select-base last-passed` 的耗时：依赖精度把时间缩短约三分之二，但仍不是“15 分钟出结论”**：0.165 轮早期只按归属选择，改受管工具文件仍要跑全部 Codex 与共用模块，
+  两次实测各 57～60 分钟（466 单元、补跑 0，60 分 18 秒与 57 分 16 秒），“15 分钟出结论”没有达成。之后加了依赖精度选择、命令门禁项筛选与整树模块缓存（OPT-02），真机实测驱动文件类修复
+  41 分 52 秒通过，对比同基点的全集 2 小时 01 分 35 秒，缩短 66%；验收口径 10-31 调整为“相对全集缩短 60% 以上”，已达成。瓶颈是选择器对“测试里会拉起构建工具”的约 256 个模块的保守并入，
+  估时按全集的三分之一（约 40 分钟）报，不要报 15 分钟；机制、数据与再压缩的代价见 [§4.8.1](#codex-opt02-dependency-selection)。VC-5 准入接受该子集结论。
 - **VC-5 阶段截止延期要抢批次间隙**：`deadline-extend` 与运行中的批次互斥（互斥锁保护计时账本头）。preview 被拒没有副作用，每 30～60 秒重试；
   0.165 第一次延期靠第 24 次 preview 抓到批次间隙，apply 因账本头前进被拒就重新 preview。
 - **恢复链上的几处手工点（0.165 已修，复核时对照）**：`approve.json` 残留旧 needs-operator 记录（现每轮循环开头补写为 passed）；工具演进后 `vc5-precheck --consume`
@@ -2483,6 +2501,249 @@ B-09／B-10 不是默认跳过全集的开关：完整宿主读集、运行镜�
 Framework 与本指南是受管依赖，部署清单登记路径及完整摘要，与工具同一可回滚事务切换；
 部署前复算指南第二部分摘要与场景清单。受监督部署后重新安装／复验驱动，保留 Git 可执行位。
 本机修改文档不等于服务器已部署；升级开工前必须检查最新提交的工具、文档、驱动安装收据一致。
+
+<a id="codex-part4-maintenance"></a>
+## 4.8 两次升级之间的工具与手册维护（0.165 收尾后的工具优化）
+
+本节记录 0.165 升级收尾后（10-30～10-31）落地的工具优化现状：后台验证提速、推送前预检、升级前行为验收、偶发测试登记、版本登记之后的重封链一键化，以及两条已核实的运维结论。这些工具都放在 `tools/ci/`、`tools/behavior_acceptance/` 和驱动目录，
+不是 `tools/official_client_capture` 的受管文件，两次升级之间改它们不废 Campaign；但改动前仍要先查文件是否被 `TARGET_VERIFIER_SHA256S` 钉住、是否落在冻结台账里（§4.8.4 的 Go 用例文件就在台账里，改它要补冻结承接收据）。
+各节只写“何时用、怎么用、怎么看、限制”；完整参数以脚本文件头和 [驱动 README](../tools/arm64_capture_driver/README.md) 为准。
+
+<a id="codex-opt02-dependency-selection"></a>
+### 4.8.1 后台验证按依赖精度选择（OPT-02）
+
+**为什么要有。** 只按归属选择时（旧口径），后台验证只能剔除另一个客户端的重模块，Codex 与共用模块一律照跑；同一 Campaign 内哪怕只修一个文件，也要跑接近一个小时（0.165 轮早期两次实测 57～60 分钟）。
+依赖精度（`precision=dependency`）在旧口径之上，再把“依赖闭包里没有任何改动文件”的其余测试模块剔除，并按真实输入路径筛选后端／前端命令门禁项；只会比旧口径少跑，不会多跑。
+
+**什么时候生效。** 数据文件 `tools/ci/unit_ownership.json` 的 `dependency.precision` 是 `auto`：比对基点是发版 tag 提交（升级后第一次验证）时沿用旧口径；基点不是发版提交
+（`background-validate.sh start … --select-base last-passed`，或门禁续跑第二层取的“上一轮全集运行”的提交）时用依赖精度。结论仍是 `client-plan` 子集、同一个 `selection` 结构（多三个精度相关的键），
+VC-5 准入的防串用判定不变，子集结论仍不得冒充全集、不能被 `reuse` 沿用。手工查看选择结果（提交号必须是完整 40 位，用 `git rev-parse` 现取，不手写）：
+
+```
+python3 -B tools/ci/unit_ownership.py select --base "$(git rev-parse <基点>)" --head "$(git rev-parse <被测提交>)" --precision dependency
+```
+
+**依赖由三部分取并集。** ①静态导入闭包，传递到测试自己精确提到的文件；②依赖追踪表 `tools/ci/unit_dependencies.json`：审计钩子在真实运行里观察到的“测试模块打开了、枚举了仓库里的哪些文件和目录”
+（`schema_version` 为 `unit-dependencies/v1`，记录 `generated_at_commit` 和每个模块的 `opened`／`listed`；现表 391 个模块有记录、`unobserved` 为 0）；③做不到精确的部分一律保守，失败关闭：没有追踪记录的模块照跑；
+追踪提交以来依赖文件变过的模块照选；追踪提交不在候选提交历史里时全部照选；改动路径不在已登记范围、Python 解析失败、闭包里有解析不了的动态加载时全部照选；闭包代码访问真实 ARM64 环境的模块照跑；
+归属表、选择器或执行器自己在改动里时本轮不筛选（全集）；用依赖精度时追踪表出现在改动里，整轮不筛选。
+
+**命令门禁项筛选。** 后端 go test／lint 与前端三项、出站控制单测这些命令单元合计占去 5 千多核·秒，模块筛得再细也省不掉，所以选择器为它们按真实输入路径各登记一条决定（run／skip，写明命中的改动与原因）：
+后端 go test 三项读 `backend/`、`docs/egress/`、冻结台账登记的路径和后端源码里提到的仓库路径；后端 lint 三项读 `backend/`；前端三项读 `frontend/`、`Makefile` 与前端源码里提到的路径；出站控制单测读 `tools/official_client_control/`；
+`check-egress-spec` 里配方整条是 `cd backend && go …` 的那批 Go 子检查按后端输入筛选。改动与输入不相交就整项（连同命令单元）从清单里拿掉；`check-egress-spec` 的其余子检查、`deploy-scripts`、`capture:prerequisites` 一律照跑，
+改动路径不认识时全部照跑。决定登记在清单的 `selection.commands`（带自摘要），入口门禁总摘要的 `client_selection.commands_skipped` 回显，VC-5 准入看的是 passed 与筛选摘要，登记在案的跳过不会被当成缺失。
+
+**整树模块缓存。** 有 74 个测试模块会复制或摘要整棵受管工具树，以前每个模块各扫一遍（约 3.5 千核·秒），现在测试侧共用一份受管树扫描结果，同一棵树不再被扫上千次。
+
+**重新追踪：版本登记之后做一次。** 追踪表记录的是某个提交上的真实读写，登记改动大（场景清单、事实映射、基线、驱动文件）时旧表会让越来越多模块“依赖文件变过”而照选，省不下时间；
+不重新追踪不会选漏（追踪以来变过的模块照选），只是不省时间。时机：版本登记提交之后、本 Campaign 第一次后台验证之前；**追踪提交必须是之后所有比对基点的祖先**，不要在 Campaign 中途换表。做法（在固定到登记提交的干净检出上，走本机重负载锁；`--jobs` 别超过 4）：
+
+```
+python3 -B tools/ci/dependency_trace.py --repo <检出> --out <结果目录> --jobs 4
+python3 -B tools/ci/unit_ownership.py dependency-table --tree <检出> --trace-dir <结果目录> --python <版本> --platform <平台>
+```
+
+再把生成的 `tools/ci/unit_dependencies.json` 单独提交（重封链的 `trace` 步就是做这件事，见 §4.8.6；追踪要带 `CAPTURE_TYPESCRIPT_MODULE` 与 `CODEX_SPEC_SOURCE_ROOT`，新增测试模块后先 `unit_ownership.py materialize`）。10-31 在任务 1～4 合并后，用重封链的 `trace` 步（`tools/ci/reseal_chain.py --only trace`，`--jobs 3`，重负载锁无等待）做了一次真实重追踪：06:39:25～06:59:59，**20.6 分钟**，追踪提交 `f44b5bf47d`，依赖表提交 `aefcd515c5`，391 个模块有记录、未观察到 0 个（旧表 379 个有记录加 8 个 `unobserved`，新增 12 个模块，其中 8 个由 `unobserved` 恢复），所以估时按约 20 分钟报。追踪时退出码非 0 的模块进 `unobserved`（永远照跑），所以要先让前面的生成值落定、测试转绿，最后才追踪。
+
+**真机实测与验收口径。** 0.165 轮在 ARM64 上以全集 `3f5d62f580a5`（13:56:55Z～15:58:30Z，2 小时 01 分 35 秒，passed）为基点，对 housekeeping 驱动文件修复 `4e22ceb107` 起后台验证：16:23:25Z～17:05:17Z，**41 分 52 秒 passed，缩短 66%**。
+选择器计划为 427 个模块里 286 个运行、141 个跳过，6 个命令门禁项（后端 lint 三项与前端三项）被跳过；`backend-go-test`、`backend-unit`、`backend-integration` 三项因“后端源码里提到了 `README.md`／`manifest.json` 这类通用文件名字面量”被保留
+（单元耗时分别约 10.6、14.2、12.5 分钟）。验收口径 10-31 由“15 分钟内出结论”调整为“驱动文件类单文件修复后，相对全集缩短 60% 以上”，已达成。
+
+**为什么到不了 15 分钟，估时怎么报。** 瓶颈是保守并入：改动命中命令门禁时，选择器把约 256 个“测试里会拉起构建工具（go／make／docker／npm）”的模块全部并入，因为追踪器看不到子进程里读了哪些文件；另有约 87 个是依赖闭包含改动文件（两类有重叠），
+合计 286 个模块被并入运行。改一个只被 1 个模块读取的数据文件也是 286 个，与改驱动文件一样（离线选择实验已验证：依赖它的模块被选中，总数不变）。所以**后台验证的估时按全集的三分之一报（约 40 分钟），不要报 15 分钟**。
+只改后端字面量规则（完整路径匹配）能去掉后端三项，但 286 个并入模块仍在；要真压到 15 分钟必须追踪子进程的文件访问，那是选择器最重要的安全阀、漏选风险最高，没有实际收益证据前不做。
+
+**起跑前置。** 后台验证起跑前本机要对被测提交跑 `driver/local/local-capture-tools-receipt.sh` 并把收据上传到 ARM64 `$RUNROOT/local-receipts/`，否则前置检查 `local-capture-receipt` 过不了；不得用 `--no-preflight` 绕过（见 §4.7 后台验证一段）。
+
+<a id="codex-prepush-check"></a>
+### 4.8.2 推送前一键预检与新工作树门禁包装
+
+**为什么要有。** 10-30、10-31 两天，非代码原因白跑约 8 次：冻结 dry-run 不覆盖指南第二部分的章节摘要（改了 SPEC-* 所在的第二部分，capture-tools 十个单元红，白跑约 25 分钟）；前端审计遇到刚发布 1～2 天的新公告；
+改了冻结路径没补承接收据；新工作树缺 TypeScript 解析器或 Codex 源码树；本机收据没做；`--output` 写成相对路径；选择器没给 40 位提交号。这些都能在几秒内查清，所以推送前先查，红的一次报全。
+
+**怎么跑。** 在要推送的检出里（`HEAD` 必须就是被推送的提交）：
+
+```
+PYTHONDONTWRITEBYTECODE=1 python3 -B tools/ci/prepush_check.py            # 默认范围 origin/main..HEAD，八项全跑，约 10 秒
+PYTHONDONTWRITEBYTECODE=1 python3 -B tools/ci/prepush_check.py --list     # 只列检查项
+PYTHONDONTWRITEBYTECODE=1 python3 -B tools/ci/prepush_check.py --fast     # 不跑联网的两项（前端审计、govulncheck），记“跳过”
+PYTHONDONTWRITEBYTECODE=1 python3 -B tools/ci/prepush_check.py --range <基点>..<被推提交> --receipt-dir <收据目录> [--allow-part2-change] [--allow-dirty] [--fetch] [--json]
+```
+
+退出码：有红项 1；只有绿和跳过 0（`--strict` 把跳过也算 1）；用法或环境错误 2。**只读**：不改受跟踪文件、不刷新索引，中间文件在系统临时目录并用完即删。基点以**本地** `origin/main` 为准，默认不联网刷新，要先刷新加 `--fetch`。
+输出开头印着基点、合并基、被推提交的完整 40 位提交号，选择器和 `--before`／`--after` 直接复制，别手写。
+
+| 检查项 | 查什么 | 跳过条件 |
+|---|---|---|
+| `worktree-state` | HEAD 就是被推提交；无未提交／未跟踪改动；未落后基点；`tools` 下无 `__pycache__`／`.pyc`（门禁前置检查按文件系统查，有就 exit 9） | 不跳过 |
+| `commit-hygiene` | 被推提交说明里没有 `[skip ci]` 一类字面量（GitHub 在说明任意位置匹配到，整次推送都不跑工作流）；`docs/egress/maintenance` 下无 `.md` | 不跳过 |
+| `freeze-successor` | 每个冻结路径的当前摘要是否已有承接收据（与后台验证起跑检查、门禁里冻结测试同一张承接图，是“推上去会不会红”的真值）；范围里还没有收据时再跑 `freeze-successor-generate --dry-run`；红时给出带完整 `--before`／`--after` 和绝对 `--output` 的生成命令 | HEAD 不是被推提交；`tools.upstream_merge` 跑不起来；范围为空记“未触及” |
+| `guide-part2-digest` | **第二部分摘要对比**：`source_spec_section_sha256(指南, "第二章")` 必须等于基点上最新一份 `codex_upgrade_scenarios_*.json` 登记的 `source_spec.sha256`（现为 `c7af79366e8a…`，从登记处读，不手抄）。红时写出旧→新摘要，提示把改动移出第二部分；本轮就是在做第二章摘要连锁时加 `--allow-part2-change`，放行“与基点不同”，但仍要求登记值已同步到新摘要、且 `tools` 下没有文件残留旧摘要 | 不跳过（算不出摘要也是红） |
+| `frontend-audit` | 本地 `pnpm audit --prod --audit-level=high --json` 再跑 `tools/check_pnpm_audit_exceptions.py --exceptions .github/audit-exceptions.yml`（与 Security Scan 同口径）；结果写系统临时目录，不覆盖 `frontend/audit.json` | 没有 pnpm；联网失败；HEAD 不是被推提交；`--fast` |
+| `govulncheck` | 在 `backend` 下 `govulncheck ./...`，只拦代码调用到的漏洞（退出码 3）；另核四个工作流 `go version \| grep` 与 `backend/go.mod` 的 go 版本一致 | 没有 govulncheck 或 go；退出码不是 0／3；HEAD 不是被推提交；`--fast` |
+| `local-receipt` | 被推提交（tip）在收据目录里有 `capture-tools-<完整提交号>.json`，且经 `opening_checks.check_capture_receipt` 核验通过（提交号、命令、退出码 0、工作树干净、耗时、封口）；收据目录依次取 `--receipt-dir`、环境变量 `LOCAL_RECEIPT_DIR`、主检出的 `local-analysis/local-receipts` | 范围为空；只推送不进门禁时可 `--skip local-receipt --skip-reason <理由>` 显式跳过 |
+| `env-paths` | `CAPTURE_TYPESCRIPT_MODULE`（绝对路径、普通文件、摘要等于 Makefile 的 `CAPTURE_TYPESCRIPT_SHA256`）；`CODEX_SPEC_SOURCE_ROOT`（绝对路径、有 `codex-rs/Cargo.lock`、版本目录名等于 Makefile 的 `CODEX_SPEC_SOURCE_VERSION`）；`LOCAL_RECEIPT_DIR` 若设了必须是绝对路径；新工作树里默认路径不存在时必红，输出里直接给出应 `export` 的值 | Makefile 里没有对应变量定义 |
+
+收据另要上传 ARM64 的 `$RUNROOT/local-receipts/` 才会被入口门禁和后台验证的起跑检查看到，预检不连任何远端，**这一步不核**。显式跳过用 `--skip <检查项> --skip-reason <理由>`（可重复，没写理由拒绝运行，输出会原样印出理由）；`--only <检查项>` 只跑指定项。
+**已知限制**：基点是本地跟踪分支，没 `--fetch` 时可能过期；`govulncheck` 用本机已装版本与当时的漏洞库，CI 用 `@latest`，偶有时间差；前端审计只看 `--prod` 高危以上；源码与收据一起推时 dry-run 不适用，此时只用覆盖复算，
+注册表的“手工待办”类规则要在补收据那一步（源码提交单独对 dry-run）才看得到；预检只覆盖上面列出的非代码坑，不替代 `make check-egress-spec`、`make test-capture-tools`、Go unit／integration 与三遍 lint。
+实测（本机，基点 `4e22ceb107`）：干净 main 7 绿 1 跳过（收据：范围为空），8.9 秒；故意改一个字的第二部分，9.2 秒内报红，写出旧→新摘要并给出两条改法；加 `--allow-part2-change` 后仍报“连锁没做全”并列出残留旧摘要的文件。
+
+**新工作树跑门禁的包装（`worktree_gate.sh`）。** 在新建工作树里跑门禁，手工要补被忽略的 `frontend/node_modules`、被忽略的 `local-analysis`、本机重负载锁、跑完清工作树；包装把这些固定下来：
+
+```
+bash tools/ci/worktree_gate.sh "$(git rev-parse HEAD)" check-egress-spec --log /abs/path/egress.log
+bash tools/ci/worktree_gate.sh <提交> test-capture-tools --log /abs/path/capture.log -- CAPTURE_TEST_PARALLELISM=3
+```
+
+做的事：①提交解析成完整 40 位，在 `<主检出>-wt/gate-<短号>-<UTC时间>-<进程号>` 建临时工作树（放在主检出同级的 `-wt` 目录，不放 `/private/tmp`，系统临时目录会让受管数据根检查假红）；②配 `CAPTURE_TYPESCRIPT_MODULE`
+（环境变量优先，否则取主检出里的并按该提交 Makefile 的摘要核对）、`CODEX_SPEC_SOURCE_ROOT`（环境变量优先，否则主检出 `local-analysis/sources/codex-cli-<该提交 Makefile 的版本>`，要有 `Cargo.lock`）、`PYTHONDONTWRITEBYTECODE=1`，
+找不到或不对时报错停下（退出码 64），不会带着坏环境跑几十分钟；目标涉及前端时把主检出的 `frontend/node_modules` 接成符号链接（`--node-modules link|none|auto`）；③经重负载锁跑 `make <目标>`（锁脚本默认 `<主检出>/local-analysis/opt-0165/heavy-run.sh`，`HEAVY_RUN` 可改，`--no-lock` 显式不走锁）；
+④不论成败清理工作树（`--keep` 保留调试）；⑤日志追加写到 `--log`（绝对路径），**最后一行固定 `EXIT=<码>`**。退出码：make 的退出码（配方失败时 make 自己退 2）；准备阶段出错 64；包装自身异常 70；被信号终止 128＋信号号。
+后台跑用 `setsid -f`，**不要 `nohup`**（它让子进程继承“忽略 SIGHUP”，依赖挂断检测的用例必红）。实测（本机）：`check-egress-spec` 在新建工作树里一条命令 49/49 通过，make 339 秒，`EXIT=0`，临时工作树已清理。
+限制：包装只保证“环境配对、过锁、清理、留日志”，不替代对结果的核对；全量 `make test-capture-tools` 仍要二十多分钟、`check-egress-spec` 约 6 分钟；被 SIGKILL 杀掉的包装来不及清理，会在 `<主检出>-wt` 下留 `gate-*` 工作树，手工 `git worktree remove --force` 即可。
+
+<a id="codex-behavior-acceptance"></a>
+### 4.8.3 升级前行为验收（网关镜像发版前必跑）
+
+**为什么要有。** 仿真升级的验收只验“出站字节像不像官方”，不验“上游行为”。v0.2.18-3／4／5 三次修同一个跨模型旧会话 WebSocket 断流（见 3.9），每次都漏了同一类盲区：假上游在 `error` 后带了终态；Go 测试走 service 层绕过 handler 的内存准入；
+没有大历史首帧；没有压共享预算；真实上游对失效密文只发 `error`、既不发终态也不断连。线上就是被这个形态击穿。套件目录 `tools/behavior_acceptance/`，完整说明在该目录 `README.md`。
+
+**何时跑。** 每次要发版的**网关镜像**（Codex 升级、上游合并、热修都算）在部署前跑一遍，全过才发；改了套件本身（场景、假上游）后，再对上一个事故镜像跑一次复现模式。
+
+**怎么跑（一条命令：起栈、跑完、拆栈、删派生镜像）。** 在带 docker 的主机（ARM64 测试机）上：
+
+```
+bash tools/behavior_acceptance/run.sh ghcr.io/itv3/sub2apiplus:<候选版本>                    # 要求全部场景通过
+bash tools/behavior_acceptance/run.sh ghcr.io/itv3/sub2apiplus:0.2.18-4 --expect accident   # 对事故版本要求复现
+BHV_DETACH=1 bash tools/behavior_acceptance/remote_run.sh ARM64 <镜像>                      # 从开发机同步并后台跑，日志最后一行 EXIT=<码>
+```
+
+可选 `--only S1,S3`、`--out <目录>`、`--keep`、`--skip-log-checks`、`--no-prod-guard`；`bash run.sh --cleanup` 清上次异常中断的残留。退出码 0 才算过，最后一行固定 `EXIT=<码>`（1 有场景未达预期或“现网未动”对比不一致，2 前置不满足，3 栈不健康）。
+结果目录里有场景完整输出、逐断言 JSON、重建前后的网关日志。
+
+**覆盖的 8 个场景（S1～S8）。** S1 只发 `error` 不发终态；S2 大历史首帧（不小于 3 MiB）；S3 预算压到只够一个连接（64 MiB 预算，3.0／3.5／4.0 MiB 首帧，2 个失效项）；S4 两个以上失效项（6 个失效 + 8 个有效，一次拒绝记完）；
+S5 压缩项被拒；S6 已输出内容后再来 `error`；S7 并发（3 路 × 4 个会话）；S8 账号状态不变（账号行与健康熔断键前后无差异）。每个场景在 README 场景表里写明“通过判据”和“事故特征”。
+
+**怎么看结果。**
+- 新镜像：8 个场景断言全部通过。关键判据：`error` 后服务端主动以关闭码 1000 结束连接；重连 1 次即 `response.completed`；`websocket_request_memory_rejected` 为 0；无 `openai.websocket_proxy_failed`（1008）；失效密文被清、有效密文与压缩项原样保留；账号状态不变。
+- 事故镜像（v0.2.18-4）：S3 必须看到 `websocket_request_memory_rejected` 多次且 5 次重连用尽无 `completed`；S1、S2、S5、S7 看到 `error` 后连接不关闭；S4 看到逐项剥离用尽 5 次。S6、S8 是回归守卫，不要求复现。
+- 带 `[日志]` 标记的断言依赖网关日志文案（`stage=turn_end` 等）；新版本改了日志文案时可先 `--skip-log-checks`，再回来改 `scenarios.py`，行为类断言不受影响。
+
+**隔离与耗时。** 只创建、只删除名字以 `bhvacc-` 开头的 4 个容器、1 个网络、2 个派生镜像（独立 PG／Redis、测试 CA 烘进网关派生镜像、假上游冒充 `chatgpt.com`），不读不改现网容器与库；起跑前后各取一次现网快照
+（容器 ID／启动时间／重启次数，库用只读事务取行数与账号状态校验和）对比，不一致判红。根盘门槛：已用 ≤69%、可用 ≥40 GiB，起跑前后各量一次。ARM64 实测（镜像都在本机）：对 v0.2.18-5 全过约 1.5 分钟；对 v0.2.18-4 `--expect accident` 约 3 分钟
+（对 v0.2.18-4 的 S3 三个体积各出现 4 次 `websocket_request_memory_rejected`，合计 12 次）。首次在一台新主机上还要加上拉取基础镜像和构建假上游镜像的时间。
+
+**已知限制。** ①假上游不是真 GPT：证明不了真实 GPT 是否接受清掉密文后剩下的空推理壳，只有原会话复测才知道；②“一次清完”依赖“OpenAI 自家推理项不带非空 `content`”的结构假设，套件的有效项也按此建模；③已有 token 输出之后只来 `error`（S6）网关仍不结束连接，是原有行为；
+④失效记录在进程内存，套件每个场景前重建网关，不测重启后的自愈；⑤账号与分组由 SQL 直接写入一次性库（管理 API 要先确认合规声明，不走它），上游迁移改了表结构时要同步改 `setup_data.py`；⑥只覆盖 OpenAI OAuth（官方出站链路）与 OpenAI API Key 两类账号的 WebSocket 路径，不含 Claude、Gemini、HTTP 路径。
+套件不在 `tools/official_client_capture` 受管树，也不在 `tools/arm64_capture_driver`，改它不改变工具身份、不进驱动 manifest；对应的离线单元测试是 `tools/official_client_capture/tests/test_behavior_acceptance.py`（不依赖网络与 docker）。
+
+<a id="codex-flaky-tests"></a>
+### 4.8.4 偶发测试登记与修复结果
+
+下面 4 个用例此前每次升级的门禁和 CI 平均要因它们重跑 1～3 次（每次 25～35 分钟）。判别方法：失败信息命中下表“特征”且诊断重跑通过，就按表对号入座，不要再当新缺陷查。改的全是普通测试文件，不在受管工具身份内，不废 Campaign。
+
+| 测试 | 特征 | 原因 | 修法 |
+|---|---|---|---|
+| `test_claude_upgrade_arm64_delivery_executor` 的 `ProcessTests.test_worker_sigkill_leaves_guard_alive_and_physically_restores` | 轮询 `state.json` 时抛 `GuardError: 守卫原件 JSON 非法` | 守卫／worker 用 `atomic_json`（临时文件加 rename）换文件，`guard.read_json` 在实读前后核对 inode、mtime，撞上换文件的瞬间就抛 `GuardError`，测试没捕获 | 测试里加 `read_state()`：捕获 `GuardError` 后 20 毫秒重读，连续 5 秒读不稳才算真故障；`switch_count`、`restore_count` 的断言与超时不变 |
+| `test_ci_capture_entry`（整体比对 git status） | “源码在执行期间变化／工作树不干净”，多出 `backend/.snapshot-contract-*/main.go` | `test_arm64_capture_driver` 的目录装配用例直接调真实 `catalog_chain.validate_snapshot_contract(REPO_ROOT, …)`；该函数为满足 Go internal 导入规则，把检查程序临时放进真实工作树 `backend/.snapshot-contract-*/` 再 `go run`，并行的 `test_ci_capture_entry` 里 `capture_ci.py` 的前后 git status 比对看见陌生未跟踪文件 | 测试里改用 `go run -overlay`：虚拟入口路径在 `backend` 模块内、真实文件在系统临时目录，磁盘上的真实工作树始终不变；返回字段与正式函数一致。不改驱动本体，所以不触发驱动重装与 ARM64 重跑 |
+| `test_official_directed_relay_flows` 的三个 WS 用例 | 核对块报 `ws-fault-action-not-exactly-once`，或读 `stream_fault_ws_actions` 报 KeyError／None | 中继的受控 WS 应答循环（`upstream_byte_relay.py`）只在读到客户端 Close／EOF 之后才把 `stream_fault_ws_actions` 写进连接元数据；测试读完终态消息就关 socket 再 `relay.stop()` 发 SIGTERM，SIGTERM 抢在中继处理完客户端断开之前时，该字段从未写入。窗口只有微秒级，满载机器才偶发 | 测试夹具新增 `close_ws_gracefully()`：发 Close(1000)，读到服务端回的 Close 帧才返回；三个 WS 用例先握手再停中继。没有改中继本体（受管文件） |
+| Go `TestOfficialUUIDV7CacheMemoryDoesNotScaleWithContent`（`official_egress_uuid_test.go`） | `GC 后堆增长 1969728 字节` 不小于上限 1536000（CI 红过 10-23、10-31） | `HeapAlloc` 是整个进程的存活堆；整包跑到该用例时堆已有数 GB，同包前面用例遗留的协程与垃圾会在测量窗口内抬高读数，“降到 1 个 P、取三次最小值”挡不住。机理是推断，本机没能稳定复现 CI 的 1.97 MB | 与同包 `TestOpenAIResponsesLiteRequiresFullResponsesDoesNotAllocatePerInputItem` 同法：父进程重新执行测试二进制只跑本用例，子进程里没有同包遗留状态；阈值、正文规模、三次取最小值、确定性断言不变，并要求子进程输出 `--- PASS: …`，防止“零用例成功退出”被当通过 |
+
+**验证办法与灵敏度。** 前三项各有压力脚本（机理复现、并行撞车、停中继时序的确定性模式），修复前能复现、修复后连续不红；脚本只放在维护者本机（`local-analysis/opt-0165/t1/`，被 `.gitignore` 忽略，不入库）。例如 SIGKILL 用例旧版 220 次里红 1 次、新版 160 次红 0 次；
+撞车用例旧版 10/10 遍红、新版 30/30 遍绿。Go 用例修复后本机 `go test -tags=unit -run '^TestOfficialUUIDV7CacheMemoryDoesNotScaleWithContent$' -count=20 -p 3 ./internal/service/`（走重负载锁）不红；变异验证：给缓存条目加 1 KB 常驻字节（约 +2 MB）读数 2611872、加 4 KB 读数 8755552，
+均被抓住，还原后绿，说明灵敏度没丢。唯一落在冻结台账里的是该 Go 用例文件，源码提交与冻结承接收据分开提交。
+**以后新写测试时**：会在真实工作树 `backend/` 下建临时目录的，一律用 `go -overlay`；轮询会被别的进程 `atomic_json` 换文件的 `state.json` 一类文件，捕获 `GuardError` 重读；停中继前先做 WS 关闭握手；测堆增长或分配量的 Go 用例放进独立测试进程（`os.Executable()` 加环境变量写法），不要靠同进程取最小值。
+
+<a id="codex-housekeeping-egress-drill"></a>
+### 4.8.5 已核实的运维结论：部署备份回收与出口脚本演练
+
+**部署备份回收认下划线根名。** 入口日常维护（`entry-dryrun.sh housekeeping`，代码 `driver/entry_housekeeping.py`）回收数据根 `control/` 下受监督部署留下的 `<根名>-backup-before-<摘要前缀>-<UTC>-<随机串>` 目录。
+部署脚本的根名段取自受管根的目录名，可含下划线（如 `official_client_control`），而原先的匹配规则只认 `[a-z0-9-]`，下划线根名的备份从未被回收。现在 `DEPLOY_BACKUP` 的根名段是 `[a-z0-9][a-z0-9_-]*`；分组与保留逻辑不变
+（保留期默认 14 天，每组另留最近 8 个，被保留期内修改过的收据、证据、账本引用的不动，其余先改名成 `.gc-trash-<原名>` 再删）。ARM64 真跑结果：`official_client_control` 组共 84 个、保留最近 8 个、14 天内 41 个、候选 35 个、被引用 0 个，**实际回收 35 个**；
+`document-transaction` 与 `managed-tools` 各 8 个都在保留内；回收后根盘 63.3%、可用 51.9 GiB。断言准备器的备份 `assertion-preparer-backup-before-…` 是单个小文件（347 个文件约 5 MiB），“普通文件一律不动”是安全前提且收尾核对要求其存在，所以不纳入回收。
+磁盘水位保护的其余部分（根盘预警、Go 编译缓存告警）见驱动 README 的“磁盘水位保护”。
+
+**出口脚本同 IP 真实演练：`rollback` 通过，`apply` 需要出口端配合。** `deploy/egress-ops/egress-ctl` 是两段式：先在出口机 `apply --role exit`，再在源端（ARM64）`apply --role origin --exit-audit-record '<出口端打印的那一行>'`；源端先于任何改动核对两端策略摘要一致。
+演练在 ARM64 用现行出口 IP 做（不换 IP），选择 `rollback --role origin --backup <policy-backups 里的备份文件> --authorized-by … --reason … --confirm-maintenance-window` 而不是 `apply`：`rollback` 走同一套“写策略、守护重装、实时核对”的路径，
+结果退出码 0，策略摘要与工具身份前后一致，出口 IP 不变。`apply` 这条路径只做了 `--dry-run`：它强制新策略 `revision` 大于现行 `revision`（`egress-ctl` 里的 `new["revision"] <= old["revision"]` 检查），装完后策略摘要必然变化，而源端 `apply` 又要出口端已装同一份策略，
+所以 ARM64 单方面做会让两端摘要对不上，必须出口机（DMIT）一起配合，不动出口机就做不了。真换到另一个出口 IP 需要出口机有第二个出口 IP，同样要在维护窗口里两端按顺序做。出口地址只在受限运维策略里指定，升级工具不把它当任何步骤的输入（见 §4.0.3）。
+
+<a id="codex-reseal-chain"></a>
+### 4.8.6 版本登记之后的“重封链”（一条命令）
+
+**为什么要有。** Codex 版本登记（或任何改了“事实映射已钉住的后端源码”“受管工具文件”的变更）之后，一串生成值必须按严格顺序重算：事实映射重绑 → 身份守恒基线重封 → 驱动 manifest 重建 → 依赖追踪表重新追踪，
+前两步改了冻结文件，每步之后还要补一份冻结承接收据（必须单独提交）。10-30 手工做了 3 次，顺序一错（收据 `--before` 取错、基线封在收据之前、追踪提交不是后续比对基点的祖先）就要返工。现在由 `tools/ci/reseal_chain.py` 固化，
+单元测试是 `tools/official_client_capture/tests/test_reseal_chain.py`（合成仓库，不依赖真实追踪）。
+
+**何时跑。**
+1. 产生重封需求的源码或受管工具改动**已经提交，并且它自己的冻结承接收据也已提交**之后（那一份由改动者做，脚本不替做；它的结果通常是 `manual_actions_required`，提示须按流程处理事实映射与追踪快照，这正是脚本要做的下一步）。
+2. 当前**没有在建的 Campaign**：脚本会改 `tools/official_client_capture` 下的受管文件（事实映射、`candidate_test_trace.py`），工具身份变化会让在建 Campaign 作废，所以真实运行必须加 `--ack-no-campaign`。
+3. 在工作分支上、工作树干净时跑；默认拒绝在 `main`／`master` 上提交（确需放行加 `--allow-main`）；不 push、不合并、不打 tag、不签字，所有修改都只落成当前分支上的提交。
+4. **新增了测试模块的话，先重新物化归属表再开链**：`python3 -B tools/ci/unit_ownership.py materialize`，并把生成的 `tools/ci/unit_ownership.json` 提交。否则归属表自检类的模块在追踪提交上是红的，追踪会把它们记进 `unobserved`
+   （演练里就出现过：新增 2 个 `unobserved`，脚本判失败并停在 `trace` 步）。
+5. **追踪要带两个环境变量**：`CAPTURE_TYPESCRIPT_MODULE`（TypeScript 解析器，主检出的 `frontend/node_modules/typescript/lib/typescript.js`）与 `CODEX_SPEC_SOURCE_ROOT`（目标版本的 Codex 源码树）。脚本在计划里对没设的给出提醒；
+   缺了它们，依赖它们的模块会在追踪时失败而被记入 `unobserved`（10-30 的旧表有 8 个，带上变量重追后为 0，具体对应关系未逐个核实）。
+
+**怎么跑。**
+
+```
+# 先看计划与前置检查（不改文件、不提交；会对尚未提交的步骤按现状预览，并真跑一次冻结承接收据的干跑）
+python3 -B tools/ci/reseal_chain.py --log-dir <工作树外的日志目录> --dry-run
+
+# 一条命令走完整条链（追踪走重负载锁；建议脱离会话跑，日志最后一行是 EXIT=<码>）
+export CAPTURE_TYPESCRIPT_MODULE=<主检出>/frontend/node_modules/typescript/lib/typescript.js
+export CODEX_SPEC_SOURCE_ROOT=<主检出>/local-analysis/sources/codex-cli-<版本>
+python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign
+```
+
+可选项：`--from <步骤>` 从某一步往后续跑，`--only <步骤>` 只跑一步，`--co-author "名字 <邮箱>"` 给提交加 `Co-Authored-By`（可重复），`--version` 指定 Codex 目标版本（缺省取守恒测试里的 `BASELINE_CODEX_VERSION`），
+`--receipt-before <提交>` 覆盖第一份收据的 `--before`（缺省取 HEAD 历史里最近一次新增收据的提交），`--date` 指定日期，`--force-reseal` 守恒模块已绿时仍强制重封，`--jobs` 追踪并行数（缺省 3，别超过 4），
+`--heavy-run <路径>` 或 `--no-heavy-lock` 指定或放弃重负载锁，`--python-version`／`--platform` 写进依赖表的环境说明。**退出码**：0 全部完成；1 某一步失败（已停在原地）；2 前置条件或用法错误；130 被中断。
+
+**步骤顺序（不可调换）。**
+
+| 步骤 | 做什么 | 提交 |
+|---|---|---|
+| `rebind` | 事实映射重绑：只改 `sha256`／`test_file_sha256` 叶子，同步 `candidate_test_trace.py` 的 `FROZEN_MAPPING_SHA256`，在常量上方追加载荷审核注释 | 1 个 |
+| `rebind-receipt` | 冻结承接收据（`--before` 取上一份收据所在提交，`--after` 取 HEAD） | 1 个，只含收据 |
+| `reseal` | 身份守恒基线 `--seal-baseline --replace`，回填 `BASELINE_SHA256`，`REGISTERED_CONTROL_CHANGES` 清空 | 1 个 |
+| `reseal-receipt` | 冻结承接收据 | 1 个，只含收据 |
+| `manifest` | 驱动 manifest 重建；本来就一致则跳过 | 0～1 个 |
+| `trace` | 重新追踪依赖表：detached 工作树 + 重负载锁 + 后台追踪；追踪提交（`generated_at_commit`）就是此刻 HEAD | 1 个 |
+| `verify` | 只读：候选测试追踪两组测试 + 身份守恒测试 + manifest 校验 | 0 个 |
+
+为什么追踪放最后：追踪时退出码非 0 的模块会进 `unobserved`（永远照跑、选择精度变差）。映射和基线没重封之前，`test_candidate_test_trace`、身份守恒必然是红的，先追踪会白白多出一批 `unobserved`；
+所以先落定前面的生成值、让测试转绿，最后追踪，追踪提交之后只多一个“依赖表”提交（追踪提交是之后所有比对基点的祖先，见 §4.8.1）。没有需要做的步骤自动跳过（映射已对、守恒已绿、区间内没有冻结转移、manifest 已一致），不产生空提交。
+
+**每一步前后脚本做什么。**
+- 前置断言：工作树干净、不在合并／变基中途、分支不是 main、HEAD 与上一步完成时的记录一致、没有 `__pycache__`、本步要用的文件在；追踪开跑前再复核一遍测试与 manifest，红的话不开追踪。
+- 步骤成功才提交；失败就停在原地：工作树还原成上一步完成时的干净状态，失败时的改动存进 `<日志目录>/failed-<步骤>.diff`，命令与输出追加在 `commands.log`，并打印“从哪一步继续”的命令。
+- 收据步骤：干跑结果要求 `passed_local_evidence_successor` 且人工动作为 0，否则判失败（链不替你做人工动作）；收据文件已存在则拒绝覆盖（换 `--label` 或 `--date`）；区间内没有冻结转移时跳过。
+- 每步之后输出并落盘“载荷审核报告”（`<日志目录>/audit-<序号>-<步骤>.txt`）。**报告只给人看：脚本不自动签字**，提交说明里也写明未经自动签字。
+
+**失败怎么续跑。** 看终端末尾两行：`✗ 步骤 X 失败：<原因>` 和 `处理后从这一步继续：python3 -B tools/ci/reseal_chain.py … --from X`。处理原因（例如收据要人工动作、追踪里新增了失败模块）后原样执行那条命令，已完成的步骤不会重做。
+- 你为修问题手工提交了东西，HEAD 会比状态记录多出提交：脚本拒绝并提示，确认无误后加 `--accept-head`。
+- 追踪被中断（关终端、Ctrl-C）：后台追踪不受影响；再 `--from trace` 会按 HEAD 接上同一个任务，已完成的直接用结果，不重追。
+- `--log-dir` 里已有状态时，不带 `--from`／`--only` 的整链运行会被拒绝；要重来换一个新的日志目录。
+- 追踪后新增了“追踪失败”的模块（`unobserved` 增加）默认判失败，因为这意味着这些测试在追踪提交上没过；弄清楚确无大碍再加 `--allow-new-unobserved --from trace` 续跑（追踪结果复用，几秒）。
+
+**载荷审核怎么看（人工签字依据）。**
+- `rebind`：逐个叶子的“位置、被钉住文件、旧摘要→新摘要”；“非快照叶子变化 0 处、键集与列表长度不变”；映射文件摘要旧→新，`FROZEN_MAPPING_SHA256` 旧→新。预期只出现你改过的那几个文件。
+- 两份收据：转移清单（哪个冻结路径、前驱摘要）、“台账外未登记路径”（收据不覆盖的，如事实映射 json、基线 json，需知晓）、人工动作必须为 0。
+- `reseal`：基线逐项对比。**普通的“映射重绑”只应让 `evidence_semantics_sha256`、`files_sha256`、`source_commit` 变化，受管文件条目只有映射 json 与 `candidate_test_trace.py` 两项变化，都在 `evidence_semantics` 层。**
+  出现 `wire_producer_sha256`、`checker`、`builder`、两个读侧摘要、编排器 wire 闭包或策略摘要变化时，报告会打印“!!”警示：这已经不是普通重绑，是出站或评估读侧身份变了，必须请调度者复核后才可采纳。
+- `manifest`：逐文件“旧摘要→新摘要、字节数”；只应是你改过的驱动文件。
+- `trace`：`generated_at_commit` 旧→新、依赖集合有变化的模块、`unobserved` 增减（新增应为 0）。
+
+**脚本之外仍要人做的事。** 重封链之后的门禁（`make check-egress-spec`、`make test-capture-tools`、Go 全包）、是否推送、签字，都不在脚本里；收据里列的待跑验证
+（`go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement'` 等）也由人安排。新增驱动文件后，驱动 manifest 按各自命令重生成。
+
+**演练实测（2026-10-31）。** 场景：对被事实映射钉住的 `openai_ws_forwarder_ingress.go` 末尾加一行无害注释并提交，补好它自己的冻结承接收据（结果 `manual_actions_required`，与 10-30 先例相同），此时 `test_candidate_test_trace` 里的钉住摘要用例红。
+一条命令（不带其它开关）约 22 分钟走完 7 步，退出码 0（追踪在重负载锁下 `--jobs 3`，机器上另有别的任务时更久）：重绑 1 个叶子 → 收据 → 基线重封 → 收据 → manifest 无变化跳过 → 追踪 388 个模块、`unobserved` 8 → 0 → 依赖表提交 → 复核三组测试全绿。
+载荷审核只含预期变化：映射只变 1 个叶子；基线只变 `evidence_semantics_sha256`、`files_sha256`、`source_commit`，受管文件条目只有映射 json 与 `candidate_test_trace.py` 两项，与 10-30 手工重封的先例（`e610f5eaf1`）形状一致。
+另一次演练里，因新增测试模块还没登记进归属表，追踪完成但新增 2 个 `unobserved`（`test_ci_gate_scope`、`test_ci_unit_ownership`），脚本判失败并停在 `trace` 步、工作树还原干净，加 `--from trace --allow-new-unobserved` 续跑几秒就提交了依赖表；这就是上面“先物化归属表”的由来。
+另外，10-31 在任务 1～4 合并后用该脚本的 `trace` 步做过一次真实重追踪（不是上面的演练）：391 个模块、未观察到 0 个、20.6 分钟，细节见 §4.8.1。
 
 ---
 
