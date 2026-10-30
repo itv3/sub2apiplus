@@ -42,3 +42,24 @@ exceptions:
     mitigation: "No zero-size custom generators in codebase; upgrade when nanoid releases fix"
     expires_on: "2026-10-13"
     owner: "security@your-domain"
+  - package: vue-i18n
+    advisory: "GHSA-83rm-6c8r-g728"
+    severity: high
+    reason: "escapeParameter is not enabled and no translation output is rendered via v-html; locale messages are static internal files, so the srcdoc escape bypass is unreachable"
+    mitigation: "Only fixed in vue-i18n 11.4.14 (two majors ahead); follow upstream sub2api migration to 11.x before expiry"
+    expires_on: "2027-01-30"
+    owner: "security@your-domain"
+  - package: "@intlify/core-base"
+    advisory: "GHSA-83rm-6c8r-g728"
+    severity: high
+    reason: "Transitive via vue-i18n 9.14.5; escapeParameter is not enabled and no translation output is rendered via v-html"
+    mitigation: "Only fixed in 11.4.14; follow upstream sub2api migration to vue-i18n 11.x before expiry"
+    expires_on: "2027-01-30"
+    owner: "security@your-domain"
+  - package: "@intlify/shared"
+    advisory: "GHSA-83rm-6c8r-g728"
+    severity: high
+    reason: "Transitive via vue-i18n 9.14.5; escapeParameter is not enabled and no translation output is rendered via v-html"
+    mitigation: "Only fixed in 11.4.14; follow upstream sub2api migration to vue-i18n 11.x before expiry"
+    expires_on: "2027-01-30"
+    owner: "security@your-domain"
