@@ -12,3 +12,10 @@ import os as _os
 GATE_EXECUTOR_ENV_NAMES = ("UNIT_EXECUTOR_RETRY_LEDGER",)
 for _name in GATE_EXECUTOR_ENV_NAMES:
     _os.environ.pop(_name, None)
+
+# 受管树扫描缓存（OPT-02 第二轮）：受管工具身份每次调用都把整棵受管树遍历并逐文件摘要一遍，整树模块里同一棵树被扫上千次。
+# 在测试进程里给 ``_tool_tree_entries``／``_managed_tree_digests`` 包一层"签名相同才复用原函数上次的结果"的缓存，受管文件一个字不动；
+# 语义、竞态保护与关闭方式（TREE_SCAN_CACHE=off）见 tree_scan_cache.py，缓存失效的变异用例在 test_ci_tree_scan_cache.py。
+from . import tree_scan_cache as _tree_scan_cache  # noqa: E402
+
+_tree_scan_cache.install_lazily()
