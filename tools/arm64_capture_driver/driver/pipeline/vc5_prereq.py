@@ -2,7 +2,7 @@
 """VC-5 库表前置的临时改动、恢复与核对（采集主机，随驱动安装在 pipeline/vc5_prereq.py，shell 入口 vc5-prereq.sh）。
 
 背景：候选采集（VC-5）要求三项库表前置——采集账号 ``credentials.model_mapping`` 清空、采集分组 ``allow_live`` 打开、分组内只许采集 Key 一把活跃
-（``vc5-precheck.sh --dry-run`` 的 ``candidate_prerequisites`` 逐项列出）。VC-5 前临时改、VC-6 后恢复原值。上一版（0.165）这套改动是一份只在本机分析目录里的
+（``vc5-precheck.sh --dry-run`` 的 ``candidate_prerequisites`` 逐项列出）。VC-5 前临时改、VC-6 后恢复原值。上一版这套改动是一份只在本机分析目录里的
 一次性脚本，恢复后核对 7 项摘要，4 项一致、另 3 项（账号 #90 其余列、其它账号、其它 Key）不同——原因是摘要口径把 ``last_used_at``、``updated_at``、会话窗口等
 **运行时列**也算进去，而 VC-6 金丝雀与生产的真实请求会更新它们；又没有改前的行级快照，只能说“疑为仅运行时列变化”，无法核实。
 
@@ -195,7 +195,7 @@ def summarize(diffs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------- 数据库访问
 
 class PsqlDatabase:
-    """经 ``docker exec -i <容器> psql`` 访问；语句与上一版（0.165）在 ARM64 上跑过的脚本一致。"""
+    """经 ``docker exec -i <容器> psql`` 访问；语句与上一版在 ARM64 上跑过的脚本一致。"""
 
     def __init__(self, container: str, user: str, name: str) -> None:
         self.command = ["docker", "exec", "-i", container, "psql", "-U", user, "-d", name, "-qAt", "-v", "ON_ERROR_STOP=1"]

@@ -214,9 +214,9 @@
     },
     {
       "path": "driver/entry_housekeeping.py",
-      "sha256": "cf19631972592984779905e2160f25c4f6d9be1e62397c2694b1e7a5c6379d64",
+      "sha256": "ca1dec43153c713c50da94c2e7f1d900d9f188d6d477821a82c85d276efb9a8f",
       "mode": "0700",
-      "bytes": 58986
+      "bytes": 58989
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -640,9 +640,9 @@
     },
     {
       "path": "driver/pipeline/vc5_prereq.py",
-      "sha256": "26b8898de4fea4373692b6d4bff75450c86afb49008ba82a0b79d9cc7615cb9b",
+      "sha256": "adce2b17fe3238cb624c98c99aa0e0cacfecd4787c5f5dc24ff166ff1c049757",
       "mode": "0700",
-      "bytes": 24194
+      "bytes": 24172
     },
     {
       "path": "driver/pipeline/vc6/ORDER.example.txt",
@@ -844,9 +844,9 @@
     },
     {
       "path": "driver/recovery_plan.py",
-      "sha256": "3ac990911a65d1a5219feda59e18208a99e1b536a55c7feea0b24ac4bb158f78",
+      "sha256": "493149de51f7b5cbb6cf29d8f55dc2a094c85e8862de17526331cb193d840d9a",
       "mode": "0700",
-      "bytes": 125662
+      "bytes": 125669
     },
     {
       "path": "driver/retry_policy.py",
@@ -1179,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "81aca2c440faf8c2c122aed87731d6280a5a91a4b8127d530a5eed213a53fb37"
+  "manifest_sha256": "c677beee5f8427e3f9c0d0ef82c7a576d648835eaa7ffb9cf2c8f3398f428829"
 }
