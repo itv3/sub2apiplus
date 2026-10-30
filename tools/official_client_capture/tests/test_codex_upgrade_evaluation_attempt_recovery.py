@@ -1263,6 +1263,48 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             "candidate_revision": 1, "candidate_id": R1, "evaluation_baseline": 1, "baseline_commit_sha256": commit["commit_sha256"],
         }
 
+    @staticmethod
+    def _offset_after_newest_reservation(campaign_dir: Path) -> float:
+        """父 run 开始时间相对"现在"的偏移（秒）：从半秒前开始，但必须严格晚于本 Campaign 里最新的预约（原 attempt 与各恢复段）。
+
+        原先固定写"半秒前"，等于假定最新预约之后至少已过半秒——这取决于前面的步骤跑得多快：受管树身份扫描变快以后，预约与父 run
+        之间不足半秒，预约就落进父 run 的窗口、对账改走 attempt 中断分支，用例随机地假红。这里按预约文件里的真实时间算偏移，
+        预约还不到 20 毫秒之前就等过去，结果不依赖机器快慢；预约已经早于半秒前时与原来的"半秒前"完全相同。"""
+
+        newest = 0.0
+        for path in campaign_dir.rglob("*reservation*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                reserved = datetime.fromisoformat(str(payload["started_at_utc"]).replace("Z", "+00:00")).timestamp()
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            newest = max(newest, reserved)
+        wait = newest + 0.02 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        return max(-0.5, newest + 0.01 - time.time())
+
+    def test_prereservation_run_window_is_after_the_newest_reservation_whatever_the_machine_speed(self) -> None:
+        """父 run 窗口的起点按最新预约的真实时间算：预约刚发布（比"半秒前"还新）时窗口起点仍严格晚于它；预约已很旧时仍是原来的"半秒前"。"""
+
+        from datetime import timezone
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory)
+            (campaign / "attempt" / "recovery" / "ar1").mkdir(parents=True)
+            fresh = datetime.now(timezone.utc)
+            (campaign / "attempt" / "recovery" / "ar1" / "recovery-reservation.json").write_text(
+                json.dumps({"started_at_utc": fresh.isoformat().replace("+00:00", "Z")}), encoding="utf-8"
+            )
+            offset = self._offset_after_newest_reservation(campaign)
+            self.assertGreater(time.time() + offset, fresh.timestamp(), "预约刚发布：窗口起点必须严格晚于它，不能再落在预约之前")
+            self.assertGreaterEqual(offset, -0.5)
+            (campaign / "attempt" / "recovery" / "ar1" / "recovery-reservation.json").write_text(
+                json.dumps({"started_at_utc": "2020-01-01T00:00:00.000000Z"}), encoding="utf-8"
+            )
+            self.assertEqual(self._offset_after_newest_reservation(campaign), -0.5, "预约早已过去：仍是原来的半秒前")
+            self.assertEqual(self._offset_after_newest_reservation(campaign / "no-such-dir"), -0.5, "没有任何预约：同样是半秒前")
+
     def _item53_prereservation_run(
         self, pseudo: dict, campaign_dir: Path, name: str, manifest: dict, *, diagnostic: tuple[str, str, str], shape: str,
     ) -> tuple[dict, Path]:
@@ -1270,15 +1312,16 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
         原因 action-failed:ar-run），``r2`` 父进程在收账前丢失、monitor 按 R2 封存；已登记 COMMIT。父 run 窗口从半秒前开始，晚于
         原 attempt 与既有段的预约（本 run 期间没有任何预约）。"""
 
+        offset = self._offset_after_newest_reservation(campaign_dir)
         if shape == "alive":
             run_dir = self.helper._b0_run_dir(
                 pseudo, name, phase="VC-5", state="failed", batched_manifest=manifest, failure_class=diagnostic[2],
-                action_id="ar-run", failure_kind=diagnostic[0], error_type=diagnostic[1], started_offset_seconds=-0.5,
+                action_id="ar-run", failure_kind=diagnostic[0], error_type=diagnostic[1], started_offset_seconds=offset,
             )
         else:
             _state, run_dir = self.helper._r2_sealed_run(
                 pseudo, name, inner=manifest, action_id="ar-run", phase="VC-5", diagnostic=diagnostic,
-                action_failed_reason="returncode=1", started_offset_seconds=-0.5,
+                action_failed_reason="returncode=1", started_offset_seconds=offset,
             )
         self.helper._item45_bind_commit(campaign_dir, run_dir, manifest)
         return json.loads((run_dir / "state.json").read_text(encoding="utf-8")), run_dir
