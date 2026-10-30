@@ -1,12 +1,16 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -545,11 +549,35 @@ func TestOfficialUUIDV7LRUCacheSweepsExpiredEntriesInBoundedSteps(t *testing.T) 
 }
 
 func TestOfficialUUIDV7CacheMemoryDoesNotScaleWithContent(t *testing.T) {
+	// HeapAlloc 是整个进程的存活堆：同包前面用例遗留的后台协程、未回收的垃圾若在测量窗口里留下存活对象，都会计入增长。
+	// CI 上先后读到 1609704、1969728 对上限 1536000（本机独跑只有约 55 万），而真回归会增长约 65 MB。
+	// 此前只靠“P 数降到 1＋取三次最小值”，挡不住整段窗口都被遗留协程抬高的情形（取最小值对持续性噪声无效）。
+	// 现在与 TestOpenAIResponsesLiteRequiresFullResponsesDoesNotAllocatePerInputItem 同法：把测量放进独立测试进程，
+	// 子进程里只跑本用例、没有任何同包遗留协程；阈值、正文规模、三次取最小值与确定性断言一律保持原样。
+	const isolatedEnv = "SUB2API_UUID_CACHE_MEMORY_TEST_CHILD"
+	if os.Getenv(isolatedEnv) != "1" {
+		executable, err := os.Executable()
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		command := exec.CommandContext(ctx, executable, "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, isolatedEnv+"=") {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(command.Env, isolatedEnv+"=1")
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "隔离堆测量失败：%s", output)
+		// 子进程若因匹配不到用例而“零用例成功退出”，不能当作通过。
+		require.Contains(t, string(output), "--- PASS: "+t.Name(), "子进程没有真正跑到本用例：%s", output)
+		t.Logf("隔离堆测量：\n%s", output)
+		return
+	}
+
 	const requests = 2000
 	const textBytes = 32 * 1024
-	// HeapAlloc 是整个进程的存活堆：同包前面用例遗留的后台协程若在窗口里留下存活对象，也会计入增长。
-	// CI 上曾读到 1609704 对上限 1536000（v0.2.17-11 发版前 main 的 CI），而真回归会增长约 65 MB。
-	// 与 testMeasureAllocatedBytes 同法：测量期间 P 数降到 1、每次用新缓存、取三次中的最小增长；
+	// 子进程内仍与 testMeasureAllocatedBytes 同法：测量期间 P 数降到 1、每次用新缓存、取三次中的最小增长；
 	// 缓存条目数与估算字节数是确定性质，每次都严格断言。
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)
