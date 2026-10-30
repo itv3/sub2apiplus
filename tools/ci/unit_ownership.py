@@ -37,6 +37,17 @@ Claude 单元约占一半核·秒），Codex 升级时这些测试几乎不会�
 选择结果写进门禁清单的 ``selection`` 块，执行器据此只保留标 ``run`` 的模块；清单里单元 ID、单元规格、额度都不变，
 所以和全集运行的记录逐字相通。
 
+依赖精度（OPT-02，后台验证 15 分钟出结论）：
+上面是"按归属"的旧口径——只有另一客户端的重模块可被剔除，Codex 与共用模块（387／425）一律照跑，所以同一 Campaign 内哪怕只修一个文件，
+后台验证仍要跑一个钟头。新口径（``precision``＝``dependency``）在旧口径之上，把"依赖闭包里没有任何改动文件"的其余模块也剔除；
+重模块仍走旧规则（枢纽只提示、一跳口径），所以只会比旧口径少跑，不会多跑。依赖由三部分取并集（见 ``DependencyModel``）：静态导入闭包（传递到底）、
+测试自己精确提到的文件、依赖追踪表 ``tools/ci/unit_dependencies.json``（审计钩子在真实运行里观察到的打开与枚举，``dependency-table`` 子命令汇总）。
+做不到精确的部分一律保守：没有追踪记录的模块照跑；追踪提交以来依赖文件变过的模块照选；追踪提交不在候选提交历史里时全部照选；改动路径不认识、
+Python 解析失败、闭包里有解析不了的动态加载时全部照选；闭包代码访问真实 ARM64 环境的模块照跑；用依赖精度时追踪表出现在改动里就整轮不筛选（候选提交不能自己改规则给自己放水）。
+``precision``＝``auto`` 时：基点是发版 tag 提交（升级后第一次验证）沿用旧口径，基点不是发版提交（同一 Campaign 内上一个通过的后台验证——
+``--select-base last-passed``，或门禁续跑第二层取的"上一轮全集运行"的提交）才用新口径；两处都经过同一个 ``select``，共用同一份依赖数据。
+结论仍是 ``client-plan`` 子集、同一个 ``selection`` 结构（新口径另多 ``precision`` 三个键），VC-5 准入的防串用判定不受影响。
+
 使用与限制：
 
 * 入口：``entry-gates.sh --gate-scope client-plan --select-base <最近一次发版的 40 位提交>``、``background-validate.sh start`` 同名选项；
@@ -49,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import csv
 import fnmatch
 import hashlib
@@ -63,6 +75,9 @@ from typing import Any, Iterable, Mapping, Sequence
 SCHEMA = "unit-ownership/v1"
 SELECTION_SCHEMA = "unit-executor-gates-selection/v1"
 DATA_PATH = "tools/ci/unit_ownership.json"
+# 依赖追踪表（OPT-02）：依赖精度的选择规则之一。它不在 ``SELF_PATHS`` 里——旧口径根本不读它，升级登记时重新追踪出来的新表不该让第一次验证
+# （基点是发版 tag，用旧口径）整轮回退全集；只有有效精度是 dependency 时它出现在改动里才等于给自己放水，那时才整轮不筛选（见 ``select``）。
+DEPENDENCY_TABLE_PATH = "tools/ci/unit_dependencies.json"
 # 归属表与选择器自己（含驱动副本）：出现在改动里就不筛选，防止候选提交自己改规则给自己放水。
 SELF_PATHS = (DATA_PATH, "tools/ci/unit_ownership.py", "tools/arm64_capture_driver/driver/unit_ownership.py")
 TESTS_DIR = "tools/official_client_capture/tests"
@@ -295,6 +310,22 @@ def unresolved_dynamic_lines(tree: ast.AST) -> list[int]:
     return sorted(set(lines))
 
 
+# ---------------------------------------------------------------------------
+# 依赖精度用的小工具（OPT-02）
+# ---------------------------------------------------------------------------
+
+# 会去跑构建工具的字面量命令：测试拉起它们，就可能读到 tools/ 以外的任何后端、前端、部署文件。
+SPAWN_WORDS = frozenset({"go", "make", "gmake", "docker", "npm", "pnpm", "node", "yarn", "cargo"})
+# 拼路径的调用（连续的字符串常量实参拼成一个路径）。
+_JOIN_CALLS = frozenset({"join", "joinpath", "Path", "PurePath", "PurePosixPath"})
+CODE_SUFFIXES = frozenset({".py", ".sh", ".bash", ".mjs", ".js", ".m", ".go", ".rs"})
+_TOKEN = re.compile(r"[A-Za-z0-9_*?][A-Za-z0-9_.\-/*?]*")
+# 路径形式的字符串里不再有价值的碎片（太短、没有字母数字）。
+_ALNUM = re.compile(r"[A-Za-z0-9]")
+_DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
+_STEM = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+
+
 class Graph:
     """``tools/`` 下全部 Python 文件的导入图。
 
@@ -327,6 +358,13 @@ class Graph:
         # 每个文件里"整串是小写标识符"的字符串字面量（按名字加载脚本时的写法）。
         self.literals: dict[str, set[str]] = {}
         self.unparsed: set[str] = set()
+        # 依赖精度（OPT-02）要用的文件事实，由 ``_dependency_facts`` 在解析时顺手收集，不影响上面任何既有结构：
+        # ``hard``：只由 AST 里的 import 语句建立的导入边（再加祖先包的 ``__init__.py``）；``consts``：非文档字符串的字符串常量（含路径拼接结果）；
+        # ``import_tokens``：import 写法对应的路径形式（被删除的模块用）。
+        self.hard: dict[str, set[str]] = {}
+        self.consts: dict[str, set[str]] = {}
+        self.top_consts: dict[str, set[str]] = {}
+        self.import_tokens: dict[str, set[str]] = {}
         for rel in files:
             self._analyze(rel)
         stems: dict[str, list[str]] = {}
@@ -416,10 +454,97 @@ class Graph:
                     if hit is not None:
                         imports.add(hit)
         imports.discard(rel)
+        self._dependency_facts(rel, tree)
         self.refs[rel] = path_refs_of(tree)
         unresolved = unresolved_dynamic_lines(tree) if rel in self.dynamic else []   # 只分析含动态加载调用的文件（约十分之一），导入图构建不变慢
         if unresolved:
             self.unresolved_dynamic[rel] = unresolved
+
+    def _dependency_facts(self, rel: str, tree: ast.AST) -> None:
+        """依赖精度要用的文件事实（只读，一次遍历 AST 收集；文件级汇总）。
+
+        * ``hard``：import 语句解析出的文件（不含字符串里提到的模块名），外加每个被导入文件的祖先包 ``__init__.py``——导入子模块会先执行父包；
+        * ``consts``：非文档字符串的字符串常量，加路径拼接（``a / "b"``、``os.path.join``、``Path("a", "b")``）连续常量段拼出的路径
+          （文档字符串与注释里"提到"某个文件不算依赖）；``top_consts`` 是其中不在任何函数体里的（导入这个文件时一定会执行到）；
+        * ``import_tokens``：import 写法对应的路径形式，文件被删除时用来找原来的使用者。"""
+
+        text = self.text[rel]
+        package = ".".join(PurePosixPath(rel).with_suffix("").parts[:-1])
+        docstrings: set[int] = set()
+        nodes = list(ast.walk(tree))
+        for node in nodes:
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                    docstrings.add(id(first.value))
+        hard: set[str] = set()
+        consts: set[str] = set()
+        top_consts: set[str] = set()   # 不在任何函数体里的常量：导入这个文件时一定会执行到
+        tokens: set[str] = set()
+        in_function: set[int] = set()
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                for statement in (node.body if isinstance(node.body, list) else [node.body]):
+                    in_function.update(id(item) for item in ast.walk(statement))
+
+        def hard_edge(dotted: str) -> None:
+            tokens.add(dotted.replace(".", "/") + ".py")
+            tokens.add(dotted.replace(".", "/") + "/__init__.py")
+            hit = self.resolve(dotted)
+            if hit is not None and hit != rel:
+                hard.add(hit)
+
+        def run_join(parts: list[str | None], node: ast.AST) -> None:
+            run: list[str] = []
+            for part in [*parts, None]:
+                if part is None:
+                    if (len(run) >= 1 and any("/" in item or "." in item for item in run)) or len(run) >= 2:
+                        joined = "/".join(item.strip("/") for item in run if item.strip("/"))
+                        consts.add(joined)
+                        if id(node) not in in_function:
+                            top_consts.add(joined)
+                    run = []
+                else:
+                    run.append(part)
+
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    hard_edge(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module or ""
+                if node.level:
+                    up = package.split(".") if package else []
+                    up = up[: len(up) - (node.level - 1)] if node.level > 1 else up
+                    base = ".".join(up + ([base] if base else []))
+                if base:
+                    hard_edge(base)
+                for alias in node.names:
+                    if alias.name != "*":
+                        hard_edge(f"{base}.{alias.name}" if base else alias.name)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if id(node) not in docstrings:
+                    consts.add(node.value)
+                    if id(node) not in in_function:
+                        top_consts.add(node.value)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+                if name in _JOIN_CALLS:
+                    run_join([arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None for arg in node.args], node)
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                run_join(_chain_parts(node), node)
+        # 祖先包：导入 ``a.b.c`` 会先执行 ``a/__init__.py``、``a/b/__init__.py``。
+        for target in list(hard):
+            parts = PurePosixPath(target).parts[:-1]
+            for index in range(1, len(parts) + 1):
+                init = "/".join((*parts[:index], "__init__.py"))
+                if init in self.text and init != rel:
+                    hard.add(init)
+        self.hard[rel] = hard
+        self.consts[rel] = consts
+        self.top_consts[rel] = top_consts
+        self.import_tokens[rel] = tokens
 
     # -- 可达集 -------------------------------------------------------------
 
@@ -492,6 +617,8 @@ _DATA_KEYS = frozenset({
     "schema_version", "description", "calibration", "cheap_core_seconds", "enabled_clients", "infra_prefixes", "overrides", "pinned",
     "reviewed_hermetic", "p3_literals", "coupled", "recognized_areas", "generic_refs", "generic_names", "hubs", "shared_kernel", "modules",
 })
+# 可选键：依赖精度（OPT-02）。没有这一节就是旧口径（owner），选择结果与改造前逐字相同。
+_OPTIONAL_KEYS = frozenset({"dependency"})
 _MODULE_KEYS = frozenset({"owner", "rule", "core_seconds", "codex_plan", "claude_plan"})
 
 
@@ -513,8 +640,15 @@ def load_data(tree: Path) -> dict[str, Any]:
 def validate_data(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA:
         raise OwnershipError("归属数据格式版本不对")
-    if set(payload) != _DATA_KEYS:
-        raise OwnershipError(f"归属数据的键不对：多 {sorted(set(payload) - _DATA_KEYS)}，缺 {sorted(_DATA_KEYS - set(payload))}")
+    if not _DATA_KEYS <= set(payload) <= _DATA_KEYS | _OPTIONAL_KEYS:
+        raise OwnershipError(f"归属数据的键不对：多 {sorted(set(payload) - _DATA_KEYS - _OPTIONAL_KEYS)}，缺 {sorted(_DATA_KEYS - set(payload))}")
+    dependency = payload.get("dependency")
+    if dependency is not None and (not isinstance(dependency, dict) or set(dependency) - {"precision", "reason", "reviewed_files"}
+                                   or dependency.get("precision") not in PRECISIONS):
+        raise OwnershipError(f"dependency 必须是 {{precision: {'／'.join(PRECISIONS)}, reason: 说明, reviewed_files: 文件→理由}}：{dependency!r}")
+    reviewed = (dependency or {}).get("reviewed_files", {})
+    if not isinstance(reviewed, dict) or not all(isinstance(path, str) and isinstance(why, str) and why for path, why in reviewed.items()):
+        raise OwnershipError("dependency.reviewed_files 必须是 文件→理由 的对象，理由不得为空")
     cheap = payload["cheap_core_seconds"]
     if isinstance(cheap, bool) or not isinstance(cheap, (int, float)) or cheap < 0:
         raise OwnershipError("廉价阈值必须是非负数")
@@ -654,7 +788,7 @@ def materialize(tree: Path, base_data: Mapping[str, Any], calibration: Mapping[s
     """按现推结果和核·秒标定生成数据文件的全部派生部分（模块表、枢纽、共用内核、计划状态）；人工登记部分原样带过来。"""
 
     graph = graph or Graph(tree)
-    data = {key: base_data[key] for key in _DATA_KEYS if key in base_data}
+    data = {key: base_data[key] for key in (*_DATA_KEYS, *_OPTIONAL_KEYS) if key in base_data}
     derived = derive_modules(tree, base_data, graph)
     cheap = base_data["cheap_core_seconds"]
     modules: dict[str, Any] = {}
@@ -728,6 +862,9 @@ def check(tree: Path, *, graph: Graph | None = None) -> list[str]:
                 problems.append(f"联动表里的模块不存在：{module}")
             elif table.get(module, {}).get("owner") != "claude":
                 problems.append(f"联动表里的模块必须归属 Claude（它们才是被剔除的对象）：{module}")
+    for path in (data.get("dependency") or {}).get("reviewed_files", {}):
+        if path not in graph.text:
+            problems.append(f"dependency.reviewed_files 里的文件不存在：{path}")
     problems.extend(hermetic_problems(tree, data, graph))
     return problems
 
@@ -975,11 +1112,16 @@ class Selector:
 
 
 def select(tree: Path, *, client: str, base: str, head: str | None = None, data: Mapping[str, Any] | None = None,
-           include_claude: bool = False, graph: Graph | None = None, force_modules: Iterable[str] = ()) -> dict[str, Any]:
+           include_claude: bool = False, graph: Graph | None = None, force_modules: Iterable[str] = (),
+           precision: str | None = None) -> dict[str, Any]:
     """算出门禁清单里的 ``selection`` 块（见模块说明里的并入规则）。出错（数据坏、基点不对、树不干净）一律抛 ``OwnershipError``。
 
     ``force_modules``（修好接着跑第二层）：上一轮失败或没执行完的测试模块，不论改动是否影响它都并入（原因“上一轮失败”）；不在测试树里的名字
-    记进 ``force_modules_unknown``。缺省空时 selection 与改造前逐字相同（不多任何键）。"""
+    记进 ``force_modules_unknown``。缺省空时 selection 与改造前逐字相同（不多任何键）。
+
+    ``precision``（OPT-02）：``owner`` 旧口径；``dependency`` 在旧口径之上，把"依赖闭包碰不到任何改动文件"的其余模块也剔除（见 ``DependencyModel``）；
+    ``auto`` 按基点是不是发版 tag 提交二选一（``resolve_precision``）；缺省取数据文件 ``dependency.precision``，数据里没有这一节就是 ``owner``。
+    旧口径下 selection 与改造前逐字相同；新口径才多出 ``precision``／``precision_reason``／``dependency_model`` 三个键。"""
 
     tree = Path(tree)
     data = validate_data(dict(data)) if data is not None else load_data(tree)
@@ -989,6 +1131,7 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         raise OwnershipError(f"本版只启用 {data['enabled_clients']} 的计划，不支持 --client {client}")
     base, head = resolve_commits(tree, base, head)
     changes = changed_files(tree, base, head)
+    effective_precision, precision_reason = resolve_precision(precision, data, tree, base)
     selector = Selector(tree, data, client, graph)
     found = selector.found
     table = data["modules"]
@@ -1016,6 +1159,8 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     for status, path in changes:
         if path in SELF_PATHS:
             fallback.append(f"归属表或选择器本身在改动里：{path}")
+        elif path == DEPENDENCY_TABLE_PATH and effective_precision == PRECISION_DEPENDENCY:
+            fallback.append(f"依赖追踪表在改动里（依赖精度的选择规则之一）：{path}")
         elif path in EXECUTOR_SELF_PATHS:
             fallback.append(f"执行器版本文件或调度策略文件在改动里：{path}")
     if include_claude:
@@ -1033,6 +1178,9 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
                 fail_closed.append({"reason": f"改动的 Python 文件没有任何静态使用者，而重模块 {module} 可达的 {sites[0]} 里有解析不了目标的动态加载，它可能被加载",
                                     "file": unused[0]})
                 pull([module], f"失败关闭：含解析不了的动态加载（{sites[0]}），改动的 {unused[0]} 没有静态使用者")
+    dependency_skippable: list[str] = []
+    if effective_precision == PRECISION_DEPENDENCY and not fallback:
+        dependency_skippable = _dependency_pull(selector, data, tree, changes, head, fail_closed, pull)
     forced = sorted({str(name) for name in force_modules})
     if forced and not fallback:
         pull([module for module in forced if module in present], "上一轮失败或没执行完，必须重跑")
@@ -1041,12 +1189,17 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         for module in selector.heavy:
             if module not in pulled:
                 state[module] = SKIP
+        for module in dependency_skippable:
+            if module not in pulled:
+                state[module] = SKIP
     scope = SCOPE_FULL if fallback else SCOPE_CLIENT_PLAN
     seconds = {module: table[module]["core_seconds"] or 0.0 for module in selector.heavy}
     cheap = data["cheap_core_seconds"]
     # 被剔除的模块逐个列出理由（验收要求）：谁、归属、规则、核·秒、为什么可以不跑。
+    heavy_names = set(selector.heavy)
     skipped_rows = [{"module": module, "owner": table[module]["owner"], "rule": table[module]["rule"], "core_seconds": table[module]["core_seconds"],
-                     "reason": skip_reason(module, table[module], client, cheap=cheap)}
+                     "reason": skip_reason(module, table[module], client, cheap=cheap) if module in heavy_names
+                     else "依赖闭包碰不到任何改动文件（依赖精度）：基点已有这个模块的通过结论，改动不影响它的结果"}
                     for module in sorted(name for name, chosen in state.items() if chosen == SKIP)]
     release_tags = release_tags_at(tree, base)
     advisory_rows = []
@@ -1079,7 +1232,61 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     if forced:
         selection["force_modules"] = forced
         selection["force_modules_unknown"] = sorted(name for name in forced if name not in present)
+    if effective_precision == PRECISION_DEPENDENCY:
+        selection["precision"] = PRECISION_DEPENDENCY
+        selection["precision_reason"] = precision_reason
+        selection["dependency_model"] = DEPENDENCY_MODEL
     return seal(selection)
+
+
+def _dependency_pull(selector: Selector, data: Mapping[str, Any], tree: Path, changes: Sequence[tuple[str, str]], head: str,
+                     fail_closed: Sequence[Mapping[str, Any]], pull: Any) -> list[str]:
+    """依赖精度：对"旧口径下本来一律照跑"的模块（非重模块、已登记、没钉住），按依赖算谁被改动牵到；返回可剔除的候选名单（没被牵到的由调用方标 skip）。
+
+    改动取"基点到候选"与"追踪提交到候选"的并集：追踪表是追踪提交上的快照，追踪之后依赖文件变过的模块，记录可能过期，要继续被选直到重新追踪。
+    失败关闭：旧口径已有失败关闭记录（改动路径不认识、Python 解析失败、数据文件没读取者）、追踪提交不在候选提交的历史里时，候选一律并入；
+    改动里有没有任何静态使用者的 Python 文件、而候选闭包里有解析不了目标的动态加载时，同样并入这些候选（沿用旧口径的判断）。"""
+
+    table = load_dependency_table(tree)
+    if table is None:
+        raise OwnershipError(f"依赖精度需要依赖追踪表 {DEPENDENCY_TABLE_PATH}")
+    modules = data["modules"]
+    heavy = set(selector.heavy)
+    candidates = [module for module in selector.found if module in modules and module not in heavy and module not in data["pinned"]]
+    if not candidates:
+        return []
+    # 旧口径的"受管树内数据文件找不到任何读取者"是为重模块设的保险（它们靠文件名在 Python 源码里找读取者）；依赖精度对其余模块另有依赖闭包与追踪表，
+    # 这一条不再让全部模块跟着失败关闭，否则任何一个新数据文件都会把整轮拉回全集。
+    fatal = [item for item in fail_closed if not str(item["reason"]).startswith("受管树内数据文件找不到任何读取者")]
+    if fatal:
+        pull(candidates, "依赖精度失败关闭：" + str(fatal[0]["reason"]) + "：" + str(fatal[0]["file"]))
+        return candidates
+    traced = str(table["generated_at_commit"])
+    known = _git(tree, "cat-file", "-e", f"{traced}^{{commit}}", check_rc=False).returncode == 0
+    if not known or _git(tree, "merge-base", "--is-ancestor", traced, head, check_rc=False).returncode != 0:
+        pull(candidates, f"依赖精度失败关闭：追踪提交 {traced[:12]} 不在候选提交的历史里，追踪记录无法与改动对照")
+        return candidates
+    since_trace = changed_files(tree, traced, head) if traced != head else []
+    merged = sorted(set(changes) | set(since_trace), key=lambda item: (item[1], item[0]))
+    model = DependencyModel(tree, selector.graph, data, table)
+    readers = {path: model.mention_readers(path) for status, path in merged if status in ("A", "D")}
+    unused: set[str] = set()
+    sites = set(selector.graph.unresolved_dynamic)
+    if sites:
+        unused = selector.graph.unused(path for status, path in merged if status != "D" and path.endswith(".py") and path.startswith(GRAPH_ROOT + "/"))
+    for module in candidates:
+        literal = model.environment_sensitive(module)
+        if literal is not None and module not in data["reviewed_hermetic"]:
+            pull([module], f"依赖精度：闭包含访问真实 ARM64 环境的字面量 {literal}，不剔除")
+            continue
+        for reason in model.reasons(module, merged, readers):
+            pull([module], reason)
+        if unused:
+            _deps, closure, _dirs = model.footprint(module)
+            hit = sorted(closure & sites)
+            if hit:
+                pull([module], f"依赖精度失败关闭：改动的 {sorted(unused)[0]} 没有任何静态使用者，而闭包里的 {hit[0]} 有解析不了目标的动态加载，它可能被加载")
+    return candidates
 
 
 def _handle_change(selector: Selector, data: Mapping[str, Any], tree: Path, base: str, head: str, status: str, path: str,
@@ -1169,6 +1376,420 @@ def _handle_other(selector: Selector, data: Mapping[str, Any], path: str, pull: 
             pull(selector.importers_of(reader, chain=chain), path)
     if not readers and name_owner(path) != "codex" and not name.startswith("candidate_"):
         close("受管树内数据文件找不到任何读取者，无法判断谁依赖它", path)
+
+
+# ---------------------------------------------------------------------------
+# 依赖精度（OPT-02）：按每个测试模块真实依赖的文件选择
+# ---------------------------------------------------------------------------
+
+PRECISION_OWNER = "owner"            # 旧口径：只有归属对方客户端的重模块可被剔除，其余一律照跑
+PRECISION_DEPENDENCY = "dependency"  # 新口径：除上面的重模块照旧，其余模块也按"依赖文件里有没有改动"剔除
+PRECISION_AUTO = "auto"              # 基点是发版 tag 提交时用旧口径，否则（同一 Campaign 内上一个通过的提交作基点）用新口径
+PRECISIONS = (PRECISION_OWNER, PRECISION_AUTO, PRECISION_DEPENDENCY)
+DEPENDENCY_MODEL = "dependency-closure/v1"
+DEPENDENCY_TABLE_SCHEMA = "unit-dependencies/v1"
+
+
+def tracked_files(tree: Path) -> list[str]:
+    """测试树当前提交里的全部文件（相对路径，排序）。选择器要求测试树干净，所以工作树就是 HEAD；不是 git 仓库时退回遍历目录。"""
+
+    tree = Path(tree)
+    result = subprocess.run(["git", "-C", str(tree), "-c", "core.quotepath=off", "ls-files", "-z"], capture_output=True, check=False)
+    if result.returncode == 0:
+        return sorted(item for item in result.stdout.decode("utf-8", "replace").split("\0") if item)
+    out: list[str] = []
+    for current, directories, names in os.walk(tree):
+        directories[:] = sorted(item for item in directories if item not in (".git", "__pycache__", "node_modules"))
+        out.extend(os.path.relpath(os.path.join(current, name), tree).replace(os.sep, "/") for name in names)
+    return sorted(out)
+
+
+def load_dependency_table(tree: Path) -> dict[str, Any] | None:
+    """读依赖追踪表；文件不存在返回 None（依赖精度不可用，调用方回退旧口径）；格式不对抛 ``OwnershipError``。"""
+
+    path = Path(tree) / DEPENDENCY_TABLE_PATH
+    if not path.is_file():
+        return None
+    try:
+        table = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise OwnershipError(f"读不到依赖追踪表 {DEPENDENCY_TABLE_PATH}：{error}") from error
+    problems = dependency_table_problems(table)
+    if problems:
+        raise OwnershipError(f"依赖追踪表不合法：{problems[0]}")
+    return table
+
+
+def dependency_table_problems(table: Any) -> list[str]:
+    if not isinstance(table, dict) or table.get("schema_version") != DEPENDENCY_TABLE_SCHEMA:
+        return ["格式版本不对"]
+    problems = []
+    if set(table) != {"schema_version", "model", "generated_at_commit", "tracer", "files", "modules", "unobserved"}:
+        problems.append(f"键不对：{sorted(table)}")
+        return problems
+    if table["model"] != DEPENDENCY_MODEL:
+        problems.append(f"模型版本 {table['model']!r} 不是 {DEPENDENCY_MODEL}")
+    if not (isinstance(table["generated_at_commit"], str) and SHA1.fullmatch(table["generated_at_commit"])):
+        problems.append("generated_at_commit 必须是 40 位小写提交")
+    if not isinstance(table["files"], list) or not all(isinstance(item, str) for item in table["files"]):
+        problems.append("files 必须是路径字符串列表（空串＝枚举过仓库根目录）")
+        return problems
+    size = len(table["files"])
+    if not isinstance(table["modules"], dict) or not isinstance(table["unobserved"], dict):
+        problems.append("modules／unobserved 必须是对象")
+        return problems
+    for module, row in table["modules"].items():
+        if not isinstance(row, dict) or set(row) != {"opened", "listed"}:
+            problems.append(f"{module}：字段不对")
+            continue
+        for key in ("opened", "listed"):
+            if not isinstance(row[key], list) or not all(isinstance(item, int) and not isinstance(item, bool) and 0 <= item < size for item in row[key]):
+                problems.append(f"{module}.{key}：必须是 files 下标列表")
+    for module, reason in table["unobserved"].items():
+        if not isinstance(reason, str) or not reason:
+            problems.append(f"{module}：unobserved 必须写原因")
+    if set(table["modules"]) & set(table["unobserved"]):
+        problems.append("同一个模块不能既有记录又在 unobserved 里")
+    return problems
+
+
+def build_dependency_table(trace_dir: Path, tree: Path, commit: str, modules: Sequence[str], tracer: Mapping[str, Any]) -> dict[str, Any]:
+    """把审计钩子追踪的结果（每个模块一个目录，里面是各进程的 ``<pid>.json`` 与 ``_result.json``）汇成依赖追踪表。
+
+    只留仓库里真实存在的文件（``__pycache__`` 里的字节码还原成源文件）；追踪失败（退出码非 0、超时、没有记录）的模块进 ``unobserved``，
+    选择时永远照跑——失败的运行读到哪一步不可信。``commit`` 是被追踪的测试树的提交。"""
+
+    tracked = set(tracked_files(tree))
+    directories = {item for path in tracked for item in (str(PurePosixPath(path).parents[index]) for index in range(len(PurePosixPath(path).parents) - 1))}
+    files: dict[str, int] = {}
+    table_modules: dict[str, Any] = {}
+    unobserved: dict[str, str] = {}
+
+    def index(path: str) -> int:
+        return files.setdefault(path, len(files))
+
+    def source_of(path: str) -> str | None:
+        if "/__pycache__/" in path:
+            head, _, name = path.partition("/__pycache__/")
+            path = f"{head}/{name.split('.')[0]}.py"
+        return path if path in tracked else None
+
+    for module in sorted(modules):
+        folder = Path(trace_dir) / module
+        result_path = folder / "_result.json"
+        if not result_path.is_file():
+            unobserved[module] = "没有追踪记录"
+            continue
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if result.get("rc") != 0:
+            unobserved[module] = f"追踪运行退出码 {result.get('rc')}（{str(result.get('tail', '')).strip().splitlines()[-1][:80] if result.get('tail') else '无输出'}）"
+            continue
+        opened: set[str] = set()
+        listed: set[str] = set()
+        for record_path in sorted(folder.glob("*.json")):
+            if record_path.name == "_result.json":
+                continue
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            for path in record.get("opened", ()):
+                found = source_of(path)
+                if found is not None:
+                    opened.add(found)
+            for path in record.get("listed", ()):
+                if path in directories or path == "":
+                    listed.add(path)
+            for argv in record.get("spawned", ()):   # 被拉起的子进程的参数里写着的仓库文件（脚本、数据）
+                for argument in argv:
+                    for token in _TOKEN.findall(str(argument)):
+                        token = token.strip("/")
+                        if token in tracked:
+                            opened.add(token)
+        table_modules[module] = {"opened": sorted(index(path) for path in opened), "listed": sorted(index(path) for path in listed)}
+    ordered = sorted(files, key=files.__getitem__)
+    return {"schema_version": DEPENDENCY_TABLE_SCHEMA, "model": DEPENDENCY_MODEL, "generated_at_commit": commit, "tracer": dict(tracer),
+            "files": ordered, "modules": table_modules, "unobserved": unobserved}
+
+
+class DependencyModel:
+    """每个测试模块的依赖文件集合（"这个模块的结果可能取决于哪些文件"），三部分取并集，宁可多算，不能漏：
+
+    1. **静态·导入**：测试模块 import 的文件，传递到底（含祖先包 ``__init__.py``）——改了被导入的库，导入它的模块都要重测；
+    2. **静态·提到**：测试模块与它传递导入的**测试目录文件（夹具）**里的字面量（非文档字符串）精确写着的仓库文件（路径、完整文件名，含路径拼接）；
+       字面量里有 ``go``／``make``／``docker``／``npm`` 等构建工具，视为依赖 tools/ 以外的全部文件；
+    3. **动态·追踪**：依赖追踪表（``tools/ci/unit_dependencies.json``）记录的、该模块被审计钩子实际观察到打开的文件、枚举的目录、被拉起的脚本
+       ——库里读的数据、清单类数据里列着又真被读取的工具文件、子进程执行的脚本、间接导入、目录枚举与通配的实际范围，静态分析看不全或只能无限放宽的，
+       都由它给出（静态只给下限，不做会把几乎所有模块拉进来的"提到的数据里再提到"式放宽）。
+
+    追踪表是某个提交（``generated_at_commit``）上的快照：选择时用"追踪提交到候选提交"的全部改动对依赖集合求交（比"基点到候选"更宽），
+    所以追踪之后依赖文件变过的模块即使基点已经跑过它也会继续被选，直到重新追踪——记录过期只会多选，不会漏选。
+    没有追踪记录的模块（新模块、追踪失败、超时）永远照跑；闭包代码含访问真实 ARM64 安装或数据根的字面量、又没被复核为隔离的模块也永远照跑。
+
+    已知不能证明的情形（追踪时本机跳过的平台分支、动态拼出的路径、外部非 Python 进程读的文件）由 ``unobserved``／静态下限／收尾全集与 GitHub CI 全集兜底。"""
+
+    def __init__(self, tree: Path, graph: Graph, data: Mapping[str, Any], table: Mapping[str, Any]) -> None:
+        self.tree = Path(tree)
+        self.graph = graph
+        self.table = table
+        self.generic_names = frozenset(data["generic_names"])
+        self.p3_literals = tuple(data["p3_literals"])
+        # 已人工复核为"字面量只是假配置／模拟载荷／环境变量名"的测试目录文件：含真实环境字面量也不让依赖它的模块永远照跑（``dependency.reviewed_files``）。
+        self.reviewed_files = frozenset((data.get("dependency") or {}).get("reviewed_files", {}))
+        self.files = tracked_files(self.tree)
+        self.file_set = frozenset(self.files)
+        self.by_suffix: dict[str, list[str]] = collections.defaultdict(list)
+        self.dir_members: dict[str, list[str]] = collections.defaultdict(list)
+        for item in self.files:
+            parts = item.split("/")
+            for index in range(len(parts)):
+                self.by_suffix["/".join(parts[index:])].append(item)
+            for index in range(1, len(parts)):
+                self.dir_members["/".join(parts[:index])].append(item)
+        self._text: dict[str, str] = {}
+        self._tokens: dict[str, frozenset[str]] = {}
+        self._resolved: dict[str, frozenset[str]] = {}
+        self._footprints: dict[str, tuple[dict[str, tuple[str, str]], set[str], set[str]]] = {}
+        names = table["files"]
+        self.observed: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+            module: (frozenset(names[i] for i in row["opened"]), frozenset(names[i] for i in row["listed"]))
+            for module, row in table["modules"].items()}
+        self.unobserved: Mapping[str, str] = table["unobserved"]
+
+    # -- 基础 -------------------------------------------------------------------
+
+    @staticmethod
+    def is_code(rel: str) -> bool:
+        return PurePosixPath(rel).suffix in CODE_SUFFIXES
+
+    @staticmethod
+    def in_tests(rel: str) -> bool:
+        return rel.startswith(TESTS_DIR + "/")
+
+    def text_of(self, rel: str) -> str:
+        if rel not in self._text:
+            if rel in self.graph.text:
+                self._text[rel] = self.graph.text[rel]
+            else:
+                try:
+                    self._text[rel] = (self.tree / rel).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    self._text[rel] = ""
+        return self._text[rel]
+
+    def normalize(self, token: str) -> str:
+        token = token.strip().strip("\"'`,;:()<>").replace("\\", "/")
+        while token.startswith("./"):
+            token = token[2:]
+        return token.strip("/")
+
+    def tokens_of(self, rel: str, *, top_only: bool = False) -> frozenset[str]:
+        """一个文件里"提到"的路径形式的片段：Python 取非文档字符串常量（多行或带空格的整段再按空白切开；``top_only`` 只取不在函数体里的），
+        其余文本取非注释行里的词。"""
+
+        key = f"{rel}\0{int(top_only)}"
+        if key in self._tokens:
+            return self._tokens[key]
+        raw: set[str] = set()
+        if rel.endswith(".py") and rel in self.graph.consts:
+            for const in (self.graph.top_consts if top_only else self.graph.consts)[rel]:
+                if len(const) > 4000:
+                    continue
+                if "\n" in const or " " in const or len(const) > 240:
+                    raw.update(_TOKEN.findall(const))
+                else:
+                    raw.add(const)
+            raw.update(self.graph.import_tokens.get(rel, ()))
+        else:
+            text = self.text_of(rel)
+            if PurePosixPath(rel).suffix in (".sh", ".bash"):
+                text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+            raw.update(_TOKEN.findall(text))
+        out = {self.normalize(item) for item in raw}
+        self._tokens[key] = frozenset(item for item in out if len(item) >= 3 and _ALNUM.search(item) and len(item) <= 240)
+        return self._tokens[key]
+
+    # -- 解析：片段 → 仓库里的文件 -----------------------------------------------------
+
+    def resolve_token(self, token: str) -> frozenset[str]:
+        """片段解析成仓库里精确命中的文件（完整路径、路径后缀或文件名；通用文件名如 ``__init__.py`` 不单独算）。"""
+
+        cached = self._resolved.get(token)
+        if cached is None:
+            hits = list(self.by_suffix.get(token, ())) if "*" not in token and "?" not in token else []
+            if "/" not in token:
+                hits = [item for item in hits if PurePosixPath(item).name not in self.generic_names]
+                # 点分模块路径（``python -m tools.ci.unit_records``、``import_module("…")``）：按模块文件解析。
+                if "." in token and _DOTTED.fullmatch(token):
+                    hits.extend(self.by_suffix.get(token.replace(".", "/") + ".py", ()))
+                    hits.extend(self.by_suffix.get(token.replace(".", "/") + "/__init__.py", ()))
+                # 按名字加载（``load_script("vc4_resume")``）：含下划线的标识符整串等于某个 Python 文件的主干名。
+                elif "_" in token and _STEM.fullmatch(token):
+                    hits.extend(self.by_suffix.get(token + ".py", ()))
+            cached = frozenset(hits)
+            self._resolved[token] = cached
+        return cached
+
+    @staticmethod
+    def _near(reader: str, target: str) -> bool:
+        """裸文件名在仓库里有多个同名文件时，只认和读取者共享前两级目录的（``tools/official_client_capture`` 之内）：同名的通用文件名
+        （``summary.json`` 之类）多半是测试自己在临时目录里造的，不是仓库里别处的同名文件。"""
+
+        left = PurePosixPath(reader).parent.parts
+        right = PurePosixPath(target).parent.parts
+        shared = 0
+        for a, b in zip(left, right):
+            if a != b:
+                break
+            shared += 1
+        return shared >= 2
+
+    def mentions(self, rel: str, *, top_only: bool = False) -> set[str]:
+        """一个文件精确提到的仓库文件（字面量路径、完整文件名，不含自己）。目录、前缀、通配符这类宽泛的提法不在这里算：它们的实际范围由追踪表给出。"""
+
+        exact: set[str] = set()
+        for token in self.tokens_of(rel, top_only=top_only):
+            if "*" in token or "?" in token:
+                continue
+            found_exact = self.resolve_token(token)
+            if "/" not in token and len(found_exact) > 1:
+                found_exact = frozenset(item for item in found_exact if self._near(rel, item))
+            exact.update(found_exact)
+        exact.discard(rel)
+        return exact
+
+    # -- 依赖集合 ----------------------------------------------------------------
+
+    def footprint(self, module: str) -> tuple[dict[str, tuple[str, str]], set[str], set[str]]:
+        """（依赖文件 → （缘由, 经由哪个文件）, 导入闭包里的文件, 被观察到枚举过的目录）。"""
+
+        cached = self._footprints.get(module)
+        if cached is not None:
+            return cached
+        start = f"{TESTS_DIR}/{module}.py"
+        deps: dict[str, tuple[str, str]] = {start: ("测试模块自身", "")}
+        closure: set[str] = set()
+        queue = [start]
+        while queue:   # 静态·导入：传递到底
+            current = queue.pop()
+            if current in closure:
+                continue
+            closure.add(current)
+            for target in self.graph.hard.get(current, ()):
+                deps.setdefault(target, ("导入", current))
+                queue.append(target)
+        for current in sorted(closure):   # 静态·提到：只看测试目录里的文件（测试自己与它的夹具）
+            if not self.in_tests(current):
+                continue
+            # 测试模块自己整个文件都会执行；被它导入的夹具，导入时只有模块级代码一定执行，函数体里的提法留给追踪表（执行到了才会被观察到）。
+            for target in self.mentions(current, top_only=current != start):
+                deps.setdefault(target, ("提到", current))
+        opened, listed_dirs = self.observed.get(module, (frozenset(), frozenset()))   # 动态·追踪
+        for target in sorted(opened):
+            deps.setdefault(target, ("追踪到被打开", ""))
+        for directory in sorted(listed_dirs):
+            for target in (self.files if directory == "" else self.dir_members.get(directory, ())):
+                deps.setdefault(target, (f"追踪到枚举目录 {directory or '仓库根'}", ""))
+        result = (deps, closure, set(listed_dirs))
+        self._footprints[module] = result
+        return result
+
+    def spawns_build_tools(self, module: str) -> bool:
+        _deps, closure, _dirs = self.footprint(module)
+        return any(self.graph.consts.get(item, set()) & SPAWN_WORDS for item in closure if self.in_tests(item))
+
+    def environment_sensitive(self, module: str) -> str | None:
+        """测试模块与它导入的夹具（测试目录里的文件）含访问真实 ARM64 安装或数据根的路径字面量：返回命中的字面量，否则 None。
+        范围和旧口径的 ARM64 依赖守卫（``hermetic_problems``）一致：库文件里写着这些路径当默认值很常见，测试会把它们重定向到临时目录，不算访问真实环境；
+        文档字符串与注释里提到它们也不算（只看字符串常量）。"""
+
+        _deps, closure, _dirs = self.footprint(module)
+        for item in sorted(closure):
+            if not self.in_tests(item):
+                continue
+            if not item.endswith(".py") or item in self.reviewed_files:
+                continue
+            for const in self.graph.consts.get(item, ()):   # 非文档字符串的常量：文档字符串与注释里提到这些路径不算访问
+                for literal in self.p3_literals:
+                    if literal in const:
+                        return literal
+        return None
+
+    def mention_readers(self, path: str) -> set[str]:
+        """文本里整词提到 ``path``（文件名、路径后缀或模块名）的文件——文件被删除或新增时，找会被它影响的读取者。"""
+
+        parts = path.split("/")
+        suffixes = {"/".join(parts[index:]) for index in range(len(parts))}
+        suffixes -= {item for item in suffixes if "/" not in item and item in self.generic_names}
+        stem = PurePosixPath(path).stem
+        pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(stem) + r"(?![A-Za-z0-9_])") if path.endswith(".py") else None
+        out: set[str] = set()
+        for item in self.files:
+            if item == path or not (self.in_tests(item) or item.endswith(".py")):
+                continue
+            if self.tokens_of(item) & suffixes or (pattern is not None and item in self.graph.text and pattern.search(self.graph.text[item])):
+                out.add(item)
+        return out
+
+    def reasons(self, module: str, changes: Sequence[tuple[str, str]], readers: Mapping[str, set[str]]) -> list[str]:
+        """这个模块为什么必须跑：依赖里有改动文件（每条写明缘由与经由）；空＝改动都碰不到它。"""
+
+        if module in self.unobserved:
+            return [f"没有可用的依赖追踪记录（{self.unobserved[module]}），不剔除"]
+        if module not in self.observed:
+            return ["依赖追踪表里没有这个模块（新模块或追踪表过期），不剔除"]
+        deps, closure, listed_dirs = self.footprint(module)
+        opened, _dirs = self.observed[module]
+        out: list[str] = []
+        spawns: bool | None = None
+        for status, path in changes:
+            if status != "D":
+                hit = deps.get(path)
+                if hit is not None:
+                    out.append(f"依赖闭包含改动文件 {path}（{hit[0]}" + (f"，经 {hit[1]}" if hit[1] else "") + "）")
+                    continue
+            else:
+                if path in opened:
+                    out.append(f"追踪到这个模块打开过已删除的 {path}")
+                    continue
+            # 新增或删除：追踪到枚举过的目录下的增删、文件名被测试目录里的代码提到过，都可能改变结果。
+            if status in ("A", "D"):
+                directory = next((item for item in listed_dirs if item == "" or path.startswith(item + "/")), None)
+                if directory is not None:
+                    out.append(f"追踪到这个模块枚举过目录 {directory or '仓库根'}，其下{'新增' if status == 'A' else '删除'}了 {path}")
+                    continue
+                named = readers.get(path, set()) & closure
+                if named:
+                    out.append(f"导入闭包里的 {sorted(named)[0]} 提到{'新增' if status == 'A' else '已删除'}的 {path}")
+                    continue
+            if not path.startswith(GRAPH_ROOT + "/"):
+                if spawns is None:
+                    spawns = self.spawns_build_tools(module)
+                if spawns:
+                    out.append(f"测试里会拉起构建工具（go／make／docker／npm 等），可能读到 tools/ 以外的改动文件 {path}")
+        return out
+
+
+def resolve_precision(requested: str | None, data: Mapping[str, Any], tree: Path, base: str) -> tuple[str, str]:
+    """（有效精度, 缘由）。``requested`` 缺省取数据文件 ``dependency.precision``（没有这一节就是 owner，行为与改造前逐字相同）。
+
+    ``auto``：基点是发版 tag 的提交（升级后的第一次验证，基点的"全集通过"证据是 GitHub CI 与收尾，不是本环境）用 owner；
+    基点不是发版提交（同一 Campaign 内上一个通过的后台验证，或上一轮全集运行的提交）用 dependency——链头那次 owner 运行已经让每个
+    Codex／共用模块在本环境跑过，之后每轮只剔除"依赖碰不到改动"的模块，被剔除模块的通过结论沿基点链传递。
+    没有依赖追踪表时 auto 回退 owner（写明原因），显式要求 dependency 则报错。"""
+
+    chosen = requested or (data.get("dependency") or {}).get("precision") or PRECISION_OWNER
+    if chosen not in PRECISIONS:
+        raise OwnershipError(f"不认识的选择精度：{chosen!r}（只有 {', '.join(PRECISIONS)}）")
+    if chosen == PRECISION_OWNER:
+        return chosen, "显式指定" if requested else "数据文件 dependency.precision"
+    if not (Path(tree) / DEPENDENCY_TABLE_PATH).is_file():
+        if chosen == PRECISION_DEPENDENCY:
+            raise OwnershipError(f"要求依赖精度，但没有依赖追踪表 {DEPENDENCY_TABLE_PATH}")
+        return PRECISION_OWNER, "没有依赖追踪表：回退按归属选择"
+    if chosen == PRECISION_DEPENDENCY:
+        return chosen, "显式指定" if requested else "数据文件 dependency.precision"
+    tags = release_tags_at(tree, base)
+    if tags:
+        return PRECISION_OWNER, f"基点是发版 tag 提交（{'、'.join(tags[:2])}）：沿用按归属选择"
+    return PRECISION_DEPENDENCY, "基点不是发版 tag 提交（同一 Campaign 内已通过的提交）：按依赖选择"
 
 
 # ---------------------------------------------------------------------------
@@ -1273,6 +1894,34 @@ def audit_check(data: Mapping[str, Any], records: Iterable[Mapping[str, Any]], r
     return problems
 
 
+def what_if(tree: Path, paths: Sequence[str]) -> dict[str, Any]:
+    """假设 ``paths`` 被改了（树里存在的按修改，不存在的按删除），逐个测试模块算依赖是否被牵到。不碰 git 历史，只读当前树与依赖追踪表。"""
+
+    tree = Path(tree)
+    data = load_data(tree)
+    table = load_dependency_table(tree)
+    if table is None:
+        raise OwnershipError(f"没有依赖追踪表 {DEPENDENCY_TABLE_PATH}")
+    graph = Graph(tree)
+    model = DependencyModel(tree, graph, data, table)
+    changes = [("M" if (tree / path).exists() else "D", path) for path in sorted(paths)]
+    readers = {path: model.mention_readers(path) for status, path in changes if status in ("A", "D")}
+    modules = data["modules"]
+    heavy = {module for module, row in modules.items() if plan_state(row, "codex", cheap=data["cheap_core_seconds"], pinned=module in data["pinned"]) == SKIP}
+    rows: dict[str, list[str]] = {}
+    for module in discover_modules(tree):
+        if module in heavy:
+            continue
+        reasons = model.reasons(module, changes, readers)
+        literal = model.environment_sensitive(module) if module in model.observed else None
+        if literal is not None and module not in data["reviewed_hermetic"]:
+            reasons.append(f"闭包含访问真实 ARM64 环境的字面量 {literal}，永远照跑")
+        if reasons:
+            rows[module] = reasons
+    seconds = sum((modules.get(module) or {}).get("core_seconds") or 0.0 for module in rows)
+    return {"changes": [[status, path] for status, path in changes], "modules": len(rows), "core_seconds": round(seconds, 1), "pulled": rows}
+
+
 # ---------------------------------------------------------------------------
 # 命令行
 # ---------------------------------------------------------------------------
@@ -1307,7 +1956,17 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     sel.add_argument("--base", required=True)
     sel.add_argument("--head", default=None)
     sel.add_argument("--include-claude", action="store_true")
+    sel.add_argument("--precision", choices=PRECISIONS, default=None, help="选择精度：缺省取数据文件 dependency.precision（没有就是 owner）")
     sel.add_argument("--output", type=Path, default=None)
+    tab = sub.add_parser("dependency-table", help="把审计钩子追踪的结果汇成依赖追踪表（tools/ci/unit_dependencies.json）")
+    tab.add_argument("--tree", type=Path, default=Path.cwd(), help="被追踪的测试树（取它的提交与文件清单）")
+    tab.add_argument("--trace-dir", type=Path, required=True, help="每个模块一个子目录（里面是各进程的 <pid>.json 与 _result.json）")
+    tab.add_argument("--python", default="", help="追踪时的 Python 版本说明")
+    tab.add_argument("--platform", default="", help="追踪时的平台说明")
+    tab.add_argument("--output", type=Path, default=None)
+    dep = sub.add_parser("deps", help="假设这些文件被改了，按依赖闭包看哪些测试模块会被牵到（不碰 git，调试与评审用）")
+    dep.add_argument("--tree", type=Path, default=Path.cwd())
+    dep.add_argument("paths", nargs="+", help="仓库相对路径；树里不存在的按已删除处理")
     rep = sub.add_parser("diff-report", help="两次运行清单（全集、计划）的差集核对")
     rep.add_argument("full_manifest", type=Path)
     rep.add_argument("plan_manifest", type=Path)
@@ -1351,7 +2010,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_json(args.output or data_path(args.tree), payload)
             return 0
         if args.command == "select":
-            _write_json(args.output, select(args.tree, client=args.client, base=args.base, head=args.head, include_claude=args.include_claude))
+            _write_json(args.output, select(args.tree, client=args.client, base=args.base, head=args.head, include_claude=args.include_claude,
+                                            precision=args.precision))
+            return 0
+        if args.command == "dependency-table":
+            commit = _git(args.tree, "rev-parse", "--verify", "HEAD^{commit}").stdout.decode().strip()
+            data = load_data(args.tree)
+            heavy = {module for module, row in data["modules"].items()
+                     if plan_state(row, "codex", cheap=data["cheap_core_seconds"], pinned=module in data["pinned"]) == SKIP}
+            traced = [module for module in discover_modules(args.tree) if module not in heavy]
+            table = build_dependency_table(args.trace_dir, args.tree, commit, traced,
+                                           {"python": args.python, "platform": args.platform, "events": "open／枚举目录／子进程参数（sys.addaudithook）"})
+            _write_json(args.output or (args.tree / DEPENDENCY_TABLE_PATH), table)
+            return 0
+        if args.command == "deps":
+            _write_json(None, what_if(args.tree, args.paths))
             return 0
         if args.command == "diff-report":
             result = diff_report(json.loads(args.full_manifest.read_text(encoding="utf-8")), json.loads(args.plan_manifest.read_text(encoding="utf-8")))

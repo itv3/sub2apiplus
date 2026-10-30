@@ -31,6 +31,49 @@
    "reason": "Codex 版本登记会机械地改 Claude 场景清单里的受管工具文件名单、重生成 Claude 期望画像并同步冻结摘要（FROZEN_PROFILE_SHA256S）；它们是镜像式重锚，只有直接核对这些锚点的测试需要重跑，Claude 重集成链并不关心。Python 联动文件只有在抹掉冻结摘要赋值后其余完全不变时才算联动。"
   }
  ],
+ "dependency": {
+  "precision": "auto",
+  "reason": "OPT-02：基点是发版 tag 提交时沿用按归属选择；同一 Campaign 内以上一个通过的提交（或上一轮全集运行）作基点时，按依赖追踪表 tools/ci/unit_dependencies.json 与静态导入闭包把依赖碰不到改动的其余模块也剔除。没有追踪表时回退按归属选择。",
+  "reviewed_files": {
+   "tools/official_client_capture/tests/evaluation_chain_driver.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/real_chains/test_claude_upgrade_control_chain.py": "HOST_DATA_ROOT 只在“命名空间隔离自检”里探测：外层隔离外壳启动后断言宿主数据根不可写；导入它的其它模块只用到常量与辅助函数，不执行这段自检",
+   "tools/official_client_capture/tests/real_chains/test_codex_upgrade_evaluation_real_chain.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_arm64_capture_driver.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_arm64_driver_fix_and_continue.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_arm64_driver_vc_batch_boundary.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_arm64_phase_context.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_arm64_pipeline_scripts.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_arm64_round_context.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_chain_rehearsal_blindspots.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_background_preflight.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_background_reuse.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_background_scope.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_entry_dryrun.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_entry_dryrun_opening_env.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_ci_entry_steps.py": "把 /etc/sub2api-egress/policy.json 重定向到临时文件，断言入口步骤不再把它当输入",
+   "tools/official_client_capture/tests/test_ci_read_audit_wp_r10.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_ci_unit_dependencies.py": "合成仓库里的假环境字面量（验证环境敏感判定本身），不是访问",
+   "tools/official_client_capture/tests/test_ci_unit_ownership.py": "合成路径字面量（验证 ARM64 依赖守卫本身），不是访问",
+   "tools/official_client_capture/tests/test_claude_launch_probe.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_claude_sealed_gate_materials.py": "只用 Path(\"/root/arm64-capture-driver\").exists() 决定 skipTest，其余全在 tempfile 里（与按模块复核的结论一致）",
+   "tools/official_client_capture/tests/test_claude_upgrade_arm64_environment_receipt.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_claude_upgrade_failure_lifecycle.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_client_launch_probe.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_codex_closeout.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_codex_upgrade.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_codex_upgrade_arm64_environment_receipt.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_codex_upgrade_campaign_resume.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_codex_upgrade_candidate_readiness_failures.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_codex_upgrade_root_cause.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_codex_upgrade_vc_artifacts.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_driver_client_table.py": "ARM64_VC_ENV 只是传给子进程的临时参数文件路径；capture-cli/data 是临时根下建的目录",
+   "tools/official_client_capture/tests/test_driver_client_table_codex_parity.py": "只是环境变量名 ARM64_VC_ENV：测试把它指向临时参数文件，不读取真实环境里的值",
+   "tools/official_client_capture/tests/test_pre_a3_client_grouping.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_pre_a3_codex_parity.py": "路径只是假的配置值、模拟载荷或断言文本，测试在临时目录里运行，不访问真实的 ARM64 安装或数据根",
+   "tools/official_client_capture/tests/test_unit_inherit_codex_parity.py": "/etc/sub2api-egress/policy.json 只出现在输入声明与 argv 断言文本里，ARM64_VC_ENV 指向临时文件",
+   "tools/official_client_capture/tests/unit_ownership_world.py": "合成仓库的 p3_literals 配置值，不是访问"
+  }
+ },
  "description": "门禁单元按客户端归属（Codex 升级工具优化第 9 项）：物化后的结果，评审看 diff；规则与校验见 tools/ci/unit_ownership.py，改它用 materialize 重新生成，不手改派生部分。",
  "enabled_clients": [
   "codex"
@@ -939,6 +982,13 @@
    "rule": "infra-prefix"
   },
   "test_ci_time_threshold_lint": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_unit_dependencies": {
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": null,
