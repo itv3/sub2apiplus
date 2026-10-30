@@ -18,8 +18,9 @@ capture-tools 十个单元红，白跑约 25 分钟）、前端审计遇到刚�
   ``__pycache__`` 或 ``.pyc``（门禁前置检查按文件系统查，有就 exit 9）。
 * ``commit-hygiene`` 提交说明与目录卫生：被推提交说明里不能有 ``[skip ci]`` 一类字面量（GitHub 在说明任意位置匹配到就整次推送都不跑工作流，09-23 出过事）；
   ``docs/egress/maintenance`` 下不能放 ``.md``（Go 冻结门禁要求为零）。
-* ``freeze-successor`` 冻结承接：范围内的改动没触及冻结路径就写“未触及”；触及了就跑 ``freeze-successor-generate --dry-run`` 看命中，再复算每个冻结路径的当前摘要是否
-  已有承接收据（与后台验证起跑检查同一套算法），没有就给出带完整提交号和绝对路径的生成命令（收据必须与源码分开提交）。
+* ``freeze-successor`` 冻结承接：以“每个冻结路径的当前摘要是否已有承接收据”为真值（与后台验证起跑检查、门禁里的冻结测试同一张承接图）；范围里还没有收据时再跑
+  ``freeze-successor-generate --dry-run`` 看命中与注册表待办，没触及冻结路径就写“未触及”；范围里已含收据（源码与收据一起推）时 dry-run 不适用（工具会按自引用拒绝），只用覆盖复算。
+  未承接时给出带完整提交号和绝对路径的生成命令（收据必须与源码分开提交）。
 * ``guide-part2-digest`` 指南第二部分摘要：``source_spec_section_sha256(指南, "第二章")`` 必须等于登记值（取自基点上最新一份 ``codex_upgrade_scenarios_*.json`` 的
   ``source_spec.sha256``，不手抄常量）。第二部分是冻结章，各版场景清单与规则清单钉着它的摘要，改一个字节就让十来个单元红；``--allow-part2-change`` 用于本轮就是在做
   第二章摘要连锁的情况，放行“与基点不同”，但仍要求登记值已同步到新摘要、且没有文件还留着旧摘要。
@@ -261,7 +262,7 @@ def check_worktree_state(ctx: Context) -> Result:
         fixes.append("按字面路径删掉这些缓存（find tools -name __pycache__ -type d 列出再逐个删）；以后在工作树里的每条 python 命令都带 PYTHONDONTWRITEBYTECODE=1")
     if reasons:
         return red(name, "工作树状态不适合直接推送", reasons, fixes)
-    notes = "，工作树干净（--allow-dirty 下不计）" if not dirty else f"，有 {len(dirty)} 处未提交改动（已按 --allow-dirty 放行）"
+    notes = "，工作树干净" if not dirty else f"，有 {len(dirty)} 处未提交改动（已按 --allow-dirty 放行）"
     return green(name, f"HEAD 就是被推提交 {short(ctx.tip)}，未落后 {ctx.base_ref}{notes}，tools 下无 __pycache__／.pyc")
 
 
@@ -305,53 +306,71 @@ def _generate_command(ctx: Context) -> str:
             f"--tag {tag} --output {output}")
 
 
+def _receipts_in_range(ctx: Context) -> list[str]:
+    """范围内新增或修改的冻结台账收据（``docs/egress/maintenance/*.json``）。"""
+
+    changed = ctx.git("diff", "--name-only", "--diff-filter=AM", ctx.before, ctx.tip, "--", MAINTENANCE_DIR, check=False).stdout.split()
+    return [path for path in changed if path.endswith(".json")]
+
+
 def check_freeze_successor(ctx: Context) -> Result:
+    """冻结承接。以“每个冻结路径当前内容是否已有承接收据”为准（与门禁里 Go／Python 冻结测试同一张承接图，推上去会不会红的真值）；
+    范围里还没有收据时再跑 ``freeze-successor-generate --dry-run`` 看命中与注册表待办。范围里已经含收据（源码与收据一起推）时 dry-run 不适用：
+    工具会按“收据在本区间内变化，存在自引用风险”拒绝，所以只用覆盖复算。"""
+
     name = "freeze-successor"
     if not ctx.commits:
         return green(name, "未触及冻结范围（范围内没有提交，没有改动路径）")
     early = tip_checkout_skip(ctx, name)
     if early:
         return early
-    dry = ctx.run([sys.executable, "-B", "-m", "tools.upstream_merge", "freeze-successor-generate", "--dry-run", "--before", ctx.before,
-                   "--after", ctx.tip, "--tag", "prepush", "--repository", str(ctx.repo)], cwd=ctx.repo, timeout=180,
-                  env={"PYTHONPATH": str(ctx.repo)})
-    if dry.returncode == 127:
-        return skipped(name, f"跑不起 tools.upstream_merge：{_tail(dry.stderr)}")
-    if dry.returncode != 0:
-        message = _tail(dry.stderr or dry.stdout)
-        fixes = [f"区间内删除了冻结路径时补 --deletion-reason（及 --historical-reader）：{_generate_command(ctx)}"] if "deletion-reason" in message else \
-            ["按提示处理后重跑；前序摘要不在已登记收据里（链断裂）时不要凭空补边，先查是谁改了冻结文件却没承接"]
-        return red(name, "冻结承接 dry-run 被工具拒绝", [f"freeze-successor-generate --dry-run 退出码 {dry.returncode}：{message}"], fixes)
-    try:
-        plan = json.loads(dry.stdout)
-    except ValueError:
-        return red(name, "冻结承接 dry-run 的输出不是 JSON", [f"输出开头：{_tail(dry.stdout, 200)}"], ["先单独跑同一条命令看工具报什么"])
-    hits = [item["path"] for item in plan.get("transitions", [])]
-    manual = plan.get("required_manual_actions", [])
-    deleted = plan.get("deleted_frozen_paths", [])
-    if not hits and not manual and not deleted:
-        return green(name, f"未触及冻结范围（{plan.get('changed_path_count', 0)} 个改动路径，0 个冻结命中，dry-run 结论 {plan.get('result')}）")
+    coverage = _sibling("background_preflight").check_freeze_receipts(ctx.repo, runner=ctx.run)
+    uncovered = list(coverage.get("detail", {}).get("uncovered", []))
+    registered = coverage.get("detail", {}).get("registered")
+    if not coverage.get("passed") and not uncovered:
+        return red(name, "冻结覆盖算不出来", list(coverage.get("problems", [])), ["先单独跑 tools.upstream_merge.freeze.load_frozen_edges 看台账读取为什么失败"])
     reasons: list[str] = []
     fixes: list[str] = []
-    if manual:
-        for action in manual[:5]:
+    hits: list[str] = []
+    receipts = _receipts_in_range(ctx)
+    plan: dict[str, Any] = {}
+    if not receipts:
+        dry = ctx.run([sys.executable, "-B", "-m", "tools.upstream_merge", "freeze-successor-generate", "--dry-run", "--before", ctx.before,
+                       "--after", ctx.tip, "--tag", "prepush", "--repository", str(ctx.repo)], cwd=ctx.repo, timeout=180,
+                      env={"PYTHONPATH": str(ctx.repo)})
+        if dry.returncode == 127:
+            return skipped(name, f"跑不起 tools.upstream_merge：{_tail(dry.stderr)}")
+        if dry.returncode != 0:
+            message = _tail(dry.stderr or dry.stdout)
+            reasons.append(f"freeze-successor-generate --dry-run 退出码 {dry.returncode}：{message}")
+            fixes.append(f"区间内删除了冻结路径时补 --deletion-reason（及 --historical-reader）：{_generate_command(ctx)}" if "deletion-reason" in message
+                         else "按提示处理后重跑；前序摘要不在已登记收据里（链断裂）时不要凭空补边，先查是谁改了冻结文件却没承接")
+        else:
+            try:
+                plan = json.loads(dry.stdout)
+            except ValueError:
+                reasons.append(f"freeze-successor-generate --dry-run 的输出不是 JSON：{_tail(dry.stdout, 200)}")
+                fixes.append("先单独跑同一条命令看工具报什么")
+        hits = [item["path"] for item in plan.get("transitions", [])]
+        for action in plan.get("required_manual_actions", [])[:5]:
             reasons.append(f"注册表规则 {action.get('rule_id')} 命中 {action.get('path')}：{action.get('instruction')}")
-        fixes.append("按规则要求的手工动作处理后，用 freeze-successor-generate 生成收据")
-    if deleted:
-        reasons.append(f"区间内删除了冻结路径：{'；'.join(deleted[:5])}")
-        fixes.append(f"生成收据时补 --deletion-reason（Python 模块再补 --historical-reader）：{_generate_command(ctx)}")
-    coverage_module = _sibling("background_preflight")
-    coverage = coverage_module.check_freeze_receipts(ctx.repo, runner=ctx.run)
-    uncovered = list(coverage.get("detail", {}).get("uncovered", []))
-    if not coverage.get("passed") and not uncovered:
-        return red(name, "冻结覆盖算不出来", [*reasons, *coverage.get("problems", [])], fixes)
+        if plan.get("required_manual_actions"):
+            fixes.append("按规则要求的手工动作处理后，用 freeze-successor-generate 生成收据")
+        if plan.get("deleted_frozen_paths"):
+            reasons.append(f"区间内删除了冻结路径：{'；'.join(plan['deleted_frozen_paths'][:5])}")
+            fixes.append(f"生成收据时补 --deletion-reason（Python 模块再补 --historical-reader）：{_generate_command(ctx)}")
     if uncovered:
         shown = "；".join(uncovered[:8]) + (f" 等共 {len(uncovered)} 个" if len(uncovered) > 8 else "")
         reasons.append(f"{len(uncovered)} 个冻结路径的当前内容没有承接收据登记：{shown}（冻结测试必红）")
-        fixes.append("生成承接收据并【单独提交】（源码与收据不能同一提交，否则留冻结缺口）：" + _generate_command(ctx))
+        fixes.append("生成承接收据并【单独提交】（源码与收据不能同一提交，否则留冻结缺口）：" + _generate_command(ctx)
+                     + ("（若工具以自引用拒绝，把 --after 换成最后一个源码提交）" if receipts else ""))
     if reasons:
-        return red(name, f"范围命中 {len(hits)} 个冻结路径，承接不完整", reasons, fixes)
-    return green(name, f"范围命中 {len(hits)} 个冻结路径（{'；'.join(hits[:3])}{'…' if len(hits) > 3 else ''}），当前摘要均已有承接收据（登记 {coverage['detail'].get('registered')} 个冻结路径）")
+        return red(name, f"范围命中 {len(hits)} 个冻结路径，承接不完整" if hits else "冻结承接不完整", reasons, fixes)
+    if receipts:
+        return green(name, f"范围内已含 {len(receipts)} 个承接收据文件，dry-run 不适用（工具会按自引用拒绝）；全部 {registered} 个冻结路径的当前摘要均已有承接收据登记")
+    if not hits:
+        return green(name, f"未触及冻结范围（{plan.get('changed_path_count', 0)} 个改动路径，0 个冻结命中，dry-run 结论 {plan.get('result')}）")
+    return green(name, f"范围命中 {len(hits)} 个冻结路径（{'；'.join(hits[:3])}{'…' if len(hits) > 3 else ''}），当前摘要均已有承接收据（登记 {registered} 个冻结路径）")
 
 
 # ---------------------------------------------------------------------------

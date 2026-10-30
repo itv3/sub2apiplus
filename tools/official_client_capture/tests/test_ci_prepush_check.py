@@ -438,10 +438,27 @@ class FreezeSuccessorTests(unittest.TestCase):
                    "transitions": [{"path": "frozen/data.txt", "reason": "示例承接", "predecessor_sha256": sha("v1\n"), "to_sha256": sha("v2 源码已改\n")}]}
         write(env.repo / "docs" / "egress" / "maintenance" / "demo2-freeze-successor.json", json.dumps(receipt, ensure_ascii=False))
         commit_all(env.repo, "承接收据（单独提交）")
-        ctx = env.context(runner=Stub((is_dry_run, done(FROZEN_DRY_RUN_HIT))))
-        result = pc.check_freeze_successor(ctx)
+        stub = Stub((is_dry_run, done("", 2, "上游合并工具拒绝：冻结 successor 引用的收据在本区间内发生变化，存在自引用风险")))
+        result = pc.check_freeze_successor(env.context(runner=stub))
         self.assertEqual(result.status, pc.PASS, result)
-        self.assertIn("命中 1 个冻结路径", result.summary)
+        self.assertIn("范围内已含 1 个承接收据文件，dry-run 不适用", result.summary)
+        # 源码与收据一起推时 dry-run 必被工具按自引用拒绝：不能因此报红，也根本不该去跑它
+        self.assertFalse(any(is_dry_run(call) for call in stub.calls))
+
+    def test_receipt_for_another_path_does_not_hide_an_uncovered_frozen_file(self) -> None:
+        env = Env(self)
+        make_frozen_repo(env)
+        env.branch()
+        write(env.repo / "frozen" / "data.txt", "v2 源码已改\n")
+        commit_all(env.repo, "改冻结文件")
+        write(env.repo / "docs" / "egress" / "maintenance" / "other-freeze-successor.json",
+              json.dumps({"schema_version": "official-egress-upstream-freeze-successor/v1", "transitions": [
+                  {"path": "elsewhere.txt", "reason": "别的文件", "predecessor_sha256": sha("a"), "to_sha256": sha("b")}]}, ensure_ascii=False))
+        commit_all(env.repo, "别的收据")
+        result = pc.check_freeze_successor(env.context(runner=Stub((is_dry_run, done("", 2, "自引用")))))
+        self.assertEqual(result.status, pc.FAIL, result)
+        self.assertIn("frozen/data.txt", " ".join(result.reasons))
+        self.assertIn("自引用拒绝", " ".join(result.fixes))
 
     def test_tool_rejection_is_red_and_missing_tool_is_skipped(self) -> None:
         env = Env(self)
