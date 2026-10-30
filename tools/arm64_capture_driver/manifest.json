@@ -208,9 +208,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "4199d30715c28b52021a4fe0bbd2711e3d6c816b819fc8e098f84280b02f1ce8",
+      "sha256": "b8370c0e137a4940adf8dd7a2a4146c594da2e3474dd08a4100fe1938fca91f4",
       "mode": "0700",
-      "bytes": 215842
+      "bytes": 215889
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -928,9 +928,9 @@
     },
     {
       "path": "driver/unit_ownership.py",
-      "sha256": "11e7aff21a1f28a7369945520560c0515d45c3b1615e7b61e281487129951cef",
+      "sha256": "d6d17d65e2615d977ca7e732d6f0fb027c1d94daf7e363140210c88531d8b82f",
       "mode": "0700",
-      "bytes": 130913
+      "bytes": 132197
     },
     {
       "path": "driver/unit_records.py",
@@ -1179,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "518e952e0c8e9eb9e890678266d14e42716b1686a1fd9fb689057a2285deb447"
+  "manifest_sha256": "0ab8827e73df39cd11bcf53d625633b3826ae04b2147ae2929eea584e10f5cda"
 }

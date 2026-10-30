@@ -1134,6 +1134,7 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 
 
+
 # >>> T2 预检登记常量（脚本生成，可重跑）
 T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
 T2_PRECHECK_DIGESTS = {'entry-gates.sh': 'f80292303f9970da87a735b1d63f247e74b81dc7d544393054832a0b2db57186',

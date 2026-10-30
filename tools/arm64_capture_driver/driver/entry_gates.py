@@ -997,7 +997,7 @@ def _apply_command_selection(manifest: dict[str, Any], selection: Mapping[str, A
     只拿掉"整个门禁项只有命令单元、没有测试组"的门禁项，而且只拿掉不被其它保留门禁项引用的单元，清单的闭合要求（每个单元属于某个门禁项）保持成立。"""
 
     commands = selection.get("commands")
-    if not isinstance(commands, Mapping):
+    if not isinstance(commands, Mapping) or not isinstance(manifest.get("gates"), list):
         return
     rows = {key: row for key, row in (commands.get("gates") or {}).items() if isinstance(row, Mapping) and row.get("decision") == "skip"}
     gate_skips = {key for key, row in rows.items() if row.get("scope", "gate") == "gate"}

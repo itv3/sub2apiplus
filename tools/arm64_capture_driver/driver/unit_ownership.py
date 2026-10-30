@@ -48,6 +48,12 @@ Python 解析失败、闭包里有解析不了的动态加载时全部照选；�
 ``--select-base last-passed``，或门禁续跑第二层取的"上一轮全集运行"的提交）才用新口径；两处都经过同一个 ``select``，共用同一份依赖数据。
 结论仍是 ``client-plan`` 子集、同一个 ``selection`` 结构（新口径另多 ``precision`` 三个键），VC-5 准入的防串用判定不受影响。
 
+命令门禁项（OPT-02 第二轮）：依赖精度下，后端 go test／lint 与前端三项、出站控制单测这些命令单元占去 5 千多核·秒（4 核约 25 分钟），模块筛得再窄也装不进 15 分钟。
+选择器（``CommandInputs``／``command_decisions``）按真实输入路径为它们各登记一条决定（run／skip，写明命中的改动与原因，进 selection 的自摘要），
+入口门禁据此把跳过的门禁项连同命令单元从清单里拿掉；``check-egress-spec`` 的其余子检查、``deploy-scripts``、``capture:prerequisites``、pre-A3 场景一律照跑。
+输入取向保守：后端 go test 读 ``backend/``、``docs/egress/``、冻结台账登记的路径（取 ``tools.upstream_merge.freeze`` 的权威算法，算不出来就失败关闭）和后端源码里提到的
+仓库路径；lint 读 ``backend/``；前端读 ``frontend/``、``Makefile`` 和前端源码里提到的路径；改动路径不认识时全部照跑。
+
 使用与限制：
 
 * 入口：``entry-gates.sh --gate-scope client-plan --select-base <最近一次发版的 40 位提交>``、``background-validate.sh start`` 同名选项；
@@ -2117,7 +2123,10 @@ def what_if(tree: Path, paths: Sequence[str]) -> dict[str, Any]:
         if reasons:
             rows[module] = reasons
     seconds = sum((modules.get(module) or {}).get("core_seconds") or 0.0 for module in rows)
-    return {"changes": [[status, path] for status, path in changes], "modules": len(rows), "core_seconds": round(seconds, 1), "pulled": rows}
+    decisions = command_decisions(CommandInputs(tree, tracked_files(tree), data["generic_refs"]), changes)
+    return {"changes": [[status, path] for status, path in changes], "modules": len(rows), "core_seconds": round(seconds, 1), "pulled": rows,
+            "commands": {key: row["decision"] for key, row in decisions.items()},
+            "commands_skipped": sorted(key for key, row in decisions.items() if row["decision"] == "skip")}
 
 
 # ---------------------------------------------------------------------------
