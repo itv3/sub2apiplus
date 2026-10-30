@@ -1580,16 +1580,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				if fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
-					// 记录被上游拒绝的密文摘要；错误照旧透传，下一轮进场时按摘要预剥离。
-					if digests := collectOpenAIEncryptedContentDigestsRaw(payload); len(digests) > 0 {
-						s.markOpenAIWSInvalidEncryptedContentLineage(groupID, sessionHash, digests)
-						logOpenAIWSModeInfo(
-							"ingress_ws_invalid_encrypted_lineage_mark account_id=%d turn=%d digests=%d",
-							account.ID,
-							turn,
-							len(digests),
-						)
-					}
+					// 按错误里的密文片段精确定位被拒项并记录（fork 钩子，见 openai_ws_encrypted_recovery.go）；
+					// 错误照旧透传，下一轮进场时按摘要预剥离。
+					s.recordOpenAIWSRejectedEncryptedContent(c, account, groupID, sessionHash, turn, payload, errMsgRaw, tokenEventCount > 0)
 				}
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
@@ -2028,7 +2021,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		skipBeforeTurn = false
 		// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 		// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
-		if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalidDigests) > 0 {
+		if invalidDigests := s.openAIWSIngressRecoverySnapshot(c, frameBody, groupID, sessionHash, account); len(invalidDigests) > 0 {
 			strippedPayload, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
 				currentPayload, invalidDigests, "ingress_ws_invalid_encrypted_lineage_strip", account.ID, turn,
 			)
@@ -2531,6 +2524,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			turnPrevRecoveryTried,
 		)
 		if finalizeErr != nil {
+			emitOpenAIWSRecoveryValidationFailure(frameBody, writeClientMessage, account.ID, turn, finalizeErr)
 			return NewOpenAIWSClientCloseError(
 				coderws.StatusPolicyViolation,
 				"official egress websocket frame validation failed",

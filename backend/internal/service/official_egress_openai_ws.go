@@ -966,7 +966,8 @@ func decodeAndValidateUnifiedOpenAIWSBusinessContract(
 			return nil, nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
 		}
 	}
-	equal, err := equalOfficialOpenAIWSBusinessHistory(originalPayload, candidatePayload)
+	// 本轮若做过失效密文恢复清理，快照由进场清理写入 body，校验用同一份快照判定允许的差异。
+	equal, err := equalOfficialOpenAIWSBusinessHistoryWithRecovery(originalPayload, candidatePayload, body.invalidEncryptedRecovery())
 	if err != nil {
 		return nil, nil, nil, err
 	}
