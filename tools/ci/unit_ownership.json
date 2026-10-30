@@ -316,6 +316,13 @@
    "owner": "shared",
    "rule": "default-shared"
   },
+  "test_behavior_acceptance": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "default-shared"
+  },
   "test_build_assertion_bundle": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -820,6 +827,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_prepush_check": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_read_audit": {
    "claude_plan": "run",
    "codex_plan": "run",
@@ -1069,6 +1083,13 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 28.6,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_worktree_gate": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "shared",
    "rule": "infra-prefix"
   },
@@ -3050,6 +3071,13 @@
    "claude_plan": "run",
    "codex_plan": "run",
    "core_seconds": 1.5,
+   "owner": "codex",
+   "rule": "evidence:codex-only"
+  },
+  "test_reseal_chain": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
    "owner": "codex",
    "rule": "evidence:codex-only"
   },
