@@ -694,9 +694,9 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-cleanup-execute.sh",
-      "sha256": "825695ea80ddf242ce4ac94318517680d2366f82d02945b33a07520c6283e484",
+      "sha256": "ad9b6575ed5a669924668d745533928fd62c19a898d8093a3438aeb9165763e3",
       "mode": "0700",
-      "bytes": 14442
+      "bytes": 14770
     },
     {
       "path": "driver/pipeline/vc6/vc6-deliver-1.sh",
@@ -1167,5 +1167,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "78ffd12642f3b01d49c50e03924458910d2080f49ca14806e9afee9eee62ad0f"
+  "manifest_sha256": "c6a328b7b201168d029d888337ede8d10ac49b46aa47b522753e7d5cc5fbfa57"
 }

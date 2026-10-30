@@ -856,6 +856,44 @@ class Vc6CleanupTests(SandboxCase):
         self.assertNotIn(self.RELEASE_REF, removed, "发布镜像绝不能被删")
         self.assertEqual(execution["post_checks"]["rollback_image_present"], True)
 
+    def _run_with_relative_path(self, cwd: Path, script_arg: str, *args: str) -> subprocess.CompletedProcess:
+        """以“相对路径”调用清理脚本：脚本参数是相对 cwd 的路径，而不是绝对路径。"""
+
+        extra = {"VC6_CLEANUP_APPROVED_BY": "测试批准依据", "VC6_ARCHIVE_DIR": str(self.archive_dir), "PYTHONPATH": str(self.sb.data)}
+        return subprocess.run(["bash", script_arg, *args], env=self.sb.environ(D=str(self.sb.data), **extra), cwd=cwd,
+                              capture_output=True, text=True, errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+
+    def test_relative_path_invocation_from_sandbox_root_does_not_fail(self) -> None:
+        """脚本先 cd 到数据根、再按脚本目录 source vc6-env.sh：用相对路径调用时，旧写法 dirname 是相对的，cd 之后就找不到 vc6-env.sh。"""
+
+        self._docker(running=self.FINAL)
+        relative = os.path.relpath(self.script, self.root)
+        self.assertFalse(os.path.isabs(relative))
+        result = self._run_with_relative_path(self.root, relative, "--check")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("No such file", result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0])["problems"], [])
+
+    def test_relative_path_invocation_from_script_dir_with_dot_slash(self) -> None:
+        """在脚本所在目录用 ./脚本名 调用（dirname 为 "."）：同样不能报错，并且能走到真正的执行（不只是预检）。"""
+
+        self._docker(running=self.FINAL)
+        result = self._run_with_relative_path(self.script.parent, "./vc6-cleanup-execute.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._execution()["post_checks"]["running_image_kind"], "final")
+        self.assertFalse(self.junk.exists(), "清单内目录应已删除")
+
+    def test_script_dir_is_resolved_before_cd_to_data_root(self) -> None:
+        """静态合同：解析脚本目录的那行必须出现在 cd 到数据根之前，source 用解析后的变量，不再直接用 BASH_SOURCE 的相对 dirname。"""
+
+        lines = list(_code_lines(self.script))
+        resolve = next(n for n, line in lines if "VC6_SELF_DIR=" in line and "BASH_SOURCE" in line)
+        cd_data = next(n for n, line in lines if 'cd "$D"' in line)
+        source = next((n, line) for n, line in lines if "vc6-env.sh" in line and "source" in line)
+        self.assertLess(resolve, cd_data)
+        self.assertGreater(source[0], cd_data)
+        self.assertNotIn("BASH_SOURCE", source[1])
+
     def test_second_execution_is_refused(self) -> None:
         self._docker(running=self.FINAL)
         self.assertEqual(self._run().returncode, 0)

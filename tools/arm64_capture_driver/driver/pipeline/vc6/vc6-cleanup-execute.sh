@@ -11,9 +11,12 @@
 #       bash vc6-cleanup-execute.sh           执行（预检不过即中止）
 set -Eeuo pipefail; umask 077
 MODE="${1:-execute}"
+# 必须在 cd 之前把脚本所在目录解析成绝对路径：用相对路径调用本脚本时（例如 bash ./vc6-cleanup-execute.sh），
+# 下一行 cd 到数据根之后，相对的 dirname 会指向数据根下并不存在的位置，source vc6-env.sh 就找不到文件。
+VC6_SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 D=${D:-/root/docker/capture-cli/data}; cd "$D"; export PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1
 # 本轮取值一律从参数文件现取（见同目录 vc6-env.sh），不写死 Campaign／候选／提交号／摘要／镜像号
-source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"
+source "${VC6_SELF_DIR}/vc6-env.sh"
 : "${VC6_CLEANUP_APPROVED_BY:?必须在环境变量 VC6_CLEANUP_APPROVED_BY 写明本次清理的批准依据（调度者填）}"
 export VC6_CLEANUP_APPROVED_BY
 CID=$NEW
