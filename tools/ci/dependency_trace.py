@@ -24,6 +24,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,7 +107,9 @@ def trace_module(repo: Path, out: Path, site: Path, module: str) -> tuple[str, i
     env = dict(os.environ, TRACE_OUT=str(folder), TRACE_ROOT=str(repo), PYTHONPATH=str(site) + os.pathsep + str(repo), PYTHONDONTWRITEBYTECODE="1")
     started = time.time()
     try:
-        completed = subprocess.run([sys.executable, "-B", "-m", "unittest", f"{TESTS_PACKAGE}.{module}"], cwd=repo, env=env, capture_output=True,
+        # 子进程用 PATH 里的 python3（与门禁入口 ``python3 -B -m unittest`` 同一个解释器路径），不用 sys.executable：框架版 Python 的 sys.executable 是
+        # 真实路径而不是符号链接路径，test_arm64_capture_driver 里有一条用例比对的正是后者，用 sys.executable 追踪会让它假红、整个模块进 unobserved。
+        completed = subprocess.run([shutil.which("python3") or sys.executable, "-B", "-m", "unittest", f"{TESTS_PACKAGE}.{module}"], cwd=repo, env=env, capture_output=True,
                                    text=True, timeout=MODULE_TIMEOUT_SECONDS, check=False)
         code, tail = completed.returncode, (completed.stderr or "")[-400:]
     except subprocess.TimeoutExpired:
