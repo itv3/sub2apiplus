@@ -1256,14 +1256,18 @@ COMMAND_GATE_KINDS = {
     "backend-lint": "lint", "lint-unit": "lint", "lint-integration": "lint",
     "frontend-lint": "frontend", "frontend-typecheck": "frontend", "frontend-critical": "frontend",
 }
+# 单元级筛选：属于多个门禁项的命令单元（check-egress-spec 的子检查同时是它自己的门禁项）按单元 ID 判定，跳过时从所有引用它的门禁项里一起拿掉。
+# test-official-client-control 是 tools/official_client_control 的单元测试，两个受管根互不导入（受管根自包含），输入就是这棵树加它提到的文件。
+COMMAND_UNIT_KINDS = {"egress-spec:test-official-client-control": "control"}
 COMMAND_MODEL = "command-inputs/v1"
 # 种类 → 一定算输入的路径前缀／文件（再加下面扫描出来的 tools/docs 等仓库内引用）。go 门禁项读冻结台账目录（docs/egress/）整个——冻结类 Go 测试把台账登记的
 # 摘要与仓库文件当前摘要比对；lint 只读后端源码与 backend/.golangci.yml（都在 backend/ 里）；前端的关键用例经 make 目标跑，Makefile 算输入。
-COMMAND_PREFIXES = {"go": ("backend/", "docs/egress/"), "lint": ("backend/",), "frontend": ("frontend/",)}
-COMMAND_FILES = {"go": (), "lint": (), "frontend": ("Makefile",)}
-# 扫描后端／前端源码里提到的仓库路径时看的文件类型（后端数据文件里也会列路径，如目录数据）。
-_COMMAND_SCAN_SUFFIXES = {"go": (".go", ".json", ".yaml", ".yml", ".sh", ".txt"),
-                          "frontend": (".ts", ".js", ".mjs", ".cjs", ".vue", ".json", ".md", ".html", ".css")}
+COMMAND_PREFIXES = {"go": ("backend/", "docs/egress/"), "lint": ("backend/",), "frontend": ("frontend/",), "control": ("tools/official_client_control/",)}
+COMMAND_FILES = {"go": (), "lint": (), "frontend": ("Makefile",), "control": ("Makefile",)}
+# 扫描谁提到的仓库路径：种类 → （根目录前缀, 文件后缀）。
+_COMMAND_SCAN = {"go": (("backend/",), (".go", ".json", ".yaml", ".yml", ".sh", ".txt")),
+                 "frontend": (("frontend/",), (".ts", ".js", ".mjs", ".cjs", ".vue", ".json", ".md", ".html", ".css")),
+                 "control": (("tools/official_client_control/",), (".py", ".json", ".md", ".sh", ".txt"))}
 _COMMAND_TOKEN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-/]*")
 _FILE_LIKE = re.compile(r"(?:[A-Za-z0-9_.\-]+/)+[A-Za-z0-9_.\-]+|[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]+)*\.[A-Za-z0-9]{1,8}")
 
@@ -1300,12 +1304,12 @@ class CommandInputs:
     def tokens(self, kind: str) -> set[str]:
         """后端（go）或前端（frontend）源码里提到的"像文件名或路径"的片段。"""
 
-        scan = "go" if kind in ("go", "lint") else "frontend"
+        scan = "go" if kind in ("go", "lint") else kind
         if scan not in self._tokens:
-            roots = ("backend/",) if scan == "go" else ("frontend/",)
+            roots, suffixes = _COMMAND_SCAN[scan]
             out: set[str] = set()
             for rel in self.files:
-                if not rel.startswith(roots) or not rel.endswith(_COMMAND_SCAN_SUFFIXES[scan]) or "/node_modules/" in rel:
+                if not rel.startswith(roots) or not rel.endswith(suffixes) or "/node_modules/" in rel:
                     continue
                 try:
                     text = (self.tree / rel).read_text(encoding="utf-8", errors="ignore")
@@ -1383,9 +1387,9 @@ class CommandInputs:
                 return f"{self._frozen_error}，对后端测试失败关闭"
             if path in frozen:
                 return "改动的路径在冻结台账里登记（冻结类 Go 测试比对它的当前摘要）"
-        if kind in ("go", "frontend"):
+        if kind in ("go", "frontend", "control"):
             tokens = self.tokens(kind)
-            who = "后端" if kind == "go" else "前端"
+            who = {"go": "后端", "frontend": "前端", "control": "出站控制工具"}[kind]
             for suffix in self._suffixes(path):
                 if suffix in tokens:
                     return f"{who}源码里提到了 {suffix}"
@@ -1402,7 +1406,7 @@ def command_decisions(inputs: CommandInputs, changes: Sequence[tuple[str, str]])
     """每个可筛选的命令门禁项：改动与它的输入相交就 ``run``（写明命中的改动与原因，最多三条），不相交就 ``skip``。"""
 
     out: dict[str, dict[str, Any]] = {}
-    for gate, kind in COMMAND_GATE_KINDS.items():
+    for gate, kind in {**COMMAND_GATE_KINDS, **COMMAND_UNIT_KINDS}.items():
         hits = []
         for status, path in changes:
             why = inputs.reason(kind, path)
@@ -1410,7 +1414,7 @@ def command_decisions(inputs: CommandInputs, changes: Sequence[tuple[str, str]])
                 hits.append({"file": path, "status": status, "reason": why})
                 if len(hits) >= 3:
                     break
-        out[gate] = {"kind": kind, "decision": "run" if hits else "skip", "hits": hits}
+        out[gate] = {"kind": kind, "scope": "unit" if gate in COMMAND_UNIT_KINDS else "gate", "decision": "run" if hits else "skip", "hits": hits}
     return out
 
 
@@ -1420,10 +1424,12 @@ def _command_selection(tree: Path, data: Mapping[str, Any], changes: Sequence[tu
 
     if any(str(item["reason"]).startswith("改动路径不在已登记的目录范围") for item in fail_closed):
         why = "改动路径不在已登记的目录范围：命令门禁项一律照跑"
-        gates = {gate: {"kind": kind, "decision": "run", "hits": [{"file": str(fail_closed[0]["file"]), "status": "?", "reason": why}]}
-                 for gate, kind in COMMAND_GATE_KINDS.items()}
+        gates = {gate: {"kind": kind, "scope": "unit" if gate in COMMAND_UNIT_KINDS else "gate", "decision": "run",
+                        "hits": [{"file": str(fail_closed[0]["file"]), "status": "?", "reason": why}]}
+                 for gate, kind in {**COMMAND_GATE_KINDS, **COMMAND_UNIT_KINDS}.items()}
     else:
         gates = command_decisions(CommandInputs(tree, tracked_files(tree), data["generic_refs"]), changes)
+    # ``gates`` 的键既有门禁项 ID（scope=gate），也有按单元 ID 判定的命令单元（scope=unit，``COMMAND_UNIT_KINDS``）；入口门禁据此拿掉整个门禁项或单个单元。
     return {"model": COMMAND_MODEL, "gates": gates, "skipped_gates": sorted(gate for gate, row in gates.items() if row["decision"] == "skip")}
 
 

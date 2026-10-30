@@ -988,6 +988,13 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_tree_scan_cache": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_unit_dependencies": {
    "claude_plan": "run",
    "codex_plan": "run",

@@ -447,11 +447,22 @@ COMMAND_WORLD = {
     "frontend/src/app.ts": "export const a = 1\n",
     "deploy/config.example.yaml": "a: 1\n",
     "docs/legal/terms.md": "terms\n",
+    "tools/official_client_control/__init__.py": "",
+    "tools/official_client_control/receipts.py": "READ = 'docs/legal/terms.md'\n",
 }
 
 
+CONTROL_UNIT = "egress-spec:test-official-client-control"
+
+
 def decided(selection: dict[str, Any], decision: str) -> list[str]:
-    return sorted(gate for gate, row in selection["commands"]["gates"].items() if row["decision"] == decision)
+    """门禁项一级的决定（scope=gate）；单元级的决定（出站控制工具单测）单独用 ``control_decision`` 看。"""
+
+    return sorted(gate for gate, row in selection["commands"]["gates"].items() if row["decision"] == decision and row["scope"] == "gate")
+
+
+def control_decision(selection: dict[str, Any]) -> str:
+    return selection["commands"]["gates"][CONTROL_UNIT]["decision"]
 
 
 class CommandSelectionTests(unittest.TestCase):
@@ -461,7 +472,8 @@ class CommandSelectionTests(unittest.TestCase):
     def test_nothing_touching_backend_or_frontend_skips_all_nine_gates_and_says_why(self) -> None:
         selection = self.pick(COMMAND_WORLD, (f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
         self.assertEqual(decided(selection, "skip"), ALL_COMMAND_GATES)
-        self.assertEqual(selection["commands"]["skipped_gates"], ALL_COMMAND_GATES)
+        self.assertEqual(selection["commands"]["skipped_gates"], sorted([*ALL_COMMAND_GATES, CONTROL_UNIT]), "九个门禁项加出站控制单测这个单元级的决定")
+        self.assertEqual(control_decision(selection), "skip")
         self.assertEqual(selection["commands"]["model"], uo.COMMAND_MODEL)
         self.assertTrue(uo.seal_ok(selection), "commands 在自摘要之内：被改动就验不过")
 
@@ -545,6 +557,15 @@ class CommandSelectionTests(unittest.TestCase):
         self.assertNotIn("commands", full)
         self.assertEqual(full["scope"], uo.SCOPE_FULL)
 
+    def test_the_control_tool_unit_test_runs_only_for_its_own_tree_the_makefile_and_files_its_sources_name(self) -> None:
+        for change, expected in ((f"{CAPTURE}/loose_data.json", "skip"), ("backend/main.go", "skip"), ("frontend/src/app.ts", "skip"),
+                                 ("tools/official_client_control/receipts.py", "run"), ("tools/official_client_control/new_module.py", "run"),
+                                 ("Makefile", "run"), ("docs/legal/terms.md", "run")):
+            with self.subTest(change=change):
+                text = None if change == "tools/official_client_control/receipts.py" and False else "x = 2\n"
+                selection = self.pick(COMMAND_WORLD, (change, text if not change.endswith((".md", "Makefile")) else "changed\n"))
+                self.assertEqual(control_decision(selection), expected)
+
     def test_deleting_a_tool_file_the_backend_names_runs_the_go_gates(self) -> None:
         files = {**COMMAND_WORLD, "backend/internal/svc/frozen_test.go": 'package svc\n\nvar f = "tools/official_client_capture/far_dep.py"\n'}
         selection = self.pick(files, (f"{CAPTURE}/far_dep.py", None))
@@ -559,11 +580,13 @@ class CommandGateManifestTests(unittest.TestCase):
         return {"unit_id": unit_id, "argv": ["true"], "cwd": "/tmp", "cores": 1, "memory_mb": 128, "timeout_seconds": 60, "weight": 1.0}
 
     def manifest(self) -> dict[str, Any]:
-        gates = [("backend-unit", "backend:unit"), ("lint-unit", "backend:lint-unit"), ("frontend-lint", "frontend:lint"),
-                 ("check-egress-spec", "egress-spec:x"), ("deploy-scripts", "deploy:y")]
+        gates = [("backend-unit", ["backend:unit"]), ("lint-unit", ["backend:lint-unit"]), ("frontend-lint", ["frontend:lint"]),
+                 ("test-official-client-control", [CONTROL_UNIT]), ("check-egress-spec", ["egress-spec:x", CONTROL_UNIT]),
+                 ("deploy-scripts", ["deploy:y"])]
+        unit_ids = [unit_id for _gate, members in gates for unit_id in members]
         return {"schema_version": "unit-executor-gates/v1", "profile": "full-gates", "test_groups": [],
-                "units": [self.unit(unit_id) for _gate, unit_id in gates],
-                "gates": [{"gate_id": gate, "units": [unit_id]} for gate, unit_id in gates], "scheduling": {}}
+                "units": [self.unit(unit_id) for unit_id in dict.fromkeys(unit_ids)],
+                "gates": [{"gate_id": gate, "units": members} for gate, members in gates], "scheduling": {}}
 
     def apply(self, *changes: tuple[str, str | None]) -> tuple[dict[str, Any], dict[str, Any]]:
         from tools.ci import entry_gates as eg
@@ -586,16 +609,24 @@ class CommandGateManifestTests(unittest.TestCase):
     def test_skipped_gates_leave_the_manifest_with_their_units_and_the_rest_stays_closed(self) -> None:
         manifest, selection = self.apply((f"{CAPTURE}/loose_data.json", '{"v": 2}\n'))
         self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["check-egress-spec", "deploy-scripts"])
+        self.assertEqual([gate["units"] for gate in manifest["gates"]], [["egress-spec:x"], ["deploy:y"]], "共用的出站控制单测从 check-egress-spec 里也拿掉了")
         self.assertEqual(sorted(unit["unit_id"] for unit in manifest["units"]), ["deploy:y", "egress-spec:x"])
-        self.assertEqual(manifest["command_gates_skipped"], ["backend-unit", "frontend-lint", "lint-unit"])
-        self.assertEqual(selection["commands"]["skipped_gates"], ALL_COMMAND_GATES, "清单里没有的门禁项（这里的 profile 只有三个可筛选的）也有决定，但只拿掉清单里有的")
+        self.assertEqual(manifest["command_gates_skipped"], ["backend-unit", "frontend-lint", "lint-unit", "test-official-client-control"])
+        self.assertEqual(manifest["command_units_skipped"], [CONTROL_UNIT])
         self.assertTrue(uo.seal_ok(selection))
         self.assertEqual(self.loads(manifest), ["check-egress-spec", "deploy-scripts"], "执行器读得进，没有游离单元")
 
-    def test_a_backend_change_keeps_the_go_and_lint_gates_and_drops_only_the_frontend(self) -> None:
+    def test_a_change_in_the_control_tree_keeps_the_shared_unit_in_both_gates(self) -> None:
+        manifest, _selection = self.apply(("tools/official_client_control/receipts.py", "READ = 'docs/legal/terms.md'\nX = 1\n"))
+        self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["test-official-client-control", "check-egress-spec", "deploy-scripts"])
+        self.assertEqual(manifest["gates"][1]["units"], ["egress-spec:x", CONTROL_UNIT])
+        self.assertEqual(manifest["command_units_skipped"], [])
+        self.assertEqual(self.loads(manifest), ["test-official-client-control", "check-egress-spec", "deploy-scripts"])
+
+    def test_a_backend_change_keeps_the_go_and_lint_gates_and_drops_the_frontend_and_the_control_unit_test(self) -> None:
         manifest, _selection = self.apply(("backend/main.go", "package main\n// 变了\n"))
         self.assertEqual([gate["gate_id"] for gate in manifest["gates"]], ["backend-unit", "lint-unit", "check-egress-spec", "deploy-scripts"])
-        self.assertEqual(manifest["command_gates_skipped"], ["frontend-lint"])
+        self.assertEqual(manifest["command_gates_skipped"], ["frontend-lint", "test-official-client-control"])
 
     def test_the_egress_spec_group_and_deploy_scripts_are_never_filtered(self) -> None:
         for change in ((f"{CAPTURE}/loose_data.json", '{"v": 2}\n'), ("docs/other.md", "# 变了\n"), ("frontend/src/app.ts", "export const a = 3\n")):
@@ -604,10 +635,11 @@ class CommandGateManifestTests(unittest.TestCase):
                 kept = [gate["gate_id"] for gate in manifest["gates"]]
                 self.assertIn("check-egress-spec", kept)
                 self.assertIn("deploy-scripts", kept)
+                self.assertIn("egress-spec:x", manifest["gates"][kept.index("check-egress-spec")]["units"], "check-egress-spec 的其余子检查一个不少")
 
     def test_a_whole_set_fallback_leaves_the_manifest_untouched(self) -> None:
         manifest, _selection = self.apply(("tools/ci/unit_executor.py", "# x\n"))
-        self.assertEqual(len(manifest["gates"]), 5)
+        self.assertEqual(len(manifest["gates"]), 6)
         self.assertNotIn("command_gates_skipped", manifest)
 
     @staticmethod

@@ -52,6 +52,12 @@
 
 1. 填写本轮参数，准备干净工具提交与 bundle，受监督部署工具／文档并安装、复验驱动。
    先 `entry-dryrun.sh start <bundle> <分支> <完整提交> --opening` 在独立演练根空跑；不写正式总账、不发真实请求。
+   **版本登记之后、本 Campaign 第一次后台验证之前，重新追踪依赖追踪表**（OPT-02）：在固定到登记提交的干净检出上
+   `python3 -B tools/ci/dependency_trace.py --repo <检出> --out <结果目录> --jobs 4`（本机走重测试锁，约 30～50 分钟），再
+   `python3 -B tools/ci/unit_ownership.py dependency-table --tree <检出> --trace-dir <结果目录> --python <版本> --platform <平台>`，
+   把 `tools/ci/unit_dependencies.json` 提交进登记变更集。追踪提交必须是之后所有比对基点的祖先；**不要在 Campaign 中途换表**
+   （用依赖精度时追踪表出现在改动里，整轮不筛选）。不重新追踪不会选漏——追踪之后依赖文件变过的模块照选，
+   只是升级登记改动大，`last-passed` 轮次选出的模块和命令门禁项会越来越多，省不下时间。
 2. **新目标**：`entry.sh` 完成预检、P0 和 VC-0 原子收口，最后派发 VC-1 首批；失败重跑同一入口，账本不重建。
    **同目标官方证据复用**：`pre-a3.sh → stage1.sh → vc0-gate-target.sh → stage2.sh`，只收 `EVIDENCE_DECISION=reuse`；
    已建账本的 stage1 收尾失败仅跑 `stage1-finish.sh`。`pre-all.sh` 可替代 stage2 并继续 VC-2／VC-3。
@@ -749,6 +755,13 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   上一个 `passed` 结论的提交作基点，选择器只看这一小段改动。**VC-5 准入接受这种子集结论**：`vc5_admission.state` 走 `check(require_passed=True, client=…)`，子集结论只拒另一客户端用，
   基点不是发版 tag 也只是在提示里写“不是发版 tag 提交”。保护：基点结论须 passed 且筛选印证无问题，基点提交必须是新提交的祖先（与逐单元承接同一套核对，含类型变化／符号链接／子模块的否决），
   找不到可用的就拒绝、不悄悄回退（第一次验证先不带它）；解析出的具体提交登记进输入合同，来源写进结论的 `select_base_origin`。归属表或选择器自己在这段改动里时入口门禁照旧回退全集。
+* 依赖精度（OPT-02）：`--select-base last-passed`（或门禁续跑第二层取上一轮全集运行的提交）这类“基点不是发版 tag 提交”的轮次，选择器除剔除另一客户端的重模块外，
+  还把依赖闭包碰不到改动的其余测试模块剔除（静态导入闭包＋测试自己精确提到的文件＋`tools/ci/unit_dependencies.json` 里实际观察到的打开与枚举），
+  并按真实输入路径筛选后端／前端命令门禁项：改动与它的输入不相交，整项（连同命令单元）从清单里拿掉——后端 go test 三项读 `backend/`、`docs/egress/`、冻结台账登记的路径与后端源码
+  里提到的仓库路径，后端 lint 三项读 `backend/`，前端三项读 `frontend/`、`Makefile` 与前端源码里提到的路径，出站控制单测读 `tools/official_client_control/`。
+  `check-egress-spec` 的其余子检查、`deploy-scripts`、`capture:prerequisites` 一律照跑。跳过的决定、命中的改动与原因都登记在清单的 `selection.commands`（带自摘要），
+  入口门禁总摘要的 `client_selection.commands_skipped` 回显；VC-5 准入只看 passed 与筛选摘要、不比对门禁集合，所以登记在案的跳过不会被当成缺失。
+  基点是发版 tag 提交（升级后第一次验证）、改动路径不认识、回退全集时一律不筛。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
