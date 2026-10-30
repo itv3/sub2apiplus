@@ -1,0 +1,59 @@
+{
+  "base_commit": "3f5d62f580a52be788663d1ec6e8e8d8e2cf786e",
+  "changed_path_count": 10,
+  "current_commit": "db4bcf85ad1389256cc5f3130cc7a24dc8fca955",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7309,
+  "frozen_path_count": 2318,
+  "identity_sha256": "2c5816483e97a213e5cbedff86845069fcae7773fc3de1a0b314441cfe20bd9b",
+  "issued_at_utc": "2026-10-30T21:41:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-opt1031-t1-flaky-tests-20261031-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_uuid_test.go",
+      "predecessor_sha256s": [
+        "e42536ed289530a21f39a21e0b6cfc779f6c4226a0e152f489b47f556b12a0a9"
+      ],
+      "reason": "缓存内存用例改在独立测试进程里测堆增长（取三次最小值、阈值与正文规模不变），消除 CI 上被同包遗留状态抬高读数的偶发红；不改变官方客户端画像、Persona、wire 或生产代码 path=backend/internal/service/official_egress_uuid_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-alloc-measure-helper-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-merge-align-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-framework-cadence-removal-uuid-test-20261025-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "2fd26e8ba2216f3ef47914470e6b394569197973c7d4e134b26a1f73c95a7bc3"
+    }
+  ],
+  "unregistered_path_count": 9,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/entry_housekeeping.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/entry_housekeeping.py",
+    "tools/official_client_capture/tests/official_relay_harness.py",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/official_client_capture/tests/test_ci_entry_housekeeping.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_arm64_delivery_executor.py",
+    "tools/official_client_capture/tests/test_official_directed_relay_flows.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
