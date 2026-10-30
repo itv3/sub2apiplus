@@ -684,6 +684,7 @@ class RealTreeGuardTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.data = uo.load_data(REPO_ROOT)
         cls.table = uo.load_dependency_table(REPO_ROOT)
+        cls.graph = uo.Graph(REPO_ROOT)   # 导入图构建要十几秒：整个类共用一份，what_if 都传它
 
     def test_the_real_data_file_enables_auto_precision_and_the_table_exists(self) -> None:
         self.assertEqual((self.data.get("dependency") or {}).get("precision"), "auto")
@@ -717,9 +718,9 @@ class RealTreeGuardTests(unittest.TestCase):
         """真实依赖的缩影：改驱动目录里的叶子脚本只牵到二三十个模块；改受管目录的叶子脚本牵到约一百个（九十个模块会复制或摘要整个受管树，
         它们对受管目录里的每个文件都有真实依赖）；改核心库牵到近三百个。三者都远少于旧口径的 387 个。"""
 
-        driver_leaf = uo.what_if(REPO_ROOT, ["tools/arm64_capture_driver/driver/phase_context.py"])
-        tool_leaf = uo.what_if(REPO_ROOT, ["tools/official_client_capture/drive_candidate_gateway_ws.py"])
-        core = uo.what_if(REPO_ROOT, ["tools/official_client_capture/capturelib/model.py"])
+        driver_leaf = uo.what_if(REPO_ROOT, ["tools/arm64_capture_driver/driver/phase_context.py"], graph=self.graph)
+        tool_leaf = uo.what_if(REPO_ROOT, ["tools/official_client_capture/drive_candidate_gateway_ws.py"], graph=self.graph)
+        core = uo.what_if(REPO_ROOT, ["tools/official_client_capture/capturelib/model.py"], graph=self.graph)
         self.assertLessEqual(driver_leaf["modules"], 60, sorted(driver_leaf["pulled"])[:12])
         self.assertLessEqual(tool_leaf["modules"], 160, sorted(tool_leaf["pulled"])[:12])
         self.assertGreater(core["modules"], tool_leaf["modules"] + 100)

@@ -22,6 +22,16 @@ from tools.official_client_capture.tests.unit_ownership_world import (
     CALIBRATION, CAPTURE, CHEAP, HEAVY, HEAVY_MODULES, TESTS, WORLD, World, base_data, git, pulled, skipped)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+_REAL_GRAPH: uo.Graph | None = None
+
+
+def real_graph() -> uo.Graph:
+    """真实仓库的导入图（构建要十几秒）：本模块里要用的地方共用一份。"""
+
+    global _REAL_GRAPH
+    if _REAL_GRAPH is None:
+        _REAL_GRAPH = uo.Graph(REPO_ROOT)
+    return _REAL_GRAPH
 
 
 # --------------------------------------------------------------------------------------------- 真实仓库的守卫
@@ -32,7 +42,7 @@ class RealTreeGuardTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.graph = uo.Graph(REPO_ROOT)
+        cls.graph = real_graph()
         cls.data = uo.load_data(REPO_ROOT)
 
     def test_the_data_file_matches_the_derivation_and_covers_every_test_module(self) -> None:
@@ -511,7 +521,7 @@ class UnresolvedDynamicLoadTests(unittest.TestCase):
     def test_the_real_tree_exposure_is_the_two_reviewed_table_driven_loads(self) -> None:
         # 现状核对：真实树里重模块可达的、解析不了目标的动态加载点只有这两处（都是按客户端表的行加载编排器／账本模块）。以后谁再加一个，这条会红，
         # 提醒评审看清楚它加载什么、值不值得并入。
-        selector = uo.Selector(REPO_ROOT, uo.load_data(REPO_ROOT), "codex")
+        selector = uo.Selector(REPO_ROOT, uo.load_data(REPO_ROOT), "codex", real_graph())
         self.assertEqual(selector.exposed(), {
             "test_claude_sealed_gate_materials": ["tools/arm64_capture_driver/driver/vc5_admission.py"],
             "test_claude_vc4_driver": ["tools/arm64_capture_driver/driver/vc4_client.py"]})

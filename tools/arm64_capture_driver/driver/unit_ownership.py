@@ -2109,7 +2109,7 @@ def audit_check(data: Mapping[str, Any], records: Iterable[Mapping[str, Any]], r
     return problems
 
 
-def what_if(tree: Path, paths: Sequence[str]) -> dict[str, Any]:
+def what_if(tree: Path, paths: Sequence[str], *, graph: Graph | None = None) -> dict[str, Any]:
     """假设 ``paths`` 被改了（树里存在的按修改，不存在的按删除），逐个测试模块算依赖是否被牵到。不碰 git 历史，只读当前树与依赖追踪表。"""
 
     tree = Path(tree)
@@ -2117,7 +2117,7 @@ def what_if(tree: Path, paths: Sequence[str]) -> dict[str, Any]:
     table = load_dependency_table(tree)
     if table is None:
         raise OwnershipError(f"没有依赖追踪表 {DEPENDENCY_TABLE_PATH}")
-    graph = Graph(tree)
+    graph = graph or Graph(tree)   # 同一棵树连着问几次时，调用方可以传同一个导入图（构建要十几秒）
     model = DependencyModel(tree, graph, data, table)
     changes = [("M" if (tree / path).exists() else "D", path) for path in sorted(paths)]
     readers = {path: model.mention_readers(path) for status, path in changes if status in ("A", "D")}
