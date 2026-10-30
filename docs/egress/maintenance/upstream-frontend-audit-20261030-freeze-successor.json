@@ -1,0 +1,81 @@
+{
+  "base_commit": "15e2a84690eaf08af5e4cbf5f15803fb7c293c2f",
+  "changed_path_count": 3,
+  "current_commit": "948e11ac4089f6956f8d22a5cc8867fbcfb1a913",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7281,
+  "frozen_path_count": 2318,
+  "identity_sha256": "114749b9497278fe627da7c4008cf8c1f5aedac77dcec2a0b3f55ccad71c5add",
+  "issued_at_utc": "2026-10-30T01:02:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-frontend-audit-20261030-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/audit-exceptions.yml",
+      "predecessor_sha256s": [
+        "acbe6b16dfeed5687b088fa1dff4f7076ed1169121d7c7150f0d7606b7b8f905"
+      ],
+      "reason": "前端安全扫描新公告：pnpm override 把 decode-uri-component 升到 0.5.1（GHSA-qr28-fpjm-wq7f），vue-i18n 9.14.5（GHSA-83rm-6c8r-g728）加审计例外 path=.github/audit-exceptions.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b45e4e8c72b49d30753e40422894f4e9ac7bac8ed1c53f246609be34d62cd91e"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/package.json",
+      "predecessor_sha256s": [
+        "c376b2d146038c106a072df15acf381e74763b1fc1405271e3e30e5e0e82747d"
+      ],
+      "reason": "前端安全扫描新公告：pnpm override 把 decode-uri-component 升到 0.5.1（GHSA-qr28-fpjm-wq7f），vue-i18n 9.14.5（GHSA-83rm-6c8r-g728）加审计例外 path=frontend/package.json",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.13-3-frontend-security-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-security-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "24f4752c4da579d07bf73f006a84e1e228ea01819484886cd7226a27dfd2533e"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/pnpm-lock.yaml",
+      "predecessor_sha256s": [
+        "f8db731dbe42ac0e796312724424b826817ca528ad847c8aa1aad7193c908f30"
+      ],
+      "reason": "前端安全扫描新公告：pnpm override 把 decode-uri-component 升到 0.5.1（GHSA-qr28-fpjm-wq7f），vue-i18n 9.14.5（GHSA-83rm-6c8r-g728）加审计例外 path=frontend/pnpm-lock.yaml",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.13-3-frontend-security-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-security-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0817eb7937645b6b05a77afddd623748190658e17b09e148d250df9785d8086d"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
