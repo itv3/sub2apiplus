@@ -625,7 +625,7 @@
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
-          "sha256": "e5c1d0a13fd9141649638da72a7bf2ad2b7c6d98fad2545ce9fff9056bb198e9"
+          "sha256": "caef2fb92f75283da5fcdfc0ee1d84fda8f8d3679f1972ae14848f39da55bd83"
         }
       ],
       "facts": [

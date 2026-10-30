@@ -190,8 +190,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 映射只重绑这两份源码快照共 3 个叶子（official_egress_openai_ws.go 2、openai_ws_forwarder_ingress.go 1），不改变测试、事实宇宙或规则语义。
 # 载荷逐项审核：400 个叶子里变化的 3 处全是 sha256 叶子，非摘要叶子 0 处变化，叶子键集不变，每个新值都等于对应源码文件原始字节的现算 SHA-256；
 # 映射文件摘要 31572ad2… 变为 5a30e7d1…。
+# 2026-10-30（invalid_encrypted_content 结束本轮）：error 写出后结束本轮的钩子改动了映射已登记的 openai_ws_forwarder_ingress.go；
+# 映射只重绑这一份源码快照共 1 个叶子（tests[12].source_files[1].sha256），不改变测试、事实宇宙或规则语义。
+# 载荷逐项审核：400 个叶子里变化的 1 处是该 sha256 叶子，非摘要叶子 0 处变化，叶子键集与列表长度不变，
+# 新值等于 openai_ws_forwarder_ingress.go 原始字节的现算 SHA-256（caef2fb9…，与冻结承接收据的 to_sha256 一致）；
+# 映射文件摘要 5a30e7d1… 变为 63d6f04d…。
 FROZEN_MAPPING_SHA256 = (
-    "5a30e7d1737884c3f62b4a202df2ddc243a31d0801a5f1b93b35e81b8e3d3946"
+    "63d6f04dba9e82e5a33dfbf3f2c13f6029ccdc541d6f2a46b01ad000fb3c5215"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
