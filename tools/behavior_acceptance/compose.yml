@@ -1,0 +1,71 @@
+# 升级前行为验收套件的独立栈。
+# 项目名由 stackctl.sh 通过 `docker compose -p` 指定（默认 bhvacc），容器、网络、镜像名都带这个前缀；
+# 独立网络、独立端口、独立一次性 PG / Redis（PG 用 tmpfs，拆栈即销毁），不碰同机任何现网容器、库或卷。
+# 所有 ${BHV_*} 变量由 stackctl.sh 导出；镜像由它先行构建，这里只引用（compose up 时 --no-build）。
+services:
+  pg:
+    image: ${BHV_PG_IMAGE:-postgres:18-alpine}
+    container_name: ${BHV_PROJECT}-pg
+    environment:
+      POSTGRES_USER: sub2api
+      POSTGRES_PASSWORD: ${BHV_PG_PASSWORD}
+      POSTGRES_DB: sub2api
+      PGDATA: /var/lib/postgresql/data
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=1g
+    networks:
+      bhv:
+        ipv4_address: ${BHV_NET_PREFIX}.2
+
+  redis:
+    image: ${BHV_REDIS_IMAGE:-redis:8-alpine}
+    container_name: ${BHV_PROJECT}-redis
+    networks:
+      bhv:
+        ipv4_address: ${BHV_NET_PREFIX}.3
+
+  # 假上游：冒充 chatgpt.com / auth.openai.com / api.openai.com / api.wsrec.test，443 端口，证书由本次运行的测试 CA 签发
+  mock:
+    image: ${BHV_PROJECT}-mock:1
+    container_name: ${BHV_PROJECT}-mock
+    command: ["python3", "-B", "/data/wsmock.py"]
+    environment:
+      MOCK_DATA: /data
+    volumes:
+      - ${BHV_WORKDIR}/mock-data:/data
+    networks:
+      bhv:
+        ipv4_address: ${BHV_NET_PREFIX}.10
+
+  # 被测网关：目标镜像 + 一个测试 CA 信任根的派生镜像（二进制不变）。预算两档由 BHV_BUDGET / BHV_MAXREQ 切换
+  gw:
+    image: ${BHV_PROJECT}-gw:run
+    container_name: ${BHV_PROJECT}-gw
+    env_file:
+      - ${BHV_WORKDIR}/gw.env
+    environment:
+      GATEWAY_REQUEST_MEMORY_BUDGET_BYTES: ${BHV_BUDGET:-268435456}
+      GATEWAY_REQUEST_MEMORY_MAX_REQUEST_BYTES: ${BHV_MAXREQ:-38797312}
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    extra_hosts:
+      - "chatgpt.com:${BHV_NET_PREFIX}.10"
+      - "auth.openai.com:${BHV_NET_PREFIX}.10"
+      - "api.openai.com:${BHV_NET_PREFIX}.10"
+      - "api.wsrec.test:${BHV_NET_PREFIX}.10"
+    ports:
+      - "127.0.0.1:${BHV_PORT}:8080"
+    volumes:
+      - ${BHV_WORKDIR}/gwdata:/app/data
+    networks:
+      bhv:
+        ipv4_address: ${BHV_NET_PREFIX}.4
+
+networks:
+  bhv:
+    name: ${BHV_PROJECT}-net
+    ipam:
+      config:
+        - subnet: ${BHV_NET_PREFIX}.0/24

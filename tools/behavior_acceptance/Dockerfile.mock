@@ -1,0 +1,4 @@
+# 假上游镜像：alpine + python3（假上游脚本 wsmock.py 通过挂载目录进来，不烘进镜像）。
+# 由 stackctl.sh 经标准输入构建，构建时需要能访问 alpine 软件源（apk add python3）。
+FROM alpine:3.21
+RUN apk add --no-cache python3 && rm -rf /var/cache/apk/*
