@@ -622,6 +622,20 @@ class ProcessTests(unittest.TestCase):
                 process.join(timeout=3)
         self.temporary.cleanup()
 
+    def read_state(self) -> dict:
+        """轮询读 state.json：守卫／worker 进程用 atomic_json（临时文件 + rename）换新文件，
+        guard.read_json 在实读前后核对 inode、mtime 等，恰好撞上换文件的瞬间会抛 GuardError（“实读期间路径漂移”）。
+        这是读到了瞬态而不是缺陷：捕获后重读即可；持续 5 秒都读不到稳定内容才视为真故障并原样抛出。"""
+
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                return guard.read_json(self.root / "state.json")
+            except guard.GuardError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+
     def start_guard(self) -> object:
         process = self.mp.Process(target=guard_process, args=(self.configuration, self.context))
         process.start()
@@ -645,20 +659,20 @@ class ProcessTests(unittest.TestCase):
         worker.start()
         self.processes.append(worker)
         deadline = time.monotonic() + 6
-        while guard.read_json(self.root / "state.json")["switch_count"] == 0 and time.monotonic() < deadline:
+        while self.read_state()["switch_count"] == 0 and time.monotonic() < deadline:
             time.sleep(0.05)
-        self.assertEqual(guard.read_json(self.root / "state.json")["switch_count"], 1)
+        self.assertEqual(self.read_state()["switch_count"], 1)
         self.assertNotEqual(os.getpgid(server.pid), os.getpgid(worker.pid))
         os.kill(worker.pid, signal.SIGKILL)
         worker.join(timeout=2)
         deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
-            state = guard.read_json(self.root / "state.json")
+            state = self.read_state()
             if state["restore_count"] and state["image_digest"] == self.configuration["rollback"]["image_digest"]:
                 break
             time.sleep(0.1)
         self.assertTrue(server.is_alive())
-        state = guard.read_json(self.root / "state.json")
+        state = self.read_state()
         self.assertEqual(state["image_digest"], self.configuration["rollback"]["image_digest"])
         client = executor.create_executor("arm64-isolated", self.configuration, self.context)
         recovered = client.recover_pending({"reason": "resume"})

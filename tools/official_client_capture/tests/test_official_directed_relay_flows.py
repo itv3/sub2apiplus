@@ -26,6 +26,7 @@ from tools.official_client_capture.tests.official_relay_harness import (
     OPENSSL,
     RelayProcess,
     client_text_frame,
+    close_ws_gracefully,
     make_certificate,
     post_responses,
     read_http_response,
@@ -129,6 +130,9 @@ class IncompleteTerminalRelayFlowTest(RelayFlowCase):
                 connection.sendall(client_text_frame({"type": "response.create", "generate": False}))
                 connection.sendall(client_text_frame({"type": "response.create", "input": []}))
                 messages = read_ws_messages_until(connection, {"response.incomplete", "response.failed"})
+                # 先做 WS 关闭握手再停中继：stream_fault_ws_actions 在中继读到客户端 Close／EOF 之后才写进元数据，
+                # 直接断开再 SIGTERM 会在满载时偶发丢字段（见 close_ws_gracefully 的说明）。
+                self.assertTrue(close_ws_gracefully(connection), "中继没有回 Close 帧，无法证明故障连接的元数据已写好")
             with relay.connect() as retry:
                 retry.sendall(ws_upgrade_request())
                 try:
@@ -158,6 +162,7 @@ class IncompleteTerminalRelayFlowTest(RelayFlowCase):
                 connection.sendall(client_text_frame({"type": "response.create", "input": []}))
                 connection.sendall(client_text_frame({"type": "response.create", "input": [], "previous_response_id": "x"}))
                 messages = read_ws_messages_until(connection, {"response.completed"})
+                self.assertTrue(close_ws_gracefully(connection), "中继没有回 Close 帧，无法证明故障连接的元数据已写好")
             connections, _events = relay.stop()
         self.assertEqual(messages[-1]["type"], "response.completed")
         faults = self.records(connections, intervention="stream_fault:incomplete-terminal:ws")
@@ -522,6 +527,9 @@ class ScriptChecksReadRealRelayOutputTest(RelayFlowCase):
                 connection.sendall(ws_upgrade_request())
                 connection.sendall(client_text_frame({"type": "response.create", "input": []}))
                 read_ws_messages_until(connection, {"response.incomplete", "response.failed"})
+                # 核对块要求 stream_fault_ws_actions 里恰好一次故障动作；该字段在中继读到客户端 Close／EOF 后才落元数据，
+                # 所以先做关闭握手再停中继，不靠“断开与 SIGTERM 谁先被中继处理”的时序。
+                self.assertTrue(close_ws_gracefully(connection), "中继没有回 Close 帧，无法证明故障连接的元数据已写好")
             relay.stop()
             status, report = run_script_check(code, relay.output / "relay.json", "ws", "1")
         self.assertEqual((status, report["status"], report["failures"]), (0, "passed", []))

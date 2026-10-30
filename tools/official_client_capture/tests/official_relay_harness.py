@@ -236,6 +236,51 @@ def client_text_frame(message: dict) -> bytes:
     return head + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
 
 
+def client_close_frame(code: int = 1000) -> bytes:
+    """客户端 Close 控制帧（掩码，状态码 ``code``，无原因文本）。"""
+
+    payload = struct.pack(">H", code)
+    mask = b"\x0a\x0b\x0c\x0d"
+    return bytes((0x88, 0x80 | len(payload))) + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+
+
+def close_ws_gracefully(connection: ssl.SSLSocket, *, timeout: float = 5.0) -> bool:
+    """做 WS 关闭握手：发 Close(1000)，读到服务端回的 Close 帧后返回 True；对端先关闭或超时返回 False。
+
+    为什么测试收尾要用它，而不是直接关 socket 再 ``relay.stop()``：
+    中继的受控 WS 应答循环只在读到客户端 Close／EOF 之后才把 ``stream_fault_ws_actions`` 写进连接元数据。
+    若 SIGTERM 抢在中继处理完客户端断开之前到达，连接任务被收尾阶段取消，relay.json 里该连接就没有这个字段
+    （满载机器上偶发；连接仍开着就停则必现）。中继收到 Close 后先回 Close 再跳出循环写元数据，这两步之间没有
+    await，所以客户端读到服务端 Close，就说明元数据已经写好，之后再停中继不会丢记录。
+    服务端回的 Close 帧载荷与客户端的状态码相同，固定为 ``88 02 03 e8``（不掩码）；按字节找它，不需要在已读过
+    部分数据的连接上重新对齐帧边界。
+    """
+
+    expected = bytes((0x88, 0x02)) + struct.pack(">H", 1000)
+    connection.sendall(client_close_frame(1000))
+    deadline = time.monotonic() + timeout
+    previous = connection.gettimeout()
+    data = b""
+    try:
+        while time.monotonic() < deadline:
+            connection.settimeout(max(0.05, deadline - time.monotonic()))
+            try:
+                chunk = connection.recv(65536)
+            except (ssl.SSLError, ConnectionError, TimeoutError, socket.timeout):
+                return expected in data
+            if not chunk:
+                return expected in data
+            data += chunk
+            if expected in data:
+                return True
+        return False
+    finally:
+        try:
+            connection.settimeout(previous)
+        except OSError:
+            pass
+
+
 def server_text_messages(data: bytes) -> list[dict]:
     """解析服务端（不掩码、不压缩）文本帧序列里的 JSON 消息；遇到控制帧或半帧即停。"""
 

@@ -25,6 +25,7 @@ bash 用例只调用脚本本身，chmod／chown 经 PATH 注入的计数包装�
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -843,6 +844,41 @@ def load_script(name):
     return module
 
 
+def validate_snapshot_contract_without_touching_repository(catalog, checks):
+    """与 catalog_chain.validate_snapshot_contract 同一份 Go 合同、同样的返回字段，但不在真实工作树的 backend/ 下落任何文件。
+
+    背景（偶发竞态）：驱动里的正式实现为了让 Go 的 internal 包导入合法，把检查程序临时放进 backend/.snapshot-contract-*/ 再 go run。
+    测试若直接调它（repository 传真实仓库），那几秒里真实工作树会多出未跟踪目录；同一时刻并行跑的 test_ci_capture_entry 会让
+    capture_ci.py 在 git status 比对里看到陌生文件，判定“源码在执行期间变化”而偶发红。
+    这里改用 go 的 -overlay：虚拟入口路径落在 backend 模块内（满足 internal 导入规则），实际文件在系统临时目录，
+    磁盘上的真实工作树始终不变（与 test_arm64_driver_vc4_preconditions 的 SnapshotIndexMergeTests 同法）。
+    """
+
+    backend = REPO_ROOT / "backend"
+    helper = SCRIPTS / "snapshot_catalog_check.go"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        main = root / "main.go"
+        main.write_bytes(helper.read_bytes())
+        virtual = backend / (".snapshot-contract-test-" + root.name) / "main.go"
+        if virtual.parent.exists():
+            raise AssertionError("虚拟构建入口不得占用已有仓库路径")
+        overlay = root / "overlay.json"
+        overlay.write_text(json.dumps({"Replace": {str(virtual): str(main)}}))
+        result = subprocess.run(["go", "run", "-mod=readonly", "-overlay", str(overlay), str(virtual)], cwd=backend,
+            input=json.dumps(checks, ensure_ascii=False), capture_output=True, text=True, timeout=300)
+    if result.returncode:
+        raise ValueError("快照 Go 合同拒绝：" + result.stderr.strip())
+    value = json.loads(result.stdout)
+    if value != {"status": "passed", "catalog_count": len(checks)}:
+        raise ValueError("快照 Go 合同输出不完整")
+    implementation = backend / "internal/officialegress/profilecontract"
+    sources = [{"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+               for path in sorted(implementation.glob("*.go")) if not path.name.endswith("_test.go")]
+    return {**value, "checker_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+            "profile_contract_sha256": catalog.artifacts.digest(sources)}
+
+
 def driver_keys() -> tuple[str, ...]:
     import importlib.util
 
@@ -1192,12 +1228,12 @@ class DynamicDriverGateTests(unittest.TestCase):
         _write_json(requirements, self.requirements)
         mapping = self.base / 'source' / self.lifecycle / 'gate-mapping.json'
         repository = self.root / 'repository'
-        validate = catalog.validate_snapshot_contract
-        # 装配目标是隔离夹具；摘要和可执行画像仍由真实仓库的 Go 合同核验。
-        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+        validate = lambda _, checks: validate_snapshot_contract_without_touching_repository(catalog, checks)  # noqa: E731
+        # 装配目标是隔离夹具；摘要和可执行画像仍由真实仓库的 Go 合同核验（经 overlay，不在真实 backend/ 下落临时目录）。
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=validate):
             catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         before = {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths}
-        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=validate):
             catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         self.assertEqual(before, {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths})
         (repository / 'backend/internal/officialegress' / blob).write_text('非法覆盖')
