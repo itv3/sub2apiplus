@@ -15,6 +15,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import os
 import re
@@ -25,6 +28,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -777,6 +781,262 @@ class DiskEarlyWarningTests(SandboxCase):
         self.assertIn("STOPPED VC6", text)
         self.assertEqual(self._notes(), [])
         self.assertIn("HOUSEKEEPING housekeeping", self.sb.events())
+
+
+# ======================================================================================================
+# 二之三、VC-5 库表前置：摘要排除运行时列，改前行级快照、恢复后逐列比较（0.165 恢复后 7 项摘要 3 项不同、原因未核实）
+# ======================================================================================================
+def _load_prereq():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("vc5_prereq_under_test", PIPELINE / "vc5_prereq.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeDatabase:
+    """内存里的三张表，接口与 ``PsqlDatabase`` 相同；语句的效果与真实 SQL 一致（这里不连 Postgres）。"""
+
+    ACCOUNT, GROUP, KEY = 90, 3, 3
+
+    def __init__(self) -> None:
+        mapping = {"gpt-6-luna": "gpt-6-luna", "gpt-6-astra": "gpt-6-astra", "gpt-6.1-sol": "gpt-6.1-sol", "codex-auto-review": "gpt-6-luna"}
+        self.tables = {
+            "accounts": [
+                {"id": 90, "name": "采集号", "status": "inactive", "schedulable": False, "priority": 1, "deleted_at": None,
+                 "credentials": {"model_mapping": mapping, "access_token": "tok-90", "refresh_token": "ref-90", "plan": "pro"},
+                 "extra": {"codex_5h_used_percent": 3, "codex_usage_updated_at": "2026-10-29T10:00:00Z", "privacy_mode": "on"},
+                 "last_used_at": "2026-10-29T01:00:00Z", "updated_at": "2026-10-29T01:00:00Z", "session_window_start": None,
+                 "session_window_end": None, "session_window_status": None, "rate_limited_at": None, "error_message": None}]
+            + [{"id": 100 + n, "name": f"账号{n}", "status": "active" if n % 2 else "error", "schedulable": bool(n % 3), "priority": n,
+                "deleted_at": None, "credentials": {"access_token": f"tok-{n}", "refresh_token": f"ref-{n}", "expires_at": "2026-10-30T00:00:00Z"},
+                "extra": {"codex_7d_used_percent": n, "model_rate_limits": {}, "note": f"n{n}"},
+                "last_used_at": f"2026-10-29T0{n}:00:00Z", "updated_at": f"2026-10-29T0{n}:00:00Z", "session_window_start": None,
+                "session_window_end": None, "session_window_status": "allowed", "rate_limited_at": None, "error_message": None}
+               for n in range(1, 8)],
+            "groups": [
+                {"id": 3, "name": "采集组", "allow_live": False, "codex_models_manifest_config": {}, "model_allowlist": {}, "rate_multiplier": 1.0,
+                 "updated_at": "2026-10-20T00:00:00Z", "deleted_at": None},
+                {"id": 4, "name": "其它组", "allow_live": True, "codex_models_manifest_config": {"a": 1}, "model_allowlist": {"b": 2},
+                 "rate_multiplier": 1.5, "updated_at": "2026-10-21T00:00:00Z", "deleted_at": None}],
+            "api_keys": [
+                {"id": 2, "group_id": 3, "status": "inactive", "deleted_at": "2026-10-28T00:00:00Z", "key": "sk-secret-2", "quota_used": 0.0,
+                 "usage_5h": 0.0, "last_used_at": None, "updated_at": "2026-10-28T00:00:00Z", "window_5h_start": None},
+                {"id": 3, "group_id": 3, "status": "active", "deleted_at": None, "key": "sk-secret-3", "quota_used": 1.5, "usage_5h": 1.5,
+                 "last_used_at": "2026-10-29T00:00:00Z", "updated_at": "2026-10-29T00:00:00Z", "window_5h_start": None},
+                {"id": 131, "group_id": 3, "status": "active", "deleted_at": None, "key": "sk-secret-131", "quota_used": 0.0, "usage_5h": 0.0,
+                 "last_used_at": None, "updated_at": "2026-10-29T00:00:00Z", "window_5h_start": None}]}
+
+    def row(self, table: str, row_id: int) -> dict:
+        return next(item for item in self.tables[table] if item["id"] == row_id)
+
+    # ---- 与 PsqlDatabase 相同的接口
+    def table(self, name: str) -> list:
+        return json.loads(json.dumps(self.tables[name]))
+
+    def remove_model_mapping(self, account: int) -> None:
+        self.row("accounts", account)["credentials"].pop("model_mapping", None)
+
+    def set_allow_live(self, group: int, value: bool) -> None:
+        self.row("groups", group)["allow_live"] = value
+
+    def set_key_status(self, key: int, old: str, new: str) -> None:
+        row = self.row("api_keys", key)
+        if row["status"] == old:
+            row["status"] = new
+
+    def restore_model_mapping(self, account: int, mapping) -> None:
+        self.row("accounts", account)["credentials"]["model_mapping"] = mapping
+
+    def restore_group_fields(self, group: int, row: dict) -> None:
+        target = self.row("groups", group)
+        for column in ("allow_live", "codex_models_manifest_config", "model_allowlist"):
+            target[column] = row[column]
+
+    # ---- 模拟运行时流量：VC-6 金丝雀与生产的真实请求会写这些列
+    def runtime_traffic(self) -> None:
+        for item in self.tables["accounts"]:
+            item["last_used_at"] = "2026-10-30T03:16:00Z"
+            item["updated_at"] = "2026-10-30T03:16:01Z"
+            item["session_window_start"], item["session_window_end"] = "2026-10-30T03:00:00Z", "2026-10-30T08:00:00Z"
+            item["session_window_status"] = "allowed_warning"
+            item["extra"] = {**item["extra"], "codex_5h_used_percent": 77, "codex_usage_updated_at": "2026-10-30T03:16:00Z"}
+            item["credentials"] = {**item["credentials"], "access_token": "tok-new", "expires_at": "2026-10-31T00:00:00Z"}
+        for item in self.tables["groups"]:
+            item["updated_at"] = "2026-10-30T03:16:00Z"
+        for item in self.tables["api_keys"]:
+            item["last_used_at"], item["quota_used"], item["usage_5h"] = "2026-10-30T03:16:00Z", 9.5, 9.5
+
+
+class Vc5PrereqTests(unittest.TestCase):
+    IDS = {"account": 90, "group": 3, "key": 3}
+
+    def setUp(self) -> None:
+        self.mod = _load_prereq()
+        self.db = FakeDatabase()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.backup = Path(self._tmp.name).resolve() / "backup" / "vc5-prereq"
+
+    def digests(self, db=None) -> dict:
+        db = db or self.db
+        return self.mod.compute_digests({t: db.table(t) for t in self.mod.TABLES}, **self.IDS)
+
+    def test_digests_ignore_runtime_columns_but_not_real_changes(self) -> None:
+        before = self.digests()
+        self.assertEqual(list(before), list(self.mod.DIGEST_NAMES))
+        self.db.runtime_traffic()
+        self.assertEqual(self.digests(), before, "运行时列（last_used_at/updated_at/会话窗口/用量快照键/令牌刷新键/Key 用量）变了，7 项摘要都不该变")
+        changes = {
+            "other_accounts": lambda d: d.row("accounts", 103).update(schedulable=not d.row("accounts", 103)["schedulable"]),
+            "account_other_cols": lambda d: d.row("accounts", 90).update(priority=9),
+            "account_cred_without_mapping": lambda d: d.row("accounts", 90)["credentials"].update(plan="free"),
+            "group_without_live": lambda d: d.row("groups", 3).update(rate_multiplier=2.0),
+            "other_groups": lambda d: d.row("groups", 4).update(allow_live=False),
+            "key_without_status": lambda d: d.row("api_keys", 3).update(group_id=4),
+            "other_keys": lambda d: d.row("api_keys", 131).update(status="inactive"),
+        }
+        for name, change in changes.items():
+            db = FakeDatabase()
+            change(db)
+            moved = [key for key, value in self.digests(db).items() if value != before[key]]
+            self.assertEqual(moved, [name], f"{name} 对应的真实改动只应让这一项摘要变化")
+
+    def test_the_old_whole_row_digest_would_have_false_alarmed_after_runtime_traffic(self) -> None:
+        """复现 0.165 的误报：旧口径只去掉 credentials／updated_at，last_used_at、会话窗口、extra 用量快照留在摘要里，运行时流量一来就变。"""
+
+        def old_style(db) -> str:
+            rows = [{k: v for k, v in item.items() if k != "updated_at"} for item in db.table("accounts") if item["id"] != 90]
+            return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+
+        old_before, new_before = old_style(self.db), self.digests()["other_accounts"]
+        self.db.runtime_traffic()
+        self.assertNotEqual(old_style(self.db), old_before, "旧口径：运行时流量使 other_accounts 变化（误报）")
+        self.assertEqual(self.digests()["other_accounts"], new_before, "新口径：不变")
+
+    def test_apply_snapshots_every_row_changes_only_three_places_and_restore_compares_column_by_column(self) -> None:
+        original_mapping = json.loads(json.dumps(self.db.row("accounts", 90)["credentials"]["model_mapping"]))
+        applied = self.mod.apply(self.db, self.backup, **self.IDS)
+        self.assertTrue(applied["ok"], applied)
+        self.assertEqual(applied["digests_changed"], [])
+        self.assertEqual(sorted((item["table"], item["id"], item["column"]) for item in applied["expected_changes"]),
+                         [("accounts", 90, "credentials.model_mapping"), ("api_keys", 3, "status"), ("groups", 3, "allow_live")])
+        self.assertEqual((applied["counts"]["runtime"], applied["counts"]["unexpected"]), (0, 0))
+        # 临时值已写入；备份目录 0700、文件 0600，行级快照含三张表的全部行。
+        self.assertNotIn("model_mapping", self.db.row("accounts", 90)["credentials"])
+        self.assertTrue(self.db.row("groups", 3)["allow_live"])
+        self.assertEqual(self.db.row("api_keys", 3)["status"], "inactive")
+        self.assertEqual(stat.S_IMODE(self.backup.stat().st_mode), 0o700)
+        for name in ("snapshot-before.json", "snapshot-after.json", "digests-before.txt", "digests-after.txt", "group-row.json", "applied"):
+            self.assertEqual(stat.S_IMODE((self.backup / name).stat().st_mode), 0o600, name)
+        snapshot = json.loads((self.backup / "snapshot-before.json").read_text(encoding="utf-8"))
+        self.assertEqual({table: len(rows) for table, rows in snapshot.items()}, {"accounts": 8, "groups": 2, "api_keys": 3})
+        # VC-6 期间真实请求写运行时列 → 恢复 → 逐列比较：运行时列只报告，其余全一致。
+        self.db.runtime_traffic()
+        restored = self.mod.restore(self.db, self.backup, **self.IDS)
+        self.assertTrue(restored["ok"], restored)
+        self.assertEqual((restored["unexpected"], restored["digests_changed"]), ([], []))
+        self.assertEqual(restored["digests_unchanged"], list(self.mod.DIGEST_NAMES))
+        self.assertGreater(restored["counts"]["runtime"], 20)
+        self.assertIn("accounts.last_used_at", restored["runtime_columns_touched"])
+        self.assertIn("accounts.extra.codex_5h_used_percent", restored["runtime_columns_touched"])
+        self.assertIn("api_keys.quota_used", restored["runtime_columns_touched"])
+        self.assertEqual(self.db.row("accounts", 90)["credentials"]["model_mapping"], original_mapping)
+        self.assertFalse(self.db.row("groups", 3)["allow_live"])
+        self.assertEqual(self.db.row("api_keys", 3)["status"], "active")
+        self.assertTrue((self.backup / "snapshot-restored.json").is_file())
+
+    def test_restore_reports_a_real_change_to_another_account_by_table_row_and_column(self) -> None:
+        self.mod.apply(self.db, self.backup, **self.IDS)
+        self.db.row("accounts", 104)["schedulable"] = not self.db.row("accounts", 104)["schedulable"]   # 有人动了别的账号的调度开关
+        self.db.row("accounts", 105)["extra"]["note"] = "被改过"
+        self.db.row("accounts", 106)["status"] = "disabled"
+        report = self.mod.restore(self.db, self.backup, **self.IDS)
+        self.assertFalse(report["ok"])
+        found = sorted((item["table"], item["id"], item["column"]) for item in report["unexpected"])
+        self.assertEqual(found, [("accounts", 104, "schedulable"), ("accounts", 105, "extra.note"), ("accounts", 106, "status")])
+        self.assertEqual(report["digests_changed"], ["other_accounts"])
+
+    def test_incomplete_restore_and_row_loss_are_caught(self) -> None:
+        self.mod.apply(self.db, self.backup, **self.IDS)
+        self.db.restore_model_mapping = lambda *args: None            # 恢复漏了 model_mapping
+        self.db.set_key_status = lambda *args: None                   # 也漏了 Key 状态
+        del self.db.tables["api_keys"][2]                              # Key 131 被删
+        report = self.mod.restore(self.db, self.backup, **self.IDS)
+        self.assertFalse(report["ok"])
+        found = sorted((item["table"], item["id"], item["column"]) for item in report["unexpected"])
+        self.assertEqual(found, [("accounts", 90, "credentials.model_mapping"), ("api_keys", 3, "status"), ("api_keys", 131, "<row>")])
+
+    def test_secret_values_never_reach_the_report(self) -> None:
+        self.mod.apply(self.db, self.backup, **self.IDS)
+        self.db.runtime_traffic()
+        self.db.row("accounts", 101)["credentials"]["plan"] = "leaked-plan-value"      # 非运行时的凭据键变了：报键名，不报值
+        self.db.row("api_keys", 2)["key"] = "sk-new-secret-value"
+        report = self.mod.restore(self.db, self.backup, **self.IDS)
+        text = json.dumps(report, ensure_ascii=False)
+        for secret in ("leaked-plan-value", "sk-new-secret-value", "tok-new", "tok-90", "ref-90", "sk-secret-3"):
+            self.assertNotIn(secret, text)
+        self.assertIn("credentials.plan", text)
+        self.assertEqual(sorted((item["table"], item["id"], item["column"]) for item in report["unexpected"]),
+                         [("accounts", 101, "credentials.plan"), ("api_keys", 2, "key")])
+
+    def test_state_guards_and_cli_exit_codes(self) -> None:
+        argv = ["apply", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", str(self.backup)]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.mod.main(argv, database=self.db), 0)
+        self.assertTrue(json.loads(out.getvalue())["ok"])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.mod.main(argv, database=self.db), 3)
+        self.assertIn("已应用过", err.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.mod.main(["verify", *argv[1:]], database=self.db), 1, "临时值还没恢复：逐列比较不通过")
+            self.assertEqual(self.mod.main(["restore", *argv[1:]], database=self.db), 0)
+            self.assertEqual(self.mod.main(["verify", *argv[1:]], database=self.db), 0)
+            self.assertEqual(self.mod.main(["show", *argv[1:]], database=self.db), 0)
+        fresh = Path(self._tmp.name) / "never-applied"
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.mod.main(["restore", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", str(fresh)],
+                                           database=self.db), 3)
+        self.assertIn("没有应用记录", err.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.mod.main(["show", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", "rel"], database=self.db), 2)
+
+    def test_psql_statements_match_the_ones_used_on_the_host_in_the_previous_upgrade(self) -> None:
+        calls = []
+
+        def fake_run(command, input=None, **_kwargs):
+            calls.append((command, input))
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
+
+        db = self.mod.PsqlDatabase("pg-box", "u", "d")
+        with unittest.mock.patch.object(self.mod.subprocess, "run", side_effect=fake_run):
+            db.table("accounts")
+            db.remove_model_mapping(90)
+            db.set_allow_live(3, True)
+            db.set_key_status(3, "active", "inactive")
+            db.restore_model_mapping(90, {"a": "b"})
+            db.restore_group_fields(3, {"allow_live": False, "codex_models_manifest_config": {}, "model_allowlist": {"x'y": 1}})
+        sql = [item[1] for item in calls]
+        self.assertEqual(calls[0][0][:8], ["docker", "exec", "-i", "pg-box", "psql", "-U", "u", "-d"])
+        self.assertIn("to_jsonb(t)", sql[0])
+        self.assertEqual(sql[1], "update accounts set credentials = credentials - 'model_mapping' where id=90 and jsonb_typeof(credentials->'model_mapping')='object'")
+        self.assertEqual(sql[2], "update groups set allow_live=true where id=3")
+        self.assertEqual(sql[3], "update api_keys set status='inactive' where id=3 and status='active'")
+        self.assertIn("jsonb_set(credentials, '{model_mapping}', :'m'::jsonb) where id=90", sql[4])
+        self.assertEqual(calls[4][0][-2:], ["-v", 'm={"a": "b"}'])
+        self.assertIn("model_allowlist='{\"x''y\": 1}'::jsonb", sql[5])
+
+    def test_wrapper_script_and_files_are_in_the_driver_manifest(self) -> None:
+        manifest = {row["path"]: row for row in json.loads((DRIVER_ROOT / "manifest.json").read_text(encoding="utf-8"))["files"]}
+        for relative in ("driver/pipeline/vc5_prereq.py", "driver/pipeline/vc5-prereq.sh"):
+            self.assertEqual(manifest[relative]["mode"], "0700")
+        result = subprocess.run(["bash", "-n", str(PIPELINE / "vc5-prereq.sh")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = (PIPELINE / "vc5_prereq.py").read_text(encoding="utf-8")
+        for forbidden in ("= 90", "= 131", "id=90", "id=3 "):
+            self.assertNotIn(forbidden, text, "账号、分组、Key 号一律来自参数，不写死")
 
 
 # ======================================================================================================

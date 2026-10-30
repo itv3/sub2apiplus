@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 194,
+  "file_count": 196,
   "files": [
     {
       "path": "README.md",
-      "sha256": "cd1f75b763c74995a901de3c670fbe402615f7da1a2f3d4bd138ff3c65f82a72",
+      "sha256": "5bafbb58f241a11427864198803d8550693971fae7c6dc1f68c88998d07206a0",
       "mode": "0600",
-      "bytes": 160542
+      "bytes": 161579
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -633,6 +633,18 @@
       "bytes": 7756
     },
     {
+      "path": "driver/pipeline/vc5-prereq.sh",
+      "sha256": "93ec2694e596182c797b188164e4d8b6c219e212f14768d06f8fad61832f1ac8",
+      "mode": "0700",
+      "bytes": 394
+    },
+    {
+      "path": "driver/pipeline/vc5_prereq.py",
+      "sha256": "26b8898de4fea4373692b6d4bff75450c86afb49008ba82a0b79d9cc7615cb9b",
+      "mode": "0700",
+      "bytes": 24194
+    },
+    {
       "path": "driver/pipeline/vc6/ORDER.example.txt",
       "sha256": "e1414c5d5b4425a61eaba7828c02975ef908b9a6385363115018b9f5524ca22b",
       "mode": "0600",
@@ -1167,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "b82577acea4d4251301f76bde692ca0d176dfc35c1a617799b19d41812fc6300"
+  "manifest_sha256": "81aca2c440faf8c2c122aed87731d6280a5a91a4b8127d530a5eed213a53fb37"
 }
