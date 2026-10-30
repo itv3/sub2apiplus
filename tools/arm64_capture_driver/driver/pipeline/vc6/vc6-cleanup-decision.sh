@@ -1,9 +1,12 @@
 #!/bin/bash
 # VC-6 §4.6.8 清理决定：只读解析候选删除目标与必须保留项，登记 deferred 决定（未获删除授权，不执行任何删除）。
 set -Eeuo pipefail; umask 077
+# 必须在 cd 之前把脚本所在目录解析成绝对路径：用相对路径调用本脚本时（例如 bash ./vc6-cleanup-decision.sh），
+# 下一行 cd 到数据根之后，相对的 dirname 会指向数据根下并不存在的位置，source vc6-env.sh 就找不到文件。
+VC6_SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 D=${D:-/root/docker/capture-cli/data}; cd "$D"; export PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1
 # 本轮取值一律从参数文件现取（见同目录 vc6-env.sh），不写死 Campaign／候选／提交号／摘要／镜像号
-source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"
+source "${VC6_SELF_DIR}/vc6-env.sh"
 CID=$NEW
 N=$D/evidence/campaigns/$CID
 V6=$RUNROOT/vc6; R=$(cat "$V6/vc6-retire-root.txt"); RESTORE=$(cat "$V6/vc6-restore-dir.txt")

@@ -2,9 +2,12 @@
 # 四阶段（canary／production_switch／rollback／target_restore）都 STAGE_DONE 之后，
 # 构造生产激活 facts（v2）→ finalize → replay，产出 activation-receipt.json（后面的 vc6-canonical-activation.sh 要求它存在）。
 set -Eeuo pipefail; umask 077
+# 必须在 cd 之前把脚本所在目录解析成绝对路径：用相对路径调用本脚本时（例如 bash ./vc6-activation-receipt.sh），
+# 下一行 cd 到数据根之后，相对的 dirname 会指向数据根下并不存在的位置，source vc6-env.sh 就找不到文件。
+VC6_SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 D=${D:-/root/docker/capture-cli/data}; cd "$D"; export PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1
-source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "${VC6_SELF_DIR}/vc6-env.sh"
+HERE=${VC6_SELF_DIR}
 W=$V6; R=$(cat "$W/vc6-root.txt"); P=$D/candidates/$CAND/production-tree
 for s in canary production_switch rollback target_restore; do test -s "$R/stages/$s/stage.json" || { echo "缺阶段证据 $s"; exit 3; }; done
 python3 -B "$HERE/build_activation_facts.py" "$R" "$P" | tee "$W/activation-facts.out"

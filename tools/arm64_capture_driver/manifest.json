@@ -670,15 +670,15 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-activation-receipt.sh",
-      "sha256": "fb81747afa196819b787bab9b3be547fa0561ef34d154aa718b1b33d4cad3716",
+      "sha256": "6aff9756899075cb2b067426e125d9ea803d7184551358e592b24ef012b120ad",
       "mode": "0700",
-      "bytes": 1250
+      "bytes": 1551
     },
     {
       "path": "driver/pipeline/vc6/vc6-build.sh",
-      "sha256": "a0e02df4f63b82c36b848502917ae159da2105c15fa28c09006c527e6f866e2f",
+      "sha256": "d5bef3f85e17fcbb8b16bb7f80fc337b1c28c5ba400f2680210558c43984930f",
       "mode": "0700",
-      "bytes": 6086
+      "bytes": 6404
     },
     {
       "path": "driver/pipeline/vc6/vc6-canary.sh",
@@ -700,9 +700,9 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-cleanup-decision.sh",
-      "sha256": "726ec604670403ba8cb614828e2126d0f0791a06305d8447e641e4a2f4d4c509",
+      "sha256": "94c5dced61bf9372e32f8ab093d95f83434b4bf37a7b36a010c9ca9eeda98e15",
       "mode": "0700",
-      "bytes": 8273
+      "bytes": 8602
     },
     {
       "path": "driver/pipeline/vc6/vc6-cleanup-execute.sh",
@@ -736,21 +736,21 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-gate-receipt.sh",
-      "sha256": "8ff57dbcbe6bc39a3cbf32f3bc2da6826215be65eccd21760bc815bdbb1b78e5",
+      "sha256": "9376112c33c280fc113e929dca3905b4c1dc7094902a2cfa3b0ab927bd3a8159",
       "mode": "0700",
-      "bytes": 1355
+      "bytes": 1650
     },
     {
       "path": "driver/pipeline/vc6/vc6-gates.sh",
-      "sha256": "490f1ee920612f52f6c9e224cbc0a19d37522cb8115cbb0ecdf7ed72201bbfb9",
+      "sha256": "066364ce62fb0e27d358b210dada84769c4c64ff88c1eb79d477bd1e8c146466",
       "mode": "0700",
-      "bytes": 5261
+      "bytes": 5579
     },
     {
       "path": "driver/pipeline/vc6/vc6-private-archive.sh",
-      "sha256": "b37e5f9e9f3a6052ede90d6efd5861dda779392dce13362c8378b5c810d0c6e5",
+      "sha256": "bcd172091b55399d038527790ae2067e08f36d74754d76457ffef384f8dc944a",
       "mode": "0700",
-      "bytes": 8807
+      "bytes": 9135
     },
     {
       "path": "driver/pipeline/vc6/vc6-promote.sh",
@@ -760,9 +760,9 @@
     },
     {
       "path": "driver/pipeline/vc6/vc6-retire-build.sh",
-      "sha256": "16b1dea3e054392f65ec5c0437595c789a58bf7920b81eb3895971ba57985433",
+      "sha256": "f6f505445cfc0128cd6fe122845e3b31f7df850adf6b78ef085a22805127e1f5",
       "mode": "0700",
-      "bytes": 6136
+      "bytes": 6461
     },
     {
       "path": "driver/pipeline/vc6/vc6-retire-canonical.sh",
@@ -1179,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "c677beee5f8427e3f9c0d0ef82c7a576d648835eaa7ffb9cf2c8f3398f428829"
+  "manifest_sha256": "aae912d33a5b493b1eb20bb60db130fae5eeab634ba21ef08d515d51b49c2696"
 }

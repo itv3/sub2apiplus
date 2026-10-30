@@ -3,10 +3,13 @@
 # 前后各采一份 ARM64 环境收据；facts v4、finalize 与 replay 由后续步骤完成。
 # 只禁写字节码、不设缓存前缀（第 67 项：空前缀会让标准库 .pyc 也读不到）；本计划没有计时敏感的 Python 子进程用例。
 set -Eeuo pipefail; umask 077
+# 必须在 cd 之前把脚本所在目录解析成绝对路径：用相对路径调用本脚本时（例如 bash ./vc6-gates.sh），
+# 下一行 cd 到数据根之后，相对的 dirname 会指向数据根下并不存在的位置，source vc6-env.sh 就找不到文件。
+VC6_SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 D=${D:-/root/docker/capture-cli/data}; cd "$D"; export PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1; export PATH=/usr/local/go/bin:$PATH
 unset PYTHONPYCACHEPREFIX
 # 本轮取值一律从参数文件现取（见同目录 vc6-env.sh），不写死 Campaign／候选／提交号／摘要／镜像号
-source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"
+source "${VC6_SELF_DIR}/vc6-env.sh"
 # 入口坐标是入口编排器的参数，门禁里的测试不该继承（见 lib.sh isolated_run 的说明）；vc6-env.sh 已用完它们。
 unset ENTRY_COMMIT ENTRY_BUNDLE ENTRY_BRANCH
 N=$NEWDIR

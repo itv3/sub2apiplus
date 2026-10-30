@@ -1728,6 +1728,123 @@ class Vc6EnvTests(SandboxCase):
         self.assertIn("占位", result.stdout)
 
 
+class Vc6RelativePathInvocationTests(SandboxCase):
+    """VC-6 里“先 cd 到数据根、再 source 同目录 vc6-env.sh”的脚本：用相对路径调用时不能找不到 vc6-env.sh。
+
+    旧写法是 cd "$D" 之后才 source "$(dirname "${BASH_SOURCE[0]}")/vc6-env.sh"：脚本用 ./xxx.sh 或 pipeline/vc6/xxx.sh 这类相对路径
+    调用时，dirname 得到的是相对路径，cd 之后它指向数据根下并不存在的位置，source 报 No such file。
+    修法与清理脚本一致：cd 之前把脚本目录解析成绝对路径（VC6_SELF_DIR），之后一律用它。
+    """
+
+    # 这 7 个脚本都是先 cd "$D" 再 source vc6-env.sh（清理脚本 vc6-cleanup-execute.sh 的同类测试见 Vc6CleanupTests）
+    CD_FIRST_SCRIPTS = (
+        "vc6-activation-receipt.sh", "vc6-build.sh", "vc6-gates.sh", "vc6-cleanup-decision.sh",
+        "vc6-gate-receipt.sh", "vc6-retire-build.sh", "vc6-private-archive.sh",
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.vc6 = self.sb.pipe / "vc6"
+        # vc6-env.sh 换成桩：打印自己被 source 时的路径后直接结束脚本（真 vc6-env.sh 另有占位断言，见 Vc6EnvTests）
+        _write(self.vc6 / "vc6-env.sh", """
+            echo "VC6_ENV_STUB_SOURCED ${BASH_SOURCE[0]}"
+            exit 0
+        """, 0o644)
+
+    def _run_relative(self, cwd: Path, script_arg: str, **extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", script_arg], env=self.sb.environ(D=str(self.sb.data), **extra), cwd=cwd,
+                              capture_output=True, text=True, errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+
+    def test_relative_path_invocation_finds_vc6_env(self) -> None:
+        """两种相对调用：在脚本所在目录用 ./脚本名（dirname 为 "."），以及在沙箱根目录用相对子路径。都要 source 到同目录的桩，且路径是绝对的。"""
+
+        stub = str(self.vc6 / "vc6-env.sh")
+        for name in self.CD_FIRST_SCRIPTS:
+            for cwd, arg in ((self.vc6, f"./{name}"), (self.root, os.path.relpath(self.vc6 / name, self.root))):
+                with self.subTest(script=name, cwd=str(cwd), arg=arg):
+                    self.assertFalse(os.path.isabs(arg))
+                    result = self._run_relative(cwd, arg)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("No such file", result.stderr)
+                    self.assertIn(f"VC6_ENV_STUB_SOURCED {stub}", result.stdout)
+
+    def _fake_python(self) -> Path:
+        """假 python3：只回显参数并成功退出，用来看脚本把“脚本目录下的构造器”传成了什么路径。"""
+
+        fake = self.root / "fakepy"
+        _write(fake / "python3", """
+            #!/bin/bash
+            echo "FAKE_PY $*"
+        """)
+        return fake
+
+    def _receipt_env(self, with_gate_attempt: bool) -> tuple[Path, Path]:
+        """给两个收据脚本备齐 vc6-env.sh 之后要读的文件：V6 目录、证据根 R 及其里的前置证据。返回 (V6, R)。"""
+
+        v6 = self.root / "v6work"
+        r = self.root / "v6evidence"
+        # 两个脚本共用同一组目录名：先清掉上一个子用例（含它失败中断）留下的
+        shutil.rmtree(v6, ignore_errors=True)
+        shutil.rmtree(r, ignore_errors=True)
+        v6.mkdir()
+        r.mkdir()
+        (v6 / "vc6-root.txt").write_text(str(r), encoding="utf-8")
+        _write(self.vc6 / "vc6-env.sh", f"""
+            echo "VC6_ENV_STUB_SOURCED ${{BASH_SOURCE[0]}}"
+            export V6="{v6}" CAND=cand-x
+        """, 0o644)
+        if with_gate_attempt:
+            (v6 / "vc6-gates-attempt.txt").write_text("attempt-x", encoding="utf-8")
+            for fname in ("acceptance-result.json", "catalog-promotion-receipt.json", "post-promotion-gates.receipt.json"):
+                (r / fname).write_text("{}", encoding="utf-8")
+        else:
+            for stage in ("canary", "production_switch", "rollback", "target_restore"):
+                (r / "stages" / stage).mkdir(parents=True)
+                (r / "stages" / stage / "stage.json").write_text("{}", encoding="utf-8")
+            (r / "activation-receipt.json").write_text("{}", encoding="utf-8")
+        return v6, r
+
+    def test_receipt_scripts_resolve_builder_next_to_script_when_called_relatively(self) -> None:
+        """两个收据脚本在 source 之后还要用脚本目录找同目录的 facts 构造器（HERE）：相对调用时必须是绝对路径、且文件真实存在。"""
+
+        cases = (("vc6-activation-receipt.sh", "build_activation_facts.py", False), ("vc6-gate-receipt.sh", "build_gate_facts_vc6.py", True))
+        for name, builder, gate in cases:
+            with self.subTest(script=name):
+                self._receipt_env(gate)
+                fake = self._fake_python()
+                result = self._run_relative(self.vc6, f"./{name}", PATH=f"{fake}:{self.sb.path}")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                expected = self.vc6 / builder
+                self.assertTrue(expected.is_file())
+                self.assertIn(f"FAKE_PY -B {expected} ", result.stdout)
+
+    def test_script_dir_is_resolved_before_cd_to_data_root(self) -> None:
+        """静态合同（覆盖 vc6 目录下全部脚本，防止以后新增的脚本再犯）：任何脚本在 cd 到数据根之后，都不得再用 BASH_SOURCE 推导路径；
+        先 cd 再 source 的脚本必须有 VC6_SELF_DIR 先于 cd 解析，source 用解析后的变量。"""
+
+        scripts = sorted(PIPELINE.glob("vc6/*.sh"))
+        self.assertGreaterEqual(len(scripts), 20)
+        for path in scripts:
+            lines = list(_code_lines(path))
+            cd_lines = [(n, line) for n, line in lines if 'cd "$D"' in line]
+            if not cd_lines:
+                continue
+            cd_number, cd_text = cd_lines[0]
+            with self.subTest(script=path.name):
+                late = [f"{n}: {line.strip()[:100]}" for n, line in lines
+                        if "BASH_SOURCE" in (line[line.index('cd "$D"'):] if n == cd_number else line) and n >= cd_number]
+                self.assertEqual(late, [], "cd 到数据根之后不得再用 BASH_SOURCE 的相对 dirname")
+        for name in self.CD_FIRST_SCRIPTS:
+            lines = list(_code_lines(PIPELINE / "vc6" / name))
+            resolve = next(n for n, line in lines if "VC6_SELF_DIR=" in line and "BASH_SOURCE" in line)
+            cd_data = next(n for n, line in lines if 'cd "$D"' in line)
+            source = next((n, line) for n, line in lines if "vc6-env.sh" in line and "source" in line)
+            with self.subTest(script=name, check="解析先于 cd"):
+                self.assertLess(resolve, cd_data)
+                self.assertGreater(source[0], cd_data)
+                self.assertIn("VC6_SELF_DIR", source[1])
+
+
 # ======================================================================================================
 # 六、采集账号包装脚本、本机侧脚本
 # ======================================================================================================
