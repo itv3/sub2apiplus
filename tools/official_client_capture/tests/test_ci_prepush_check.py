@@ -726,6 +726,7 @@ class MainTests(unittest.TestCase):
         code, output = env.run("--receipt-dir", str(env.root / "receipts"), env=env_vars, runner=Stub((is_dry_run, done(FROZEN_DRY_RUN_MISS))))
         self.assertEqual(code, pc.EXIT_OK, output)
         self.assertIn("8 绿、0 红、0 跳过", output)
+        self.assertIn(f"被推提交 {git(env.repo, 'rev-parse', 'HEAD')}", output)   # 完整 40 位提交号现取现印，供选择器与生成命令直接复制
         after = sorted(str(path.relative_to(env.repo)) for path in env.repo.rglob("*") if ".git" not in path.relative_to(env.repo).parts)
         self.assertEqual(before, after)
         self.assertEqual(git(env.repo, "status", "--porcelain", "--ignored"), status_before)

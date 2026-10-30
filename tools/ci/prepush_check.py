@@ -800,7 +800,8 @@ def run_checks(ctx: Context, names: Sequence[str], jobs: int = 4) -> list[Result
 def render(ctx: Context, results: Sequence[Result], elapsed: float) -> str:
     lines = [f"推送前预检（{SCHEMA}）",
              f"范围：{ctx.base_ref}（{short(ctx.base)}）..{ctx.tip_ref}（{short(ctx.tip)}），合并基 {short(ctx.before)}，共 {len(ctx.commits)} 个被推提交；仓库 {ctx.repo}"
-             f"（{ctx.base_ref} 以本地跟踪分支为准，未 fetch）"]
+             f"（{ctx.base_ref} 以本地跟踪分支为准，未 fetch）",
+             f"完整提交号（选择器、--before／--after 都要完整 40 位，别手写）：基点 {ctx.base}，合并基 {ctx.before}，被推提交 {ctx.tip}"]
     for result in results:
         lines.append(f"[{result.status}] {result.name}  {result.summary}  ({result.seconds}s)")
         if result.status == FAIL:

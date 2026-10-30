@@ -333,8 +333,6 @@ def execute(args: argparse.Namespace, env: Mapping[str, str], log: Log, state: d
         # 锁脚本一律经 bash 调用（不依赖它有没有可执行位）。
         argv = (["bash", str(heavy_run)] if heavy_run else []) + ["make", args.target, *args.make_args]
         log.note(("经重负载锁 " + str(heavy_run) if heavy_run else "不走重负载锁（--no-lock）") + "；命令：" + " ".join(argv))
-        # 开 make 之前把终端提示打出来，方便知道日志在哪、排队等锁时别以为卡住了。
-        log.note(f"日志 {log.path}", terminal=True)
         started = time.monotonic()
         code = run_target(argv, cwd=worktree, env=child_env, log=log, state=state)
         log.note(f"make 退出码 {code}，用时 {time.monotonic() - started:.0f} 秒")
@@ -385,6 +383,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
                 raise GateSetupError(f"--log 要是绝对路径：{log_path}")
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log = Log(log_path)
+            log.note(f"日志 {log_path}", terminal=True)   # 第一时间告诉操作员日志在哪：准备阶段出错、排队等锁时也找得到
             code = execute(args, environment, log, state)
         except GateSetupError as error:
             code = EXIT_SETUP

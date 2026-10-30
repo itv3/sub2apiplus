@@ -175,7 +175,10 @@ class RunTests(unittest.TestCase):
         fixture = Fixture(self)
         self.assertEqual(fixture.run("main", "ok"), 0)
         self.assertIn(f"提交 {fixture.commit}", fixture.log_text())
-        self.assertEqual(fixture.run("没有这个提交", "ok"), wg.EXIT_SETUP)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(wg.main(["--repo", str(fixture.main), "--log", str(fixture.log), "没有这个提交", "ok"], env=fixture.env()), wg.EXIT_SETUP)
+        self.assertIn(str(fixture.log), stderr.getvalue())   # 准备阶段出错时终端上也有日志路径
         self.assertEqual(fixture.log_text().splitlines()[-1], f"EXIT={wg.EXIT_SETUP}")
 
     def test_make_arguments_after_double_dash_are_passed_through(self) -> None:
