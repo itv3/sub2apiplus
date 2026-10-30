@@ -186,8 +186,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-29（0.165.0 集成重绑）：0.165.0 变更集（W1 生效 effort 与 configuration_update、W2 turn_id／一消息一帧／兜底身份、W3 整段重放同连接／窗口号／压缩帧／
 # 动态键）改动了映射已登记的生产源码；映射只重绑这些源码快照共 5 个叶子（official_egress_openai_http.go 5），不改变测试、事实宇宙或规则语义。
 # 载荷逐项审核：400 个叶子里变化的 5 处全是 sha256／test_file_sha256 叶子，非快照叶子 0 处变化；映射文件摘要 0cd678af… 变为 31572ad2…。
+# 2026-10-30（原生 WS 失效密文受控恢复）：跨模型旧会话的失效密文恢复改动了映射已登记的 official_egress_openai_ws.go 与 openai_ws_forwarder_ingress.go；
+# 映射只重绑这两份源码快照共 3 个叶子（official_egress_openai_ws.go 2、openai_ws_forwarder_ingress.go 1），不改变测试、事实宇宙或规则语义。
+# 载荷逐项审核：400 个叶子里变化的 3 处全是 sha256 叶子，非摘要叶子 0 处变化，叶子键集不变，每个新值都等于对应源码文件原始字节的现算 SHA-256；
+# 映射文件摘要 31572ad2… 变为 5a30e7d1…。
 FROZEN_MAPPING_SHA256 = (
-    "31572ad24e7d22972764245f2693ead05c892286c5625c656a0b9f1135fb65cd"
+    "5a30e7d1737884c3f62b4a202df2ddc243a31d0801a5f1b93b35e81b8e3d3946"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
