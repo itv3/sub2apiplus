@@ -117,6 +117,41 @@ PAUSE_HINTS = {
                  "可每隔 30～60 秒重试同一条命令，在批次间隙里 preview 与 apply 紧接着做；apply 因计时账本 head 已前进被拒时重新 preview 再 apply"),
 }
 
+# 同根因计数触顶后的恢复顺序（0.165 VC-5 实战：两次失败后按“先隔离再对账”，第一次 reconcile-attempt 仍把同根因记到上限 2，
+# 项目总账与 Campaign 计时账本同时到限、账本 stop_required；campaign-resume 又要求部署收据晚于该限额事件，只能停掉刚起的后台验证、
+# 同树重新受监督部署、再重起）。本计划不改计数规则（规则在受管计时账本里，只能随版本登记改），只把完整顺序与代价写进输出。
+CAP_RECOVERY_TITLE = "同根因计数触顶后的恢复顺序（先后不能颠倒；每个写动作都要人给专项批准，本计划不代办）"
+CAP_RECOVERY_COST = (
+    "代价：停掉并重起后台验证（它绑定部署收据，已跑进度作废；0.165 实例：起后约 13 分钟被停，重起多花约 17 分钟进度）、多一次同树受监督部署、"
+    "多一次人工专项批准。预防：失败后先执行本计划（先对账入账）、再部署修复，部署收据天然晚于限额事件，可省掉第 3 步和后台验证重起"
+)
+
+
+def cap_recovery_lines(*, campaign_ledger: bool) -> list[str]:
+    """触顶恢复顺序的逐行文字（纯函数：对账暂停提示与计划警告共用，措辞只此一处）。
+
+    ``campaign_ledger``：Campaign 计时账本同根因到上限（stop_required），由 campaign-resume 恢复，同时清除两本账该根因的计数；
+    为假（只有项目总账到上限、Campaign 账本没停）时，第 4 步改为 record-root-cause-repair。"""
+
+    if campaign_ledger:
+        repair = ("campaign-resume（Campaign 账本 stop_required）：参数文件填 FIX_COMMIT／REGRESSION_RECEIPT／RESUME_REASON，"
+                  "预览 → 人批准 → --approve-sha256；成功后两本账该根因的计数一并清零")
+    else:
+        repair = ("record-root-cause-repair（项目总账根因到上限；修复提交、回归收据、部署收据三项绑定）：由人执行，"
+                  "登记后该根因不再按到限处理")
+    return [
+        CAP_RECOVERY_TITLE + "：",
+        "1. 隔离（暂停含环境污染才需要）：先取晚于污染的干净环境收据，再 environment-isolate（预览 → 人批准 → apply）。"
+        "先隔离并不能避开触顶：隔离只豁免“等待封存且没有失败作业”的 attempt，失败 attempt 的首次 reconcile-attempt 仍会把失败根因记入计数",
+        "2. 补账（暂停含账务才需要）：accounting-resolve（预览 → 人批准 → apply）",
+        "3. 同树重部署：恢复命令要求部署收据晚于限额事件（即首次对账那一刻）。停掉在跑的后台验证，对同一提交同树重新受监督部署；"
+        "工具摘要不变则无需重登记演进",
+        "4. " + repair,
+        "5. 重起后台验证（绑定新部署收据），然后用同一参数文件、同一轮次重新执行本命令（reconcile 通过后继续批准／授权／续跑）",
+        CAP_RECOVERY_COST,
+    ]
+
+
 REQUIRED_KEYS = ("ROUND", "D", "RUNROOT", "VC_ENV", "VC_STATE_DIR", "CAMPAIGN", "ATTEMPT", "CANDIDATE", "APPROVER")
 OPTIONAL_KEYS = (
     "FIX_COMMIT", "REGRESSION_RECEIPT", "RESUME_REASON", "EVOLUTION_REASON", "APPROVALS_DIR", "DRIVER_TARGET",
@@ -1214,6 +1249,9 @@ def build_plan(params: Mapping[str, str], facts: Mapping[str, Any], *, followed_
     if facts["ledger"].get("paused_scopes"):
         warnings.append(f"计时账本有预算暂停范围 {facts['ledger']['paused_scopes']}：对账会判暂停，先由人批准 deadline-extend preview/apply"
                         "（项目／Campaign／阶段分别批准；阶段层加 --scope stage --phase VC-n），再重新执行本计划")
+    if facts["ledger"].get("status") in STOPPED_LEDGER_STATES:
+        # 账本停线（stop_required 的常见原因是同根因重试到上限）：计划预览就把完整恢复顺序与代价摆出来，不等对账暂停才看到。
+        warnings.append("\n  ".join(cap_recovery_lines(campaign_ledger=True)))
     rows = facts["continuation"].get("successor_rows") or []
     if rows:
         latest = rows[-1]
@@ -1354,6 +1392,9 @@ def judge(result: CliResult, step: str, *, command_context: Mapping[str, Any] | 
             templates = pause_command_templates(command_context["params"], command_context["orchestrator"], FC.pause_kinds(payload),
                                                 command_context.get("operation_id"))
         rendered = "".join(f"\n  命令模板：{line}" for line in templates)
+        if "root_cause_repair" in FC.pause_kinds(payload):
+            # 同根因计数触顶：把完整恢复顺序与代价一并打印（Campaign 账本 stop_required 与项目总账到上限各自的第 4 步不同）。
+            rendered += "".join(f"\n  {line}" for line in cap_recovery_lines(campaign_ledger=CAMPAIGN_STOP_MARKER in reasons))
         return category, reason, "；".join(actions) + "；处理后重新执行同一条命令" + suffix + rendered
     if category == "stop":
         return category, reason, "永久停线或需审核由人裁定" + suffix

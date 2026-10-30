@@ -1334,5 +1334,80 @@ class PauseWarningTests(_WorldCase):
         self.assertFalse((world.runroot / "recovery-plan-approvals").exists())
 
 
+class CapRecoveryOrderTests(_WorldCase):
+    """同根因计数触顶后的恢复顺序（0.165 VC-5 实战）：先隔离再对账，第一次对账仍把同根因记到上限，账本 stop_required。
+    恢复命令要求部署收据晚于限额事件，于是必须“隔离 → 补账 → 同树重部署 → campaign-resume → 重起后台验证”。
+    计划预览与对账暂停的输出都要把这个顺序和代价写全；计数规则本身在受管计时账本里，本计划只负责输出，不改规则。"""
+
+    ATTEMPT = "20261021T135838Z-70aa3c8b45478aec"
+    # 顺序里每一步的标志性文字（按先后），代价放在最后。
+    MARKS = ("1. 隔离", "2. 补账", "3. 同树重部署", "4. campaign-resume", "5. 重起后台验证", "代价：")
+
+    def assertOrdered(self, text: str, marks: tuple[str, ...]) -> None:
+        positions = []
+        for mark in marks:
+            self.assertIn(mark, text)
+            positions.append(text.index(mark))
+        self.assertEqual(positions, sorted(positions), f"顺序不对：{dict(zip(marks, positions))}")
+
+    def test_pure_function_lists_the_full_order_and_cost(self) -> None:
+        helper = self.make_world().helper()
+        lines = helper.cap_recovery_lines(campaign_ledger=True)
+        self.assertOrdered("\n".join(lines), self.MARKS)
+        text = "\n".join(lines)
+        for fragment in ("environment-isolate", "accounting-resolve", "部署收据晚于限额事件", "campaign-resume", "FIX_COMMIT", "清零",
+                         "重起后台验证", "同一参数文件、同一轮次", "先执行本计划（先对账入账）、再部署修复"):
+            self.assertIn(fragment, text)
+        # 项目总账到限、Campaign 账本没停：第 4 步换成 record-root-cause-repair。
+        project_only = "\n".join(helper.cap_recovery_lines(campaign_ledger=False))
+        self.assertIn("4. record-root-cause-repair", project_only)
+        self.assertNotIn("4. campaign-resume", project_only)
+
+    def test_plan_preview_shows_the_order_when_the_ledger_is_stopped(self) -> None:
+        world = self.make_world(ledger_status="stop_required")
+        plan = world.plan()
+        warning = next(item for item in plan["warnings"] if item.startswith("同根因计数触顶后的恢复顺序"))
+        self.assertOrdered(warning, self.MARKS)
+        shown = world.run("--plan").stdout
+        self.assertOrdered(shown, self.MARKS)
+        # 账本没停线时不出这条警告。
+        self.assertFalse(any("同根因计数触顶" in item for item in self.make_world().plan()["warnings"]))
+
+    def test_isolate_first_then_reconcile_hits_the_cap_and_prints_the_full_order(self) -> None:
+        """构造“先隔离再对账、计数触顶”：环境污染已隔离（environment_resolved），对账仍判账务＋同根因触顶两项暂停。"""
+
+        world = self.make_world(scenario={"pauses": {self.ATTEMPT: ["environment", "accounting", "root_cause_repair"]}})
+        world.set_state(environment_resolved=True)  # 已先 environment-isolate
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertOrdered(result.stderr, self.MARKS)
+        self.assertIn("Campaign 账本同根因重试已达上限", result.stderr)
+        self.assertIn("命令模板：补账预览（零写入）", result.stderr)
+        self.assertNotIn("environment-isolate --campaign-dir", result.stderr, "环境已隔离，不再打印隔离命令模板")
+        self.assertEqual(world.write_calls(), [], "只打印顺序与命令，本计划不代办任何写动作")
+        self.assertEqual(world.dispatches(), [])
+        # 人按顺序做完（补账、同树重部署、campaign-resume、重起后台验证）后，同一条命令继续到派发。
+        world.set_state(accounting_resolved=True, root_cause_repair_resolved=True)
+        world.pre_sign_recovery(seq=10, effective=7)
+        again = world.run("--apply")
+        self.assertEqual(again.returncode, EXIT_OK, again.stderr)
+        self.assertEqual(len(world.dispatches()), 1)
+
+    def test_project_only_cap_names_record_root_cause_repair_as_step_four(self) -> None:
+        world = self.make_world(scenario={"pauses": {self.ATTEMPT: ["root_cause_repair"]},
+                                          "pause_text": {"root_cause_repair": "项目总账根因 rc1-x 累计失败已达上限"}})
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertOrdered(result.stderr, ("1. 隔离", "2. 补账", "3. 同树重部署", "4. record-root-cause-repair", "5. 重起后台验证", "代价："))
+        self.assertNotIn("4. campaign-resume", result.stderr)
+
+    def test_other_pauses_do_not_print_the_cap_order(self) -> None:
+        world = self.make_world(scenario={"pauses": {self.ATTEMPT: ["accounting"]}})
+        result = world.run("--apply")
+        self.assertEqual(result.returncode, EXIT_OPERATOR, result.stderr)
+        self.assertNotIn("同树重部署", result.stderr)
+        self.assertNotIn("同根因计数触顶后的恢复顺序", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -317,7 +317,10 @@ class RealVc5Tests(_RealCase):
         self.assertEqual(self.statuses(plan), {
             "resume": "pending", "evolution": "waiting", "reconcile-runs": "done", "reconcile": "waiting", "approve": "waiting",
             "authorize": "waiting", "continue": "waiting"})
-        self.assertEqual(len(plan["warnings"]), 1, "演进未登记且尚无对账收据：提示先对账再部署修复")
+        # 账本 stop_required 起多一条“同根因计数触顶后的恢复顺序”警告；原有“演进未登记且尚无对账收据：先对账再部署修复”仍在。
+        self.assertEqual(len(plan["warnings"]), 2)
+        self.assertIn("先对账入账", "".join(plan["warnings"]))
+        self.assertTrue(any(item.startswith("同根因计数触顶后的恢复顺序") for item in plan["warnings"]))
         # 失败 attempt 已完成 6 个作业（真实 attempt.json）。
         self.assertEqual(len(plan["objects"]["keep"]), 6)
 

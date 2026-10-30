@@ -165,6 +165,8 @@ PAUSE_TEXT = {
     "environment": "存在未隔离的环境污染（暂停：修复环境、取得干净环境复核后以 environment-isolate 隔离继续）",
     "request_budget": "项目请求预算已耗尽（暂停：批准请求预算延长后继续）",
     "deadline": "Campaign 计时预算已暂停",
+    # 与受管对账器的 Campaign 账本同根因触顶文字一致（fix_and_continue.CAMPAIGN_ROOT_CAUSE_STOP 是它的子串）。
+    "root_cause_repair": "Campaign 账本同根因重试已达上限，状态 stop_required；需 campaign-resume 恢复",
 }
 
 
@@ -173,7 +175,7 @@ def pause_for(st, subject):
     if not kinds:
         return None
     return {"status": "paused", "attempt_id": subject,
-            "decision": {"decision": "paused", "pause_kinds": kinds, "reasons": [PAUSE_TEXT.get(kind, kind) for kind in kinds]},
+            "decision": {"decision": "paused", "pause_kinds": kinds, "reasons": [(scenario().get("pause_text") or {}).get(kind) or PAUSE_TEXT.get(kind, kind) for kind in kinds]},
             "next_command": "处理后重新对账"}
 
 
