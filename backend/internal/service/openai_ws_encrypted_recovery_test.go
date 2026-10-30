@@ -100,11 +100,11 @@ func captureOpenAIWSRecoveryLogs(t *testing.T, run func()) string {
 		if event == nil {
 			continue
 		}
-		out.WriteString(event.Message)
+		_, _ = out.WriteString(event.Message)
 		for key, value := range event.Fields {
-			out.WriteString(" " + key + "=" + fmt.Sprint(value))
+			_, _ = out.WriteString(" " + key + "=" + fmt.Sprint(value))
 		}
-		out.WriteString("\n")
+		_, _ = out.WriteString("\n")
 	}
 	return out.String()
 }

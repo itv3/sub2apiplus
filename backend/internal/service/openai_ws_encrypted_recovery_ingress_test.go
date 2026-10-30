@@ -246,8 +246,8 @@ func (f recoveryBusinessFrame) text() string {
 	walk = func(value any) {
 		switch typed := value.(type) {
 		case string:
-			out.WriteString(typed)
-			out.WriteByte('\n')
+			_, _ = out.WriteString(typed)
+			_ = out.WriteByte('\n')
 		case []any:
 			for _, item := range typed {
 				walk(item)
@@ -299,7 +299,8 @@ func (h *recoveryWireHarness) recordedDigests(accountID int64) map[string]struct
 
 // scopedKey 返回某账号的恢复记录键（要求恰有一个）。
 func (h *recoveryWireHarness) scopedKey(accountID int64) string {
-	store := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	store, ok := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	require.True(h.t, ok, "状态存储类型应为 defaultOpenAIWSStateStore")
 	store.sessionInvalidEncryptedMu.RLock()
 	defer store.sessionInvalidEncryptedMu.RUnlock()
 	infix := "|ws-ingress-recovery|account=" + strconv.FormatInt(accountID, 10) + "|"
@@ -318,7 +319,8 @@ func (h *recoveryWireHarness) scopedKey(accountID int64) string {
 
 // scopedKeyCount 统计全部恢复作用域键（不含恢复次数计数用的伪键）。
 func (h *recoveryWireHarness) scopedKeyCount() int {
-	store := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	store, ok := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	require.True(h.t, ok, "状态存储类型应为 defaultOpenAIWSStateStore")
 	store.sessionInvalidEncryptedMu.RLock()
 	defer store.sessionInvalidEncryptedMu.RUnlock()
 	count := 0
@@ -332,7 +334,8 @@ func (h *recoveryWireHarness) scopedKeyCount() int {
 
 // rawKeyCount 统计不带恢复作用域的记录键数（上游原有“分组 + 会话”键）。
 func (h *recoveryWireHarness) rawKeyCount() int {
-	store := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	store, ok := h.gate.service.getOpenAIWSStateStore().(*defaultOpenAIWSStateStore)
+	require.True(h.t, ok, "状态存储类型应为 defaultOpenAIWSStateStore")
 	store.sessionInvalidEncryptedMu.RLock()
 	defer store.sessionInvalidEncryptedMu.RUnlock()
 	count := 0
