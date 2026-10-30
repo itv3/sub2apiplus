@@ -361,6 +361,27 @@ class GateScopeExecutorTests(unittest.TestCase):
         self.assertEqual(echoed["skipped_modules"], ["test_claude_big"], "被剔除的模块逐个写进回显（逐个理由在 selection.skipped）")
         self.assertEqual([row["module"] for row in scoped["selection"]["skipped"]], ["test_claude_big"])
         self.assertEqual((echoed["base_is_release"], echoed["base_release_tags"]), (False, []), "合成仓库的基点没有发版 tag：如实记 False")
+        self.assertNotIn("commands_skipped", echoed, "旧口径的筛选没有命令门禁项决定：回显与改造前逐字相同")
+
+    def test_export_echoes_the_skipped_command_gates_and_units_when_the_selection_carries_command_decisions(self) -> None:
+        """依赖精度下被跳过的命令门禁项／单元是登记在案的跳过：总摘要的筛选回显逐个写出，完整决定在清单的 selection.commands 里（带自摘要）。"""
+
+        _full, scoped = self.plans()
+        body = {key: value for key, value in scoped["selection"].items() if key != "selection_sha256"}
+        body["commands"] = {"model": uo.COMMAND_MODEL, "skipped_gates": ["backend-unit"],
+                            "gates": {"backend-unit": {"kind": "go", "scope": "gate", "decision": "skip", "hits": []}}}
+        scoped["selection"] = uo.seal(body)
+        scoped["command_gates_skipped"] = ["backend-unit", "test-official-client-control"]
+        scoped["command_units_skipped"] = ["egress-spec:test-official-client-control"]
+        completed, _summary, _manifest = self.run_gates(scoped, "export-commands")
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        out = self.root / "exported-commands"
+        entry = eg.export_records(self.root / "export-commands-gates.json", self.root / "export-commands" / "summary.json", out,
+                                  source={"commit": "c" * 40, "tree_head": "c" * 40}, subject="s", round_id="r", tree=str(self.tree),
+                                  isolation="x", host="h", architecture="a")
+        echoed = entry["client_selection"]
+        self.assertEqual(echoed["commands_skipped"], ["backend-unit", "test-official-client-control", "egress-spec:test-official-client-control"])
+        self.assertEqual(echoed["selection_sha256"], scoped["selection"]["selection_sha256"])
 
 
 class GateScopeExportTests(unittest.TestCase):

@@ -2768,6 +2768,10 @@ def scope_note(payload: Mapping[str, Any]) -> str:
         if isinstance(names, list) and names:
             # 被剔除的模块逐个列出（完整清单与逐个理由在结论的 selection 与运行清单的 selection.skipped 里）。
             note += f"；被剔除的 {len(names)} 个模块：{'、'.join(str(item) for item in names[:60])}{'等' if len(names) > 60 else ''}"
+        skipped_commands = selection.get("commands_skipped")
+        if isinstance(skipped_commands, list) and skipped_commands:
+            # 依赖精度下按真实输入路径跳过的命令门禁项／单元（登记在案的跳过，不是缺失；决定与原因在清单的 selection.commands 里）。
+            note += f"；按输入路径跳过的命令门禁项／单元 {len(skipped_commands)} 个：{'、'.join(str(item) for item in skipped_commands[:20])}"
         return note
     resolved = payload.get("gate_scope_resolved")
     if payload.get("gate_scope") == GATE_SCOPE_AUTO and isinstance(resolved, Mapping):

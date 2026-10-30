@@ -888,9 +888,10 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 
 
+
 # >>> T2 预检登记常量（脚本生成，可重跑）
 T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
-T2_PRECHECK_DIGESTS = {'tools/ci/background_validation.py': '7589fae140a1e7e7c8efeaa37db5c1a678010dbf9efd60db2312843d6db354f5',
+T2_PRECHECK_DIGESTS = {'tools/ci/background_validation.py': 'fa8dbfc4c9599a7318cc27b48b70d642d5b037ae96dd828835f4f4ab5ec3b337',
  'tools/ci/entry_gates.py': '4199d30715c28b52021a4fe0bbd2711e3d6c816b819fc8e098f84280b02f1ce8',
  'tools/ci/entry_orchestrator.py': '7d400c835b5e108590109dc4c889deba36508353737f5b122f324759ce80fce3',
  'tools/ci/entry_steps.py': '4c57d915784ab2c3873a9be72464b0d7b947daceafa6c1681b396f8519181e4e',

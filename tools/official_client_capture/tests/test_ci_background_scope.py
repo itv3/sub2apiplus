@@ -389,6 +389,25 @@ class TwoClientAutoTests(TwoClientWorld):
         taken = re.search(r"【子集：([^】]*)】", message)
         self.assertEqual(taken.group(1), f"codex 计划，跳过 4/10 个测试模块，基点 {BASE[:12]}，筛选摘要 {'s' * 12}")
 
+    def test_skipped_command_gates_are_a_recorded_skip_and_the_admission_still_passes(self) -> None:
+        """OPT-02 第二轮：依赖精度下按输入路径跳过的命令门禁项登记在回显里，准入照样通过、提示写明跳过了哪些；对 Claude 仍然拒绝。"""
+
+        skipped = ["backend-unit", "lint-unit", "frontend-lint", "egress-spec:test-official-client-control"]
+        selection = {**SELECTION, "commands_skipped": skipped}
+        self.conclusion(info=INFO_SUBSET, echoed=selection, recorded=selection)
+        code, message = bv.check(self.codex_run, self.data, require_passed=True, client="codex")
+        self.assertEqual(code, 0, message)
+        self.assertIn("按输入路径跳过的命令门禁项／单元 4 个：backend-unit、lint-unit、frontend-lint、egress-spec:test-official-client-control", message)
+        taken = re.search(r"【子集：([^】]*)】", message)
+        self.assertEqual(taken.group(1), f"codex 计划，跳过 4/10 个测试模块，基点 {BASE[:12]}，筛选摘要 {'s' * 12}", "进准入键的范围说明不变")
+        code, message = bv.check(self.codex_run, self.data, require_passed=True, client="claude")
+        self.assertEqual(code, 3, message)
+        self.assertIn("防串用", message)
+        # 回显被改掉（跳过的名单在结论里和总摘要里对不上）也不影响印证——印证看的是筛选摘要、客户端、基点；名单只作说明。
+        self.conclusion(info=INFO_SUBSET, echoed=selection, recorded={**SELECTION, "commands_skipped": []})
+        code, message = bv.check(self.codex_run, self.data, require_passed=True, client="codex")
+        self.assertEqual(code, 0, message)
+
     def test_the_admission_message_names_the_skipped_modules_and_the_release_base(self) -> None:
         selection = {**SELECTION, "base_is_release": True, "base_release_tags": ["v0.2.18"], "skipped_modules": ["test_claude_a", "test_claude_b"]}
         self.conclusion(info=INFO_SUBSET, echoed=selection, recorded=selection)
