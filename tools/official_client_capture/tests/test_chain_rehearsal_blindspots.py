@@ -95,6 +95,36 @@ class StartupFlagRunnerTest(unittest.TestCase):
         self.assertEqual(outcome.verdict, "pass", outcome.detail + outcome.output)
         self.assertRegex(outcome.detail, r"\d+ 个客户端命令行都能启动")
 
+    def test_codex_home_directory_exists_before_the_binary_is_started(self) -> None:
+        """探针调用二进制时，环境变量 CODEX_HOME 指向的 ``home/.codex`` 必须已经存在。
+
+        真二进制找不到 CODEX_HOME 目录就拒绝启动（ARM64 实测：不建时探针 4/4 被拒）。这里用一个会记录并校验该目录的假二进制：
+        目录不存在就以非零码退出（复刻真二进制的拒绝），存在则记一行后正常退出；探针必须每个组合都放行，且记录里全是“存在”。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            record = Path(directory) / "codex-home-record.txt"
+            stub = Path(directory) / "stub-codex-home.py"
+            stub.write_text(
+                "import os, sys\n"
+                "home = os.environ.get('CODEX_HOME', '')\n"
+                "exists = bool(home) and os.path.isdir(home)\n"
+                "with open(sys.argv[1], 'a', encoding='utf-8') as handle:\n"
+                "    handle.write(('exists' if exists else 'missing') + ' ' + home + '\\n')\n"
+                "if not exists:\n"
+                "    sys.stderr.write('Error: CODEX_HOME does not exist\\n')\n"
+                "    raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            outcome = blindspots.StartupFlagRunner(binary=(sys.executable, str(stub), str(record)), window_seconds=3.0).run(
+                self.context(directory)
+            )
+            lines = record.read_text(encoding="utf-8").splitlines() if record.is_file() else []
+        self.assertEqual(outcome.verdict, "pass", outcome.detail + outcome.output)
+        self.assertTrue(lines, "假二进制一次都没被调用")
+        self.assertEqual({line.split(" ", 1)[0] for line in lines}, {"exists"}, lines)
+        self.assertTrue(all(line.split(" ", 1)[1].endswith("/.codex") for line in lines), lines)
+
 
 class CloseoutEnvironmentTest(unittest.TestCase):
     def test_names_come_from_gate_env_whitelist_and_include_the_retry_ledger(self) -> None:

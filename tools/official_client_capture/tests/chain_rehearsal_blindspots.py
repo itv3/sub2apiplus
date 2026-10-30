@@ -240,6 +240,9 @@ def startup_flags_main(binary: Sequence[str], *, window_seconds: float, isolate:
                 seen.add(key)
                 home = work / f"home-{len(combos)}"
                 home.mkdir()
+                # run_binary_once 把 CODEX_HOME 指向 home/.codex；真二进制不会替我们建这个目录，找不到就直接拒绝启动
+                # （ARM64 实测：不建时 4/4 被拒，预先建好后 3 个 TUI 都能正常启动），所以调用真二进制前必须先建好。
+                (home / ".codex").mkdir(parents=True)
                 result = run_binary_once(binary, command, window_seconds=window_seconds, isolate=isolate, home=home)
                 combos.append({"scenario": scenario, **result})
         missing = [scenario for scenario, commands in recorded.items() if not commands]
