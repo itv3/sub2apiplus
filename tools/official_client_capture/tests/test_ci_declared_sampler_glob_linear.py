@@ -150,12 +150,15 @@ class WorstCaseTimingTests(unittest.TestCase):
         matcher = ds.PathMatcher("out/*a*a*a*b")
 
         # 规模守卫放在最前面：真回归（退回回溯正则）时在 250→500 字符这一步、几秒内就失败，不会先把几百条 1000 字符的路径跑完
-        # （那样每条要二十多秒，总共要算上一个多小时）。一批路径的总耗时随路径长度加倍做相对比较（每批 50 条），不用绝对阈值。
+        # （那样每条要二十多秒，总共要算上一个多小时）。一批路径的总耗时随路径长度加倍做相对比较，不用绝对阈值。
+        # 批量保持 50 条：真回归时（回溯正则）每批的耗时随批量线性放大，批量大了“几秒内失败”就变成几分钟。
+        # 长度序列末尾加了 4000：CI 上 50 条的批在 500→1000 字符只有约 5～18 毫秒，计时窗口太短，曾偶发比值 3.24 越过紧档上限 3.2 而红；
+        # 现在紧档下限提到两端都 ≥ 20 毫秒（见 scaling_guard），这一档在 CI 上落在 2000→4000 字符，窗口足够长，噪声占比小，二次方仍会被抓。
         def prepare(length: int):
             batch = [f"out/{'a' * length}{index}" for index in range(50)] + [f"out/{'a' * length}b"]
             return lambda: [matcher.matches(path) for path in batch]
 
-        scaling_guard.assert_growth_is_bounded(self, prepare, (250, 500, 1000, 2000), label="一批长路径")
+        scaling_guard.assert_growth_is_bounded(self, prepare, (250, 500, 1000, 2000, 4000), label="一批长路径")
 
         # 正确性断言只用少量路径：5 条不匹配、1 条匹配（线性实现下都是毫秒级）。
         paths = [f"out/{'a' * 1000}{index}" for index in range(5)] + [f"out/{'a' * 1000}b"]
