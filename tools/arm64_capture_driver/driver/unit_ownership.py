@@ -1121,7 +1121,8 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
 
     ``precision``（OPT-02）：``owner`` 旧口径；``dependency`` 在旧口径之上，把"依赖闭包碰不到任何改动文件"的其余模块也剔除（见 ``DependencyModel``）；
     ``auto`` 按基点是不是发版 tag 提交二选一（``resolve_precision``）；缺省取数据文件 ``dependency.precision``，数据里没有这一节就是 ``owner``。
-    旧口径下 selection 与改造前逐字相同；新口径才多出 ``precision``／``precision_reason``／``dependency_model`` 三个键。"""
+    旧口径下 selection 与改造前逐字相同；新口径才多出 ``precision``／``precision_reason``／``dependency_model`` 三个键，
+    以及 ``commands``（命令门禁项的筛选结果，见 ``CommandInputs``）。"""
 
     tree = Path(tree)
     data = validate_data(dict(data)) if data is not None else load_data(tree)
@@ -1179,8 +1180,10 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
                                     "file": unused[0]})
                 pull([module], f"失败关闭：含解析不了的动态加载（{sites[0]}），改动的 {unused[0]} 没有静态使用者")
     dependency_skippable: list[str] = []
+    commands: dict[str, Any] | None = None
     if effective_precision == PRECISION_DEPENDENCY and not fallback:
         dependency_skippable = _dependency_pull(selector, data, tree, changes, head, fail_closed, pull)
+        commands = _command_selection(tree, data, changes, fail_closed)
     forced = sorted({str(name) for name in force_modules})
     if forced and not fallback:
         pull([module for module in forced if module in present], "上一轮失败或没执行完，必须重跑")
@@ -1236,7 +1239,192 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         selection["precision"] = PRECISION_DEPENDENCY
         selection["precision_reason"] = precision_reason
         selection["dependency_model"] = DEPENDENCY_MODEL
+    if commands is not None:
+        selection["commands"] = commands
     return seal(selection)
+
+
+# ---------------------------------------------------------------------------
+# 命令单元的输入（OPT-02 第二轮）：后端／前端门禁项按真实输入路径筛选
+# ---------------------------------------------------------------------------
+
+# 可筛选的命令门禁项及其种类。每个门禁项在入口门禁清单里只有一个命令单元，跳过时整项（单元＋门禁项）一起从清单里拿掉，原因登记进 selection。
+# 其余命令单元（check-egress-spec 的 48 个子检查、test-official-client-control、deploy-scripts 的 6 个、capture:prerequisites、pre-A3 场景）
+# 读台账、读全仓库、读部署目录，输入说不窄，一律照跑。
+COMMAND_GATE_KINDS = {
+    "backend-go-test": "go", "backend-unit": "go", "backend-integration": "go",
+    "backend-lint": "lint", "lint-unit": "lint", "lint-integration": "lint",
+    "frontend-lint": "frontend", "frontend-typecheck": "frontend", "frontend-critical": "frontend",
+}
+COMMAND_MODEL = "command-inputs/v1"
+# 种类 → 一定算输入的路径前缀／文件（再加下面扫描出来的 tools/docs 等仓库内引用）。go 门禁项读冻结台账目录（docs/egress/）整个——冻结类 Go 测试把台账登记的
+# 摘要与仓库文件当前摘要比对；lint 只读后端源码与 backend/.golangci.yml（都在 backend/ 里）；前端的关键用例经 make 目标跑，Makefile 算输入。
+COMMAND_PREFIXES = {"go": ("backend/", "docs/egress/"), "lint": ("backend/",), "frontend": ("frontend/",)}
+COMMAND_FILES = {"go": (), "lint": (), "frontend": ("Makefile",)}
+# 扫描后端／前端源码里提到的仓库路径时看的文件类型（后端数据文件里也会列路径，如目录数据）。
+_COMMAND_SCAN_SUFFIXES = {"go": (".go", ".json", ".yaml", ".yml", ".sh", ".txt"),
+                          "frontend": (".ts", ".js", ".mjs", ".cjs", ".vue", ".json", ".md", ".html", ".css")}
+_COMMAND_TOKEN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-/]*")
+_FILE_LIKE = re.compile(r"(?:[A-Za-z0-9_.\-]+/)+[A-Za-z0-9_.\-]+|[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]+)*\.[A-Za-z0-9]{1,8}")
+
+
+class CommandInputs:
+    """后端／前端命令门禁项的输入路径（"改动与这些路径不相交就跳过"的依据），保守取向，认不出的路径一律当输入：
+
+    * **种类前缀**（``COMMAND_PREFIXES``）：go 读 ``backend/`` 与 ``docs/egress/``，lint 读 ``backend/``，前端读 ``frontend/`` 与 ``Makefile``；
+    * **冻结台账登记的路径**（只对 go）：冻结类 Go 测试读它们的当前摘要；取 ``tools.upstream_merge.freeze.load_frozen_edges``（与 ``freeze-successor-generate``
+      同一份权威算法，子进程里算，算不出来就对 go 失败关闭）；再并入 ``docs/egress/source-freeze/`` 下列出的路径；
+    * **源码里提到的仓库路径**（go 扫后端、前端扫前端）：每个文件里"像文件名或路径"的片段（去掉前导 ``../``、``?raw`` 之类后缀），
+      改动路径的某个路径后缀（文件名、``目录/文件名``、完整路径）等于其中一个片段，就算输入；通用目录（``generic_refs``）不单独算，免得一句
+      ``tools/official_client_capture`` 把整个受管树拉成输入。
+
+    判定对改动的每个状态（含已删除）一视同仁：已删除的文件靠路径字符串匹配，不靠"现在还在不在"。"""
+
+    def __init__(self, tree: Path, files: Sequence[str], generic_refs: Iterable[str]) -> None:
+        self.tree = Path(tree)
+        self.files = list(files)
+        self.generic_refs = frozenset(generic_refs)
+        self._tokens: dict[str, set[str]] = {}
+        self._frozen: set[str] | None = None
+        self._frozen_error: str | None = None
+
+    # -- 扫描 -----------------------------------------------------------------
+
+    @staticmethod
+    def _clean(token: str) -> str:
+        token = token.split("?", 1)[0]
+        while token.startswith(("./", "../")):
+            token = token[2:] if token.startswith("./") else token[3:]
+        return token.strip("/.")
+
+    def tokens(self, kind: str) -> set[str]:
+        """后端（go）或前端（frontend）源码里提到的"像文件名或路径"的片段。"""
+
+        scan = "go" if kind in ("go", "lint") else "frontend"
+        if scan not in self._tokens:
+            roots = ("backend/",) if scan == "go" else ("frontend/",)
+            out: set[str] = set()
+            for rel in self.files:
+                if not rel.startswith(roots) or not rel.endswith(_COMMAND_SCAN_SUFFIXES[scan]) or "/node_modules/" in rel:
+                    continue
+                try:
+                    text = (self.tree / rel).read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                if len(text) > 4_000_000:
+                    continue
+                for match in _COMMAND_TOKEN.findall(text):
+                    cleaned = self._clean(match)
+                    if len(cleaned) >= 3 and _FILE_LIKE.fullmatch(cleaned) and cleaned not in self.generic_refs:
+                        out.add(cleaned)
+                # 路径拼接：filepath.Join(root, "tools", "x", "y.py")／path.join(...)／resolve(dir, '../x') 里的连续字符串字面量拼成路径。
+                for call in re.finditer(r"(?:[Jj]oin|resolve)\(([^()]*)\)", text):
+                    parts = re.findall(r"[\"'`]([^\"'`\n]*)[\"'`]", call.group(1))
+                    run: list[str] = []
+                    for part in [*parts, None]:
+                        if part is None or not part.strip("/"):
+                            if len(run) >= 2:
+                                joined = self._clean("/".join(item.strip("/") for item in run))
+                                if _FILE_LIKE.fullmatch(joined) and joined not in self.generic_refs:
+                                    out.add(joined)
+                            run = []
+                        else:
+                            run.append(part)
+            self._tokens[scan] = out
+        return self._tokens[scan]
+
+    def frozen(self) -> set[str] | None:
+        """冻结台账登记的路径加 source-freeze 下列出的路径；算不出来返回 None（调用方对 go 失败关闭）。台账目录不存在（合成仓库）当空集。"""
+
+        if self._frozen is not None or self._frozen_error is not None:
+            return self._frozen
+        if not (self.tree / "docs/egress/maintenance").is_dir():
+            self._frozen = set()
+            return self._frozen
+        code = ("import json, sys\nfrom pathlib import Path\nfrom tools.upstream_merge import freeze\n"
+                "edges, registered, receipts = freeze.load_frozen_edges(Path('.'))\nprint(json.dumps(sorted(registered)))\n")
+        try:
+            result = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.tree, capture_output=True, text=True, timeout=300, check=False,
+                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(self.tree)})
+            if result.returncode != 0:
+                raise ValueError(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else f"退出码 {result.returncode}")
+            frozen = set(json.loads(result.stdout))
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            self._frozen_error = f"冻结台账登记路径算不出来：{error}"
+            return None
+        freeze_dir = self.tree / "docs/egress/source-freeze"
+        if freeze_dir.is_dir():
+            for entry in sorted(freeze_dir.rglob("*")):
+                if entry.is_file() and entry.stat().st_size < 8_000_000:
+                    for token in _COMMAND_TOKEN.findall(entry.read_text(encoding="utf-8", errors="ignore")):
+                        if "/" in token:
+                            frozen.add(token)
+        self._frozen = frozen
+        return frozen
+
+    # -- 判定 -----------------------------------------------------------------
+
+    @staticmethod
+    def _suffixes(path: str) -> list[str]:
+        parts = path.split("/")
+        return ["/".join(parts[index:]) for index in range(len(parts))]
+
+    def reason(self, kind: str, path: str) -> str | None:
+        """这个改动路径是不是该种类命令的输入：是返回原因，不是返回 None。"""
+
+        for prefix in COMMAND_PREFIXES[kind]:
+            if path.startswith(prefix):
+                return f"改动落在 {prefix} 下"
+        if path in COMMAND_FILES[kind]:
+            return f"改动的 {path} 是这类命令的输入文件"
+        if kind == "go":
+            frozen = self.frozen()
+            if frozen is None:
+                return f"{self._frozen_error}，对后端测试失败关闭"
+            if path in frozen:
+                return "改动的路径在冻结台账里登记（冻结类 Go 测试比对它的当前摘要）"
+        if kind in ("go", "frontend"):
+            tokens = self.tokens(kind)
+            who = "后端" if kind == "go" else "前端"
+            for suffix in self._suffixes(path):
+                if suffix in tokens:
+                    return f"{who}源码里提到了 {suffix}"
+            parts = path.split("/")[:-1]   # 提到的是改动文件所在的（非通用）目录：枚举或读整个目录，目录下的任何改动都算
+            for end in range(len(parts), 1, -1):
+                directory = "/".join(parts[:end])
+                for suffix in self._suffixes(directory):
+                    if "/" in suffix and suffix in tokens:
+                        return f"{who}源码里提到了目录 {suffix}"
+        return None
+
+
+def command_decisions(inputs: CommandInputs, changes: Sequence[tuple[str, str]]) -> dict[str, dict[str, Any]]:
+    """每个可筛选的命令门禁项：改动与它的输入相交就 ``run``（写明命中的改动与原因，最多三条），不相交就 ``skip``。"""
+
+    out: dict[str, dict[str, Any]] = {}
+    for gate, kind in COMMAND_GATE_KINDS.items():
+        hits = []
+        for status, path in changes:
+            why = inputs.reason(kind, path)
+            if why is not None:
+                hits.append({"file": path, "status": status, "reason": why})
+                if len(hits) >= 3:
+                    break
+        out[gate] = {"kind": kind, "decision": "run" if hits else "skip", "hits": hits}
+    return out
+
+
+def _command_selection(tree: Path, data: Mapping[str, Any], changes: Sequence[tuple[str, str]],
+                       fail_closed: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """命令门禁项的筛选结果（登记进 selection，由入口门禁据此从清单里拿掉跳过的门禁项）。改动路径不认识时全部照跑。"""
+
+    if any(str(item["reason"]).startswith("改动路径不在已登记的目录范围") for item in fail_closed):
+        why = "改动路径不在已登记的目录范围：命令门禁项一律照跑"
+        gates = {gate: {"kind": kind, "decision": "run", "hits": [{"file": str(fail_closed[0]["file"]), "status": "?", "reason": why}]}
+                 for gate, kind in COMMAND_GATE_KINDS.items()}
+    else:
+        gates = command_decisions(CommandInputs(tree, tracked_files(tree), data["generic_refs"]), changes)
+    return {"model": COMMAND_MODEL, "gates": gates, "skipped_gates": sorted(gate for gate, row in gates.items() if row["decision"] == "skip")}
 
 
 def _dependency_pull(selector: Selector, data: Mapping[str, Any], tree: Path, changes: Sequence[tuple[str, str]], head: str,

@@ -953,6 +953,7 @@ def _apply_auto_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Seq
     if selection["scope"] == GATE_SCOPE_FULL:
         info["fallback_reason"] = "；".join(selection["fallback_reasons"])
     manifest["selection"] = selection
+    _apply_command_selection(manifest, selection)
 
 
 def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequence[str], gate_scope: str, select_base: str | None,
@@ -984,6 +985,35 @@ def apply_gate_scope(manifest: dict[str, Any], tree: Path, *, gates_wanted: Sequ
         raise ValueError("按客户端筛选不能与读集合同、收窄提案、固定79接线同用（这些走全集）")
     manifest["selection"] = _ownership().select(tree, client=select_client, base=select_base, include_claude=include_claude,
                                                 force_modules=force_modules)
+    _apply_command_selection(manifest, manifest["selection"])
+
+
+def _apply_command_selection(manifest: dict[str, Any], selection: Mapping[str, Any]) -> None:
+    """依赖精度下的命令门禁项筛选（OPT-02 第二轮）：选择器（``unit_ownership.select``）按真实输入路径判定后端／前端门禁项，改动与输入不相交的门禁项
+    连同它的命令单元从清单里拿掉。拿掉不是"缺失"：每个门禁项的判定、命中的改动与原因都登记在清单的 ``selection.commands``（带自摘要，随运行清单发布），
+    入口门禁总摘要的 ``client_selection.commands_skipped`` 回显跳过的门禁项。没有 ``commands`` 键（旧口径、回退全集）时什么都不动，清单与改造前逐字相同。
+
+    只拿掉"整个门禁项只有命令单元、没有测试组"的门禁项，而且只拿掉不被其它保留门禁项引用的单元，清单的闭合要求（每个单元属于某个门禁项）保持成立。"""
+
+    commands = selection.get("commands")
+    if not isinstance(commands, Mapping):
+        return
+    skipped = {gate for gate, row in (commands.get("gates") or {}).items() if isinstance(row, Mapping) and row.get("decision") == "skip"}
+    kept: list[dict[str, Any]] = []
+    dropped_units: set[str] = set()
+    dropped_gates: list[str] = []
+    for gate in manifest["gates"]:
+        if gate["gate_id"] in skipped and not gate.get("test_groups") and not gate.get("not_executed"):
+            dropped_units.update(gate["units"])
+            dropped_gates.append(gate["gate_id"])
+        else:
+            kept.append(gate)
+    still_used = {unit_id for gate in kept for unit_id in gate["units"]}
+    dropped_units -= still_used
+    if dropped_gates:
+        manifest["gates"] = kept
+        manifest["units"] = [unit for unit in manifest["units"] if unit["unit_id"] not in dropped_units]
+        manifest["command_gates_skipped"] = sorted(dropped_gates)   # 实际从清单里拿掉的门禁项（决定与原因在 selection.commands 里）
 
 
 def _module_of(unit_id: str) -> str:
@@ -2840,6 +2870,9 @@ def export_records(
                       "skipped_modules": [row.get("module") for row in chosen.get("skipped") or []],
                       "modules_total": len(modules), "modules_skipped": sum(1 for state in modules.values() if state == "skip"),
                       "modules_pulled": len(chosen.get("pulled") or []), "advisories": len(chosen.get("advisories") or [])}
+        if isinstance(chosen.get("commands"), dict):
+            # 依赖精度的命令门禁项筛选：跳过的门禁项逐个回显（判定与原因在清单的 selection.commands 里，带自摘要）。
+            scope_info["commands_skipped"] = list(manifest.get("command_gates_skipped") or [])
         entry["client_selection"] = scope_info
         for key in ("full_gates_summary", "preflight"):
             if entry.get(key):
