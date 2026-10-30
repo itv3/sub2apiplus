@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "399eb2702ba3d130d9c7b4fafb7a214db4cfe6f8e405d434e3d054ab7b40b97c",
+      "sha256": "cd1f75b763c74995a901de3c670fbe402615f7da1a2f3d4bd138ff3c65f82a72",
       "mode": "0600",
-      "bytes": 158046
+      "bytes": 160542
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -178,9 +178,9 @@
     },
     {
       "path": "driver/entry-dryrun.sh",
-      "sha256": "3894caae2a90f1719ee001a3f72fe41997af3f68194ae1ee9e39115163083a5b",
+      "sha256": "ab6e72163bb127868a91300883735d764c43828641a8de7d9bba6e86718ca9c5",
       "mode": "0700",
-      "bytes": 4522
+      "bytes": 5766
     },
     {
       "path": "driver/entry-gates.sh",
@@ -214,9 +214,9 @@
     },
     {
       "path": "driver/entry_housekeeping.py",
-      "sha256": "9498504ca6253bed7a1f3c803932c8df0860d4fca7ad1e268daf230520820fba",
+      "sha256": "cf19631972592984779905e2160f25c4f6d9be1e62397c2694b1e7a5c6379d64",
       "mode": "0700",
-      "bytes": 38476
+      "bytes": 58986
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -358,15 +358,15 @@
     },
     {
       "path": "driver/local/local-full-regression.sh",
-      "sha256": "47981fe07de01fd75108891ed92b76471ee140a473a18c81451120f092b60b03",
+      "sha256": "3291bb86c6462bcb2c1d07fc4ef5d9c2049ba878e8c57f8b2889af1392dec783",
       "mode": "0700",
-      "bytes": 1994
+      "bytes": 2227
     },
     {
       "path": "driver/local/local-gate.sh",
-      "sha256": "a1b52ab6cd3eec4f74dae133a8758c706130af612d3adeb23b99745cae87b1c9",
+      "sha256": "94e2dacd21987d02db50ceed96352415940aaa1a8e27b7d4ad2a55564b9c1cf0",
       "mode": "0700",
-      "bytes": 4376
+      "bytes": 4609
     },
     {
       "path": "driver/local/local-upload.sh",
@@ -514,15 +514,15 @@
     },
     {
       "path": "driver/pipeline/pipeline-lib.sh",
-      "sha256": "fe26de44f036d165bc2fae4cce3cbd849d101a6f340d45858a80c46411db458e",
+      "sha256": "54a07654cd92dbe6f1d58361c3f98c67e276bf8bf6509707a16281b342b6d14e",
       "mode": "0700",
-      "bytes": 12395
+      "bytes": 12447
     },
     {
       "path": "driver/pipeline/pipeline.env.example",
-      "sha256": "4ecc6ee49157955f46ceba31df26555ab90f00e070bef4b4e1e974fab1dbaf7f",
+      "sha256": "87511f083d2d0e6cb0567b6a4ed847cf2e847c7e3e5ff960ce547113f369fd6e",
       "mode": "0600",
-      "bytes": 2865
+      "bytes": 3237
     },
     {
       "path": "driver/pipeline/post-bgv.sh",
@@ -592,9 +592,9 @@
     },
     {
       "path": "driver/pipeline/vc-pipeline.sh",
-      "sha256": "13d64f1eeccdee72040bde765483fd22c1957f00266dc9a05ef489358e7f1cb8",
+      "sha256": "3cfd1f5d03bcffdc739deb993a7abb43b360d5934d31e2686a7084235252c7ae",
       "mode": "0700",
-      "bytes": 62686
+      "bytes": 64158
     },
     {
       "path": "driver/pipeline/vc2/gen_vc1_seal_plans.py",
@@ -1167,5 +1167,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "1965959a2159d87345a0f6a2366de622ff4a4848bf45225c79bba2e24a4a419d"
+  "manifest_sha256": "b82577acea4d4251301f76bde692ca0d176dfc35c1a617799b19d41812fc6300"
 }

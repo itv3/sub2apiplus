@@ -199,9 +199,17 @@ class Sandbox:
             echo "BGV $*" >> "{self.log}"
             exit 0
         """)
+        # 假 entry-dryrun.sh：记录调用；disk-watch 回放一份可回收清单（真实 disk-watch 另有 test_ci_entry_housekeeping 覆盖）。
         _write(d / "entry-dryrun.sh", f"""
             #!/bin/bash
             echo "HOUSEKEEPING $*" >> "{self.log}"
+            if [ "$1" = disk-watch ]; then
+              echo "根盘水位：已用 66%（停线 69%），可用 47 GiB（下限 40 GiB）；已到预警线"
+              echo "可回收清单（按 dry-run 估算，未删除任何东西）："
+              echo "  - Go 编译缓存旧条目（6 小时以上没用过）：120 项，约 900 MiB（housekeeping 自动清）"
+              echo "  - 部署回滚备份与文档事务目录：40 项，约 1500 MiB（housekeeping 自动清）"
+              [ -f "{self.root}/disk_watch.rc" ] && exit "$(cat "{self.root}/disk_watch.rc")"
+            fi
             exit 0
         """)
         # 假 vc5-precheck.sh：--consume 恒通过（＝准入收据已存在）；--dry-run 回放 precheck_dryrun.json（缺省为库表前置全绿的 ready 报告），
@@ -683,6 +691,92 @@ class Vc6RetryPolicyTests(SandboxCase):
         result = self.sb.stage_pipeline("--from", "VC6", "--to", "VC6", PIPE_RETRY_MAX="1", STUB_REPLAY_FAILS="99")
         self.assertEqual(result.returncode, 1)
         self.assertIn("STOPPED VC6", "\n".join(self.sb.status_lines()))
+
+
+# ======================================================================================================
+# 二之二、根盘预警：达到水位（停线前 5 个百分点或可用不足 45 GiB）时提前提示并给出可回收清单，不停也不删
+# ======================================================================================================
+class DiskEarlyWarningTests(SandboxCase):
+    """每个阶段起跑前的磁盘检查通过之后，离停线（69%、可用不低于 40 GiB）已不远时，流水线写 DISKNOTE 并调 entry-dryrun.sh disk-watch。"""
+
+    def _df(self, used_percent: int, avail_gib: int) -> None:
+        _write(self.sb.bin / "df", f"""
+            #!/bin/bash
+            echo "Filesystem Size Used Avail Use% Mounted"
+            echo "/dev/stub 100G {used_percent}G {avail_gib}G {used_percent}% /"
+        """)
+
+    def _run_vc6(self, **extra: str) -> subprocess.CompletedProcess:
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(5)
+        (sb.runroot / "vc5-admission.json").write_text("{}", encoding="utf-8")
+        _write(sb.pipe / "vc6" / "ok.sh", f"""
+            #!/bin/bash
+            touch "{sb.newdir}/control/vc/vc-6-checkpoint.json"
+            exit 0
+        """)
+        (sb.prep / "vc6").mkdir(parents=True, exist_ok=True)
+        (sb.prep / "vc6" / "ORDER.txt").write_text("run     ok    ok.sh\n", encoding="utf-8")
+        return sb.stage_pipeline("--from", "VC6", "--to", "VC6", **extra)
+
+    def _notes(self) -> list[str]:
+        return [line for line in self.sb.status_lines() if " DISKNOTE " in line]
+
+    def test_plenty_of_room_prints_no_note_and_does_not_call_disk_watch(self) -> None:
+        self._df(40, 60)
+        result = self._run_vc6()
+        self.assertEqual(result.returncode, 0, result.stdout[-800:] + result.stderr[-800:])
+        self.assertEqual(self._notes(), [])
+        self.assertNotIn("HOUSEKEEPING disk-watch", self.sb.events())
+
+    def test_close_to_the_stop_line_notes_the_margin_and_lists_what_to_reclaim_but_keeps_going(self) -> None:
+        """根盘 66%（停线 69%）、可用 47G：越线前提示，清单取自 disk-watch；流水线照常通过，不跑 housekeeping、不删。"""
+
+        self._df(66, 47)
+        result = self._run_vc6()
+        self.assertEqual(result.returncode, 0, result.stdout[-800:] + result.stderr[-800:])
+        text = "\n".join(self._notes())
+        self.assertIn("已到预警线", text)
+        self.assertIn("停线 69%", text)
+        self.assertIn("距停线约 3 个百分点", text)
+        self.assertIn("可用比下限多 7G", text)
+        self.assertIn("可回收清单", text)
+        self.assertIn("Go 编译缓存旧条目", text)
+        self.assertIn("部署回滚备份与文档事务目录", text)
+        self.assertEqual(self.sb.events().count("HOUSEKEEPING disk-watch"), 1)
+        self.assertNotIn("HOUSEKEEPING housekeeping", self.sb.events(), "预警只提示，不替人清盘")
+        self.assertNotIn("DISKWARN", "\n".join(self.sb.status_lines()))
+        self.assertTrue((self.sb.prep / "pipeline" / "disk-watch-VC6.out").is_file())
+        self.assertIn("PASS VC6", "\n".join(self.sb.status_lines()))
+
+    def test_low_free_space_alone_also_triggers_the_note(self) -> None:
+        self._df(50, 44)   # 已用只有 50%，但可用 44G 比 40G 下限只多 4G（< 5G）
+        result = self._run_vc6()
+        self.assertEqual(result.returncode, 0, result.stdout[-800:] + result.stderr[-800:])
+        self.assertIn("可用比下限多 4G", "\n".join(self._notes()))
+
+    def test_margins_are_configurable_and_a_failing_disk_watch_does_not_stop_the_pipeline(self) -> None:
+        self._df(66, 47)
+        result = self._run_vc6(PIPE_DISK_WARN_PCT_MARGIN="1", PIPE_DISK_WARN_GIB_MARGIN="1")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self._notes(), [], "预警线改成停线前 1 个百分点／多 1G 后，66%／47G 不再提示")
+        shutil.rmtree(self.sb.prep, ignore_errors=True)
+        (self.sb.prep / "pipeline").mkdir(parents=True)
+        (self.root / "disk_watch.rc").write_text("5", encoding="utf-8")   # disk-watch 自己失败：只记 rc，流水线照常
+        again = self._run_vc6()
+        self.assertEqual(again.returncode, 0, again.stdout[-800:])
+        self.assertIn("disk-watch rc=5", "\n".join(self._notes()))
+
+    def test_over_the_line_still_stops_after_housekeeping_and_prints_no_early_note(self) -> None:
+        self._df(70, 60)
+        result = self._run_vc6()
+        self.assertEqual(result.returncode, 1)
+        text = "\n".join(self.sb.status_lines())
+        self.assertIn("DISKWARN VC6", text)
+        self.assertIn("STOPPED VC6", text)
+        self.assertEqual(self._notes(), [])
+        self.assertIn("HOUSEKEEPING housekeeping", self.sb.events())
 
 
 # ======================================================================================================

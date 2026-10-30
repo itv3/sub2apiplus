@@ -21,6 +21,12 @@
 #       单独做一遍日常维护：清 Go 编译缓存里 6 小时以上没用过的条目、清理单元执行记录库（保留期默认 30 天，仍被 v2 认证与
 #       P0 v2 证据引用的运行连同记录与日志都留着）、只留最近 5 次空跑的演练根与产物，再查根盘余量（与 guard.sh 同一条停线，
 #       操作员阈值取参数文件 MIN_FREE_GIB）。--dry-run 只算不删。打印报告；退出码 0 根盘在停线以内，5 越过停线。
+#       同时回收部署留下的回滚备份与文档事务目录（磁盘水位保护）：保留期默认 14 天（--deploy-backup-retention-days，不得短于 7）、每组另留
+#       最近 8 个（--keep-deploy-backups），保留期内改过的收据／证据里仍写着名字的也不动；--no-deploy-backups 关掉这一项。本机 Go 编译缓存超过
+#       30 GiB（--go-cache-warn-gib）时报告里 warnings 有警告。
+#   disk-watch [--json]       只读：根盘水位预警与可回收清单。已用到停线前 5 个百分点（缺省）或可用不足 45 GiB 时，列出日常维护能回收的各项
+#                              及各自能腾多少（dry-run 估算）；余量充足只打一行。越过停线退出码 5，其余 0。流水线每阶段起跑前自动调用。
+#   go-cache-check [--go-cache auto|<目录>] [--warn-gib <GiB>]   只读：本机 Go 编译缓存超过阈值（缺省 30 GiB）就警告，退出码恒为 0。
 #   stop [--reason <原因>]   停下在跑的空跑（空跑与前台入口门禁共用调度器；background-validate.sh stop 已连空跑一起停）
 #   status                    打印全部结论（$RUNROOT/entry-dryrun/）
 set -Eeuo pipefail; umask 077
@@ -33,7 +39,9 @@ case "$command" in
     if [ "$#" -lt 3 ]; then echo "用法：bash entry-dryrun.sh start <bundle 绝对路径> <分支> <40 位提交> [--opening|--reexecute|--unit-inherit-request <请求>] [--unit-inherit-full-gates-request <配套请求>] [--audit-policy <策略>] [--to <步骤>]" >&2; exit 2; fi
     exec "${DR[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" --bundle "$1" --branch "$2" --commit "$3" "${@:4}" ;;
   housekeeping) exec python3 -B "$DRV/entry_housekeeping.py" run --data-root "$D" --runroot "$RUNROOT" --min-free-gib "${MIN_FREE_GIB:-40}" "$@" ;;
+  disk-watch) exec python3 -B "$DRV/entry_housekeeping.py" disk-watch --data-root "$D" --runroot "$RUNROOT" --min-free-gib "${MIN_FREE_GIB:-40}" "$@" ;;
+  go-cache-check) exec python3 -B "$DRV/entry_housekeeping.py" go-cache-check "$@" ;;
   stop) exec "${DR[@]}" stop --runroot "$RUNROOT" "$@" ;;
   status) exec "${DR[@]}" status --runroot "$RUNROOT" ;;
-  *) echo "用法：bash entry-dryrun.sh start|housekeeping|stop|status …" >&2; exit 2 ;;
+  *) echo "用法：bash entry-dryrun.sh start|housekeeping|disk-watch|go-cache-check|stop|status …" >&2; exit 2 ;;
 esac

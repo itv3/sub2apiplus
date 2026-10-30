@@ -8,6 +8,8 @@ set -u
 ROUND="$1"; C="$2"; DC="$3"; RECEIPT="$4"; OUTROOT="$5"
 REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Developer/.sub2apiplus-gates}
 OUT=$OUTROOT/local-gates; IMPL=$OUTROOT/impl-logs; T=$GATES_ROOT/wt-D; TC=$GATES_ROOT/wt-C
+# 本机 Go 编译缓存超阈值（缺省 30 GiB）只警告不拦：10-29 缓存涨到 109G、数据盘只剩 7.5G，门禁中途盘满。
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/../entry_housekeeping.py" go-cache-check || true
 rm -rf "$OUT" "$IMPL"; mkdir -p "$OUT" "$IMPL/cross-check"
 : "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
 export CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"

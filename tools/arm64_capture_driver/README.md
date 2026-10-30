@@ -796,6 +796,22 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   没有收据或账本引用）每组只留最近 2 份（E4-03），再查根盘：越过停线（与 `guard.sh` 同一条：已用超过 69%，或可用少于
   40 GiB 与 `MIN_FREE_GIB` 中较大的那个）就不跑，结论 failed、没通过的一步记 `disk`。报告摘要在结论的 `housekeeping`，全文在
   结论旁的 `<结论名>.housekeeping.json`。单独做一遍：`bash entry-dryrun.sh housekeeping [--dry-run]`（退出码 5＝越过停线）。
+* 磁盘水位保护（`driver/entry_housekeeping.py`，与上面的日常维护同一个文件，不另起一套）：
+  * **部署备份与事务目录自动回收**：每次受监督部署在数据根 `control/` 留一份 `<根名>-backup-before-<摘要前缀>-<UTC>-<随机串>`
+    （受管工具、断言准备器等的回滚备份，约 35～40 MiB），在 `docs/` 留一份文档事务目录 `.codex-<版本号>-deploy-<UTC>-<随机串>` 或
+    `.managed-deploy-…`。日常维护现在会回收它们：保留期默认 14 天（`--deploy-backup-retention-days`，不得短于 7 天）内的不动；
+    备份按根名分组、事务目录合成一组，每组另留最近 8 个（`--keep-deploy-backups`）；保留期之外的，若 `control`、`evidence` 下保留期内修改过的
+    收据／证据／账本里仍写着它的名字也不动（身份裁定会读“attempt 开始后第一份部署”的回滚备份）；其余先改名成 `.gc-trash-<原名>` 再删，
+    中断后下次先清遗留，删不动就放回原名。`--dry-run` 只算不删，`--no-deploy-backups` 关掉这一项。报告在 `deploy_backups`。
+  * **本机 Go 编译缓存告警**：缓存超过 30 GiB（`--go-cache-warn-gib`）时日常维护报告的 `warnings` 有警告；`bash entry-dryrun.sh go-cache-check
+    [--go-cache <目录>] [--warn-gib <GiB>]` 单独检查，退出码恒为 0（只警告，不拦）。本机门禁入口脚本 `driver/local/local-gate.sh`、
+    `local-full-regression.sh` 开跑前各调用一次。
+  * **根盘预警**：`bash entry-dryrun.sh disk-watch [--json]` 只读，已用到停线前 5 个百分点（停线 69% 时即 ≥ 64%）或可用不足 45 GiB
+    （停线 40 GiB 加 5 GiB；`--warn-percent`／`--warn-gib` 可调）时，列出日常维护能回收的各项及各自能腾多少（dry-run 估算：Go 编译缓存旧条目、
+    旧空跑、旧暂存树、部署备份与事务目录；记录库另按保留期与引用判定，不在估算里）；余量充足只打一行；越过停线退出码 5。
+    `vc-pipeline.sh` 每个阶段起跑前的磁盘检查通过后调用它，把预警与清单写进 `vc-status.txt`（`DISKNOTE` 行，全文 `disk-watch-<阶段>.out`），
+    只提示不停、不删；预警线可用 `pipeline.env` 的 `PIPE_DISK_WARN_PCT_MARGIN`（缺省 5）、`PIPE_DISK_WARN_GIB_MARGIN`（缺省 5）调整。
+    越过停线仍走原来的 `DISKWARN`：先跑 housekeeping，仍超线才 `STOPPED`。
 * 停：`bash entry-dryrun.sh stop`。空跑与前台入口门禁共用调度器和入口门禁工作目录，修复轮跑定向回归之前要停下——
   `background-validate.sh stop`（修好接着跑的 regression 步骤会执行）连空跑一起停。
 * 结论：`$RUNROOT/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute][-to-<终点>].json`（`entry-dryrun/v1`；终点不是

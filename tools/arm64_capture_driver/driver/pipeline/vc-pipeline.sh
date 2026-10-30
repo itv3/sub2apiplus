@@ -85,9 +85,23 @@ stop() { log "STOPPED $1 :: $2"; exit 1; }
 others_running() {
   pgrep -af '[e]ntry_orchestrator.py|[b]ackground_validation.py (start|run|reuse)|[e]ntry-gates.sh|[c]hain-rehearsal|[a]rm64-vc4-gates.sh|[v]c4-all.sh|[v]c5-all.sh|[v]c23(-seq)?\.sh|[e]ntry-dryrun.sh start|[s]tart-entry.sh' | grep -v 'vc-pipeline.sh' || true
 }
+# 根盘预警线（磁盘水位保护）：离停线还有余量时提前提示，不停、不删。预警＝距停线不足 PIPE_DISK_WARN_PCT_MARGIN 个百分点（缺省 5，
+# 即停线 69% 时已用 ≥ 64%）或可用不足 40 + PIPE_DISK_WARN_GIB_MARGIN GiB（缺省 +5）。到预警线就调 entry-dryrun.sh disk-watch 打出可回收清单
+# （日常维护会回收的各项各能腾多少，dry-run 估算），写进状态文件，让调度者在越线停下之前就能先腾盘。清单取不到不影响流水线。
+disk_early_warning() { # $1 阶段 $2 停线百分比
+  local limit=${2:-69} pm=${PIPE_DISK_WARN_PCT_MARGIN:-5} gm=${PIPE_DISK_WARN_GIB_MARGIN:-5} pct gib
+  pct=$(disk_pct); gib=$(disk_gib)
+  if [ "${pct}" -lt $((limit - pm)) ] && [ "${gib}" -ge $((40 + gm)) ]; then return 0; fi
+  log "DISKNOTE $1 根盘 $(disk_txt)，已到预警线（停线 ${limit}%/可用不低于 40G；预警＝停线前 ${pm} 个百分点或可用不足 $((40 + gm))G），距停线约 $((limit - pct)) 个百分点、可用比下限多 $((gib - 40))G"
+  (cd "${DRV}" && bash entry-dryrun.sh disk-watch > "${PDIR}/disk-watch-$1.out" 2>&1)
+  local rc=$?
+  log "DISKNOTE $1 可回收清单（disk-watch rc=${rc}，全文 ${PDIR}/disk-watch-$1.out；执行：bash entry-dryrun.sh housekeeping）："
+  head -n 12 "${PDIR}/disk-watch-$1.out" 2>/dev/null | while IFS= read -r line; do log "DISKNOTE $1 | ${line}"; done
+  return 0
+}
 disk_guard() { # $1 阶段 $2 停线百分比（缺省 69）
   local limit=${2:-69}
-  if [ "$(disk_pct)" -le "${limit}" ] && [ "$(disk_gib)" -ge 40 ]; then return 0; fi
+  if [ "$(disk_pct)" -le "${limit}" ] && [ "$(disk_gib)" -ge 40 ]; then disk_early_warning "$1" "${limit}"; return 0; fi
   log "DISKWARN $1 根盘 $(disk_txt)，超线 ${limit}%，先跑 housekeeping"
   (cd "${DRV}" && bash entry-dryrun.sh housekeeping > "${PDIR}/housekeeping-guard-$1.out" 2>&1)
   if [ "$(disk_pct)" -le "${limit}" ] && [ "$(disk_gib)" -ge 40 ]; then log "DISKWARN $1 housekeeping 后恢复：$(disk_txt)"; return 0; fi

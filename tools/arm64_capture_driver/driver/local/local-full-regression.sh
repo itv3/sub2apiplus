@@ -8,6 +8,8 @@ REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Develo
 : "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
 export CODEX_SPEC_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
 TS=$REPO/frontend/node_modules/typescript/lib/typescript.js
+# 本机 Go 编译缓存超阈值（缺省 30 GiB）只警告不拦：10-29 缓存涨到 109G、数据盘只剩 7.5G，门禁中途盘满。
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/../entry_housekeeping.py" go-cache-check || true
 mkdir -p "$OUT"
 test "$(git -C $T rev-parse HEAD)" = "$DC"; test -z "$(git -C $T status --porcelain --untracked-files=all)"
 cd "$T"; START=$(date -u +%Y-%m-%dT%H:%M:%SZ); S0=$(date +%s)

@@ -451,6 +451,303 @@ class DiskLineTests(unittest.TestCase):
         self.assertTrue(report["disk"]["ok"])
 
 
+def _stamp(days_ago: float) -> str:
+    """部署名字里的 UTC 时间戳（与部署脚本的 utc_stamp().lower() 同一格式），相对 NOW 往前推 ``days_ago`` 天。"""
+
+    return time.strftime("%Y%m%dt%H%M%Sz", time.gmtime(NOW - days_ago * DAY))
+
+
+class DeployBackupReclaimTests(unittest.TestCase):
+    """磁盘水位保护：housekeeping 自动回收部署回滚备份与文档事务目录（保留期可配）。
+
+    三道闸缺一不回收：①每组最近 N 个之内；②部署时间在保留期之内；③保留期内修改过的收据／证据里仍写着名字。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.data = self.base / "data"
+        for sub in ("control", "docs", "evidence"):
+            (self.data / sub).mkdir(parents=True)
+        self.token = 0
+
+    def backup(self, days_ago: float, kind: str = "managed-tools") -> Path:
+        self.token += 1
+        path = self.data / "control" / f"{kind}-backup-before-{'ab' * 6}-{_stamp(days_ago)}-{self.token:08x}"
+        path.mkdir()
+        (path / "tool.py").write_bytes(b"x" * 1000)
+        return path
+
+    def transaction(self, days_ago: float, prefix: str = ".codex-01650-deploy") -> Path:
+        self.token += 1
+        path = self.data / "docs" / f"{prefix}-{_stamp(days_ago)}-{self.token:08x}"
+        path.mkdir()
+        (path / "doc.md").write_bytes(b"d" * 500)
+        return path
+
+    def prune(self, **kwargs) -> dict:
+        return hk.prune_deploy_backups(self.data, now=NOW, **kwargs)
+
+    def test_old_backups_beyond_the_newest_few_are_removed_and_the_rest_stay(self) -> None:
+        # 10 个备份，1～10 天前各一个再加 5 个 30～70 天前的；保留期 14 天、每组最近 3 个。
+        recent = [self.backup(day) for day in (1, 2, 3, 5, 8, 12)]
+        old = [self.backup(day) for day in (20, 30, 45, 60, 70)]
+        report = self.prune(retention_days=14, keep_latest=3)
+        self.assertEqual(sorted(report["removed"]), sorted(path.name for path in old))
+        self.assertEqual(report["removed_bytes"], 5 * 1000)
+        for path in recent:
+            self.assertTrue(path.is_dir(), f"保留期内的不能动：{path.name}")
+        for path in old:
+            self.assertFalse(path.exists())
+        self.assertEqual(report["groups"]["managed-tools"], {"total": 11, "newest_kept": 3, "within_retention": 3, "candidates": 5,
+                                                             "referenced": 0, "removed": 5})
+
+    def test_newest_few_of_each_group_survive_even_when_all_are_old(self) -> None:
+        tools = [self.backup(day) for day in (20, 30, 40, 50, 60)]
+        preparer = [self.backup(day, "assertion-preparer") for day in (25, 35)]
+        report = self.prune(retention_days=14, keep_latest=3)
+        self.assertEqual(sorted(path.name for path in (self.data / "control").iterdir()),
+                         sorted(path.name for path in (*tools[:3], *preparer)), "每组各自留最近 3 个，工具备份 5 个只剩 3 个，准备器 2 个全留")
+        self.assertEqual(len(report["removed"]), 2)
+
+    def test_transaction_dirs_form_one_group_across_versions(self) -> None:
+        old_version = [self.transaction(day, ".codex-01640-deploy") for day in (20, 22, 24, 26)]
+        current = [self.transaction(day) for day in (1, 3)]
+        managed = [self.transaction(day, ".managed-deploy") for day in (30, 40)]
+        report = self.prune(retention_days=14, keep_latest=3)
+        survivors = {path.name for path in (self.data / "docs").iterdir()}
+        # 合成一组：最近 3 个是 current 两个加 old_version 最新的一个；其余都超过 14 天，回收。
+        self.assertEqual(survivors, {current[0].name, current[1].name, old_version[0].name})
+        self.assertEqual(len(report["removed"]), len(old_version) - 1 + len(managed))
+
+    def test_a_recent_file_that_still_names_the_backup_protects_it(self) -> None:
+        referenced, orphan, quiet = self.backup(30), self.backup(31), self.backup(32)
+        self.backup(1), self.backup(2), self.backup(3)   # 最近 3 个，占满“最近 N 个”闸
+        recent_doc = self.data / "evidence" / "verdict.json"
+        recent_doc.write_text(json.dumps({"rollback_backup": str(referenced)}), encoding="utf-8")
+        _age(recent_doc, RECENT)
+        stale_doc = self.data / "control" / "old-receipt.json"      # 只有保留期之外的旧收据提到 orphan：不算保护
+        stale_doc.write_text(json.dumps({"rollback_backup": str(orphan)}), encoding="utf-8")
+        _age(stale_doc, NOW - 40 * DAY)
+        report = self.prune(retention_days=14, keep_latest=3)
+        self.assertTrue(referenced.is_dir())
+        self.assertFalse(orphan.exists())
+        self.assertFalse(quiet.exists())
+        self.assertEqual(report["protected_by_recent_reference"], {referenced.name: str(recent_doc)})
+        self.assertEqual(report["groups"]["managed-tools"]["referenced"], 1)
+
+    def test_dry_run_changes_nothing_and_matches_the_real_run(self) -> None:
+        self.backup(1), self.backup(2), self.backup(3)
+        old = [self.backup(day) for day in (30, 40)]
+        txn = self.transaction(50)
+        self.transaction(1), self.transaction(2), self.transaction(3)
+        dry = self.prune(retention_days=14, keep_latest=3, dry_run=True)
+        self.assertTrue(all(path.is_dir() for path in (*old, txn)), "只算不删")
+        real = self.prune(retention_days=14, keep_latest=3)
+        self.assertEqual((dry["removed"], dry["removed_bytes"]), (real["removed"], real["removed_bytes"]))
+        self.assertEqual(sorted(real["removed"]), sorted(path.name for path in (*old, txn)))
+
+    def test_unrelated_entries_symlinks_and_files_are_never_touched(self) -> None:
+        keep = [self.backup(day) for day in (1, 2, 3)]
+        real_old = self.backup(40)
+        link = self.data / "control" / f"managed-tools-backup-before-{'cd' * 6}-{_stamp(80)}-deadbeef"
+        link.symlink_to(real_old, target_is_directory=True)
+        plain_file = self.data / "control" / f"managed-tools-backup-before-{'ef' * 6}-{_stamp(81)}-feedface"
+        plain_file.write_bytes(b"file")
+        bystander = self.data / "control" / "codex-0.165.0-timing-ledger"
+        bystander.mkdir()
+        wrong_shape = self.data / "control" / "managed-tools-backup-before-notes"
+        wrong_shape.mkdir()
+        self.prune(retention_days=14, keep_latest=3)
+        self.assertFalse(real_old.exists())
+        self.assertTrue(link.is_symlink() and plain_file.is_file() and bystander.is_dir() and wrong_shape.is_dir())
+        self.assertTrue(all(path.is_dir() for path in keep))
+
+    def test_trash_from_an_interrupted_run_is_cleared_and_a_failed_delete_puts_the_directory_back(self) -> None:
+        for day in (1, 2, 3):
+            self.backup(day)
+        leftover = self.data / "control" / (hk.TRASH_MARK + self.backup(50).name)
+        (self.data / "control" / leftover.name[len(hk.TRASH_MARK):]).rename(leftover)
+        report = self.prune(retention_days=14, keep_latest=3)
+        self.assertFalse(leftover.exists())
+        self.assertEqual(report["trash_leftovers_removed"], 1)
+        victim = self.backup(60)
+        with unittest.mock.patch.object(hk.shutil, "rmtree", side_effect=OSError("删不动")), self.assertRaises(OSError):
+            self.prune(retention_days=14, keep_latest=3)
+        self.assertTrue(victim.is_dir(), "删不动就放回原名，下次重新判定")
+
+    def test_retention_floor_and_bad_arguments(self) -> None:
+        for kwargs in ({"retention_days": 6.9}, {"retention_days": 14, "keep_latest": 0}):
+            with self.assertRaises(hk.HousekeepingError):
+                self.prune(**kwargs)
+        self.assertEqual(self.prune(retention_days=7)["status"], "absent")   # 没有任何备份：不是错误
+
+    def test_run_reclaims_by_default_and_can_be_switched_off(self) -> None:
+        for day in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+            self.backup(day)
+        old = self.backup(60)
+        with unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=types.SimpleNamespace(
+                total=100 * 2 ** 30, used=50 * 2 ** 30, free=50 * 2 ** 30)):
+            skipped = hk.run(data_root=self.data, runroot=self.base / "run", go_cache="off", deploy_retention_days=None)
+            self.assertNotIn("deploy_backups", skipped)
+            self.assertTrue(old.is_dir())
+            report = hk.run(data_root=self.data, runroot=self.base / "run", go_cache="off")
+        self.assertEqual(report["deploy_backups"]["removed"], [old.name])
+        self.assertFalse(old.exists())
+
+
+class DiskWatchTests(unittest.TestCase):
+    """起跑前的磁盘预警：离停线还有余量时提前提示并给出可回收清单（不删任何东西）。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.data, self.runroot = self.base / "data", self.base / "run"
+        for sub in ("control", "docs", "evidence", "staging"):
+            (self.data / sub).mkdir(parents=True)
+        # 造出四类可回收物：旧部署备份与事务目录、旧暂存树（当前树在）、旧空跑、Go 缓存旧条目。
+        self.old_backup = self.data / "control" / f"managed-tools-backup-before-{'ab' * 6}-{_stamp(60)}-00000001"
+        self.old_backup.mkdir()
+        (self.old_backup / "f").write_bytes(b"b" * 4096)
+        for day in (1, 2, 3, 4, 5, 6, 7, 8, 9):    # 保证“最近 8 个”闸被新备份占满
+            fresh = self.data / "control" / f"managed-tools-backup-before-{'cd' * 6}-{_stamp(day)}-{day:08x}"
+            fresh.mkdir()
+        for day in (1, 2, 3, 4, 5, 6, 7, 8, 9):    # 事务目录合成一组，同样要有最近 8 个占满，老的才轮得到回收
+            (self.data / "docs" / f".codex-01650-deploy-{_stamp(day)}-{day:08x}").mkdir()
+        self.old_txn = self.data / "docs" / f".codex-01650-deploy-{_stamp(70)}-0000000a"
+        self.old_txn.mkdir()
+        (self.old_txn / "d").write_bytes(b"t" * 2048)
+        (self.data / "staging" / "codex-x-managed-tools").mkdir()
+        for stamp in ("20260901t000000z", "20260902t000000z", "20260903t000000z"):
+            tree = self.data / "staging" / f"codex-x-managed-tools.superseded-{stamp}"
+            tree.mkdir()
+            (tree / "f").write_bytes(b"s" * 1024)
+        self.cache = self.base / "go-build"
+        (self.cache / "ab").mkdir(parents=True)
+        stale = self.cache / "ab" / "old"
+        stale.write_bytes(b"g" * 8192)
+        _age(stale, NOW - 10 * 3600)
+
+    def usage(self, used_percent: float, free_gib: float) -> object:
+        total = 142 * 2 ** 30
+        fake = types.SimpleNamespace(total=total, used=int(total * used_percent / 100), free=int(free_gib * 2 ** 30))
+        return unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=fake)
+
+    def watch(self, **kwargs) -> dict:
+        return hk.disk_watch(data_root=self.data, runroot=self.runroot, go_cache=str(self.cache), **kwargs)
+
+    def test_close_to_the_stop_line_warns_and_lists_what_can_be_reclaimed_without_deleting(self) -> None:
+        """根盘 66%（停线 69%）、可用 47 GiB：还没越线，但到了预警线；清单列出四类可回收物，现场一个文件都没少。"""
+
+        with self.usage(66.0, 47.0):
+            report = self.watch()
+        self.assertFalse(report["over_stop"])
+        self.assertTrue(report["early_warning"])
+        self.assertEqual((report["margin_percent"], report["margin_gib"]), (3.0, 7.0))
+        names = [item["item"] for item in report["reclaimable"]]
+        self.assertEqual(len(names), 4)
+        by_name = {item["item"].split("（")[0]: item for item in report["reclaimable"]}
+        self.assertEqual(by_name["Go 编译缓存旧条目"]["bytes"], 8192)
+        self.assertEqual(by_name["部署留下的旧暂存树"]["count"], 1)
+        self.assertEqual(by_name["部署回滚备份与文档事务目录"]["bytes"], 4096 + 2048)
+        self.assertEqual(by_name["部署回滚备份与文档事务目录"]["count"], 2)
+        self.assertEqual(report["reclaimable_bytes"], sum(item["bytes"] for item in report["reclaimable"]))
+        self.assertTrue(self.old_backup.is_dir() and self.old_txn.is_dir() and (self.cache / "ab" / "old").is_file(), "disk-watch 只读，不删任何东西")
+        text = hk.disk_watch_text(report)
+        for fragment in ("已到预警线", "可回收清单", "Go 编译缓存旧条目", "部署回滚备份与文档事务目录", "housekeeping"):
+            self.assertIn(fragment, text)
+
+    def test_plenty_of_room_stays_quiet_and_skips_the_scan(self) -> None:
+        with self.usage(50.0, 70.0), unittest.mock.patch.object(hk, "prune_deploy_backups", side_effect=AssertionError("余量充足不扫描")):
+            report = self.watch()
+        self.assertFalse(report["early_warning"])
+        self.assertEqual(report["reclaimable"], [])
+        self.assertEqual(len(hk.disk_watch_text(report).splitlines()), 1)
+        self.assertIn("余量充足", hk.disk_watch_text(report))
+
+    def test_each_warning_line_is_independent_and_configurable(self) -> None:
+        cases = [((63.9, 60.0), {}, False),     # 距停线 5.1 个百分点、可用余量 20 GiB：都没到
+                 ((64.0, 60.0), {}, True),      # 刚好停线前 5 个百分点
+                 ((50.0, 45.0), {}, True),      # 可用只比 40 GiB 下限多 5 GiB
+                 ((50.0, 45.1), {}, False),
+                 ((64.0, 60.0), {"warn_percent": 2.0}, False),
+                 ((50.0, 45.0), {"warn_gib": 2.0}, False),
+                 ((68.9, 60.0), {"warn_percent": 2.0}, True)]
+        for (used, free), kwargs, expected in cases:
+            with self.usage(used, free):
+                self.assertEqual(self.watch(**kwargs)["early_warning"], expected, (used, free, kwargs))
+
+    def test_over_the_stop_line_is_reported_with_the_stop_reason(self) -> None:
+        with self.usage(70.0, 41.0):
+            report = self.watch()
+        self.assertTrue(report["over_stop"] and report["early_warning"])
+        self.assertIn("根盘越过停线", report["warnings"][0])
+
+    def test_cli_exit_codes_and_json(self) -> None:
+        argv = ["disk-watch", "--data-root", str(self.data), "--runroot", str(self.runroot), "--go-cache", str(self.cache)]
+        for used, free, code in ((66.0, 47.0, 0), (70.0, 41.0, 5)):
+            with self.usage(used, free), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(hk.main(argv), code)
+            self.assertIn("可回收清单", out.getvalue())
+        with self.usage(66.0, 47.0), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(hk.main([*argv, "--json"]), 0)
+        self.assertTrue(json.loads(out.getvalue())["early_warning"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(hk.main(["disk-watch", "--data-root", "rel", "--runroot", str(self.runroot)]), 2)
+
+    def test_dispatch_script_and_driver_copy_expose_the_new_subcommands(self) -> None:
+        script = (REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry-dryrun.sh").read_text(encoding="utf-8")
+        self.assertIn('disk-watch) exec python3 -B "$DRV/entry_housekeeping.py" disk-watch', script)
+        self.assertIn('go-cache-check) exec python3 -B "$DRV/entry_housekeeping.py" go-cache-check', script)
+
+
+class GoCacheWarningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.cache = self.base / "go-build"
+        (self.cache / "ab").mkdir(parents=True)
+        (self.cache / "ab" / "entry").write_bytes(b"0" * (3 << 20))
+
+    def test_over_the_threshold_warns_and_under_it_does_not(self) -> None:
+        over = hk.go_cache_check(self.cache, warn_gib=1 / 1024)       # 阈值 1 MiB，缓存 3 MiB
+        self.assertTrue(over["over"])
+        self.assertIn("超过告警阈值", over["warning"])
+        self.assertIn("go clean -cache", over["warning"])
+        under = hk.go_cache_check(self.cache, warn_gib=1.0)
+        self.assertFalse(under["over"])
+        self.assertIsNone(under["warning"])
+        self.assertEqual(under["size_bytes"], 3 << 20)
+        self.assertEqual(hk.go_cache_check(None)["status"], "absent")
+        self.assertEqual(hk.go_cache_check(self.base / "nope")["status"], "absent")
+
+    def test_default_threshold_is_thirty_gib(self) -> None:
+        self.assertEqual(hk.GO_CACHE_WARN_GIB, 30.0)
+        self.assertFalse(hk.go_cache_check(self.cache)["over"])
+
+    def test_housekeeping_report_carries_the_warning_without_blocking(self) -> None:
+        fake = types.SimpleNamespace(total=100 * 2 ** 30, used=50 * 2 ** 30, free=50 * 2 ** 30)
+        with unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=fake):
+            report = hk.run(data_root=self.base / "data", runroot=self.base / "run", go_cache=str(self.cache), go_cache_warn_gib=1 / 1024,
+                            dry_run=True)
+        self.assertTrue(report["disk"]["ok"], "只警告，不影响根盘结论")
+        self.assertEqual(len(report["warnings"]), 1)
+        self.assertIn("超过告警阈值", report["warnings"][0])
+        with unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=fake):
+            quiet = hk.run(data_root=self.base / "data", runroot=self.base / "run", go_cache=str(self.cache), dry_run=True)
+        self.assertEqual(quiet["warnings"], [])
+
+    def test_cli_go_cache_check_always_exits_zero(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(hk.main(["go-cache-check", "--go-cache", str(self.cache), "--warn-gib", str(1 / 1024)]), 0)
+        self.assertIn("超过告警阈值", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(hk.main(["go-cache-check", "--go-cache", str(self.cache)]), 0)
+        self.assertIn("未超过", out.getvalue())
+
+
 class DriverCopyTests(unittest.TestCase):
     def test_driver_carries_an_identical_copy(self) -> None:
         self.assertEqual(DRIVER_COPY.read_bytes(), MODULE.read_bytes())

@@ -40,9 +40,27 @@
 摘要，收据、账本与驱动安装记录都不引用旧副本（10-03 只读核实），内容可从部署源仓库按提交重新检出。按名字分组、按时间戳
 每组只留最近 2 份（对比最近两次部署用）；同名的当前暂存树不在时整组不动（布局异常，留给人看）。
 
+部署备份与事务目录（``prune_deploy_backups``，磁盘水位保护）：每次受监督部署在数据根 ``control/`` 留一份
+``<根名>-backup-before-<摘要前缀>-<UTC>-<随机串>``（受管工具、断言准备器等的回滚备份，约 35～40 MiB），在 ``docs/`` 留一份文档事务目录
+``.codex-<版本号>-deploy-<UTC>-<随机串>`` 或 ``.managed-deploy-…``。部署脚本没有回收，0.165 一轮累计 95 个备份 3.7 GiB、133 个事务目录 625 MiB，
+根盘清理后 53%、VC-6 构建后涨到 66%，收尾门禁期间一度 67%（距停线约 4 GB），靠人工手顺腾盘。本函数把手顺固化：
+
+* 保留期（默认 14 天，不得短于 7 天，``--deploy-backup-retention-days`` 可调）内的一律不动；每组（备份按根名分组，事务目录合成一组）
+  另外保留最近 8 个（``--keep-deploy-backups``），部署刚做完回滚还要用；
+* 保留期之外的，若引用扫描发现保留期内修改过的文件（``control``、``evidence`` 下的收据、证据、账本）仍写着它的名字，也不动
+  （指南的身份裁定会读“attempt 开始后第一份部署”的回滚备份，这类引用靠名字扫描保护）；其余才回收；
+* 回收先改名成 ``.gc-trash-<原名>`` 再删，中断后下次先清掉这类遗留；``--dry-run`` 只算不删。
+
+``disk-watch``（磁盘水位保护）：根盘离停线还有余量时给提前提示，不做任何删除。预警线是停线前 5 个百分点（缺省，即已用 ≥ 64%）
+或可用不足 45 GiB（停线 40 GiB 加 5 GiB），打印距停线的余量和**可回收清单**（各项 dry-run 的结果：Go 编译缓存旧条目、旧空跑、旧暂存树、
+部署备份与事务目录各能腾出多少）。``vc-pipeline.sh`` 每个阶段起跑前的磁盘检查通过后调用它。``go-cache-check``：本机 Go 编译缓存
+超过阈值（缺省 30 GiB）时警告（10-29 本机数据盘因 Go 编译缓存涨到 109G、只剩 7.5G；只警告，退出码恒为 0）。
+
 子命令：``run --data-root --runroot [--record-store] [--reference-root …] [--retention-days] [--keep-dryruns]
-[--keep-superseded] [--go-cache auto|off|<目录>] [--min-free-gib] [--dry-run]``：做一遍并打印报告（JSON）；退出码 0 根盘在停线
-以内，5 越过停线，2 用法错误。
+[--keep-superseded] [--deploy-backup-retention-days] [--keep-deploy-backups] [--no-deploy-backups] [--go-cache auto|off|<目录>]
+[--go-cache-warn-gib] [--min-free-gib] [--dry-run]``：做一遍并打印报告（JSON）；退出码 0 根盘在停线以内，5 越过停线，2 用法错误。
+``disk-watch --data-root --runroot [--json] [同上的留存参数]``：只读，打印水位与可回收清单，退出码同上。
+``go-cache-check [--go-cache …] [--warn-gib]``：只读，打印缓存大小与警告，退出码 0。
 """
 
 from __future__ import annotations
@@ -71,6 +89,17 @@ DEFAULT_RETENTION_DAYS = 30.0
 GRACE_HOURS = 24.0
 KEEP_DRYRUNS = 5
 KEEP_SUPERSEDED = 2
+# 部署备份与事务目录：保留期缺省 14 天（一个版本周期约 10 天，再留余量）、下限 7 天，每组另留最近 8 个。
+DEPLOY_BACKUP_RETENTION_DAYS = 14.0
+DEPLOY_BACKUP_MIN_RETENTION_DAYS = 7.0
+KEEP_DEPLOY_BACKUPS = 8
+# 引用扫描里单个文件的大小上限（超过的不看；收据、账本与证据都远小于它）。
+DEPLOY_REFERENCE_MAX_BYTES = 4 << 20
+# 本机 Go 编译缓存告警阈值（GiB）。
+GO_CACHE_WARN_GIB = 30.0
+# 根盘预警线：停线前多少个百分点、可用空间比下限多出多少 GiB 时开始提前提示。
+WATCH_MARGIN_PERCENT = 5.0
+WATCH_MARGIN_GIB = 5.0
 TEMP_MAX_AGE_SECONDS = 86400.0
 # 根盘停线：与 guard.sh 的派发前检查同一组数（已用 ≤69%、可用 ≥30 GiB、可用 ≥ 操作员阈值且不低于 40 GiB）。
 MAX_USED_PERCENT = 69.0
@@ -84,6 +113,9 @@ RUN_ID = re.compile(r"[0-9A-Za-z._-]+")
 GO_ENTRY_DIR = re.compile(r"[0-9a-f]{2}")
 DRYRUN_ROOT = re.compile(r"entry-dryrun-(\d{8}t\d{6}z)")
 DRYRUN_OUTPUT = re.compile(r"run-(\d{8}t\d{6}z)")
+# 部署留下的回滚备份目录（control/）与文档事务目录（docs/）；时间戳是部署脚本的 utc_stamp().lower()。
+DEPLOY_BACKUP = re.compile(r"(?P<kind>[a-z0-9][a-z0-9-]*)-backup-before-[0-9a-f]{12}-(?P<stamp>\d{8}t\d{6}z)-[0-9a-f]{8}")
+DEPLOY_TRANSACTION = re.compile(r"\.(?:codex-\d+|managed)-deploy-(?P<stamp>\d{8}t\d{6}z)-[0-9a-f]{8}")
 SUPERSEDED_STAGING = re.compile(r"(?P<base>.+-managed-tools)\.superseded-(?P<stamp>\d{8}t\d{6}z)(?:-\d+)?")
 GO_CANDIDATES = ("/usr/local/go/bin/go",)
 # 扫引用文档时不进的目录：部署留下的受管工具树副本与字节码缓存（只有仓库文件，没有认证与收据）、版本库与前端依赖。
@@ -553,6 +585,202 @@ def prune_superseded_staging(data_root: Path, *, keep: int = KEEP_SUPERSEDED, dr
             "removed": sorted(removed), "removed_bytes": removed_bytes}
 
 
+# ---------------------------------------------------------------- 部署备份与事务目录
+
+def _stamp_seconds(stamp: str) -> float:
+    """部署名字里的 UTC 时间戳（如 20261029t143005z）→ 秒。"""
+
+    return float(calendar.timegm(time.strptime(stamp.upper(), "%Y%m%dT%H%M%SZ")))
+
+
+def _deploy_items(data_root: Path) -> list[tuple[str, float, Path]]:
+    """数据根里的部署备份（``control/``）与文档事务目录（``docs/``）：``(组名, 部署时间秒, 路径)``。
+    符号链接、普通文件与名字对不上的都不算；备份按根名分组，事务目录（不分版本号前缀）合成一组。"""
+
+    found: list[tuple[str, float, Path]] = []
+    for sub, pattern in (("control", DEPLOY_BACKUP), ("docs", DEPLOY_TRANSACTION)):
+        directory = Path(data_root) / sub
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            matched = pattern.fullmatch(path.name)
+            if matched is None or path.is_symlink() or not path.is_dir():
+                continue
+            group = matched.group("kind") if pattern is DEPLOY_BACKUP else "document-transaction"
+            found.append((group, _stamp_seconds(matched.group("stamp")), path))
+    return found
+
+
+def _recent_references(roots: Iterable[Path], names: list[str], cutoff: float) -> dict[str, str]:
+    """保留期内（修改时间不早于 ``cutoff``）的文件里还写着哪些候选名字：``名字 → 第一个命中的文件``。
+    只看不超过 4 MiB 的普通文件，不跟符号链接，不进 ``SKIP_DIR_*``、部署备份与事务目录自身。"""
+
+    if not names:
+        return {}
+    pattern = re.compile(b"|".join(re.escape(name.encode()) for name in names))
+    found: dict[str, str] = {}
+    for root in roots:
+        root = Path(root)
+        if root.is_symlink() or not root.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(root.resolve()):
+            dirnames[:] = [name for name in dirnames if name not in SKIP_DIR_NAMES and not SKIP_DIR_PATTERN.fullmatch(name)
+                           and not DEPLOY_BACKUP.fullmatch(name) and not DEPLOY_TRANSACTION.fullmatch(name)
+                           and not name.startswith(TRASH_MARK)]
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                try:
+                    info = os.lstat(path)
+                    if not stat.S_ISREG(info.st_mode) or info.st_mtime < cutoff or info.st_size > DEPLOY_REFERENCE_MAX_BYTES:
+                        continue
+                    data = path.read_bytes()
+                except OSError:
+                    continue
+                for match in pattern.finditer(data):
+                    found.setdefault(match.group(0).decode(), str(path))
+    return found
+
+
+def prune_deploy_backups(data_root: Path, *, reference_roots: Iterable[Path] | None = None,
+                         retention_days: float = DEPLOY_BACKUP_RETENTION_DAYS, keep_latest: int = KEEP_DEPLOY_BACKUPS,
+                         now: float | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """回收保留期之外的部署回滚备份与文档事务目录（见模块说明）。三道闸，缺一不回收：①不在每组最近 ``keep_latest`` 个里；
+    ②部署时间早于保留期；③保留期内修改过的 ``reference_roots`` 文件里没有写着它的名字。"""
+
+    if retention_days < DEPLOY_BACKUP_MIN_RETENTION_DAYS:
+        raise HousekeepingError(f"部署备份的保留期不得短于 {DEPLOY_BACKUP_MIN_RETENTION_DAYS:g} 天（回滚与身份裁定要读）")
+    if keep_latest < 1:
+        raise HousekeepingError("每组至少留 1 个部署备份")
+    data_root = Path(data_root)
+    moment = time.time() if now is None else now
+    cutoff = moment - retention_days * 86400
+    roots = list(reference_roots) if reference_roots is not None else [data_root / "control", data_root / "evidence"]
+    # 上次中断留下的移走目录先收拾掉（原名已不在，内容就是要删的）。
+    leftovers = 0
+    for sub, pattern in (("control", DEPLOY_BACKUP), ("docs", DEPLOY_TRANSACTION)):
+        directory = data_root / sub
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if path.name.startswith(TRASH_MARK) and pattern.fullmatch(path.name[len(TRASH_MARK):]) and path.is_dir() and not path.is_symlink():
+                leftovers += 1
+                if not dry_run:
+                    shutil.rmtree(path)
+    groups: dict[str, list[tuple[float, Path]]] = {}
+    for group, seconds, path in _deploy_items(data_root):
+        groups.setdefault(group, []).append((seconds, path))
+    old: list[tuple[str, Path]] = []
+    summary: dict[str, dict[str, int]] = {}
+    for group, items in sorted(groups.items()):
+        items.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+        beyond = [path for seconds, path in items[keep_latest:] if seconds < cutoff]
+        summary[group] = {"total": len(items), "newest_kept": min(keep_latest, len(items)), "within_retention": len(items) - min(keep_latest, len(items)) - len(beyond),
+                          "candidates": len(beyond), "referenced": 0, "removed": 0}
+        old.extend((group, path) for path in beyond)
+    references = _recent_references(roots, [path.name for _group, path in old], cutoff)
+    protected: dict[str, str] = {}
+    removed: list[str] = []
+    removed_bytes = 0
+    for group, path in sorted(old, key=lambda item: item[1].name):
+        if path.name in references:
+            summary[group]["referenced"] += 1
+            protected[path.name] = references[path.name]
+            continue
+        removed_bytes += _tree_bytes(path)
+        if not dry_run:
+            trash = path.with_name(TRASH_MARK + path.name)
+            os.rename(path, trash)
+            try:
+                shutil.rmtree(trash)
+            except OSError:
+                if not path.exists() and trash.exists():
+                    os.rename(trash, path)   # 删不动就放回原名，下次重新判定
+                raise
+        summary[group]["removed"] += 1
+        removed.append(path.name)
+    return {"status": "done" if groups else "absent", "retention_days": retention_days, "keep_latest": keep_latest, "dry_run": dry_run,
+            "groups": summary, "removed": removed, "removed_bytes": removed_bytes, "protected_by_recent_reference": protected,
+            "trash_leftovers_removed": leftovers}
+
+
+# ---------------------------------------------------------------- 本机 Go 编译缓存告警与根盘预警
+
+def go_cache_check(cache: Path | None, *, warn_gib: float = GO_CACHE_WARN_GIB) -> dict[str, Any]:
+    """Go 编译缓存的大小与告警（只读）。10-29 本机数据盘因 Go 编译缓存涨到 109G、只剩 7.5G（99%），清完才回 73%。"""
+
+    if cache is None or not Path(cache).is_dir() or Path(cache).is_symlink():
+        return {"status": "absent", "cache": str(cache) if cache else None, "warn_gib": warn_gib, "over": False, "size_bytes": 0,
+                "warning": None}
+    size = _tree_bytes(Path(cache))
+    over = size / 2 ** 30 > warn_gib
+    warning = (f"Go 编译缓存 {size / 2 ** 30:.1f} GiB 超过告警阈值 {warn_gib:g} GiB：{cache}；"
+               f"门禁开跑前先清（go clean -cache，只是下次编译变慢），免得中途盘满") if over else None
+    return {"status": "done", "cache": str(cache), "warn_gib": warn_gib, "over": over, "size_bytes": size, "warning": warning}
+
+
+def disk_watch(*, data_root: Path, runroot: Path, go_cache: str = "auto", min_free_gib: float = MIN_FREE_GIB,
+               retention_days: float = DEPLOY_BACKUP_RETENTION_DAYS, keep_latest: int = KEEP_DEPLOY_BACKUPS,
+               keep_dryruns: int = KEEP_DRYRUNS, keep_superseded: int = KEEP_SUPERSEDED, warn_percent: float = WATCH_MARGIN_PERCENT,
+               warn_gib: float = WATCH_MARGIN_GIB, disk_path: Path = Path("/"), environment: Mapping[str, str] | None = None,
+               reference_roots: Iterable[Path] | None = None) -> dict[str, Any]:
+    """根盘水位预警与可回收清单（只读：各项都按 dry-run 算，不删任何东西）。预警线＝停线前 ``warn_percent`` 个百分点，或可用空间
+    不足「下限 + ``warn_gib``」。清单列出日常维护（``run``）会回收的各项各能腾出多少，让起跑前的提示能直接说“先腾哪些”。"""
+
+    disk = disk_status(disk_path, min_free_gib=min_free_gib, environment=environment)
+    margin_percent = round(disk["max_used_percent"] - disk["used_percent"], 1)
+    margin_gib = round(disk["free_gib"] - disk["min_free_gib"], 1)
+    over_stop = not disk["ok"]
+    early = over_stop or margin_percent <= warn_percent or margin_gib <= warn_gib
+    items: list[dict[str, Any]] = []
+    errors: dict[str, str] = {}
+    data_root, runroot = Path(data_root), Path(runroot)
+
+    def add(name: str, how: str, action) -> None:
+        try:
+            result = action()
+        except (HousekeepingError, OSError, subprocess.SubprocessError) as error:
+            errors[name] = f"{type(error).__name__}: {error}"
+            return
+        count = len(result.get("removed") or []) if "removed" in result else int(result.get("removed_files", 0))
+        items.append({"item": name, "how": how, "count": count, "bytes": int(result.get("removed_bytes", 0))})
+
+    if early:
+        add("Go 编译缓存旧条目（6 小时以上没用过）", "housekeeping 自动清",
+            lambda: trim_go_cache(go_cache_dir(go_cache), dry_run=True))
+        add("旧空跑演练根与产物", "housekeeping 自动清", lambda: prune_dryruns(data_root, runroot, keep=keep_dryruns, dry_run=True))
+        add("部署留下的旧暂存树", "housekeeping 自动清", lambda: prune_superseded_staging(data_root, keep=keep_superseded, dry_run=True))
+        add(f"部署回滚备份与文档事务目录（早于 {retention_days:g} 天、每组最近 {keep_latest} 个之外、无近期引用）", "housekeeping 自动清",
+            lambda: prune_deploy_backups(data_root, reference_roots=reference_roots, retention_days=retention_days, keep_latest=keep_latest,
+                                         dry_run=True))
+    total = sum(item["bytes"] for item in items)
+    warnings: list[str] = []
+    if over_stop:
+        warnings.append(disk_reason(disk))
+    elif early:
+        warnings.append(f"根盘已到预警线：已用 {disk['used_percent']}%（停线 {disk['max_used_percent']:g}%，还差 {margin_percent} 个百分点），"
+                        f"可用 {disk['free_gib']} GiB（下限 {disk['min_free_gib']:g} GiB，余量 {margin_gib} GiB）")
+    return {"schema_version": "disk-watch/v1", "disk": disk, "margin_percent": margin_percent, "margin_gib": margin_gib,
+            "warn_percent": warn_percent, "warn_gib": warn_gib, "early_warning": early, "over_stop": over_stop, "warnings": warnings,
+            "reclaimable": items, "reclaimable_bytes": total, "errors": errors}
+
+
+def disk_watch_text(report: Mapping[str, Any]) -> str:
+    """``disk_watch`` 的人读文字：没到预警线只有一行，到了再列可回收清单。"""
+
+    disk = report["disk"]
+    head = (f"根盘水位：已用 {disk['used_percent']}%（停线 {disk['max_used_percent']:g}%），可用 {disk['free_gib']} GiB"
+            f"（下限 {disk['min_free_gib']:g} GiB）；" + ("已越过停线" if report["over_stop"] else "已到预警线" if report["early_warning"] else "余量充足"))
+    if not report["early_warning"]:
+        return head
+    lines = [head, *(f"提示：{warning}" for warning in report["warnings"]), "可回收清单（按 dry-run 估算，未删除任何东西）："]
+    for item in report["reclaimable"]:
+        lines.append(f"  - {item['item']}：{item['count']} 项，约 {item['bytes'] / 2 ** 20:.0f} MiB（{item['how']}）")
+    for name, error in report["errors"].items():
+        lines.append(f"  - {name}：估算失败（{error}）")
+    lines.append(f"合计约 {report['reclaimable_bytes'] / 2 ** 30:.2f} GiB；执行：bash entry-dryrun.sh housekeeping（记录库另按保留期与引用判定，不在上面的估算里）")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 根盘
 
 def _parse_env() -> Any:
@@ -631,8 +859,11 @@ def disk_reason(disk: Mapping[str, Any]) -> str:
 def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, reference_roots: Iterable[Path] | None = None,
         retention_days: float = DEFAULT_RETENTION_DAYS, keep_dryruns: int = KEEP_DRYRUNS, keep_superseded: int = KEEP_SUPERSEDED,
         go_cache: str = "auto", min_free_gib: float = MIN_FREE_GIB, busy_dryruns: Iterable[str] = (), dry_run: bool = False,
-        disk_path: Path = Path("/"), store_now: float | None = None, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """按顺序做一遍日常维护：Go 编译缓存 → 记录库 → 空跑留存 → 旧暂存树 → 根盘。某一项出错只记在报告里，不挡后面几项。
+        disk_path: Path = Path("/"), store_now: float | None = None, environment: Mapping[str, str] | None = None,
+        deploy_retention_days: float | None = DEPLOY_BACKUP_RETENTION_DAYS, keep_deploy_backups: int = KEEP_DEPLOY_BACKUPS,
+        go_cache_warn_gib: float = GO_CACHE_WARN_GIB) -> dict[str, Any]:
+    """按顺序做一遍日常维护：Go 编译缓存 → Go 缓存大小告警 → 记录库 → 空跑留存 → 旧暂存树 → 部署备份与事务目录 → 根盘。
+    某一项出错只记在报告里，不挡后面几项。``deploy_retention_days`` 为 None 时不回收部署备份与事务目录。
     ``store_now`` 只给记录库清理换一个判断新旧的时刻（验收与演练用），Go 编译缓存始终按墙钟。"""
 
     data_root, runroot = Path(data_root), Path(runroot)
@@ -643,10 +874,15 @@ def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, ref
                               "dry_run": dry_run}
     steps = (
         ("go_cache", lambda: trim_go_cache(go_cache_dir(go_cache), dry_run=dry_run)),
+        ("go_cache_size", lambda: go_cache_check(go_cache_dir(go_cache), warn_gib=go_cache_warn_gib)),
         ("record_store", lambda: gc_record_store(store, reference_roots=roots, retention_hours=retention_days * 24, now=store_now,
                                                  dry_run=dry_run)),
         ("dryruns", lambda: prune_dryruns(data_root, runroot, keep=keep_dryruns, busy=busy_dryruns, dry_run=dry_run)),
         ("superseded_staging", lambda: prune_superseded_staging(data_root, keep=keep_superseded, dry_run=dry_run)),
+        *((("deploy_backups", lambda: prune_deploy_backups(data_root, reference_roots=[data_root / "control", data_root / "evidence"],
+                                                           retention_days=deploy_retention_days, keep_latest=keep_deploy_backups,
+                                                           dry_run=dry_run)),)
+          if deploy_retention_days is not None else ()),
     )
     for name, action in steps:
         began = time.monotonic()
@@ -655,6 +891,8 @@ def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, ref
         except (HousekeepingError, OSError, subprocess.SubprocessError) as error:
             report[name] = {"status": "error", "error": f"{type(error).__name__}: {error}", "seconds": round(time.monotonic() - began, 1)}
     report["disk"] = disk_status(disk_path, min_free_gib=min_free_gib, environment=environment)
+    # 告警汇总：Go 编译缓存超阈值（只警告，不挡）。
+    report["warnings"] = [warning for warning in (report.get("go_cache_size", {}).get("warning"),) if warning]
     report["completed_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return report
 
@@ -672,21 +910,60 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_run.add_argument("--keep-dryruns", type=int, default=KEEP_DRYRUNS)
     p_run.add_argument("--keep-superseded", type=int, default=KEEP_SUPERSEDED, help="部署留下的旧暂存树每组留几份（默认 2）")
     p_run.add_argument("--go-cache", default="auto", help="auto（go env GOCACHE）、off 或缓存目录")
+    p_run.add_argument("--go-cache-warn-gib", type=float, default=GO_CACHE_WARN_GIB, help="Go 编译缓存超过多少 GiB 就警告（默认 30）")
+    p_run.add_argument("--deploy-backup-retention-days", type=float, default=DEPLOY_BACKUP_RETENTION_DAYS,
+                       help="部署回滚备份与文档事务目录的保留期（天，默认 14，不得短于 7）")
+    p_run.add_argument("--keep-deploy-backups", type=int, default=KEEP_DEPLOY_BACKUPS, help="部署备份每组另外保留最近几个（默认 8）")
+    p_run.add_argument("--no-deploy-backups", action="store_true", help="不回收部署回滚备份与文档事务目录")
     p_run.add_argument("--min-free-gib", type=float, default=MIN_FREE_GIB)
     p_run.add_argument("--vc-env", type=Path, default=None, help="本轮安全参数文件；显式工程上限须完整复验私有 fixture_only 总账")
     p_run.add_argument("--dry-run", action="store_true", help="只算不删")
     p_run.add_argument("--store-now-utc", default=None,
                        help="验收与演练用：记录库清理按这个时刻（如 2026-11-15T00:00:00Z）判断新旧；Go 编译缓存始终按墙钟")
+    p_watch = sub.add_parser("disk-watch", help="根盘水位预警与可回收清单（只读，不删任何东西）")
+    p_watch.add_argument("--data-root", type=Path, required=True)
+    p_watch.add_argument("--runroot", type=Path, required=True)
+    p_watch.add_argument("--go-cache", default="auto")
+    p_watch.add_argument("--min-free-gib", type=float, default=MIN_FREE_GIB)
+    p_watch.add_argument("--deploy-backup-retention-days", type=float, default=DEPLOY_BACKUP_RETENTION_DAYS)
+    p_watch.add_argument("--keep-deploy-backups", type=int, default=KEEP_DEPLOY_BACKUPS)
+    p_watch.add_argument("--keep-dryruns", type=int, default=KEEP_DRYRUNS)
+    p_watch.add_argument("--keep-superseded", type=int, default=KEEP_SUPERSEDED)
+    p_watch.add_argument("--warn-percent", type=float, default=WATCH_MARGIN_PERCENT, help="停线前多少个百分点开始预警（默认 5）")
+    p_watch.add_argument("--warn-gib", type=float, default=WATCH_MARGIN_GIB, help="可用空间比下限多出不足多少 GiB 开始预警（默认 5）")
+    p_watch.add_argument("--disk-path", type=Path, default=Path("/"))
+    p_watch.add_argument("--vc-env", type=Path, default=None)
+    p_watch.add_argument("--json", action="store_true", help="输出 JSON 而不是人读文字")
+    p_go = sub.add_parser("go-cache-check", help="本机 Go 编译缓存超阈值时警告（只读，退出码恒为 0）")
+    p_go.add_argument("--go-cache", default="auto", help="auto（go env GOCACHE）或缓存目录")
+    p_go.add_argument("--warn-gib", type=float, default=GO_CACHE_WARN_GIB)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     sys.dont_write_bytecode = True
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if args.command == "go-cache-check":
+        report = go_cache_check(go_cache_dir(args.go_cache), warn_gib=args.warn_gib)
+        print(report["warning"] or (f"Go 编译缓存 {report['size_bytes'] / 2 ** 30:.1f} GiB，未超过 {args.warn_gib:g} GiB"
+                                    if report["status"] == "done" else "Go 编译缓存不存在或未启用，不检查"))
+        return 0
     for name in ("data_root", "runroot"):
         if not getattr(args, name).is_absolute():
             print(f"日常维护：--{name.replace('_', '-')} 必须是绝对路径", file=sys.stderr)
             return 2
+    if args.command == "disk-watch":
+        try:
+            values = _parse_env().parse(args.vc_env.read_text(encoding="utf-8")) if args.vc_env is not None else None
+            watch = disk_watch(data_root=args.data_root, runroot=args.runroot, go_cache=args.go_cache, min_free_gib=args.min_free_gib,
+                               retention_days=args.deploy_backup_retention_days, keep_latest=args.keep_deploy_backups,
+                               keep_dryruns=args.keep_dryruns, keep_superseded=args.keep_superseded, warn_percent=args.warn_percent,
+                               warn_gib=args.warn_gib, disk_path=args.disk_path, environment=values)
+        except (HousekeepingError, OSError, ValueError) as error:
+            print(f"磁盘水位检查拒绝：{error}", file=sys.stderr)
+            return 2
+        print(json.dumps(watch, ensure_ascii=False, indent=1) if args.json else disk_watch_text(watch))
+        return 5 if watch["over_stop"] else 0
     store_now = None
     if args.store_now_utc is not None:
         try:
@@ -699,7 +976,9 @@ def main(argv: list[str] | None = None) -> int:
         report = run(data_root=args.data_root, runroot=args.runroot, record_store=args.record_store, reference_roots=args.reference_root,
                      retention_days=args.retention_days, keep_dryruns=args.keep_dryruns, keep_superseded=args.keep_superseded,
                      go_cache=args.go_cache, environment=values,
-                     min_free_gib=args.min_free_gib, dry_run=args.dry_run, store_now=store_now)
+                     min_free_gib=args.min_free_gib, dry_run=args.dry_run, store_now=store_now,
+                     deploy_retention_days=None if args.no_deploy_backups else args.deploy_backup_retention_days,
+                     keep_deploy_backups=args.keep_deploy_backups, go_cache_warn_gib=args.go_cache_warn_gib)
     except (HousekeepingError, OSError, ValueError) as error:
         print(f"日常维护拒绝：{error}", file=sys.stderr)
         return 2
