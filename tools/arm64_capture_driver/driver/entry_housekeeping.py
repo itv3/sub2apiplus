@@ -45,6 +45,9 @@
 ``.codex-<版本号>-deploy-<UTC>-<随机串>`` 或 ``.managed-deploy-…``。部署脚本没有回收，上一版一轮累计 95 个备份 3.7 GiB、133 个事务目录 625 MiB，
 根盘清理后 53%、VC-6 构建后涨到 66%，收尾门禁期间一度 67%（距停线约 4 GB），靠人工手顺腾盘。本函数把手顺固化：
 
+* 范围：只认 ``control/`` 下的**目录**。根名段取自受管根的目录名，可含下划线（如 ``official_client_control``，一份约 1.6 MiB）；
+  受管工具根的备份固定叫 ``managed-tools``。断言准备器的备份 ``assertion-preparer-backup-before-…`` 是单个小文件（每份约 14 KB，
+  实测 347 份合计约 5 MiB），不是目录，不在回收范围：占用可忽略，且“普通文件一律不动”是本函数的安全前提（有测试钉住）；
 * 保留期（默认 14 天，不得短于 7 天，``--deploy-backup-retention-days`` 可调）内的一律不动；每组（备份按根名分组，事务目录合成一组）
   另外保留最近 8 个（``--keep-deploy-backups``），部署刚做完回滚还要用；
 * 保留期之外的，若引用扫描发现保留期内修改过的文件（``control``、``evidence`` 下的收据、证据、账本）仍写着它的名字，也不动
@@ -114,7 +117,8 @@ GO_ENTRY_DIR = re.compile(r"[0-9a-f]{2}")
 DRYRUN_ROOT = re.compile(r"entry-dryrun-(\d{8}t\d{6}z)")
 DRYRUN_OUTPUT = re.compile(r"run-(\d{8}t\d{6}z)")
 # 部署留下的回滚备份目录（control/）与文档事务目录（docs/）；时间戳是部署脚本的 utc_stamp().lower()。
-DEPLOY_BACKUP = re.compile(r"(?P<kind>[a-z0-9][a-z0-9-]*)-backup-before-[0-9a-f]{12}-(?P<stamp>\d{8}t\d{6}z)-[0-9a-f]{8}")
+# 备份名的根名段取自受管根的目录名（部署脚本的 root_name），目录名里可以有下划线（如 official_client_control），所以允许 ``_``。
+DEPLOY_BACKUP = re.compile(r"(?P<kind>[a-z0-9][a-z0-9_-]*)-backup-before-[0-9a-f]{12}-(?P<stamp>\d{8}t\d{6}z)-[0-9a-f]{8}")
 DEPLOY_TRANSACTION = re.compile(r"\.(?:codex-\d+|managed)-deploy-(?P<stamp>\d{8}t\d{6}z)-[0-9a-f]{8}")
 SUPERSEDED_STAGING = re.compile(r"(?P<base>.+-managed-tools)\.superseded-(?P<stamp>\d{8}t\d{6}z)(?:-\d+)?")
 GO_CANDIDATES = ("/usr/local/go/bin/go",)

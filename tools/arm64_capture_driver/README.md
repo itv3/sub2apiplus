@@ -812,7 +812,9 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
 * 磁盘水位保护（`driver/entry_housekeeping.py`，与上面的日常维护同一个文件，不另起一套）：
   * **部署备份与事务目录自动回收**：每次受监督部署在数据根 `control/` 留一份 `<根名>-backup-before-<摘要前缀>-<UTC>-<随机串>`
     （受管工具、断言准备器等的回滚备份，约 35～40 MiB），在 `docs/` 留一份文档事务目录 `.codex-<版本号>-deploy-<UTC>-<随机串>` 或
-    `.managed-deploy-…`。日常维护现在会回收它们：保留期默认 14 天（`--deploy-backup-retention-days`，不得短于 7 天）内的不动；
+    `.managed-deploy-…`；根名段取自受管根的目录名，可含下划线（如 `official_client_control-backup-before-…`，一份约 1.6 MiB，与受管工具根的
+    `managed-tools-backup-before-…` 各成一组）。断言准备器的备份 `assertion-preparer-backup-before-…` 是单个小文件（每份约 14 KB），不是目录，不回收。
+    日常维护现在会回收它们：保留期默认 14 天（`--deploy-backup-retention-days`，不得短于 7 天）内的不动；
     备份按根名分组、事务目录合成一组，每组另留最近 8 个（`--keep-deploy-backups`）；保留期之外的，若 `control`、`evidence` 下保留期内修改过的
     收据／证据／账本里仍写着它的名字也不动（身份裁定会读“attempt 开始后第一份部署”的回滚备份）；其余先改名成 `.gc-trash-<原名>` 再删，
     中断后下次先清遗留，删不动就放回原名。`--dry-run` 只算不删，`--no-deploy-backups` 关掉这一项。报告在 `deploy_backups`。

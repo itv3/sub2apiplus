@@ -595,6 +595,161 @@ class DeployBackupReclaimTests(unittest.TestCase):
         self.assertEqual(report["deploy_backups"]["removed"], [old.name])
         self.assertFalse(old.exists())
 
+    # ---- 受管根的目录名带下划线（official_client_control）的备份：覆盖缺口的回归测试 ----
+    # 缺口：备份名的根名段原先不许下划线，``official_client_control-backup-before-…`` 从来不在回收范围，现场累计 83 个（约 134 MiB）。
+
+    UNDERSCORED = "official_client_control"
+
+    def underscored(self, *days: float) -> list[Path]:
+        return [self.backup(day, self.UNDERSCORED) for day in days]
+
+    def test_real_field_names_are_recognised_with_the_root_name_as_the_group(self) -> None:
+        # 逐字摘自 ARM64 数据根 control/ 的只读列表：下划线根名的目录备份、受管工具根备份、断言准备器的单文件备份（后者名字也符合）。
+        real = {
+            "official_client_control-backup-before-b14095f2c241-20261006t224445z-c8b02fb1": self.UNDERSCORED,
+            "official_client_control-backup-before-8529ad4ffe4d-20261012t192317z-9888b4eb": self.UNDERSCORED,
+            "official_client_control-backup-before-9d5b0487c14c-20261030t133918z-c236f923": self.UNDERSCORED,
+            "managed-tools-backup-before-3883d78a2b42-20261030t133918z-7360f3ee": "managed-tools",
+            "assertion-preparer-backup-before-c8020cadd3ee-20261030t133918z-42a36f63": "assertion-preparer",
+        }
+        for name, group in real.items():
+            matched = hk.DEPLOY_BACKUP.fullmatch(name)
+            self.assertIsNotNone(matched, name)
+            self.assertEqual(matched.group("kind"), group, name)
+        stamp, digest = "20261006t224445z", "ab" * 6
+        for name in (
+            self.UNDERSCORED,                                                      # 受管根目录本身
+            f"{self.UNDERSCORED}-backup-before-notes",                             # 后缀形状不对
+            f"{self.UNDERSCORED}-backup-before-{digest}-{stamp}",                  # 缺随机串
+            f"{self.UNDERSCORED}-backup-after-{digest}-{stamp}-deadbeef",          # 不是 before
+            f"{self.UNDERSCORED}-backup-before-{'zz' * 6}-{stamp}-deadbeef",       # 摘要前缀不是十六进制
+            f"Official_Client-backup-before-{digest}-{stamp}-deadbeef",            # 大写
+            f"_official-backup-before-{digest}-{stamp}-deadbeef",                  # 下划线开头
+            f".{self.UNDERSCORED}-backup-before-{digest}-{stamp}-deadbeef",        # 点开头（移走文件等）
+            "profile.draft-backup.json",
+            "c01570-r2-inputs-20260926t170805z",
+        ):
+            self.assertIsNone(hk.DEPLOY_BACKUP.fullmatch(name), name)
+
+    def test_underscored_root_backups_are_their_own_group_and_keep_the_newest_eight(self) -> None:
+        # 缺省参数（保留期 14 天、每组最近 8 个）：下划线根名 14 个，最近 8 个留下，其余 6 个都早于 14 天，回收；受管工具组只有 3 个，一个不动。
+        control = self.underscored(1, 2, 3, 4, 5, 6, 7, 8, 20, 21, 25, 30, 40, 60)
+        tools = [self.backup(day) for day in (2, 30, 50)]
+        report = self.prune()
+        self.assertEqual(sorted(report["removed"]), sorted(path.name for path in control[8:]))
+        self.assertEqual(report["removed_bytes"], 6 * 1000)
+        self.assertEqual(report["groups"][self.UNDERSCORED],
+                         {"total": 14, "newest_kept": 8, "within_retention": 0, "candidates": 6, "referenced": 0, "removed": 6})
+        self.assertEqual(report["groups"]["managed-tools"]["removed"], 0)
+        for path in (*control[:8], *tools):
+            self.assertTrue(path.is_dir(), path.name)
+        for path in control[8:]:
+            self.assertFalse(path.exists(), path.name)
+
+    def test_underscored_root_backups_inside_the_retention_period_stay_even_beyond_the_newest_eight(self) -> None:
+        newest = self.underscored(0.5, 1, 2, 3, 4, 5, 6, 7)              # 最近 8 个
+        within = self.underscored(9, 13)                                  # 超出最近 8 个，但在 14 天保留期内
+        beyond = self.underscored(15, 30)                                 # 超出最近 8 个，也过了保留期
+        report = self.prune()
+        for path in (*newest, *within):
+            self.assertTrue(path.is_dir(), f"保留期内的不能动：{path.name}")
+        for path in beyond:
+            self.assertFalse(path.exists(), path.name)
+        self.assertEqual(report["groups"][self.UNDERSCORED]["within_retention"], 2)
+        self.assertEqual(sorted(report["removed"]), sorted(path.name for path in beyond))
+
+    def test_underscored_root_backup_named_by_a_recent_receipt_is_kept_and_a_stale_receipt_does_not_protect(self) -> None:
+        self.underscored(1, 2, 3, 4, 5, 6, 7, 8)
+        named, stale_named, unnamed = self.underscored(30, 31, 32)
+        receipt = self.data / "control" / "claude-managed-deploy-20261029t151423z.json"     # Claude 部署收据登记回滚备份的形状
+        receipt.write_text(json.dumps({"managed_roots": [{"root": "official_client_control", "rollback_backup": str(named)}]}), encoding="utf-8")
+        _age(receipt, RECENT)
+        old_receipt = self.data / "control" / "claude-managed-deploy-20260920t000000z.json"
+        old_receipt.write_text(json.dumps({"managed_roots": [{"rollback_backup": str(stale_named)}]}), encoding="utf-8")
+        _age(old_receipt, NOW - 40 * DAY)
+        report = self.prune()
+        self.assertTrue(named.is_dir())
+        self.assertFalse(stale_named.exists() or unnamed.exists())
+        self.assertEqual(report["protected_by_recent_reference"], {named.name: str(receipt)})
+        self.assertEqual(report["groups"][self.UNDERSCORED]["referenced"], 1)
+
+    def test_files_inside_underscored_root_backups_are_not_reference_sources(self) -> None:
+        # 备份目录里装的是受管工具树的旧副本：其中文件即使修改时间很新、提到了旧备份的名字，也不是收据，扫引用时整个目录跳过；
+        # 否则新备份里的任何一个文件都能把旧备份永远钉住。
+        newest = self.underscored(1, 2, 3, 4, 5, 6, 7, 8)
+        victim, = self.underscored(40)
+        (newest[0] / "notes.json").write_text(json.dumps({"mentions": victim.name}), encoding="utf-8")
+        report = self.prune()
+        self.assertFalse(victim.exists())
+        self.assertEqual(report["protected_by_recent_reference"], {})
+
+    def test_underscored_lookalikes_symlinks_files_and_preparer_files_are_never_touched(self) -> None:
+        stamp, digest = _stamp(80), "ab" * 6
+        self.underscored(1, 2, 3, 4, 5, 6, 7, 8)
+        real_old, = self.underscored(80)
+        control = self.data / "control"
+        keep_dirs = [
+            control / self.UNDERSCORED,                                               # 受管根自己（里面有内容）
+            control / f"{self.UNDERSCORED}-backup-before-notes",
+            control / f"{self.UNDERSCORED}-backup-before-{digest}-{stamp}",
+            control / f"{self.UNDERSCORED}-backup-after-{digest}-{stamp}-deadbeef",
+            control / f"Official_Client_Control-backup-before-{digest}-{stamp}-deadbeef",
+            control / f"_official-backup-before-{digest}-{stamp}-deadbeef",
+            control / "c01570-r2-inputs-20260926t170805z",
+            self.data / "docs" / f"{self.UNDERSCORED}-backup-before-{digest}-{stamp}-deadbeef",   # docs/ 只回收事务目录，不看备份名
+        ]
+        for path in keep_dirs:
+            path.mkdir()
+            (path / "f").write_bytes(b"k" * 100)
+        link = control / f"{self.UNDERSCORED}-backup-before-{'cd' * 6}-{_stamp(81)}-deadbeef"
+        link.symlink_to(real_old, target_is_directory=True)
+        plain_file = control / f"{self.UNDERSCORED}-backup-before-{'ef' * 6}-{_stamp(82)}-feedface"
+        plain_file.write_bytes(b"file")
+        # 断言准备器的备份在现场是十几 KB 的单个文件，不是目录：名字符合，但属“普通文件一律不动”，不在回收范围（这里 1 新 + 1 旧各一个，
+        # 旧的若按目录处理早就回收了）。
+        preparers = []
+        for days in (1, 60):
+            path = control / f"assertion-preparer-backup-before-{'12' * 6}-{_stamp(days)}-{int(days):08x}"
+            path.write_bytes(b"p" * 14000)
+            _age(path, NOW - days * DAY)
+            preparers.append(path)
+        report = self.prune()
+        self.assertFalse(real_old.exists())
+        self.assertEqual(report["removed"], [real_old.name])
+        self.assertTrue(all(path.is_dir() for path in keep_dirs))
+        self.assertTrue(link.is_symlink() and plain_file.is_file())
+        self.assertTrue(all(path.is_file() for path in preparers), "断言准备器的单文件备份不回收")
+        self.assertNotIn("assertion-preparer", report["groups"])
+
+    def test_dry_run_matches_the_real_run_for_underscored_roots_through_prune_and_run(self) -> None:
+        self.underscored(1, 2, 3, 4, 5, 6, 7, 8)
+        old = self.underscored(20, 40, 60)
+        for day in (1, 2, 3, 4, 5, 6, 7, 8):
+            self.backup(day)
+        old_tools = self.backup(30)
+        dry = self.prune(dry_run=True)
+        self.assertTrue(all(path.is_dir() for path in (*old, old_tools)), "只算不删")
+        with unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=types.SimpleNamespace(
+                total=100 * 2 ** 30, used=50 * 2 ** 30, free=50 * 2 ** 30)):
+            dry_run_report = hk.run(data_root=self.data, runroot=self.base / "run", go_cache="off", dry_run=True)["deploy_backups"]
+            self.assertTrue(all(path.is_dir() for path in (*old, old_tools)), "run 的 dry-run 同样只算不删")
+            real_run_report = hk.run(data_root=self.data, runroot=self.base / "run", go_cache="off")["deploy_backups"]
+        self.assertEqual(sorted(dry["removed"]), sorted(path.name for path in (*old, old_tools)))
+        for key in ("removed", "removed_bytes", "groups", "protected_by_recent_reference"):
+            self.assertEqual(dry_run_report[key], dry[key], key)
+            self.assertEqual(real_run_report[key], dry[key], key)
+        self.assertFalse(any(path.exists() for path in (*old, old_tools)))
+
+    def test_disk_watch_counts_underscored_root_backups_in_its_reclaimable_list(self) -> None:
+        self.underscored(1, 2, 3, 4, 5, 6, 7, 8)
+        self.underscored(30, 40, 50)
+        fake = types.SimpleNamespace(total=142 * 2 ** 30, used=int(142 * 2 ** 30 * 0.66), free=47 * 2 ** 30)
+        with unittest.mock.patch.object(hk.shutil, "disk_usage", return_value=fake):
+            report = hk.disk_watch(data_root=self.data, runroot=self.base / "run", go_cache="off")
+        by_name = {item["item"].split("（")[0]: item for item in report["reclaimable"]}
+        item = by_name["部署回滚备份与文档事务目录"]
+        self.assertEqual((item["count"], item["bytes"]), (3, 3 * 1000))
+
 
 class DiskWatchTests(unittest.TestCase):
     """起跑前的磁盘预警：离停线还有余量时提前提示并给出可回收清单（不删任何东西）。"""
