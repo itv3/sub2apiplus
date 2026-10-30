@@ -1270,10 +1270,14 @@ def _dependency_pull(selector: Selector, data: Mapping[str, Any], tree: Path, ch
     merged = sorted(set(changes) | set(since_trace), key=lambda item: (item[1], item[0]))
     model = DependencyModel(tree, selector.graph, data, table)
     readers = {path: model.mention_readers(path) for status, path in merged if status in ("A", "D")}
+    # 动态加载的失败关闭只针对追踪之后新增、不是测试模块、也没有任何静态使用者的 Python 文件：追踪时就存在的文件，被谁动态加载过追踪表里有（打开事件）；
+    # 测试模块天生没有使用者（它们是入口），也不是被加载的对象。可达的加载点只看测试目录里的文件（库里的两处表驱动加载点是已复核的，见 ``exposed``）。
     unused: set[str] = set()
-    sites = set(selector.graph.unresolved_dynamic)
+    sites = {rel for rel in selector.graph.unresolved_dynamic if rel.startswith(TESTS_DIR + "/")}
     if sites:
-        unused = selector.graph.unused(path for status, path in merged if status != "D" and path.endswith(".py") and path.startswith(GRAPH_ROOT + "/"))
+        added = [path for status, path in merged if status == "A" and path.endswith(".py") and path.startswith(GRAPH_ROOT + "/")
+                 and not is_test_module(path)]
+        unused = selector.graph.unused(added) if added else set()
     for module in candidates:
         literal = model.environment_sensitive(module)
         if literal is not None and module not in data["reviewed_hermetic"]:

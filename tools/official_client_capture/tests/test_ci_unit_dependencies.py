@@ -376,6 +376,17 @@ class MutationTests(unittest.TestCase):
         self.assertIn("test_ci_shared_thing", pulled(selection))
         self.assertIn("ARM64", reasons(selection, "test_ci_shared_thing")[0])
 
+    def test_mutation_a_new_python_file_nobody_uses_pulls_only_the_modules_that_can_load_by_a_computed_name(self) -> None:
+        loader = ("import importlib\nNAMES = {}\n\n\ndef load(key):\n    return importlib.import_module(NAMES[key])\n")
+        files = {**WORLD, f"{TESTS}/test_ci_shared_thing.py": loader}
+        added = DepWorld(self, files).pick((f"{CAPTURE}/brand_new_lib.py", "NEW = 1\n"))
+        self.assertEqual(sorted(lite(added)), ["test_ci_shared_thing"], "测试里有解析不了目标的动态加载：追踪之后新增、没人使用的 Python 文件可能被它加载")
+        self.assertIn("动态加载", reasons(added, "test_ci_shared_thing")[0])
+        edited = DepWorld(self, files).pick(("tools/ci/helper.py", "X = 3\n"))
+        self.assertEqual(lite(edited), {}, "追踪时就存在的文件，被谁加载过追踪表里有记录；只是改动它不触发")
+        tests_only = DepWorld(self, files).pick((f"{TESTS}/test_brand_new_thing.py", "X = 1\n"))
+        self.assertEqual(lite(tests_only), {}, "新增的测试模块天生没有使用者，它是入口不是被加载的对象")
+
     def test_mutation_the_old_heavy_rules_are_not_weakened(self) -> None:
         """重模块仍走旧口径：改共享内核照样牵到直接导入它的重模块，改枢纽文件只提示（拍板 1）。"""
 
