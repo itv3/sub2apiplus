@@ -1775,12 +1775,18 @@ class MainTrackLiteExpectation0166Tests(MainTrackLiteExpectationTests):
 class Expectation0166WireChecksTests(Expectation0165WireChecksTests):
     """0.166.0 候选期望清单复用 0.165.0 落下的全部判据正反例（W1 configuration_update、W2 出站保真度、W3 整段重放与窗口、SIM-06 的 BODY-003 口径）。
 
-    清单由 0.165.0 终态机械复制：与上一版相比，把版本号换回后逐叶子完全相同（没有任何检查被增删或改动）；
-    目标断言画像校验拒绝任何含 baseline 版本字面量的字符串，所以清单里不得再出现 0.165.0。
-    本类覆盖上一版的“相对 0.164.0 的增量审计”，改为“相对 0.165.0 零差异审计”。
+    清单由 0.165.0 终态复制，之后只有两处登记允许的差异（把版本号换回后逐检查审计，多出或缺少都红）：
+    - SPEC-WS-005 末尾恰好多一个检查 ``post-compaction-incremental-frame-official-form``（A21 压缩后增量帧官方形态）；
+    - SPEC-BODY-006 ``configuration-update-http-first-turn`` 只有描述变化（relay 合成清单已逐模型声明能力位），选择器与断言不变。
+    其余规则、检查逐项相同。目标断言画像校验拒绝任何含 baseline 版本字面量的字符串，所以清单里不得再出现 0.165.0。
+    本类覆盖上一版的“相对 0.164.0 的增量审计”，改为“相对 0.165.0 的精确差异审计”。
     """
 
     MANIFEST_SUFFIX = "0_166_0"
+    # 相对 0.165.0 恰好多出的检查（规则 ID -> 检查 ID，追加在该规则原检查之后）。
+    ADDED_CHECKS_0166 = {"SPEC-WS-005": ["post-compaction-incremental-frame-official-form"]}
+    # 相对 0.165.0 恰好有差异的既有检查（规则 ID，检查 ID）-> 有差异的键；BODY-006 只有描述变化，选择器与断言不变。
+    CHANGED_CHECKS_0166 = {("SPEC-BODY-006", "configuration-update-http-first-turn"): ("description",)}
 
     def test_other_rules_are_untouched_by_the_increment(self) -> None:
         raw = (TOOL_ROOT / "candidate_rule_expectations_0_166_0.json").read_text(encoding="utf-8")
@@ -1793,32 +1799,76 @@ class Expectation0166WireChecksTests(Expectation0165WireChecksTests):
         self.assertEqual(reverted["scenarios"], old["scenarios"])
         self.assertEqual([r["rule_id"] for r in reverted["rules"]], [r["rule_id"] for r in old["rules"]])
         differences = []
+        added_seen = {}
         for new_rule, old_rule in zip(reverted["rules"], old["rules"]):
             rule_id = new_rule["rule_id"]
             # 规则级字段（含 scenario_ids）逐字不变。
             self.assertEqual({k: v for k, v in new_rule.items() if k != "checks"}, {k: v for k, v in old_rule.items() if k != "checks"}, rule_id)
-            # 检查 ID 与顺序逐字不变，没有增删。
-            self.assertEqual([c["id"] for c in new_rule["checks"]], [c["id"] for c in old_rule["checks"]], rule_id)
+            added = self.ADDED_CHECKS_0166.get(rule_id, [])
+            new_ids = [c["id"] for c in new_rule["checks"]]
+            old_ids = [c["id"] for c in old_rule["checks"]]
+            # 检查 ID 与顺序：上一版原样在前，恰好多出声明的检查并追加在末尾，没有其它增删。
+            self.assertEqual(new_ids, old_ids + added, rule_id)
+            if added:
+                added_seen[rule_id] = new_ids[len(old_ids):]
             for new_check, old_check in zip(new_rule["checks"], old_rule["checks"]):
                 if new_check != old_check:
                     keys = sorted(k for k in set(new_check) | set(old_check) if new_check.get(k) != old_check.get(k))
-                    differences.append((rule_id, new_check["id"], tuple(keys)))
-        # 逐检查差异审计：把版本号换回后与上一版完全相同，一条差异都没有。
-        self.assertEqual(differences, [])
-        self.assertEqual(reverted, old)
-        # 叶子数与上一版相同（3321），换版本号不增不减叶子。
+                    differences.append(((rule_id, new_check["id"]), tuple(keys)))
+        self.assertEqual(added_seen, self.ADDED_CHECKS_0166)
+        # 逐检查差异审计：既有检查里恰好只有声明的差异（BODY-006 只改描述），其余把版本号换回后与上一版完全相同。
+        self.assertEqual(dict(differences), self.CHANGED_CHECKS_0166)
+        self.assertEqual(len(differences), len(self.CHANGED_CHECKS_0166))
+        # 把声明的差异还原（去掉新增检查、BODY-006 描述换回上一版）后，整份清单与上一版完全相同。
+        restored = json.loads(json.dumps(reverted))
+        for rule in restored["rules"]:
+            rule["checks"] = [c for c in rule["checks"] if c["id"] not in self.ADDED_CHECKS_0166.get(rule["rule_id"], [])]
+            for check in rule["checks"]:
+                if (rule["rule_id"], check["id"]) in self.CHANGED_CHECKS_0166:
+                    old_check = next(c for r in old["rules"] if r["rule_id"] == rule["rule_id"] for c in r["checks"] if c["id"] == check["id"])
+                    check["description"] = old_check["description"]
+        self.assertEqual(restored, old)
+        # BODY-006 的选择器与断言逐字不变（仍只验根线程）。
+        new006 = next(c for r in reverted["rules"] if r["rule_id"] == "SPEC-BODY-006" for c in r["checks"] if c["id"] == "configuration-update-http-first-turn")
+        old006 = next(c for r in old["rules"] if r["rule_id"] == "SPEC-BODY-006" for c in r["checks"] if c["id"] == "configuration-update-http-first-turn")
+        self.assertEqual((new006["select"], new006["assertion"]), (old006["select"], old006["assertion"]))
+        # 叶子数：上一版叶子数加新增检查的叶子数（BODY-006 描述同为一个叶子，不增减）。
         def leaves(value) -> int:
             if isinstance(value, dict):
                 return sum(leaves(v) for v in value.values())
             if isinstance(value, list):
                 return sum(leaves(v) for v in value)
             return 1
-        self.assertEqual(leaves(json.loads(raw)), leaves(old))
+        added_leaves = sum(
+            leaves(c) for r in reverted["rules"] for c in r["checks"] if c["id"] in self.ADDED_CHECKS_0166.get(r["rule_id"], [])
+        )
+        self.assertEqual(leaves(json.loads(raw)), leaves(old) + added_leaves)
         # SIM-06 在两份清单里都已对齐批准画像 b2：BODY-003 main-messages-keep-passthrough 期望 1。
         for document in (old, reverted):
             body003 = next(rule for rule in document["rules"] if rule["rule_id"] == "SPEC-BODY-003")
             check = next(item for item in body003["checks"] if item["id"] == "main-messages-keep-passthrough")
             self.assertEqual(check["assertion"]["value"], 1)
+
+    def test_replay_checks_are_registered_for_the_three_replay_scenarios(self) -> None:
+        """同 0.165.0 的注册审计，但 0.166.0 在 SPEC-WS-005 末尾多一个检查：上一版新增的 14 个检查原顺序在前，新检查恰好是最后一个。"""
+
+        rule = next(item for item in self.profile["rules"] if item["rule_id"] == "SPEC-WS-005")
+        self.assertEqual(rule["scenario_ids"], ["A05", "A06", "A20", "A21", "A22"])
+        ids = [check["id"] for check in rule["checks"]]
+        added_0166 = self.ADDED_CHECKS_0166["SPEC-WS-005"]
+        self.assertEqual(ids[len(ids) - len(added_0166):], added_0166)
+        previous_ids = ids[:len(ids) - len(added_0166)]
+        added = self.ADDED_CHECKS_0165["SPEC-WS-005"]
+        self.assertEqual(previous_ids[len(previous_ids) - len(added):], added)
+        self.assertEqual(added[:5], ["replay-frame-no-previous-response-id", "replay-frame-no-generate", "replay-frame-carries-full-history",
+                                     "replay-no-second-warmup", "replay-same-connection"])
+        profile_scenarios = {item["scenario_id"]: item for item in self.profile["scenarios"]}
+        for scenario_id in self.REPLAY_SCENARIOS:
+            self.assertEqual(profile_scenarios[scenario_id]["required_artifact_kinds"], ["relay_binary", "websocket_trace"])
+        payload = acceptance_contract.build_contract_payload(self.profile)
+        self.assertEqual(payload["validation_modes"]["SPEC-WS-005"], "candidate_profile")
+        # 规则数不变：新增的是既有规则里的一个检查，不是新规则。
+        self.assertEqual(payload["rule_counts"], {"dual_wire": 25, "candidate_profile": 18})
 
 
 class Manifest0166AgainstPreviousTests(unittest.TestCase):
