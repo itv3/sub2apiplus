@@ -1,0 +1,74 @@
+{
+  "base_commit": "e5a7f1c56fea94eac0bae0e821770bb30efdbdf7",
+  "changed_path_count": 2,
+  "current_commit": "c321c087fa308c491bbbec3ff785e47e58273dd6",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7360,
+  "frozen_path_count": 2318,
+  "identity_sha256": "0ba2605d4386da34b36a7f082241b81ad5453c6dfef390aa8bce1b31f58d5aa5",
+  "issued_at_utc": "2026-10-31T20:58:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-closeout-part2-reseal-20261101-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "a6ad8eed945957c6d0a4888804035d7702acd01f1973b08ce8846b60826395ac"
+      ],
+      "reason": "收尾第二部分最小改写后的重封（第二章摘要变化连锁）（身份守恒基线重封） path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-guide-chain-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-closeout-merge-align-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-assertion-desc-no-baseline-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-guide-chain-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-merge-wsfix-reseal-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-label-first-business-frame-index-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-probe-no-daemon-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-candidate-driver-compaction-frame-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-candidate-driver-prewarm-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-closeout-merge-20261030-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-registration-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-integrate-opt02-reseal-20261030-freeze-successor.json",
+        "docs/egress/maintenance/upstream-reg0166-reseal-20261031-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-ws-end-turn-reseal-20261030-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "243fde21a0d30f10184dad124402597926d9a6dffd7b29b0e68bce72355ae144"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_166_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
