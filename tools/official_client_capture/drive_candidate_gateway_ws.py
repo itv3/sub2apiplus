@@ -671,8 +671,12 @@ def _plan_body(
     input_items: list[dict[str, Any]],
     window_number: int,
     request_kind: str,
+    incremental: bool = False,
 ) -> dict[str, Any]:
-    """一帧非 Lite 入站 response.create（与 A06 的 write_request_body 非 Lite 形态同源），窗口号与回合 id 逐帧给出。"""
+    """一帧非 Lite 入站 response.create（与 A06 的 write_request_body 非 Lite 形态同源），窗口号与回合 id 逐帧给出。
+
+    incremental 为真表示“官方客户端压缩后的普通增量帧”形态：链到上一帧响应、input 只放本轮新增项，
+    顶层不带 instructions／tools（见下方注释）。"""
 
     session_id = PLAN_SESSION_IDS[plan]
     turn_id = _plan_turn_id(plan, index)
@@ -723,6 +727,14 @@ def _plan_body(
         # 所以压缩帧按官方形态合成，不带顶层 instructions／tools。
         del body["instructions"]
         del body["tools"]
+    if incremental:
+        # 官方客户端在 previous_response_id 续链的增量帧上只发本轮新增的输入项（实采 0.165.0 c1 第 3、6 帧都是单个 message），
+        # 载体 additional_tools、instructions、tools 都只在整段重放帧／首个业务帧里出现，增量帧里没有。原先 A21 的增量帧
+        # 是第三方式的（input 带历史用户消息、顶层带 tools／instructions），网关把顶层 tools 搬成 additional_tools 载体，
+        # 出站成了 [additional_tools, message×2]，与官方压缩后增量 [message] 不是同一形态，也没有任何判据选得中它。
+        # 这里沿用压缩帧同类处理：增量帧去掉顶层 instructions／tools，网关就没有可搬的载体。
+        body.pop("instructions", None)
+        body.pop("tools", None)
     return body
 
 
@@ -739,8 +751,8 @@ def build_plan(
     每个计划都先发一帧客户端预热（见模块头注释），首个业务帧链到它的响应。
 
     * model-switch（A20）：主线模型一轮 → 换成第二个模型整段重放 → 换回主线模型整段重放；窗口号始终 0。
-    * compact-continue（A21）：两轮（第二轮增量续链）→ 压缩触发帧（增量，窗口 0）→ 压缩后整段重放（带上游回的
-      compaction 项，窗口号 1）→ 窗口 1 里的增量续轮。
+    * compact-continue（A21）：两轮（第二轮增量续链，官方形态：只带新增一条用户消息）→ 压缩触发帧（增量，窗口 0）→
+      压缩后整段重放（带上游回的 compaction 项，窗口号 1）→ 窗口 1 里的增量续轮（同样只带新增一条用户消息）。
     * effort-change（A22）：目录里不支持 update 的模型 effort low 一轮 → 同一模型 effort high 整段重放；窗口号始终 0。
     """
 
@@ -786,17 +798,18 @@ def build_plan(
         add_client_prewarm(model=main_model, effort="high")
         add("turn-1", True, model=main_model, effort="high", window_number=0,
             input_items=[carrier, _plan_user(users[0])])
-        # 续轮与 A06 同形：保留首轮业务前缀（不含载体）并追加一条用户消息。
-        add("turn-2", True, model=main_model, effort="high", window_number=0,
-            input_items=[_plan_user(users[0]), _plan_user(users[1])])
+        # 续轮按官方压缩前增量帧形态：previous_response_id 续链，input 只放本轮新增的那条用户消息，无顶层 instructions／tools。
+        add("turn-2", True, model=main_model, effort="high", window_number=0, incremental=True,
+            input_items=[_plan_user(users[1])])
         add("compaction", True, request_kind="compaction", model=main_model, effort="high", window_number=0,
             input_items=[{"type": "compaction_trigger"}])
         add("replay-after-compaction", False, model=main_model, effort="high", window_number=1,
             input_items=[carrier, _plan_user(users[0]), _plan_user(users[1]),
                          {PLAN_COMPACTION_MARKER: True}, _plan_user(users[2])])
-        add("turn-after-replay", True, model=main_model, effort="high", window_number=1,
-            input_items=[_plan_user(users[0]), _plan_user(users[1]), {PLAN_COMPACTION_MARKER: True},
-                         _plan_user(users[2]), _plan_user(users[3])])
+        # 压缩后的普通增量帧（窗口 1）：官方形态是 [message]，只带新增的那条用户消息，无顶层 instructions／tools，
+        # 端到端判据 post-compaction-incremental-frame-official-form 选的就是它。
+        add("turn-after-replay", True, model=main_model, effort="high", window_number=1, incremental=True,
+            input_items=[_plan_user(users[3])])
     else:
         if not no_update_model:
             raise ValueError("effort-change 需要 --no-update-model。")

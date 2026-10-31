@@ -575,11 +575,56 @@ class PlanModeTests(unittest.TestCase):
         # 压缩帧按官方形态：顶层没有 instructions／tools（否则网关会在 input 最前补 additional_tools 载体）；其余帧仍带
         self.assertNotIn("tools", steps[3].body)
         self.assertNotIn("instructions", steps[3].body)
-        self.assertTrue(all("tools" in s.body and "instructions" in s.body for i, s in enumerate(steps) if i != 3))
+        # 其余帧里，除压缩后与压缩前的两个官方式增量帧（turn-2、turn-after-replay，见下）外仍带
+        self.assertTrue(all("tools" in s.body and "instructions" in s.body for i, s in enumerate(steps) if i not in (2, 3, 5)))
         marker = driver.PLAN_COMPACTION_MARKER
         replay_marks = [item for item in steps[4].body["input"] if marker in item]
         self.assertEqual(len(replay_marks), 1, "整段重放帧恰有一个压缩项占位，且位于新用户消息之前")
         self.assertEqual(steps[4].body["input"].index(replay_marks[0]), len(steps[4].body["input"]) - 2)
+
+    def test_compaction_plan_incremental_frames_follow_the_official_form(self) -> None:
+        """A21 的两个普通增量帧（turn-2、turn-after-replay）是官方压缩后增量形态：只放新增那一条用户消息，无顶层 tools／instructions。
+
+        首业务帧（turn-1，带载体）与整段重放帧保持原样；帧数、续链关系、窗口号都不因此变化。"""
+
+        _, steps = driver.build_plan("compact-continue", main_model="gpt-6.1-sol", user_text="u")
+        by_label = {s.label: s for s in steps}
+        self.assertEqual(len(steps), 6)
+        turn2, after = by_label["turn-2"], by_label["turn-after-replay"]
+        self.assertEqual(turn2.body["input"], [{"type": "message", "role": "user", "content": "u 2"}])
+        self.assertEqual(after.body["input"], [{"type": "message", "role": "user", "content": "u 4"}])
+        for step in (turn2, after):
+            self.assertEqual(len(step.body["input"]), 1, "增量帧仅 1 条新增项")
+            self.assertNotIn("tools", step.body)
+            self.assertNotIn("instructions", step.body)
+            self.assertTrue(step.chain, "增量帧仍续链上一帧响应")
+            self.assertEqual(step.request_kind, "turn")
+            self.assertIn("reasoning", step.body, "其余顶层字段不受影响")
+        # 首业务帧：载体 + 第一条用户消息，顶层仍带 tools／instructions
+        turn1 = by_label["turn-1"]
+        self.assertEqual([i["type"] for i in turn1.body["input"]], ["additional_tools", "message"])
+        self.assertIn("tools", turn1.body)
+        self.assertIn("instructions", turn1.body)
+        # 重放帧：载体 + 历史 + 压缩占位 + 新消息，顶层仍带 tools／instructions，且无 previous_response_id 续链
+        replay = by_label["replay-after-compaction"]
+        self.assertFalse(replay.chain)
+        self.assertEqual(replay.body["input"][0]["type"], "additional_tools")
+        self.assertIn("tools", replay.body)
+        self.assertIn("instructions", replay.body)
+        self.assertEqual(len(replay.body["input"]), 5)
+        # 窗口号：压缩前增量 0，压缩后增量 1（判据按“有 previous_response_id 且窗口 1”选帧）
+        windows = {s.label: json.loads(s.body["client_metadata"]["x-codex-turn-metadata"])["window_number"] for s in steps}
+        self.assertEqual((windows["turn-2"], windows["turn-after-replay"]), (0, 1))
+
+    def test_other_plans_are_unchanged_by_the_incremental_form(self) -> None:
+        """A20、A22 不动：所有帧仍带顶层 tools／instructions 与载体。"""
+
+        _, a20 = driver.build_plan("model-switch", main_model="a", second_model="b")
+        _, a22 = driver.build_plan("effort-change", main_model="x", no_update_model="y")
+        for step in (*a20[1:], *a22[1:]):
+            self.assertIn("tools", step.body)
+            self.assertIn("instructions", step.body)
+            self.assertEqual(step.body["input"][0]["type"], "additional_tools")
 
     def test_effort_change_plan_changes_only_effort(self) -> None:
         _, steps = driver.build_plan("effort-change", main_model="x", no_update_model="gpt-5.6-sol")
@@ -634,6 +679,16 @@ class PlanModeTests(unittest.TestCase):
             self.assertEqual(frames[2]["previous_response_id"], "resp_candidate_core_a21_0002")
             self.assertEqual(frames[3]["previous_response_id"], "resp_candidate_core_a21_0003")
             self.assertEqual(frames[3]["input"], [{"type": "compaction_trigger"}])
+            # 压缩前后的两个增量帧：官方形态，仅 1 条新增项，无顶层 tools／instructions
+            for incremental in (frames[2], frames[5]):
+                self.assertEqual([item["type"] for item in incremental["input"]], ["message"])
+                self.assertNotIn("tools", incremental)
+                self.assertNotIn("instructions", incremental)
+            # 首业务帧与重放帧保持原样（仍带载体与顶层 tools／instructions）
+            for full in (frames[1], frames[4]):
+                self.assertEqual(full["input"][0]["type"], "additional_tools")
+                self.assertIn("tools", full)
+                self.assertIn("instructions", full)
             self.assertNotIn("previous_response_id", frames[4])
             replay_types = [item["type"] for item in frames[4]["input"]]
             self.assertEqual(replay_types[0], "additional_tools")
