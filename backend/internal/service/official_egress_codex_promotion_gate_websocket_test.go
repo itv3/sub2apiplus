@@ -573,8 +573,14 @@ func TestCodexTurnStateRoundTripReplaysApprovedSemanticsOnTargetRelease(t *testi
 			"第 %d 帧发出时尚未收到 turn-state", index+1)
 	}
 	echoed := gjson.GetBytes(frames[2], `client_metadata.x-codex-turn-state`).String()
-	require.Equal(t, wsTurnState, echoed, "下一帧必须在 client_metadata 回送 turn-state")
-	require.Equal(t, digest(wsTurnState), digest(echoed))
+	if codexGateDeclaresTurnStateReset(profile) {
+		// 画像声明 TurnState.ResetOnNewTurn（后一个版本批准的语义）时，第三帧是新用户轮次的第一个请求，
+		// 不回送上一回合的值；同一回合内的回送由 official_egress_codex_promotion_gate_0165_test.go 的 BODY-004 门禁锁定。
+		require.Empty(t, echoed, "新用户轮次的第一帧不得回送上一回合的 turn-state")
+	} else {
+		require.Equal(t, wsTurnState, echoed, "下一帧必须在 client_metadata 回送 turn-state")
+		require.Equal(t, digest(wsTurnState), digest(echoed))
+	}
 
 	// WS 通道的 owner 变化：新账号的会话即使收到下游回带的旧值也不携带。
 	wsGate.account = otherAccount

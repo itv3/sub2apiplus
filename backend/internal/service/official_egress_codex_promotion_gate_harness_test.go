@@ -81,6 +81,11 @@ func codexGateReleaseModesHolding(holds func(profilecontract.ExecutableProfile) 
 // 两种情形都必须失败而不是退回任一槽位：
 //   - 两个槽位都不具备：目标制品没有入库，门禁无从重放；
 //   - 两个槽位都具备：该事实已不能区分目标制品，门禁失去判别力。
+//
+// 0.166.0 相对 0.165.0 画像补丁为空、没有受影响规则，也就没有判别式门禁调用它；上一轮（0.165）的七条门禁已改走
+// codexGateTargetReleaseMode。保留本函数是为了下一轮有受影响规则时直接使用，lint 的 unused 诊断在此精确豁免。
+//
+//nolint:unused // 下一轮升级有受影响规则时用于写判别式门禁
 func codexGateDiscriminatingReleaseMode(
 	t *testing.T,
 	feature string,

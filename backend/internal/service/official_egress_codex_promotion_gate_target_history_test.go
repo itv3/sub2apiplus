@@ -83,6 +83,14 @@ func TestCodexTurnMetadataHistoryInitializationReplaysApprovedSemanticsOnTargetR
 		case "compaction":
 			// 压缩请求另带官方的 compaction 对象，它不在普通轮次的 22 键边界里，由压缩语义的门禁单独锁定。
 			sorted = slices.DeleteFunc(sorted, func(key string) bool { return key == "compaction" })
+			// 画像声明 HTTP 压缩请求按官方写元数据（TurnMetadata.HTTPCompactionRequests，后一个版本批准的语义）时，
+			// 压缩请求不带 model、reasoning_effort、turn_trigger；本门禁在较旧槽位已具备该语义时据此放宽必需键，
+			// 其余键序与取值断言不变。该语义本身由 official_egress_codex_promotion_gate_0165_test.go 的压缩门禁锁定。
+			if section.HTTPCompactionRequests {
+				required = slices.DeleteFunc(slices.Clone(required), func(key string) bool {
+					return key == "model" || key == "reasoning_effort" || key == "turn_trigger"
+				})
+			}
 		}
 		slices.Sort(sorted)
 		codexGateRequireOrderedSubset(t, sorted, codexGateApprovedTurnMetadataKeys, required, where+" 的 turn metadata 键")

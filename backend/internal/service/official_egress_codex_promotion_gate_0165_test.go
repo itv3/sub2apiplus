@@ -26,23 +26,14 @@ import (
 //   - ClientMetadata.DynamicKeys（BODY-008：client_metadata 的三个动态键由 Executor 编译器写入）。
 //
 // 与「行为用例」（openai_ws_same_connection_replay_test.go 等）的区别：行为用例用夹具把槽位画像的开关强行置位后再断言，
-// 证明的是网关代码能做这些事；本文件的用例用 codexGateDiscriminatingReleaseMode 按画像结构事实定位目标槽位——候选态目标装在
-// previous，晋升后在 active，两个阶段都成立，不写死槽位名——然后**不置位任何开关**，直接在该槽位的正式画像上重放官方 0.165
-// 实采会话，证明被晋升的画像确实声明了这些事实、并且行为与官方一致；另一槽位（上一版）作对照，证明行为由画像驱动。
+// 证明的是网关代码能做这些事；本文件的用例用 codexGateTargetReleaseMode 按画像结构事实定位槽位，**不置位任何开关**，
+// 直接在该槽位的正式画像上重放官方 0.165 实采会话，证明该画像确实声明了这些事实、并且行为与官方一致。
 //
-// 这些用例只在目录里存在 0.165 画像的形态（候选态与晋升后）成立；没有目标制品的集成态会按「目标制品未入库」失败，
-// 与上一轮的判别式门禁同样，随候选链进入收尾分支。下一轮升级之后两个槽位都具备这些事实，用例按继承特征改走
-// codexGateTargetReleaseMode（做法见 official_egress_codex_promotion_gate_0164_test.go）。
+// 本文件原本是 0.165 的判别式门禁（当时只有目标槽位具备这七类事实，另一槽位作对照）。0.166 相对 0.165 线上字节一致、
+// 画像补丁为空，晋升后两个槽位都具备这些事实（继承特征），门禁不再承担判别职责：两个槽位都具备时改在较旧槽位
+// （批准这些语义的 0.165 发布）上重放，作为既有批准语义的回归，对照段随之省略；只有一个槽位具备时行为与改动前逐项一致。
+// 0.166 本身没有受影响规则，因此没有新的判别式门禁。
 // ============================================================================
-
-// codexGateRequireControlReleaseMode 返回另一个槽位作对照。本文件的用例用 codexGateDiscriminatingReleaseMode 定位，
-// 能走到这里说明另一槽位不具备该事实，对照必然成立；这里显式要求，避免对照段被悄悄省略。
-func codexGateRequireControlReleaseMode(t *testing.T, mode string) string {
-	t.Helper()
-	control, ok := codexGateControlReleaseMode(t, mode)
-	require.True(t, ok, "判别式门禁的另一槽位必须不具备该结构事实")
-	return control
-}
 
 func codexGateDeclaresReplayOnSameConnection(profile profilecontract.ExecutableProfile) bool {
 	section := profile.Optional().WebSocketContinuation
@@ -138,7 +129,7 @@ func codexGateRunC1Control(t *testing.T, mode string) [][]byte {
 //
 // 对照：另一槽位的画像没有 ReplayOnSameConnection，整段重放由新连接承接，先发网关补的预热帧，业务帧链在预热响应上。
 func TestCodexReplayOnSameConnectionReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "WebSocketContinuation 声明 ReplayOnSameConnection", codexGateDeclaresReplayOnSameConnection)
+	mode := codexGateTargetReleaseMode(t, "WebSocketContinuation 声明 ReplayOnSameConnection", codexGateDeclaresReplayOnSameConnection)
 
 	for _, scenario := range replayScenarios() {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -192,8 +183,7 @@ func TestCodexReplayOnSameConnectionReplaysApprovedSemanticsOnTargetRelease(t *t
 		})
 	}
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		for _, scenario := range replayScenarios() {
 			t.Run("control/"+scenario.name, func(t *testing.T) {
 				handshakes := replayRunIngress(t, control, replayOfficialUserAgent, replaySteps(t, scenario))
@@ -213,7 +203,7 @@ func TestCodexReplayOnSameConnectionReplaysApprovedSemanticsOnTargetRelease(t *t
 //
 // 对照：另一槽位的画像没有 ResetOnNewTurn，保存的值回送给之后的每个请求，跨回合也回送。
 func TestCodexTurnStateResetReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "TurnState 声明 ResetOnNewTurn", codexGateDeclaresTurnStateReset)
+	mode := codexGateTargetReleaseMode(t, "TurnState 声明 ResetOnNewTurn", codexGateDeclaresTurnStateReset)
 	require.Equal(t, []string{
 		"",                         // 预热帧：还没有任何值
 		replayTurnStateValue(1, 1), // 回合一首帧：预热响应里收到的值随预热过的会话交给第一个回合
@@ -221,8 +211,7 @@ func TestCodexTurnStateResetReplaysApprovedSemanticsOnTargetRelease(t *testing.T
 		"",                         // 回合二首帧：新用户轮次，不回送上一回合的值
 	}, replayRunTurnStateSession(t, mode), "目标槽位：turn-state 只在产生它的回合内回送")
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		require.Equal(t, []string{
 			"", replayTurnStateValue(1, 1), replayTurnStateValue(1, 2), replayTurnStateValue(1, 3),
 		}, replayRunTurnStateSession(t, control), "对照：另一槽位保持旧行为，上一回合收到的值跨回合回送")
@@ -238,7 +227,7 @@ func TestCodexTurnStateResetReplaysApprovedSemanticsOnTargetRelease(t *testing.T
 //
 // 对照：另一槽位的画像不声明该字段，同一入站不合成任何 configuration_update。
 func TestCodexConfigurationUpdateReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "ReasoningEffort 声明 ConfigurationUpdate=http_first_turn", codexGateDeclaresHTTPFirstTurnConfigurationUpdate)
+	mode := codexGateTargetReleaseMode(t, "ReasoningEffort 声明 ConfigurationUpdate=http_first_turn", codexGateDeclaresHTTPFirstTurnConfigurationUpdate)
 
 	defaultsFor := func(slot string) officialOpenAIReasoningDefaults {
 		return officialOpenAIReasoningDefaultsFromContext(NewOfficialEgressContext(OfficialEgressContextInput{
@@ -278,8 +267,7 @@ func TestCodexConfigurationUpdateReplaysApprovedSemanticsOnTargetRelease(t *test
 	}
 	require.Equal(t, 1, count, "整个请求里只有一条 configuration_update")
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		require.False(t, defaultsFor(control).ConfigurationUpdateHTTPFirstTurn, "对照：另一槽位的画像不声明该字段")
 		for _, item := range forward(control) {
 			require.NotEqual(t, "configuration_update", item.Get("type").String(), "对照：另一槽位不合成 configuration_update")
@@ -294,7 +282,7 @@ func TestCodexConfigurationUpdateReplaysApprovedSemanticsOnTargetRelease(t *test
 //
 // 对照：另一槽位的画像不声明 WindowTracking，窗口号恒为 `:0`，不写 window_number 与 context_window_id。
 func TestCodexWindowTrackingReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "TurnMetadata 声明 WindowTracking", codexGateDeclaresWindowTracking)
+	mode := codexGateTargetReleaseMode(t, "TurnMetadata 声明 WindowTracking", codexGateDeclaresWindowTracking)
 	_, steps := codexGateC1Steps(t)
 	session, _ := codexGateC1Steps(t)
 
@@ -347,8 +335,7 @@ func TestCodexWindowTrackingReplaysApprovedSemanticsOnTargetRelease(t *testing.T
 	require.Equal(t, replayFrameTurnMetadata(frames[4]).Get("context_window_id").String(), secondTM.Get("context_window_id").String(),
 		"新连接握手的上下文窗口 id 与窗口 1 的帧相同")
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		legacyFrames := codexGateRunC1Control(t, control)
 		for index, frame := range legacyFrames {
 			label := fmt.Sprintf("对照第 %d 帧", index+1)
@@ -377,7 +364,7 @@ func codexGateCompactionFrameMutation(payload map[string]any, _ map[string]any, 
 //
 // 对照：另一槽位的画像不声明两个压缩开关，压缩请求按普通业务请求处理（补 access_programs，WS 的 request_kind 写 turn，HTTP 仍写 model 等键）。
 func TestCodexCompactionRequestsReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "TurnMetadata 声明 WSCompactionRequests 与 HTTPCompactionRequests", codexGateDeclaresCompactionRequests)
+	mode := codexGateTargetReleaseMode(t, "TurnMetadata 声明 WSCompactionRequests 与 HTTPCompactionRequests", codexGateDeclaresCompactionRequests)
 	session, _ := codexGateC1Steps(t)
 	_, frames := codexGateRunC1(t, mode)
 
@@ -431,8 +418,7 @@ func TestCodexCompactionRequestsReplaysApprovedSemanticsOnTargetRelease(t *testi
 		require.True(t, turnTM.Get(key).Exists(), "HTTP 普通回合请求仍写 %s", key)
 	}
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		legacyFrames := codexGateRunC1Control(t, control)
 		legacy := legacyFrames[3]
 		require.True(t, gjson.GetBytes(legacy, "access_programs").Exists(), "对照：WS 压缩帧按普通业务帧补 access_programs")
@@ -450,7 +436,7 @@ func TestCodexCompactionRequestsReplaysApprovedSemanticsOnTargetRelease(t *testi
 //
 // 对照：另一槽位的画像不声明 RootThreadKeys，不写这两个键。
 func TestCodexRootThreadKeysReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "TurnMetadata 声明 RootThreadKeys", codexGateDeclaresRootThreadKeys)
+	mode := codexGateTargetReleaseMode(t, "TurnMetadata 声明 RootThreadKeys", codexGateDeclaresRootThreadKeys)
 	session, _ := codexGateC1Steps(t)
 	handshake, frames := codexGateRunC1(t, mode)
 
@@ -481,8 +467,7 @@ func TestCodexRootThreadKeysReplaysApprovedSemanticsOnTargetRelease(t *testing.T
 	require.Equal(t, "/root", httpTM.Get("agent_name").String())
 	require.Equal(t, httpTM.Get("turn_id").String(), httpTM.Get("root_turn_id").String(), "HTTP 根线程上 root_turn_id 等于 turn_id")
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		legacyFrames := codexGateRunC1Control(t, control)
 		for index, frame := range legacyFrames {
 			label := fmt.Sprintf("对照第 %d 帧", index+1)
@@ -502,7 +487,7 @@ func TestCodexRootThreadKeysReplaysApprovedSemanticsOnTargetRelease(t *testing.T
 //
 // 对照：另一槽位的画像没有 DynamicKeys，WS 帧的 client_metadata 里没有 root_turn_id。
 func TestCodexClientMetadataDynamicKeysReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "ClientMetadata 声明三个动态键", codexGateDeclaresDynamicClientMetadataKeys)
+	mode := codexGateTargetReleaseMode(t, "ClientMetadata 声明三个动态键", codexGateDeclaresDynamicClientMetadataKeys)
 	session, _ := codexGateC1Steps(t)
 	_, frames := codexGateRunC1(t, mode)
 	for index, frame := range frames {
@@ -549,8 +534,7 @@ func TestCodexClientMetadataDynamicKeysReplaysApprovedSemanticsOnTargetRelease(t
 		require.False(t, metadata.Get("ws_request_header_x_openai_internal_codex_responses_lite").Exists(), name+"：Lite 在 HTTP 上是请求头")
 	}
 
-	{
-		control := codexGateRequireControlReleaseMode(t, mode)
+	if control, ok := codexGateControlReleaseMode(t, mode); ok {
 		legacyFrames := codexGateRunC1Control(t, control)
 		for index, frame := range legacyFrames {
 			require.False(t, gjsonGet(frame, "client_metadata.root_turn_id").Exists(), fmt.Sprintf("对照第 %d 帧：另一槽位不写 root_turn_id", index+1))
