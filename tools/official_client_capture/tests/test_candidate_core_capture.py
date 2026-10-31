@@ -428,11 +428,16 @@ run_response_ws_plan() { record run_response_ws_plan "$@"; }
                 self.assertEqual(subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False).returncode, 0)
 
     def test_0165_replay_scenarios_are_declared_and_labeled_for_the_candidate(self) -> None:
+        for suffix in ("0_165_0", "0_166_0"):
+            with self.subTest(suffix=suffix):
+                self.assert_replay_scenarios_declared_and_labeled(suffix)
+
+    def assert_replay_scenarios_declared_and_labeled(self, suffix: str) -> None:
         """A20～A22 在 candidate-frozen-core 名下有证据条目：scenario_ids 追加、每个场景一条 WS 连接加 pcap，
         标签与帧标签与 A06 同形；期望清单里选 A20～A22 的候选侧判据因此有证据来源。"""
 
         root = Path(__file__).parents[1]
-        manifest = json.loads((root / "codex_upgrade_scenarios_0_165_0.json").read_text(encoding="utf-8"))
+        manifest = json.loads((root / f"codex_upgrade_scenarios_{suffix}.json").read_text(encoding="utf-8"))
         job = next(item for item in manifest["capture_jobs"] if item["id"] == "candidate-frozen-core")
         self.assertEqual(job["scenario_ids"][-3:], ["A20", "A21", "A22"])
         self.assertEqual(job["scenario_ids"][:8], ["A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"])
@@ -441,7 +446,7 @@ run_response_ws_plan() { record run_response_ws_plan "$@"; }
         self.assertEqual(environment["MAIN_MODEL"], "{model}")
         for dependency in ("drive_candidate_gateway_ws.py", "upstream_byte_relay.py", "run_candidate_core_capture.sh"):
             self.assertIn(dependency, job["tool_dependencies"])
-        labels = json.loads((root / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
+        labels = json.loads((root / f"codex_upgrade_evidence_labels_{suffix}.json").read_text(encoding="utf-8"))
         entry = next(item for item in labels["entries"] if item["job_id"] == "candidate-frozen-core")
         rules = {rule["glob"]: rule for rule in entry["rules"]}
         a06 = rules["scenarios/A06/relay/conn001.client_to_upstream.bin"]
@@ -455,7 +460,7 @@ run_response_ws_plan() { record run_response_ws_plan "$@"; }
                 pcap = rules[f"scenarios/{scenario}/egress.pcap"]
                 self.assertEqual((pcap["kind"], pcap["parser"]), ("pcap", "pcap_client_hello"))
         # 期望清单里选 A20～A22 且只在候选侧机器验的规则，都落在这三个场景的 WS 证据上（record_type 为 websocket_frame／http_request）。
-        expectations = json.loads((root / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8"))
+        expectations = json.loads((root / f"candidate_rule_expectations_{suffix}.json").read_text(encoding="utf-8"))
         selected = {
             scenario
             for rule in expectations["rules"]

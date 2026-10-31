@@ -1914,7 +1914,7 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
         """X 路 6.3／6.4 的 5 个官方场景：场景编号接 A18 起，环境按作业环境模板，covers 属于批准规则且被绑定的证据场景证明。"""
 
         scenarios = {item["scenario_id"]: item for item in self.manifest["evidence_scenarios"]}
-        rules = set(json.loads((TOOL_ROOT / "codex_upgrade_rules_0_165_0.json").read_text(encoding="utf-8"))["required_rules"])
+        rules = set(json.loads((TOOL_ROOT / f"codex_upgrade_rules_{self.MANIFEST_SUFFIX}.json").read_text(encoding="utf-8"))["required_rules"])
         self.assertEqual(set(self.EXPECTED_0165), NEW_0165_JOBS)
         for job_id, (scenario_id, scenario, extra, covers) in self.EXPECTED_0165.items():
             with self.subTest(job_id=job_id):
@@ -2001,6 +2001,17 @@ class Scenario0165ManifestParameterTest(Scenario0164ManifestParameterTest):
                 self.assertEqual((rule["labels"]["track"], rule["labels"]["mode"], rule["labels"]["provider"]), ("main", "lite", "openai_oauth"))
                 variants[job_id] = rule["labels"]["variant"]
         self.assertEqual(len(set(variants.values())), 5)
+
+
+class Scenario0166ManifestParameterTest(Scenario0165ManifestParameterTest):
+    """0.166.0 清单（由 0.165.0 终态复制并替换版本号）：作业集合、执行参数与标签同上一版，复用同一组断言（含 0.165.0 新增的 5 个官方定向作业与候选 A20～A22）。
+
+    0.165.0 到 0.166.0 的行为差异（新场景、新定向样本）若要求新增或修改作业，在这里按 0.165.0 的先例（``NEW_0165_JOBS``）追加期望集合。
+    """
+
+    MANIFEST_SUFFIX = "0_166_0"
+    TARGET_VERSION = "0.166.0"
+    UNIT_CAMPAIGN_ID = "c01660-unit"
 
 
 if __name__ == "__main__":

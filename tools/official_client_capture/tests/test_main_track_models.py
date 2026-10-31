@@ -204,6 +204,15 @@ class MainTrackModelTests(unittest.TestCase):
             track_models_for_version("0.165.0", "lite"),
             ("gpt-6-astra",),
         )
+        # 0.166.0：models.json 与 model_presets.rs 相对 0.165.0 逐字节相同，完全沿用两条轨道（gpt-6.1-terra 仍不收录）。
+        self.assertEqual(
+            track_models_for_version("0.166.0", "main"),
+            ("gpt-6.1-sol",),
+        )
+        self.assertEqual(
+            track_models_for_version("0.166.0", "lite"),
+            ("gpt-6-astra",),
+        )
         # 没被实测过的模型不进白名单：新增的 gpt-6.1-terra 不在任何版本的任一轨道里。
         for version in TRACK_MODELS_BY_CODEX_VERSION:
             for track in ("main", "lite"):
@@ -228,6 +237,8 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertIs(track_expected_use_responses_lite("0.164.0", "main"), True)
         self.assertIs(main_track_uses_responses_lite("0.165.0"), True)
         self.assertIs(track_expected_use_responses_lite("0.165.0", "main"), True)
+        self.assertIs(main_track_uses_responses_lite("0.166.0"), True)
+        self.assertIs(track_expected_use_responses_lite("0.166.0", "main"), True)
         # Lite 轨按定义恒为 True，不论主线声明。
         for version in TRACK_MODELS_BY_CODEX_VERSION:
             with self.subTest(version=version):
@@ -244,6 +255,8 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertIs(model_expected_use_responses_lite("0.164.0", "gpt-6-astra"), True)
         self.assertIs(model_expected_use_responses_lite("0.165.0", "gpt-6.1-sol"), True)
         self.assertIs(model_expected_use_responses_lite("0.165.0", "gpt-6-astra"), True)
+        self.assertIs(model_expected_use_responses_lite("0.166.0", "gpt-6.1-sol"), True)
+        self.assertIs(model_expected_use_responses_lite("0.166.0", "gpt-6-astra"), True)
         self.assertIs(model_expected_use_responses_lite("0.160.0", "gpt-5.5"), False)
         self.assertIs(model_expected_use_responses_lite("0.160.0", "gpt-6-astra"), True)
         # 不在该版本两条轨道里的模型一律失败关闭（gpt-5.5 在 0.163.0 已不是受管模型）。
@@ -253,6 +266,8 @@ class MainTrackModelTests(unittest.TestCase):
             ("0.164.0", "gpt-5.5"),
             ("0.165.0", "gpt-5.5"),
             ("0.165.0", "gpt-6.1-terra"),
+            ("0.166.0", "gpt-5.5"),
+            ("0.166.0", "gpt-6.1-terra"),
             ("0.160.0", "gpt-6.1-sol"),
         ):
             with self.subTest(version=version, model=model), self.assertRaises(ConfigurationError):
@@ -327,7 +342,7 @@ class MainTrackModelTests(unittest.TestCase):
         # core 要覆盖它的两条轨道，aux 只覆盖 Lite 轨（frozen-aux 作业固定 Lite 模型）。
         core_required = set()
         aux_required = set()
-        for version in ("0.154.0", "0.163.0", "0.164.0", "0.165.0"):
+        for version in ("0.154.0", "0.163.0", "0.164.0", "0.165.0", "0.166.0"):
             core_required |= set(track_models_for_version(version, "lite")) | set(
                 track_models_for_version(version, "main")
             )
@@ -421,6 +436,11 @@ class MainTrackModelTests(unittest.TestCase):
 
         self.assert_main_jobs_are_lite_and_compaction_declares_first_model("0_165_0")
 
+    def test_0166_main_jobs_are_lite_and_compaction_jobs_declare_the_first_model(self) -> None:
+        """0.166.0 清单由 0.165.0 终态复制，主线仍是 Lite：4 个显式主线作业与压缩首模型声明逐项沿用。"""
+
+        self.assert_main_jobs_are_lite_and_compaction_declares_first_model("0_166_0")
+
     def assert_main_jobs_are_lite_and_compaction_declares_first_model(self, suffix: str) -> None:
         manifest = json.loads(
             (TOOL_ROOT / f"codex_upgrade_scenarios_{suffix}.json").read_text(encoding="utf-8")
@@ -476,6 +496,7 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertEqual(counts["0.163.0"], [("official-core", "true")])
         self.assertEqual(counts["0.164.0"], [("official-core", "true")])
         self.assertEqual(counts["0.165.0"], [("official-core", "true")])
+        self.assertEqual(counts["0.166.0"], [("official-core", "true")])
 
     def test_lite_main_compaction_jobs_use_the_lite_threshold(self) -> None:
         """主线是 Lite 模型时，靠阈值触发自动压缩的主线作业不得比 Lite 轨作业的阈值更高。
@@ -512,7 +533,7 @@ class MainTrackModelTests(unittest.TestCase):
                 limit = int(job["steps"][0]["environment"].get("COMPACT_TOKEN_LIMIT", default))
                 self.assertLessEqual(limit, lite_limit, f"{version} {job['id']}")
             checked.append(version)
-        self.assertEqual(checked, ["0.163.0", "0.164.0", "0.165.0"], "主线声明为 Lite 的版本都要被检查到")
+        self.assertEqual(checked, ["0.163.0", "0.164.0", "0.165.0", "0.166.0"], "主线声明为 Lite 的版本都要被检查到")
         # 旧版本（主线非 Lite）的主线作业不受这条约束，仍用脚本默认值——一字不改。
         legacy = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
         for job in legacy["capture_jobs"]:
@@ -617,6 +638,19 @@ class MainTrackModelTests(unittest.TestCase):
             "expected_use_responses_lite 与 Codex 0.165.0 的 main 轨道声明",
         ):
             codex_upgrade._validate_scenario_manifest_shape(manifest_0165)
+
+        # 0.166.0 清单沿用同一组声明：报错里带的是 0.166.0。
+        manifest_0166 = json.loads(
+            (TOOL_ROOT / "codex_upgrade_scenarios_0_166_0.json").read_text(encoding="utf-8")
+        )
+        for job in manifest_0166["capture_jobs"]:
+            if job["id"] == "official-relay-http-response":
+                job["expected_use_responses_lite"] = False
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "expected_use_responses_lite 与 Codex 0.166.0 的 main 轨道声明",
+        ):
+            codex_upgrade._validate_scenario_manifest_shape(manifest_0166)
 
         # 反向：0.160.0 的主线是非 Lite，把它的主线作业改成 true 同样被拒。
         older = json.loads(
@@ -787,6 +821,22 @@ class ScenarioLoaderDeclarationTests(unittest.TestCase):
         self.assertEqual(by_id["official-lite-http-response"].model_id, "gpt-6-astra")
         self.assertTrue(by_id["official-relay-http-response"].required_model_receipt)
 
+    def test_0166_defaults_and_explicit_jobs_follow_the_lite_declaration(self) -> None:
+        """0.166.0 沿用主线 Lite 声明与两条轨道模型：没写模型字段的作业默认期望仍是 True。"""
+
+        jobs, explicit = self.load_jobs("0.166.0", "gpt-6.1-sol", "gpt-6-astra")
+        defaulted = [job for job in jobs if job.job_id not in explicit]
+        self.assertGreater(len(defaulted), 40, "大多数作业没写模型字段，走加载器默认")
+        for job in defaulted:
+            with self.subTest(job=job.job_id):
+                self.assertEqual(job.track, "main")
+                self.assertIs(job.expected_use_responses_lite, True)
+                self.assertFalse(job.required_model_receipt)
+        by_id = {job.job_id: job for job in jobs}
+        self.assertEqual(by_id["official-relay-http-response"].model_id, "gpt-6.1-sol")
+        self.assertEqual(by_id["official-lite-http-response"].model_id, "gpt-6-astra")
+        self.assertTrue(by_id["official-relay-http-response"].required_model_receipt)
+
     def test_0160_defaults_stay_non_lite(self) -> None:
         """旧版本一字不改：0.160.0 的主线仍是非 Lite 模型，加载器默认仍是 False。"""
 
@@ -841,6 +891,27 @@ class ScenarioLoaderDeclarationTests(unittest.TestCase):
             codex_upgrade._validate_upgrade_pair_models(
                 baseline_version="0.164.0",
                 target_version="0.165.0",
+                model="gpt-6.1-sol",
+                lite_model="gpt-6-astra",
+            )
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.165.0",
+            target_version="0.166.0",
+            model="gpt-6.1-sol",
+            lite_model="gpt-6-astra",
+        )
+        trimmed_166 = {
+            version: flag
+            for version, flag in MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION.items()
+            if version != "0.166.0"
+        }
+        with mock.patch.object(
+            capture_model, "MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION", trimmed_166
+        ), self.assertRaisesRegex(ConfigurationError, "主线 use_responses_lite 声明"):
+            codex_upgrade._validate_upgrade_pair_models(
+                baseline_version="0.165.0",
+                target_version="0.166.0",
                 model="gpt-6.1-sol",
                 lite_model="gpt-6-astra",
             )
