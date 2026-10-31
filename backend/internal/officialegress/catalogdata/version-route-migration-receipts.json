@@ -63,19 +63,19 @@
         "evidence_id": "wham_accounts_check",
         "backend": "http_upstream",
         "adapter_id": "officialegress.http_upstream",
-        "transport_id": "codex-0.164.0-http-ubuntu24-native-long-lived",
+        "transport_id": "codex-0.165.0-http-ubuntu24-native-long-lived",
         "wire_fixture": {
           "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/wire.json",
-          "sha256": "4631d049ddee42dc84d70ee77eca9876cd0ad12cc6b48e87c2585a97fbe24f88"
+          "sha256": "ac528122c46b8ced18103c1f97620a3bdbbff65454e12925d2246c7f5e0add99"
         },
         "execution_verification": {
           "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/execution-verification.json",
-          "sha256": "3c0e54d9da52691997a6acc52176d377831d062a02e0174d0f8ef2a5d26babe5"
+          "sha256": "6efce704542b52b6a3c9a911b4d0fe274d4d7a0c7a05f0be3a52d6cae1998d78"
         }
       },
       "profile_digests": [
         "26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681",
-        "871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d"
+        "29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14"
       ],
       "source": {
         "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
@@ -86,8 +86,8 @@
         "source_blob_sha256": "de0267c6364412801f9a0dda5227a16b7d549e8045b4da51e8a5124cd9680f10"
       },
       "reviewed_by": "codex-version-route-audit",
-      "review_ref": "codex-0.164.0-accounts-check/candidate",
-      "rationale": "0.164.0 新增工作区路由发现 accounts/check endpoint（画像 WorkspaceRouting 节）；正式 Compiler、Executor、adapter 与 terminal Guard 的合成无外部流量捕获已通过；生产 canary acceptance 待生产 canary 实测后补齐。"
+      "review_ref": "codex-0.165.0-accounts-check/candidate",
+      "rationale": "0.165.0 新增工作区路由发现 accounts/check endpoint（画像 WorkspaceRouting 节）；正式 Compiler、Executor、adapter 与 terminal Guard 的合成无外部流量捕获已通过；生产 canary acceptance 待生产 canary 实测后补齐。"
     }
   ]
 }
