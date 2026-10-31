@@ -64,6 +64,10 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 所以沿用两条轨道：主线 gpt-6.1-sol（Lite）、Lite 专项 gpt-6-astra；新增的 gpt-6.1-terra 没有被本升级采过也不是任何轨道的默认模型，
 # 按下面“没被实测过的模型不进白名单”的规则不收录。若以后要把它纳入采集，必须同步改 h1_wire_probe、upstream_byte_relay 与 extract_compaction_reason 的模型集合。
 # 登记时只核对了内置目录；gpt-6.1-sol 对采集账号是否仍可用属于上游服务侧事实，开工前仍要用 codex exec 各发一次最小请求复核。
+# 0.166.0 的内置目录核对（本机 rust-v0.166.0 源码，与 0.165.0 源码树逐文件比较）：models-manager/models.json 与 models-manager/src/model_presets.rs 两个文件
+# 与 0.165.0 逐字节相同（cmp 退出码 0），12 个条目（含 gpt-6.1-terra）、默认排第一的 gpt-6.1-sol（priority=1）、Lite 专项 gpt-6-astra（priority=2）都不变，
+# 所以 0.166.0 与 0.165.0 完全相同：沿用两条轨道（主线 gpt-6.1-sol 是 Lite、Lite 专项 gpt-6-astra），gpt-6.1-terra 仍没有被本升级采过，仍不收录。
+# 同样只核对了内置目录，gpt-6.1-sol 对采集账号是否仍可用开工前仍要用 codex exec 各发一次最小请求复核。
 #
 # 主线只收录已在本升级中实际采过或即将采的模型，而不是所有同 Lite 标志的模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
@@ -117,6 +121,11 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "main": ("gpt-6.1-sol",),
         "lite": ("gpt-6-astra",),
     },
+    "0.166.0": {
+        # 内置目录与 0.165.0 逐字节相同，沿用 0.165.0 的主线 Lite 模型与 Lite 专项模型，gpt-6.1-terra 仍不收录；见上方说明。
+        "main": ("gpt-6.1-sol",),
+        "lite": ("gpt-6-astra",),
+    },
 }
 
 # 各目标版本主线轨道的 use_responses_lite 声明：True 表示主线模型本身就是 Lite 模型。
@@ -143,6 +152,7 @@ MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION: dict[str, bool] = {
     "0.163.0": True,
     "0.164.0": True,
     "0.165.0": True,
+    "0.166.0": True,
 }
 
 
