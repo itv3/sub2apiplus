@@ -65,6 +65,11 @@
       "digest": "26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681",
       "file": "snapshots/0.165.0/26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681.json",
       "version": "0.165.0"
+    },
+    {
+      "digest": "29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14",
+      "file": "snapshots/0.166.0/29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14.json",
+      "version": "0.166.0"
     }
   ]
 }
