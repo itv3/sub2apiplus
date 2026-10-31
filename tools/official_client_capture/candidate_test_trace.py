@@ -394,8 +394,15 @@ FROZEN_MAPPING_SHA256 = (
 # 正则转义版本号 2、EP-006 query 值与描述 2、EP-013 query 值 1、A15 触发描述 1；上一版“从该版起”的行为起点表述上一版登记时已去掉，本版没有需要去掉版本号的表述，
 # 目标断言画像校验（_validate_assertion_profile_manifest，baseline 0.165.0）本机通过。source_spec_sha256 仍是指南第二章当前摘要，指南第二部分换到 0.166.0
 # 后由集成步骤重绑。摘要 f5708a15… 变为 625ef701…。
+# 2026-10-31（0.166.0 集成重冻）：上次冻结（摘要 625ef701…，提交 f0105cc80）之后，候选侧改动（事项 1 合成 /models 逐模型能力位、事项 2④ A21 增量帧官方形态）
+# 又直接在 0.166.0 期望清单上追加了判据，清单字节变了而本常量未跟着重冻。载荷逐项审核（上次冻结点清单对当前清单）：规则 43 条不变；每条规则
+# 除 checks、scenario_ids 外的字段逐字不变；已有 check 0 个被删、1 个被改（见下一条显式允许的审核）；新增 check 1 个（SPEC-WS-005 1）；场景增量 无。摘要 625ef701… 变为 2fd8dceb…。
+# 2026-10-31（0.166.0 集成重冻，显式允许的已有 check 改动）：对 --allow-changed 列出的 check 逐项审核——除 select、description 外逐字不变，select 除 where 外逐字不变，where 只在末尾追加。规则 43 条不变；已有 check 恰有 1 个改动（SPEC-BODY-006 configuration-update-http-first-turn）。叶子级核对（键路径逐叶子比较）：旧 3321 个、新 3339 个叶子，取值变化 1 个、消失 0 个、新增 18 个（新增检查的叶子；变化的是上述 check 的 description）。摘要 625ef701… 变为 2fd8dceb…。
+# 2026-10-31（0.166.0 登记集成）：指南第二部分按 0.166.0 改写（引用换版与三条不收敛理由），第二章摘要由 c7af7936… 变为 9a084313…，
+# 20 份场景／期望清单的 source_spec 摘要随之重绑（脚本断言每份差异恰为一行替换）；本常量绑定的 candidate_rule_expectations_0_166_0.json
+# 载荷审核：与改前逐行比较仅 source_spec 摘要一行不同，规则、场景、选择器与判据逐字不变。整文件摘要 2fd8dceb… 变为 386ed351…。
 FROZEN_PROFILE_SHA256 = (
-    "625ef7011109a6e386fd4514ca40046c29a80760e06ab7e0bc5958a4bc5fd968"
+    "386ed3517a62fae71d28c8707fe2fde107c3c3dff74f7c772fa8eaaaf16457a0"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
