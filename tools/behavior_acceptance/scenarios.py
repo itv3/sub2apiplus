@@ -83,7 +83,7 @@ def render_table() -> str:
 # 公共判据
 # ---------------------------------------------------------------------------------------------
 HOLD = float(os.environ.get("BHV_HOLD", "3.0"))   # error 之后等服务端关闭的最长秒数；超时视为“服务端不关闭”
-MAX_ATTEMPTS = 5                                  # Codex 0.165 的重连上限：连同首次共 5 次连接
+MAX_ATTEMPTS = 5                                  # Codex 0.166 的重连上限：连同首次共 5 次连接
 SKIP_LOG_CHECKS = False                           # --skip-log-checks：不核对依赖日志文案的断言
 
 

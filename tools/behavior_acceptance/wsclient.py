@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """模拟 Codex CLI 的 WebSocket 客户端（标准库）：握手、发 response.create、收事件直到终态或连接关闭。
 
-只做行为验收需要的最小实现：请求头按 Codex 0.165 的形态伪装（网关据此识别官方客户端出站链路），
+只做行为验收需要的最小实现：请求头按 Codex 0.166 的形态伪装（网关据此识别官方客户端出站链路），
 大帧发送用整数异或做掩码，避免对几 MiB 的首帧逐字节循环。"""
 import base64, hashlib, json, os, socket, struct, time, uuid
 
@@ -49,8 +49,8 @@ class WSClient:
             "Host": "%s:%d" % (self.host, self.port), "Upgrade": "websocket", "Connection": "Upgrade",
             "Sec-WebSocket-Key": nonce, "Sec-WebSocket-Version": "13",
             "Authorization": "Bearer " + self.key,
-            "User-Agent": "codex_cli_rs/0.165.0 (Mac OS 26.0.0; arm64) Terminal (codex-tui; 0.165.0)",
-            "originator": "codex_cli_rs", "version": "0.165.0",
+            "User-Agent": "codex_cli_rs/0.166.0 (Mac OS 26.0.0; arm64) Terminal (codex-tui; 0.166.0)",
+            "originator": "codex_cli_rs", "version": "0.166.0",
             "OpenAI-Beta": "responses_websockets=2026-02-06",
             "session_id": self.session_id, "x-client-request-id": str(uuid.uuid4()),
         }

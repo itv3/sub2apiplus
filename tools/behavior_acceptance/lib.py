@@ -415,7 +415,7 @@ def brief(line, limit=300):
 def attempt_once(key, sid, fr, hold=3.0, timeout=30):
     """一次连接：握手、发首帧、读到 completed / 服务端关闭 / error 后 hold 秒仍不关闭。
 
-    Codex 0.165 的行为：收到 error 或 Close 帧都立即重连（放弃旧 TCP）。这里 error 之后等 hold 秒看服务端是否关闭，
+    Codex 0.166 的行为：收到 error 或 Close 帧都立即重连（放弃旧 TCP）。这里 error 之后等 hold 秒看服务端是否关闭，
     超时就判定“服务端不关闭”（held_after_error=True）并放弃旧 TCP。"""
     import socket
     rec = {"events": [], "closed": None, "completed": None, "error": None, "hs": None, "send_err": None,

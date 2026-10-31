@@ -71,7 +71,7 @@ BHV_DETACH=1 bash remote_run.sh ARM64 <镜像> [选项...]   # 后台跑（远�
 
 - **预算档**：`default` 是现网同款准入（预算 256MiB、单请求上限约 37MiB、放大 6.11、固定 25MiB）；`tight` 是预算 64MiB、单请求上限 5MiB，只够一个 3～4MiB 大历史连接（权重＝正文×6.11＋25MiB，约 44～49MiB，两个放不下）。
 - **假上游的默认应答就是事故形态**：对失效密文只发 `error`（HTTP 400 形态、`invalid_encrypted_content`、片段格式与线上一致），不发 `response.failed`，也不断连。需要别的形态时才在 `ctl.json` 里加开关（`emit_failed`、`output_first`、`close_after_error`、`drop_next` 等，见 `wsmock.py` 文件头）。
-- **客户端按 Codex 0.165 的方式重连**：收到 `error` 或 Close 都立即重连（放弃旧 TCP），连同首次最多 5 次连接；`error` 之后等 3 秒（`BHV_HOLD`）看服务端是否关闭，不关闭记为 `held_after_error`。
+- **客户端按 Codex 0.166 的方式重连**：收到 `error` 或 Close 都立即重连（放弃旧 TCP），连同首次最多 5 次连接；`error` 之后等 3 秒（`BHV_HOLD`）看服务端是否关闭，不关闭记为 `held_after_error`。
 - **通过判据**分两类：行为类断言（客户端看到的事件、关闭码、连接次数、假上游收到的出站帧、`websocket_request_memory_rejected`／`websocket_proxy_failed` 计数、账号快照）和日志类断言（带 `[日志]` 标记，依赖网关日志文案，如 `stage=turn_end close_status=1000`、`marked=6`、`reason=compaction_item`）。新版本改了日志文案时，可先用 `--skip-log-checks` 放行日志类，再回来改 `scenarios.py` 里对应的 `log_check` 断言。
 - **事故特征**每个场景各有一个判定（`Recorder.set_signature`），用于 `--expect accident`：标“必现”的场景必须看到事故特征才算复现成功，S6、S8 是回归守卫，不要求。
 - **出站帧核对**用语义视图比较（忽略网关补的开发者基础指令与内部元数据）：消息正文、角色、工具参数与配对 ID、有效推理项密文、压缩项必须原样；失效项密文被清，清完的空推理壳删除或保留均可（0.2.18-5 保留 `{"type":"reasoning","summary":[]}`，真实 GPT 接受它，见原会话复测）。
