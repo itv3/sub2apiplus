@@ -1846,5 +1846,125 @@ class CandidateA06FrameLabelsTests(unittest.TestCase):
         self.assertIsNone(by_index[list(resolved)[0]]["event_type"])
 
 
+class PostCompactionIncrementalFrameTests(unittest.TestCase):
+    """0.166.0 候选期望清单 SPEC-WS-005 `post-compaction-incremental-frame-official-form`：A21 压缩后的普通增量帧必须是官方形态。
+
+    官方压缩后增量帧（0.165.0 c1 实采第 6 帧）：主线、带 previous_response_id、窗口 1，input 只有新增的一条 message，
+    没有 additional_tools 载体、没有历史项。判据只用结构身份选帧（有 prev 且已在窗口 1），不依赖被验证的 input 取值。
+    本类直接读 0.166.0 清单文件，不依赖版本参数化子类；构造观测的辅助方法借用 0.165.0 判据测试类里已有的实现。
+    """
+
+    CHECK_ID = "post-compaction-incremental-frame-official-form"
+    SESSION = Expectation0165WireChecksTests.SESSION
+    official_body = Expectation0165WireChecksTests.official_body
+    session_observations = Expectation0165WireChecksTests.session_observations
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.profile = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_166_0.json").read_text(encoding="utf-8"))
+
+    def check(self, rule_id: str, check_id: str):
+        rule = next(item for item in self.profile["rules"] if item["rule_id"] == rule_id)
+        return rule, next(item for item in rule["checks"] if item["id"] == check_id)
+
+    def selected(self, observations):
+        rule, check = self.check("SPEC-WS-005", self.CHECK_ID)
+        return candidate_rule_assertion._select_observations(observations, check["select"], rule["scenario_ids"])
+
+    def passes(self, observations) -> bool:
+        rule, check = self.check("SPEC-WS-005", self.CHECK_ID)
+        return candidate_rule_assertion._evaluate_assertion(self.selected(observations), check["assertion"])[0]
+
+    @staticmethod
+    def with_input(types):
+        """把请求体的 input 换成给定类型序列（message 带空 content，与 official_body 的业务消息同形）。"""
+
+        def mutate(body, _metadata):
+            body["input"] = [{"type": kind, "role": "user", "content": []} if kind == "message" else {"type": kind} for kind in types]
+        return mutate
+
+    def session(self, *, post=("message",), pre=("message",), drop_post=False):
+        """官方压缩续聊：预热、首业务帧、压缩前增量、压缩帧、整段重放帧、压缩后增量；另有标题线程连接。"""
+
+        build = self.official_body
+        main = [
+            build("prewarm", previous=False),
+            build("turn", first="additional_tools"),
+            build("turn", mutate=self.with_input(pre)),
+            build("compaction"),
+            build("turn", first="additional_tools", window=1, previous=False),
+        ]
+        if not drop_post:
+            main.append(build("turn", window=1, mutate=self.with_input(post)))
+        title = [build("prewarm", model="gpt-5.6-luna", thread="thread_title", previous=False),
+                 build("turn", first="additional_tools", model="gpt-5.6-luna", thread="thread_title", previous=False)]
+        return self.session_observations("A21", {1: main, 2: title})
+
+    def test_check_is_registered_last_in_the_replay_rule_and_reads_only_structure(self) -> None:
+        rule, check = self.check("SPEC-WS-005", self.CHECK_ID)
+        self.assertEqual(rule["checks"][-1]["id"], self.CHECK_ID)
+        self.assertIn("A21", rule["scenario_ids"])
+        self.assertEqual(check["select"]["scenario_ids"], ["A21"])
+        self.assertEqual(check["assertion"], {"operator": "all_equal", "path": "data.shape.input._types", "value": ["message"]})
+        paths = [(item["operator"], item["path"]) for item in check["select"]["where"]]
+        self.assertEqual(paths, [("equal", "labels.thread_role"), ("equal", "data.event_type"),
+                                 ("present", "data.shape.previous_response_id"),
+                                 ("equal", "data.shape._turn_metadata.window_number")])
+        # 选择键里没有任何 input 取值：不依赖被验证的取值。
+        self.assertFalse([item for item in check["select"]["where"] if "input" in item["path"]])
+        self.assertEqual([c["id"] for c in rule["checks"]].count(self.CHECK_ID), 1)
+
+    def test_official_form_incremental_frame_passes(self) -> None:
+        self.assertTrue(self.passes(self.session()))
+
+    def test_only_the_post_compaction_incremental_frame_is_selected(self) -> None:
+        """干扰样本：压缩前增量（窗口 0、有 prev）、压缩帧（窗口 0）、重放帧（窗口 1、无 prev）、预热帧、标题线程都不被选中。"""
+
+        observations = self.session()
+        chosen = self.selected(observations)
+        self.assertEqual([(item.artifact_path, item.data["frame_index"]) for item in chosen], [("relay/conn001.client_to_upstream.bin", 5)])
+        # 干扰样本即使形态不对也不应让判据变红：压缩前增量带载体、重放帧只有一个 message。
+        noisy = self.session(pre=("additional_tools", "message", "message"))
+        self.assertTrue(self.passes(noisy))
+        self.assertEqual(len(self.selected(noisy)), 1)
+
+    def test_third_party_form_incremental_frames_fail(self) -> None:
+        for types in (("additional_tools", "message", "message"),
+                      ("message", "message"),
+                      ("additional_tools", "message", "message", "compaction", "message", "message"),
+                      ("message", "configuration_update")):
+            with self.subTest(types=types):
+                self.assertFalse(self.passes(self.session(post=types)))
+
+    def test_title_thread_frames_in_window_one_are_not_selected(self) -> None:
+        build = self.official_body
+        observations = self.session()
+        extra_title = [build("prewarm", model="gpt-5.6-luna", thread="thread_title", previous=False),
+                       build("turn", first="additional_tools", model="gpt-5.6-luna", thread="thread_title", previous=False),
+                       build("turn", window=1, model="gpt-5.6-luna", thread="thread_title",
+                             mutate=self.with_input(("additional_tools", "message", "message")))]
+        mixed = self.session_observations("A21", {1: [], 2: extra_title})
+        self.assertEqual(self.selected(mixed), [], "标题线程不是主线程，窗口 1 的带 prev 帧也不归这条判据管")
+        self.assertTrue(self.passes([*observations, *mixed]))
+
+    def test_empty_selection_fails_closed(self) -> None:
+        # 压缩后没有增量帧（只有重放帧）：选择为空，必须红，不能空过。
+        self.assertFalse(self.passes(self.session(drop_post=True)))
+        self.assertEqual(self.selected(self.session(drop_post=True)), [])
+        # 完全没有观测、或观测只在别的场景：同样失败关闭。
+        self.assertFalse(self.passes([]))
+        other = [dataclasses.replace(item, scenario_id="A20") for item in self.session()]
+        self.assertFalse(self.passes(other))
+
+    def test_configuration_update_description_states_the_current_relay_behaviour(self) -> None:
+        _, check = self.check("SPEC-BODY-006", "configuration-update-http-first-turn")
+        self.assertNotIn("清单不带该字段", check["description"])
+        self.assertNotIn("合成清单不带", check["description"])
+        self.assertIn("逐模型声明 supports_reasoning_effort_updates", check["description"])
+        # 选择器仍只验根线程（0.165 起的批准修订口径）。
+        self.assertIn({"operator": "equal", "path": "data.body.shape._turn_metadata.thread_source", "value": "user"},
+                      check["select"]["where"])
+
+
 if __name__ == "__main__":
     unittest.main()
