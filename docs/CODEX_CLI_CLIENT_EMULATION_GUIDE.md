@@ -515,7 +515,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `Body.Fields` 按上列槽位重排并移除 `instructions`。画像 `BaseInstructions.IDScheme=uuidv7` 声明增量窗口形态：网关为第三方客户端派生的预热帧 `input` 为
   `[]`，首个业务帧保留 `additional_tools` 与基础指令消息（不再剥离），并以预热响应 id 续链。
   整段重放：画像 `WebSocketContinuation.ReplayOnSameConnection=true` 声明该形态。网关对本会话内自己发过 `generate=false` 预热帧的下游客户端（自管续链），其不带 `previous_response_id`、不带 `generate`、非工具结果续轮的全量帧复用当前上游连接原样转发：不新建连接、不补预热、不链 `previous_response_id`；复用的连接被对端关闭时换新连接重试同一帧，新连接上同样不补预热。从未自己发过预热帧的客户端（第三方每个用户轮次发整段历史）仍由“新连接＋网关预热＋链预热响应”承接，画像不声明该字段时一律如此。官方入站的整段重放帧里 `configuration_update` 在整段历史中原位原字节保留。官方出站的帧编译与最终写入不做 HTML 转义，也不追加换行（`marshalOpenAIWSReadonlyJSON`、`WritePreparedJSON`）。
-  窗口推进：画像 `TurnMetadata.WindowTracking` 声明后网关读客户端原帧的窗口号推进；`CodexIdentityFacts.WindowAdvances` 令 invocation 摘要不再绑定窗口标识。已知偏差：窗口号来源是下游客户端帧里的窗口号，对不发 `x-codex-window-id` 的第三方客户端窗口号不推进（保持 `:0`）。
+  窗口推进：画像 `TurnMetadata.WindowTracking` 声明后网关读客户端原帧的窗口号推进；`CodexIdentityFacts.WindowAdvances` 令 invocation 摘要不再绑定窗口标识。已知偏差：窗口号来源是下游客户端帧里的窗口号，对不发 `x-codex-window-id` 的第三方客户端窗口号不推进（保持 `:0`）。**不收敛的理由**（0.166.0 源码核实）：官方窗口号是 `{thread_id}:{n}`，`n` 在压缩完成、令牌预算压缩开新窗口、`new_context_window` 工具处推进（`core/src/state/auto_compact_window.rs:35-84`、`core/src/compact.rs:416`），官方 Codex 与兼容客户端都发该头，网关已跟随；网关看不到第三方客户端何时压缩，要推进只能按 `/responses/compact` 调用在网关侧保存跨请求、跨实例的会话计数（WS、HTTP 两侧都要改，动冻结台账内的 `official_egress_openai_ws.go` 等），或只数入站历史里的 `compaction` 项（多次压缩后历史只留一个压缩项，会低估）；收益只是第三方会话的窗口号不再恒为 0，上游可观测差异极弱，成本与回归面不匹配，所以保持现状。
 - **状态**：✅ 源码充分；抓包充分（0.165.0 官方 VC-1 的正式场景 A20～A22 覆盖整段重放、压缩后续聊与改 effort；非正式实采保留为补充）。
 
 ## 2.8 Header
@@ -880,7 +880,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   由画像新增的 `BaseInstructions` 节承载；`responses_http`／`responses_ws` 的 `Body.Fields` 均不再含 `instructions`。
   Lite 请求里的基础指令消息与 `additional_tools` 的 id 方案由该节的 `IDScheme=uuidv7` 声明，处理方式见 SPEC-BODY-003。
   0.165.0（网关）：官方入站（HTTP 与 WS）的 `configuration_update` 项原样透传，不补 `internal_chat_message_metadata_passthrough`、不改位置、不参与逐项 `turn_id` 定型（WS 的豁免不论画像版本，旧画像同样适用）。网关内所有“按什么 effort 跑”的读点统一取生效 effort：用量日志（`reasoning_effort`、`requested_reasoning_effort`）、渠道 `reasoning_effort_multipliers` 计费倍率、首包超时、官方 turn metadata 的 `reasoning_effort`；分组 effort 上限／映射／拒绝策略同样作用于每条 `configuration_update`（否则用户在窗口中途改档即可绕过上限）。WS 增量帧（`previous_response_id` 续链）的 `input` 只含新增项，之前帧里的升档靠连接状态沿用（有 update 则记住；无 update 且续链则沿用；首帧、整段重放清掉；预热帧不动），“是否续链”按客户端帧判断。转换到 Chat Completions／Anthropic 的路径上游不认识该项，转换前把最后一条 update 的 effort 折进请求级 effort。
-  第三方入站按 provider 形态合成：**HTTP 出站**（画像 `ReasoningEffort.ConfigurationUpdate=http_first_turn`，对应官方不带 WS 预热的 provider）在模型目录声明 `supports_reasoning_effort_updates`、请求 effort 是已知档位、入站不是官方形态（入站不带官方形态的基础指令消息）、会话不是 guardian／记忆合并时，于“首个用户轮次之后、第一个模型输出项之前”（首轮即 `input` 末尾）合成 `{"type":"configuration_update","reasoning":{"effort":"<请求 effort>"}}`（键序固定，预编码 JSON），之后各请求随第三方客户端重放的历史在同一位置带同一条，同一窗口各请求 `input` 保持前缀关系；`input` 里已有 update、有压缩项、数字档位时不合成；**WS 出站**不合成（首轮由网关补的预热帧钉死，与官方一致）。第三方中途改档时 update 取值随当前请求变化（官方是请求级钉死加追加新 update），登记为已知偏差。
+  第三方入站按 provider 形态合成：**HTTP 出站**（画像 `ReasoningEffort.ConfigurationUpdate=http_first_turn`，对应官方不带 WS 预热的 provider）在模型目录声明 `supports_reasoning_effort_updates`、请求 effort 是已知档位、入站不是官方形态（入站不带官方形态的基础指令消息）、会话不是 guardian／记忆合并时，于“首个用户轮次之后、第一个模型输出项之前”（首轮即 `input` 末尾）合成 `{"type":"configuration_update","reasoning":{"effort":"<请求 effort>"}}`（键序固定，预编码 JSON），之后各请求随第三方客户端重放的历史在同一位置带同一条，同一窗口各请求 `input` 保持前缀关系；`input` 里已有 update、有压缩项、数字档位时不合成；**WS 出站**不合成（首轮由网关补的预热帧钉死，与官方一致）。第三方中途改档时 update 取值随当前请求变化（官方是请求级钉死加追加新 update），登记为已知偏差。**不收敛的理由**（0.166.0 源码核实）：官方在每个窗口第一次采样时钉下基线，请求级 `reasoning.effort` 之后不再变化，每次改档在用户输入后追加新的 `configuration_update`，压缩后清空重钉（`core/src/session/reasoning_effort.rs:28-135`）；我方无会话状态，多实例、重启、重试下取值稳定。收敛要按（账号、线程）保存窗口基线与各次改档的锚点序列并在每个请求里重放，粗估 300～500 行加跨实例存储，落在冻结台账内且被事实映射钉住的 `official_egress_openai_http.go`，算错会改变上游实际执行档位与计费；而差异只出现在“第三方客户端、OAuth 账号、HTTP、有 update 能力的 Lite 模型、会话内改档”这一窄条件下的线上可观测形态，且“上游按最后一条 update 执行”本身未经官方抓包核实，不在其上叠加状态，所以保持现状。
 - **状态**：✅ 源码充分；抓包充分（Lite 分支）。非 Lite 分支没有本轮官方样本，结论依据 0.164.0 与 0.165.0 源码（该路径两版一致）。
 
 ### SPEC-BODY-007 编码工作流 input 类型分布记录
@@ -913,7 +913,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `guardian_credits_requested` 为 `"true"`，WS `response.create` 各场景均带 `mcp_attribution`。0.165.0 官方样本（Campaign `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：
   `http-guardian-credits`、`http-mcp-attribution` 各匹配 4 条（场景 A03、A04 的 HTTP Responses），`ws-guardian-credits`、`ws-mcp-attribution` 各匹配 16 条（场景 A05、A06 的
   `response.create`）。0.165.0 新增的逐请求键（判据 `ws-turn-frame-root-turn-id` 匹配 10 条回合帧、`ws-prewarm-frame-no-root-turn-id` 匹配 3 条预热帧、`ws-frame-request-start-ms` 与 `ws-frame-responses-lite-flag` 各匹配 13 条、`ws-compaction-frame-no-access-programs` 匹配 1 条压缩帧、`http-turn-request-root-turn-id` 匹配 4 条 HTTP 回合请求）同样取自本 Campaign 官方证据。候选断言 `assert-SPEC-BODY-008` 核对 HTTP 与 WS 两类载体的两项取值，以及上述逐请求键。
-- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明的动态键中，`root_turn_id` 同时适用于 WS 帧与 HTTP `/responses` 回合请求（含压缩请求）：HTTP 请求的 `client_metadata` 带 `root_turn_id`，根线程上等于本请求出站的 `turn_id`；子代理、guardian、记忆合并线程不写。Lite 标记与发送时间戳只属于 WS 帧，HTTP 请求体不写；WS 帧的 `root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致（未核实，旧行为同）。
+- **实现**：两项都按字符串写入，不得省略或改为布尔值、对象。画像 `ClientMetadata.DynamicKeys` 声明的动态键中，`root_turn_id` 同时适用于 WS 帧与 HTTP `/responses` 回合请求（含压缩请求）：HTTP 请求的 `client_metadata` 带 `root_turn_id`，根线程上等于本请求出站的 `turn_id`；子代理、guardian、记忆合并线程不写。Lite 标记与发送时间戳只属于 WS 帧，HTTP 请求体不写；WS 帧的 `root_turn_id` 与 Lite 标记取自帧事实，时间戳编译该帧时取当前时间。已知偏差：Lite 标记按连接冻结的 `egressContext.responsesLite` 写，官方按每帧模型写，同一连接上 Lite 与非 Lite 模型互换时会不一致。0.166.0 源码核实：官方代码确实会在同一条 WS 连接上互换（换模型只触发整段重放、不重连，握手头不带 Lite 位，Lite 位只写在每帧 `client_metadata`，`core/src/client.rs:951-966`、`1825-1838`、`2230-2234`）；但官方侧目前不可达：0.165.0 真实账号目录里的模型全是 Lite，内置目录里唯一的非 Lite 模型 `gpt-5.5` 不在账号目录中，`/model` 只列远端目录，子代理与 guardian 各用独立连接。**不收敛的理由**：逐帧重建出站上下文要动冻结台账内、被事实映射钉住的 `official_egress_openai_ws.go` 与连接池，回归面大，而线上没有触发条件。触发条件是账号目录里 Lite 与非 Lite 模型并存：每次升级在 VC-1 取回的 `/models` 里复核一次 `use_responses_lite` 列，出现并存就改为必须收敛。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-BODY-009 x-codex-turn-metadata 的键集合
@@ -1622,6 +1622,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib;from tools.official_clie
 
 **验收盲区**（升级前行为验收套件逐条补上，见 §4.8.3）：①假上游在 `error` 后带了终态（`response.failed`），测不出“只发 `error`、不发终态、不断连”；②Go 测试走 service 层，绕过 handler 的内存准入；③没有大历史首帧；④没有把共享预算压到只够一个连接；⑤只有一个失效项，测不出逐项剥离用尽客户端 5 次重连。**结论**：v0.2.18-5 在 DMIT 用原会话复测成功，经 1 次重连正常返回；这 1 次重连是首次发现失效项的一次性成本（约 5 秒），失效记录在进程内存，网关重启后丢失会再来一次。去掉它的两条路（无上游确认的预剥离、网关内静默重放）风险或改动偏大，已决定不做。**已知限制**：①“一次清完”依赖“OpenAI 自家推理项不带非空 `content`”这个结构假设，万一不成立会误清有效推理上下文（质量下降、无报错）；②已有 token 输出之后只来 `error`、不来终态的情形仍不结束连接（原有行为）；③压缩项被拒这类恢复不了的情形同样是 `error` 加正常关闭，客户端重连用满后只剩通用报错；④上游原有的 `ingress_ws_error_event` 日志照打上游文案，真实上游若给完整密文会进日志；⑤清理后剩下的空推理壳（`{"type":"reasoning","summary":[]}`）是否被上游接受，只有原会话复测能证明，假上游证明不了（本次复测正常）。三轮修复对上游文件的改动只有 `openai_ws_forwarder_ingress.go`（非测试，4 个调用点）和一个上游测试用例，其余都在 fork 独有文件。
 
+
+**0.166 对三条出站已知偏差的处置（逐条核实 0.166.0 源码）。** ①Lite 标记按连接冻结：官方代码确会在同一连接上互换 Lite／非 Lite 模型并逐帧写位，但线上目录里二者不并存，官方侧不可达，不收敛；②第三方客户端窗口号恒为 0：只影响不发窗口头的第三方，网关看不到其压缩时机，不收敛；③第三方中途改档的 update 取值：官方是基线钉死加追加，我方无状态，收敛需跨实例状态存储，不收敛。三条的源码出处与不收敛理由写在第二部分对应规则里（窗口推进在 SPEC-WS-005，configuration_update 合成在 SPEC-BODY-006，Lite 标记按连接冻结在 SPEC-BODY-008）。同一轮收敛了两处候选侧缺口（合成 `/models` 清单补逐模型能力位；A21 压缩后增量帧按官方形态合成并有判据），见 §4.7 教训。触发重新评估的条件：账号 `/models` 里出现 Lite 与非 Lite 并存（①）。
 ---
 
 # 第四部分 Codex CLI 版本演进流程
@@ -2418,11 +2420,12 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   在原 Campaign 内走“修好接着跑”（工具演进 → 对账 → 恢复），不开后继 Campaign、不改网关（当时估计：改驱动 3～4 小时，开后继 Campaign 9～11 小时，改网关 5～6 小时且有生产副作用）。
 - **驱动的压缩帧不得带顶层 `tools`／`instructions`（0.165 A21）**：Lite 规则把它们移成 `additional_tools`，官方压缩帧只有 `compaction_trigger`。驱动带了，网关出站压缩帧就多出 `additional_tools` 前缀，
   SPEC-WS-005／BODY-008／EP-021 共 7 项检查零命中。同样改驱动、第二次工具演进，修后 A21 压缩帧出站恰为 `[compaction_trigger]`。
+- **A21 压缩后的普通增量帧按官方形态合成，并有判据选它（0.166）**：官方压缩后的增量帧是 `[message]`（带 `previous_response_id`、窗口号 1、无 `additional_tools`）。0.165 的驱动发的是第三方式增量（带历史、带顶层 `tools`／`instructions`），网关搬成 `additional_tools` 载体，出站成 `[additional_tools, message×2]`，没有任何检查选它。0.166 驱动只放新增的那条用户消息并去掉顶层 `tools`／`instructions`，SPEC-WS-005 新增 `post-compaction-incremental-frame-official-form`（选 A21 里根线程、带 `previous_response_id`、`window_number=1` 的帧，断言 `input._types == ["message"]`）。**用上一版证据预演这条判据必报“判据不符”**，因为上一版证据是第三方式增量，这是预期红、反证选择器命中且不空，不要当缺陷查。
 - **VC-5 候选采集全过之后、封存之前，先用 `registration_preview` 零请求预演一次**：0.165 候选 10 个作业全过后预演报出 16 处缺陷（5 条规则），在写账、耗根因计数之前拦下；
   逐条定性后，驱动问题走工具演进，判据过严走批准修订，没有一条靠封存后的 assert 失败才发现。
 - **期望判据的选择器要限定根线程（0.165 SPEC-BODY-003／BODY-006，批准修订 b1）**：预演报 A04 的 `client_session_ids_ok=false` 和某条连接首轮缺 `configuration_update`，
   原因是判据把记忆合并与普通子代理线程也选了进来：按官方形态它们的 `session_id` 与 `thread_id` 本就不同（BODY-003）；子代理请求是否合成 `configuration_update`
-  取决于模型清单是否声明 `supports_reasoning_effort_updates`，候选中继伪造的 `/models` 清单不带该字段、生产清单带（BODY-006）。
+  取决于模型清单是否声明 `supports_reasoning_effort_updates`，候选中继伪造的 `/models` 清单不带该字段、生产清单带（BODY-006）；**0.166 已修**：中继合成清单按模型逐个写 `supports_reasoning_effort_updates`（`gpt-6.1-sol`、`gpt-6-astra` 为 true，`gpt-5.6-sol`、`gpt-5.6-luna`、`gpt-5.5` 为 false，依据内置目录与真实账号清单；A22 的 `NO_UPDATE_MODEL` 靠“目录不支持”成立，不能一刀切全开），HTTP 出站对根线程与普通子代理都合成、记忆合并不合成，BODY-006 不再依赖“重启后首个 POST 先于清单加载”的 2～14 毫秒时序。
   处理是 §4.5.5 批准修订 b1：两条判据的 `select` 追加 `thread_source == user`，assert b0 只在这两条失败，b1 全过。收尾要把批准版本落回仓库期望清单
   （`FROZEN_PROFILE_SHA256` 随之带载荷审核重冻），否则下一版继承的就是过严判据。
 - **用外部命令输出做判断的分支，单测样本要取自目标机的真实输出**：keeper 缺席判断只认大写 `No such object`，ARM64 的 Docker 29.1.2 写小写 `error: no such object:`，
