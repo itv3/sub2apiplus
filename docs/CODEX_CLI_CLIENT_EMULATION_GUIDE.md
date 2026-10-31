@@ -2,7 +2,7 @@
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
 >
-> **当前版本**：Active 为 `codex-cli 0.165.0`，Previous 为 `codex-cli 0.164.0`；`0.163.0`、`0.160.0`、`0.157.0`、`0.154.0`、`0.151.0` 与 `0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2，生产激活、回滚与 0.163.0 退休的机器事实见 [`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json)。第二部分描述当前 Active 0.165.0 的规则：本轮 43 条目标规则中 36 条继承，`SPEC-BODY-004`、`SPEC-BODY-006`、`SPEC-BODY-008`、`SPEC-BODY-009`、`SPEC-EP-021`、`SPEC-HDR-007`、`SPEC-WS-005` 变化；会话内改推理强度改走 `configuration_update` 项（请求级 `reasoning.effort` 钉在窗口基线）；WS 出站一条消息一帧且小消息也压缩；回合 id 与会话类标识改为官方 UUIDv7 位布局、回合开始时间由 turn_id 推出；自管续链客户端的整段重放留在原连接上；压缩后上下文窗口号与窗口 id 推进、压缩请求用自己的新回合 id；HTTP 与 WS 的压缩请求、回合 turn metadata 与 `client_metadata` 键集合按官方写出。
+> **当前版本**：Active 为 `codex-cli 0.166.0`，Previous 为 `codex-cli 0.165.0`；`0.164.0`、`0.163.0`、`0.160.0`、`0.157.0`、`0.154.0`、`0.151.0` 与 `0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2，生产激活、回滚与 0.164.0 退休的机器事实见 [`0.166 终态收据`](egress/maintenance/CODEX_CLI_0165_TO_0166_TERMINAL_STATE_RECEIPT.json)。本轮 43 条目标规则中 43 条继承，无变化规则（VC-2 迁移清单全部为 inherit，画像补丁清单为空）；相对 0.165.0 的画像只有版本坐标与 Digest 不同；VC-1 官方断言包与 0.165.0 基线逐场景比对，请求体顶层字段序与 `input` 首项类型一致，线上字节除版本字符串外与上一版一致（官方包多出 `codex-exec-server` 二进制与 `execServer` 包元数据键，code-mode exec 工具描述里生图工具声明新增返回类型，画像与网关均不钉工具目录文本）。第二部分只在开头段补写了当前 Active 与 0.166.0 官方样本的 Campaign，规则正文没有做本轮收尾改写，仍按 0.165.0 官方样本与 0.166.0 源码复核表述，其中的版本取值（UA、`client_version`）以本文 §3.2 与 Runtime Catalog 为准。
 >
 > **权威入口**：共享目标、证据生命周期、升级、发布与回滚以
 > [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 为准；依赖基线见
@@ -1311,7 +1311,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.165.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.166.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -1355,35 +1355,35 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.165.0 active 画像与发布执行契约
+## 3.2 Codex 0.166.0 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.165.0；`26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.164.0 相同）+ 1 个 ReturnedURL 动态端点；可选节新增字段（相对 0.164.0）：`WebSocketContinuation.ReplayOnSameConnection`、`ReasoningEffort.ConfigurationUpdate`、`TurnState.ResetOnNewTurn`、`TurnMetadata.WindowTracking`、`TurnMetadata.WSCompactionRequests`、`TurnMetadata.RootThreadKeys`、`ClientMetadata.DynamicKeys`、`TurnMetadata.HTTPCompactionRequests` | 生产默认 |
-| previous | 0.164.0；`871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.163.0 相同）+ 1 个 ReturnedURL 动态端点；`BaseInstructions` 节新增 `IDScheme=uuidv7`（增量窗口方案：Lite 前缀的 id 是记录时随机的 UUIDv7，WS 预热帧 `input` 为空）；`oauth_refresh` 端点的 Body 闭集在 `grant_type` 与 `refresh_token` 之间增加必填 `refresh_reason`；`images_generations`、`images_edits` 两端点按槽位增加回合头 `x-codex-image-turn-id`（Slot 20）与 `x-codex-turn-metadata`（Slot 25）；`TurnMetadata` 节新增可选的 `SessionDefaults`（图像请求无同回合事实时补默认会话模型，凑齐 14 键） | 受控回滚和历史复算 |
+| active | 0.166.0；`29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.165.0 相同）+ 1 个 ReturnedURL 动态端点；可选节相对 0.165.0 无新增字段（画像补丁清单为空，两份画像只差版本坐标与 Digest） | 生产默认 |
+| previous | 0.165.0；`26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681` | 16 个静态端点（含 `wham_settings_user`、`wham_accounts_check`，与 0.164.0 相同）+ 1 个 ReturnedURL 动态端点；可选节新增字段（相对 0.164.0）：`WebSocketContinuation.ReplayOnSameConnection`、`ReasoningEffort.ConfigurationUpdate`、`TurnState.ResetOnNewTurn`、`TurnMetadata.WindowTracking`、`TurnMetadata.WSCompactionRequests`、`TurnMetadata.RootThreadKeys`、`ClientMetadata.DynamicKeys`、`TurnMetadata.HTTPCompactionRequests` | 受控回滚和历史复算 |
 
-当前 Active 的官方目标身份为 tag `rust-v0.165.0`（commit
-`360319d8dee62d87e2d59fc0c21805d79519cfed`）、`aarch64-unknown-linux-musl` 包
-SHA-256 `c8b2844fdef57498572db960344aee8c836ce9f75c203379da0a9c3a334fc3b7` 和 ARM64 二进制
-SHA-256 `b32ece31af06440da980b733fb8fefdd1f193439595fda84096f1caaceec543f`。原始证据源为 Campaign
-`c01650-formal-vc1-r1-20261029t000000z` 的 attempt `20261029T042703Z-54406f2fab548474`；
-52 个官方 Job 全部 complete。官方证据由该 Campaign 的 VC-1 自采，后续分类、验收、生产激活与 0.163.0 退休由同一
-Campaign 的 canonical 链承接（候选 `c01650-candidate-r1`，attempt `20261029T162303Z-852149fae2d460d5`；
-43 项迁移为 inherit 36、change 7，目标规则 43 条；VC-5 逐规则评估基线采用批准修订 b1：SPEC-BODY-003 main-session-ids-official-form 与 SPEC-BODY-006 configuration-update-http-first-turn 两条判据的选择器追加 turn metadata thread_source 等于 user，只验根线程；仓库 0.165.0 期望清单已与该版本对齐）。
+当前 Active 的官方目标身份为 tag `rust-v0.166.0`（commit
+`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`）、`aarch64-unknown-linux-musl` 包
+SHA-256 `7821b77dda2e6283fb1f63f3165177a271da8833e857cf673c6ca1c9db3bfcc6` 和 ARM64 二进制
+SHA-256 `f2e6c980c937e734644bed1b4a9a018d3e63a0ccbe71aafc85c86a8c6e4b462a`。原始证据源为 Campaign
+`c01660-formal-vc1-r1-20261031t000000z` 的 attempt `20261031T104956Z-3e3bddb7be4fda37`；
+52 个官方 Job 全部 complete。官方证据由该 Campaign 的 VC-1 自采，后续分类、验收、生产激活与 0.164.0 退休由同一
+Campaign 的 canonical 链承接（候选 `c01660-candidate-r1`，attempt `20261031T145251Z-2c7c1d329c9c2d0e`；
+43 项迁移为 inherit 43、change 0，目标规则 43 条）。
 
 VC-6 在 ARM64 上完成：四阶段激活（canary → 切换 → 回滚 → 恢复，每阶段一次真实业务请求均 HTTP 200）所用镜像为
-`sha256:6c732406ea171ce0cabef4437f47978dd9b58cdad71f85617cd7b2340d5071f7`，退休 0.163.0 运行投影后重建的切换镜像
-ID 为 `sha256:9396536bad85ff4060ff0ca4f946c9bf3eeaaa4bb16b939fc45e76c80291bf49`，固定回滚镜像为 v0.2.18-2
-`ghcr.io/itv3/sub2apiplus@sha256:ab9f9b5568f7bb5dbcd2e1944662e15ecbd470e0d5cb37d479c6a39e819907f8`（0.164.0）；
-canonical checkpoint 为 `00000014`，执行集合为空。收尾时 ARM64 运行本地构建的退休后切换镜像；0.165.0 随下一次发版
+`sha256:748a444212bd1668f47e3b6dc37eb1dfe3e38c75b12a1ca4243911aaa1506e76`，退休 0.164.0 运行投影后重建的切换镜像
+ID 为 `sha256:5f0adfd0298432b9a4d6e63b109be4d5da1005885f0402e1c4886b5a5c5cf3a7`，固定回滚镜像为 v0.2.18-5
+`ghcr.io/itv3/sub2apiplus@sha256:48e8ac1b20fdf46d431428407a6286bec79cdf03d96cc7537c2abc0ba6fb998f`（0.165.0）；
+canonical checkpoint 为 `00000007`，执行集合为空。收尾时 ARM64 运行本地构建的退休后切换镜像；0.166.0 随下一次发版
 进入 GHCR 发布镜像，DMIT 等生产机更新按发布流程另行批准。机器事实分别见
-[`0.163.0 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
-和 [`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json)。
-0.163.0 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，画像字节 `d6b5a25a…`（0.163.0 期 Active）因被
-此前各版本的晋升／激活／终态收据逐文件登记而原地保留。此前退休的 0.160.0、0.157.0、0.154.0 两份、0.151.0 一份
+[`0.164.0 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0165_TO_0166_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
+和 [`0.166 终态收据`](egress/maintenance/CODEX_CLI_0165_TO_0166_TERMINAL_STATE_RECEIPT.json)。
+0.164.0 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，画像字节 `cc524283…`（0.164.0 期 Active）因被
+此前各版本的晋升／激活／终态收据逐文件登记而原地保留。此前退休的 0.163.0、0.160.0、0.157.0、0.154.0 两份、0.151.0 一份
 与 0.149.1 两份画像同样原地保留，分别仍由既往终态收据批准。不得据此认为这些文件已删除。
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
@@ -1501,7 +1501,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.164.0／0.165.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.165.0／0.166.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |
@@ -1645,6 +1645,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib;from tools.official_clie
 （收尾仍为 `re-execute` 全集），收益不计。
 
 0.165 轮实测（按上述口径）：准备段约 7.5 小时（10-29 00:40 开工到约 08:10 首次开工预检；与同批工具优化并行开发，不是纯版本登记耗时），正式段约 19 小时（首次开工预检到 10-30 03:19 VC-6 PASS：入口门禁两次共约 4 小时，VC-4 门禁两次，VC-5 约 8 小时 10 分——含两次失败、两次工具演进与一次批准修订，VC-6 本身 18 分 39 秒）；收尾段约 4.6 小时（VC-6 PASS 到 10-30 07:57 推 main：收尾门禁全集 516／516、补跑 0、125 分 35 秒）；推 main 到 Release 约 1.8 小时（CI 跑了三轮：一个分片计时守卫抖动重跑；Security Scan 遇两条新公告，补前端依赖修复；该修复改到上游合并台账的冻结路径、漏补承接收据，再补一轮；Release 本身约 12 分钟），ARM64 换发布镜像约 1 分钟；四段合计约 33 小时。收尾逐单元承接本轮在 ARM64 实跑了 `inherit-propose`，但可承接 0 个单元（来源后台验证都是无审计的 `re-execute`），未组装承接请求，收尾门禁仍走全集，与上文“尚未在真实升级里用过、收益不计”一致。
+
+0.166 轮实测（按上述口径）：准备段约 2 小时（10-31 10:39 开工到约 12:36 首次完整开工预检，登记集成 12:25 交回；与同批工具优化并行开发，不是纯版本登记耗时），正式段约 16 小时（12:36 到 11-01 04:36:21 VC-6 PASS）：入口前的阶段二约 4 小时（受监督部署，整链空跑 1 小时 54 分，全集后台验证 1 小时 52 分），入口门禁约 2 小时 15 分、VC-1 首批官方采集约 67 分钟，VC-4 门禁 1 小时 49 分、`vc4-all` 9 分钟（构建缓存命中），VC-5 约 5 小时 55 分（22:20 到 04:16，含一次 models 探测失败、两次目标平台门禁白跑共约 3 小时，见失败矩阵补充），VC-6 本体 19 分钟（04:17 到 04:36）；收尾段与总工作量以发版完成后的总账为准，指南不预填；收尾逐单元承接在 0.166 轮不启用（来源后台验证 `audit_policy` 为空，可承接 0 个单元），收尾为 `re-execute` 全集。
 
 [Framework §5.3](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 规定 `VC-0 → VC-1 → … → VC-6` 顺序；
 本部分保留 Codex 专用操作与验收合同。脚本参数、安装及实现细节统一见
@@ -2175,8 +2177,8 @@ GitHub 发版成功不等于生产已更新，也不能代替私有证据归档�
 先复核 Compose、静态 IP、两端出口保护和固定镜像，只替换应用容器，数据、依赖服务、挂载和网络不变。
 仅 registry 缺精确 digest 时定向 pull；前后都复核 image ID／RepoDigest。禁止 compose down 和无范围 prune。
 切换后复核 health、日志、依赖、出口、Active、activation fact 与业务结果。业务验证模型须是切换镜像与回滚镜像都实测
-走通过同一入站接口的模型（0.163／0.164／0.165.0 轮用 `gpt-6-astra` 经 `/v1/chat/completions`：主线 `gpt-6.1-sol` 从未经该接口验证，
-回滚镜像以 0.164.0 等旧身份出站也未必能用）。
+走通过同一入站接口的模型（0.163／0.164／0.165.0／0.166.0 轮用 `gpt-6-astra` 经 `/v1/chat/completions`：主线 `gpt-6.1-sol` 从未经该接口验证，
+回滚镜像以 0.165.0 等旧身份出站也未必能用）。
 身份、安全、数据、恢复、旧画像兜底、跨 Bundle fallback 或连接池混用异常，立即按冻结回滚点完整回滚。
 
 ### 4.6.7 回滚、目标恢复与 canonical 终态
@@ -2321,7 +2323,7 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 | 父进程／owner 丢失 | 按预约分流对账 | 自动补收账，按 COMMIT 和正式许可续派，不手写账本事件 |
 | 完整性损坏或永久身份失效 | 对账终态 | 旧链只读，按 Framework 建新候选／后继或新 Campaign |
 
-失败矩阵补充（0.163.0／0.164.0／0.165.0 实测，复核时逐条对照）：
+失败矩阵补充（0.163.0／0.164.0／0.165.0／0.166.0 实测，复核时逐条对照）：
 
 - **VC-5 采集被截停留下无 `attempt.json` 的孤儿 attempt**：失败批次之后的零请求恢复预览改取该候选最新的已批准且已授权预览
   （只读，不代为授权）；先 `reconcile-supervisor-run` 登记失败的预览批次，再 `reconcile-attempt` 重新生成预览（账本头变了，
@@ -2448,6 +2450,41 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   `plan_sha256` 单调推进，无重复批准或授权；但整次恢复仍有约 30 次人工操作（其中 5 次绕路），未达“人工停点不超过 3 个”。
 - **Go 编译缓存不要放在手工建的小 tmpfs 上**：入口门禁的 `go-build-cache` 是 4 GiB tmpfs，磁盘清理清空 Go 缓存后冷启动写满，6 项门禁因 `no space left on device` 红，
   那次门禁（墙钟 111 分钟）未通过，环境修好后整轮重跑。缓存目录放普通磁盘，并为冷启动留足空间。
+- **整链空跑在登记很快时不要跑完整链（0.166）**：登记集成 12:25 就交回，整链空跑（`rehearse.sh`）12:34～14:28 却占了约 1 小时 54 分的关键路径：round 阶段 28 个探针通过、1 个已登记预期缺陷
+  （`prior-candidate-seal-assert-replay`／SPEC-WS-005，A21 新判据对 0.165 旧证据）；之后的 full-chain 6 条只跑过 `chain-vc1-capture`、`chain-vc2-vc5-validation-only` 两条，第三条评估链跑了 48 分钟时
+  被调度者叫停（它占 4 核且与全集后台验证互斥，后台验证因此拖到 14:38 才起），余下 3 条记为“未执行”、不算通过。登记很快且工具层改动不大时，空跑只跑 round 阶段；full-chain 留给工具层有实质改动的版本，
+  且不与全集后台验证抢时间。注意：本轮 VC-1～VC-6 的编排没有出现空跑本应覆盖的缺陷，但这只说明本轮没撞上，不证明省掉 full-chain 总是安全。证据：`/root/codex-0166-prep/rehearse.out`、`fullchain.out`、总账 13:38／14:28／14:41。
+- **VC-5 候选就绪的 models 探测有 3 秒预算，低带宽出口会把它撑破（0.166）**：VC-5 起跑后的第一个缺陷：候选就绪的 `GET /backend-api/codex/models?client_version=0.166.0` 两次 HTTP 500（62 字节
+  `internal error`，约 3.0 秒）。F 路只读诊断（`reports/F.md`）：500 是网关自己产生的，目录取回的调用方预算 `CodexCatalogBaseFetchBudget`＝3 秒到期（后台取回另有 15 秒独立超时），排除出口连通、库表前置改动、令牌失效；
+  调度者补测：官方 0.166 的 `/models` 响应体 655945 字节，容器经出口下载 519KB 中立文件实测 140～320KB/s（22:43～22:49），0.164／0.165 同探测约 2.0～2.1 秒，当晚出口带宽约 200KB/s，失败时吞吐应低于 110KB/s。
+  重跑一次后通过（14:50Z 重起），同根因计数 1/2（`root_cause rc1-b0ed08e3ce0fbfba4926`）。做法：起 VC-5 前先量出口带宽（下载一个约 500KB 的中立文件），目录体 656KB 要在 3 秒内取完需要约 220KB/s 以上；失败后先做只读诊断、不要重复探测，
+  同根因计数到 2 就停采集。“带宽低是根因”是调度者实测加推断，没有逐字节抓包证实。
+- **目标平台门禁被流水线导出的 `VC5_RENEW_APPROVER` 弄红，白跑两次共约 3 小时（0.166）**：`tools/arm64_capture_driver/driver/pipeline/vc-pipeline.sh` 第 605 行把 `--approver` 导出为 `VC5_RENEW_APPROVER` 再起 `vc5-all`（设计目的是 canonical 前自动续管理令牌），
+  而目标平台门禁（`make test-capture-tools`）就在 `vc5-all` 的 accept 阶段里跑，三个用例没有封闭进程环境、会读到这个变量：`test_arm64_capture_driver` 的
+  `Vc5AllResumeTests.test_expired_admission_before_canonical_is_an_explicit_error_not_a_silent_exit`、`test_arm64_pipeline_scripts` 的 `CaptureAccountOrderTests` 两个用例，凡带 `--approver` 起 VC-5 必红。
+  第一次（17:01:07Z 停，用时 1 小时 37 分）调度者先误判为自己手工 export 所致，第二次（17:06:30Z～18:30:42Z，1 小时 24 分）进程环境里确认没有手工变量、读到的是流水线自己的 `--approver` 文本才更正；
+  第三次（18:34:54Z 起，不带 `--approver` 重起 `--from VC5`）通过。绕法：准入收据已 consume 通过、管理令牌离到期还有 ≥12 小时（canonical 的要求）时，不带 `--approver` 重起；
+  门禁红时先看红的用例读到了什么值，再归因。同 0.165 VC-4“测试不封闭进程环境”一类。待办（发版后）：流水线只在 canonical 阶段导出该变量，或给这三个用例 `env -u VC5_RENEW_APPROVER`。
+- **`vc5-prereq.sh` 的 `--key` 是“要临时关掉的那把 Key”，不是采集 Key（0.166）**：脚本头注释把它写成“采集 Key”，调度者第一次传了采集 Key 132，把它关了；发现后立刻 `restore`（逐列比较通过，中间没有请求经过这些 Key），
+  旧备份改名 `vc5-prereq-backup.wrong-key-132-restored`，改传 `--key 3`（分组 3 里另一把活跃 Key）重做。该脚本（`tools/arm64_capture_driver/driver/pipeline/vc5-prereq.sh`）在受管驱动目录里，注释修正只能随版本登记做。证据：总账 22:21。
+- **#90 令牌窗口决定 VC-5／VC-6 的排期上限（0.166）**：ARM64 库里 #90 仍带 `refresh_token`，访问令牌 `exp=22:09:56Z`（北京 11-01 06:09:56）；#90 保持 active 到过期前 30 分钟，网关会提前刷新并轮换刷新令牌，
+  使 DMIT 同一登录失效，所以必须在北京 05:39 前关回；`capture-account-on` 要求开启前剩余 ≥60 分钟，VC-6 里四个带采集步骤（`switch-production`／`switch-rollback`／`switch-restore`／`retire-switch`）
+  最后一个必须在北京 05:09:56 前完成。本轮实况：VC-5 04:11 关回（比 05:39 早 1 小时 28 分），VC-6 最后一个带采集步骤 04:33 关（比 05:09 早 35 分钟），VC-6 本体 19 分钟（04:17～04:36）。
+  两次白跑几乎吃掉全部余量。起 VC-5 之前就把两条硬线（05:09／05:39 这类时刻）和各阶段预估耗时摆在一起算余量，余量不足 3 小时就先请老板重新授权 #90，不要赌。证据：总账 11:07、23:11、04:17。
+- **本机没有 `setsid`，`vc6-handoff-watch.sh`（头注释写的是 `setsid -f`）照写会静默起不来；交接分支名要用候选别名（0.166）**：第一次起的监视其实没起来；改用 Python `start_new_session` 起（04:24），但它在 `local-retire` 前仍没触发（原因没有查明），
+  最后由调度者手工 `vc6-local-commit.sh retire`（12 秒）补上，PC＝`582db846d0`、RPC＝`a90fcb490b`。`sync` 第一次还因 `cand166` 不在别名分支 `codex/codex-0166-candidate-r1` 报错，切过去 24 秒完成。
+  本机后台一律用 `detach.py` 这类 Python 新会话写法；交接前核对候选工作树在别名分支上。证据：总账 04:38。
+- **流水线阶段下限（`PIPE_NEED_VC1`／`PIPE_NEED_VC5`）在阶段预算被首批采集吃掉后会拒绝起跑（0.166）**：VC-1 首批官方采集约 67 分钟吃掉预算，剩下只是封存预览与批准，账本剩 51 分钟＜缺省 90 分钟，`vc-pipeline.sh` 首次 STOPPED，
+  改 `PIPE_NEED_VC1=30` 重起；VC-5 重起时账本剩 185 分钟＜缺省 300 分钟，先后用 `PIPE_NEED_VC5=120`、`60`，并 `deadline-extend` 把 VC-5 阶段截止延到 21:00Z。下限是保守值，首批之后按剩余步骤的真实耗时调低，调低理由写进总账。
+- **VC-1 核对“线上字节与上一版一致”的方法（0.166，画像补丁为空的版本）**：`facts_summary` 对上一版基线与本版官方断言包逐场景比对（113 行，只有作业名、重复样本计数 34→37／19→22 与同值排序不同，请求体顶层字段序与 `input` 首项类型全部一致）；
+  A04 官方样本里 exec 工具目录 `image_gen__imagegen` 的返回类型 `Promise<unknown>`→`Promise<{ image_url: string; output_hint?: string; }>` 只记事实（画像与网关不钉工具目录文本）；
+  `/models` 响应无 `literature_search_query`、`auto_review_suffix`、`approved_command_prefix_saved`、`granular`，`request_permissions`／`omitted_paths`／`denied_reads` 命中数与上一版相同。
+  VC-2 迁移清单 43 条必须全 inherit，这是空补丁版本的硬前提（K 路建链脚本 `fetch` 对画像摘要不符直接 exit 6）。
+- **收尾 b8 证据索引要求第二部分写明 Active 终态收据的 Campaign（0.166）**：`tools/evidence_index.py` 第 929 行校验第二部分里同时出现终态收据的官方证据来源 Campaign 与末级 Campaign；第二部分只有上一版及更早的 Campaign 时，`b8`（重建 `docs/EVIDENCE_INDEX.md`）报“第二部分未写明 Active 终态收据的 Campaign”。登记阶段若按“第二部分不动”安排，收尾会被卡在这一步：至少要改第二部分开头段，第二章摘要随之变，触发 20 份清单与 2 个检查器的连锁、冻结承接收据、身份守恒基线重封和依赖追踪（0.166 侧分支演练：改动 +9／−7，连锁约 35～40 分钟）。做法：收尾第一小时就做第二部分最小改写再跑连锁，与 ARM64 只读取回并行；规则正文（UA、`client_version`、样本匹配数）可不动，其余绑定位置下次登记统一改。连锁里的载荷审核注释由脚本写入，注释措辞要与收尾场景相符（本轮发现登记版脚本把注释写死成“登记集成”，已改收尾版副本）。证据：总账 b8 记录，`reports/C.md` 附录。
+- **VC-5 库表前置的 `restore` 会把其它账号 `extra` 里的运行时键报成 unexpected（0.166）**：VC-6 后 `vc5-prereq.sh restore --key 3` 标 `ok:False`，12 处 unexpected 全是其它账号 `extra` 里随运行变化的键（`upstream_billing_probe` 计数、
+  `*_balance_updated_at`、`cline_*`、`codex_credits_snapshot`），无 `status`／`schedulable`／`credentials` 变化，调度者判良性。下次登记时把这些键加进 `vc5_prereq.py` 的运行时键清单，避免恢复时靠人判断。
+- **磁盘水位（0.166）**：入口前 65%，D 路腾到 57.5%（可用 60G），VC-6 结束后升到 67%（已用 95G／可用 47G）。停线是 ≤69% 且可用 ≥40G，收尾还要放一份权威克隆和门禁工作根（0.165 的 `work-1` 约 440M、
+  测试树与 Go 缓存数 G），VC-6 后派 D 路再腾一轮，11-01 04:46 实测 62%（可用 55G）才开始收尾的 ARM64 写步骤（审计索引）。证据：总账 11:40、04:38，C 路 b5 记录。
 
 #### 暂停种类与放行
 

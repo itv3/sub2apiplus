@@ -1,0 +1,148 @@
+{
+  "audit_index": {
+    "bytes": 2471766,
+    "path": "docs/egress/maintenance/CODEX_CLI_0165_TO_0166_AUDIT_INDEX.json",
+    "sha256": "43cc73b4eb2171c7bd9f06127be7ae7319ce2eed3e5d69bb6e53a4cf39489ef1"
+  },
+  "audit_index_identity_sha256": "98199adeb56fbc42429afdedbbeb1b152623ad83d362978e6d2eb4ad670bbd78",
+  "audit_index_note": "索引由受管工具 tools/codex_audit_index.py generate 以 --no-replay 在 ARM64 生成：逐文件登记 255 个 campaign-run、28 个监督器逐命令 run 与 15 个计时账本的摘要、私有归档坐标与总量，生成后已在证据根上以 check --evidence-root 逐文件复核 6663 个文件无漂移；未执行 UpgradeTimingLedger 重放与监督器审计（--no-replay），完整账本随私有归档保存。",
+  "audit_index_totals": {
+    "byte_count": 19093236,
+    "file_count": 6663,
+    "ledgers_by_kind": {
+      "campaign_run": 255,
+      "supervisor_run": 28,
+      "upgrade_timing_ledger": 15
+    },
+    "runs_audited": 0,
+    "runs_not_audited": 0,
+    "timing_ledger_stop_the_line_events": 6,
+    "timing_ledgers_not_replayable": 0,
+    "timing_ledgers_replayed": 0
+  },
+  "campaign_chain": [
+    {
+      "campaign_id": "c01660-formal-vc1-r1-20261031t000000z",
+      "campaign_manifest_sha256": "20c749ae8007d630e3c09ffe83e17468c04cf12e4f462a8655ea8ca71612bf0f",
+      "note": "0.166.0 官方证据在本 Campaign 的 VC-1 自采（campaign.json 无 predecessor、无 official_evidence_reuse），与第 2 级末级 Campaign 为同一个，分列两项只为标明两种角色",
+      "order": 1,
+      "role": "official_evidence_source"
+    },
+    {
+      "attempt_id": "20261031T145251Z-2c7c1d329c9c2d0e",
+      "campaign_id": "c01660-formal-vc1-r1-20261031t000000z",
+      "campaign_manifest_sha256": "20c749ae8007d630e3c09ffe83e17468c04cf12e4f462a8655ea8ca71612bf0f",
+      "candidate_id": "c01660-candidate-r1",
+      "created_at_utc": "2026-10-31T10:49:31Z",
+      "note": "VC-0～VC-6 全链，末级 Campaign；Runtime Catalog 顶层 source 与 ReleaseGraph active 节点 source 均指向它",
+      "order": 2,
+      "role": "production_replacement",
+      "upgrade_id": "codex-0165-to-01660-r1-20261031t000000z"
+    }
+  ],
+  "campaign_chain_note": "ReleaseGraph 0.166.0 active 节点 build.source 指向本 Campaign 的 classification 摘要，catalog 顶层 source 指向同一 Campaign 的退休事件（retirement:codex-legacy-profile）；Previous 0.165.0 节点 source 仍指向 0.165.0 终态链末级 Campaign。",
+  "canonical": {
+    "execute_item_ids_remaining": [],
+    "final_checkpoint_sequence": 7,
+    "final_checkpoint_sha256": "633cf018328071d5657cf001e8bb5d34363e2e8264a8845e3de9cb582aab0ec9",
+    "final_phase": "VC-6",
+    "item_count": 49,
+    "note": "7 个 checkpoint、49 项全部 complete；VC-6 完成收据 vc6-completion（receipt_digest 8abeda48…）登记链终点。完整 checkpoint 链位于证据根 evidence/campaigns/<末级 Campaign>/canonical/checkpoints/，已随私有归档保存并在异地解包复核。",
+    "vc6_items": [
+      "production-activation",
+      "retire-0.164.0",
+      "rollback-verification"
+    ]
+  },
+  "catalog_promotion": {
+    "bytes": 2637,
+    "path": "docs/egress/maintenance/CODEX_CLI_0165_TO_0166_CATALOG_PROMOTION_RECEIPT.json",
+    "sha256": "28b8d0f2142aa0d47baeabf9eee45699d8926b0d02b4bf440f498ce3950d5ca6"
+  },
+  "completed_at_utc": "2026-10-31T20:36:17Z",
+  "evidence_host": "ARM64",
+  "evidence_root": "/root/docker/capture-cli/data",
+  "identity_algorithm": "sha256(json.dumps(payload_without_identity_sha256, ensure_ascii=False, sort_keys=True, separators=(',', ':')))",
+  "identity_sha256": "0a1728a9b10f589915da1a5a7b4004d3a1366aa6e1853d16d3aaeba5c3561514",
+  "post_promotion_gate": {
+    "bytes": 6279,
+    "path": "docs/egress/maintenance/CODEX_CLI_0165_TO_0166_POST_PROMOTION_GATE_RECEIPT.json",
+    "sha256": "eb073dfe9a06ab6e6cdbe3b9463fd57215c5c936f042789d633df3e550bb7254"
+  },
+  "production_activation": {
+    "bytes": 9050,
+    "path": "docs/egress/maintenance/CODEX_CLI_0165_TO_0166_PRODUCTION_ACTIVATION_RECEIPT.json",
+    "sha256": "4b9fa3bdfdbd9307776816cffeb57ac28eb27174c1bf6c382dc83dfb5d86b1c2"
+  },
+  "production_deployment": {
+    "activation_build_commit": "582db846d0186c6792852478e45ea87d1790ccb9",
+    "activation_image_id": "sha256:748a444212bd1668f47e3b6dc37eb1dfe3e38c75b12a1ca4243911aaa1506e76",
+    "activation_source_tree_sha256": "e4d88c763d58c09d19f2334d1a60fbab4e5d5200ba8a410cef1382afd8f38d3e",
+    "architecture": "linux/arm64",
+    "authoritative_commit": "a90fcb490b3ce265d7d19f1453e1adcbd4a4b51f",
+    "final_image_id": "sha256:5f0adfd0298432b9a4d6e63b109be4d5da1005885f0402e1c4886b5a5c5cf3a7",
+    "host": "ARM64",
+    "note": "四阶段激活（canary → 切换 → 回滚 → 恢复，每阶段一次真实业务请求均 HTTP 200）由 production_activation 收据登记，激活镜像由 production tree 同步提交 582db846d 构建；退休后按 §4.6.7 以 a90fcb490 重建并切换到 final_image_id（retire_switch 通过），Active 0.166.0 与固定回滚镜像坐标不变。source_tree_sha256 = sha256(git ls-files -s 的逐字输出)，已在 a90fcb490 的退休构建树上复算。",
+    "rollback_image_reference": "ghcr.io/itv3/sub2apiplus@sha256:48e8ac1b20fdf46d431428407a6286bec79cdf03d96cc7537c2abc0ba6fb998f",
+    "rollback_version": "0.165.0",
+    "source_tree_sha256": "5d47dbcbbde18f07fe7405c30578c4815af80aba2a33b8fd3139b8e4674498bc"
+  },
+  "promotion_intermediate_snapshot_catalog": {
+    "note": "晋升时产出的中间快照仍含 0.164.0 条目；退休后 selector 指向裁剪版 c591fdb5…，中间快照逐字保留为历史归档",
+    "path": "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/5a320dd5626f883f91349af84c220b0a8fba07f4ac21695114573ba6af4e8ac7.json",
+    "sha256": "5a320dd5626f883f91349af84c220b0a8fba07f4ac21695114573ba6af4e8ac7"
+  },
+  "remote_cleanup": {
+    "decision": "deferred",
+    "note": "§4.6.8 清理按既定决定登记 deferred（清理决定收据 e895abd0…）：只读列出 10 个候选删除目标与必须保留项，未执行任何删除；实际清理另需精确目标批准。生产容器保持在退休后的最终镜像。",
+    "receipt_digest": "e895abd0a43476fc98ced62a130d65708284d191ebd9543b98d930519612a1b8"
+  },
+  "result": "passed",
+  "retained_runtime_profiles": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.164.0/871526df931ac6c0330886fef1a25ac98db1ac3e2cf4cf849828c296a0df3d9d.json",
+      "removed_from_runtime_projection_in_commit": "a90fcb490",
+      "sha256": "cc524283fabd55058eec1b4d36c46c63f7e17b4f287a36e2a43cfddb0ea702c1",
+      "state": "retained_as_frozen_terminal_artifact"
+    }
+  ],
+  "retained_runtime_profiles_note": "0.164.0 的运行画像按指南 §4.6.7 第 1 类保留字节、只移出 Catalog／selector／运行投影：871526df…（0.164.0 期 Active）被前序晋升／激活／终态收据逐文件登记，不得删除、改名或移动；与此前各版本退休同一处置。",
+  "retired_runtime_profiles": [],
+  "runtime_catalog": {
+    "active_profile": {
+      "bytes": 53280,
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.166.0/29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14.json",
+      "sha256": "f29229a3014aac16a73f724c99900396159bbdc66f580ea106f13324a1e73cdc"
+    },
+    "catalog": {
+      "bytes": 533,
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "sha256": "8d98422f6517a169bd73313cb55b39976477054e1cd9a32ee234f16e3cf77b0f"
+    },
+    "release_graph": {
+      "bytes": 4655,
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/50d69e934b98a1d0c392b0e6fcae01446f37a0917ddf0034a754064a673a4c4c.json",
+      "sha256": "50d69e934b98a1d0c392b0e6fcae01446f37a0917ddf0034a754064a673a4c4c"
+    },
+    "snapshot_catalog": {
+      "bytes": 585,
+      "path": "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/c591fdb5ccb5d1cab1b0c45c6dd1b79498af5baf17e9ba46036d8224c3b59ebc.json",
+      "sha256": "c591fdb5ccb5d1cab1b0c45c6dd1b79498af5baf17e9ba46036d8224c3b59ebc"
+    }
+  },
+  "runtime_profile_removal": {
+    "bytes": 3778,
+    "path": "docs/egress/maintenance/CODEX_CLI_0165_TO_0166_RUNTIME_PROFILE_REMOVAL_RECEIPT.json",
+    "sha256": "ba192ba17d5246010367905d18bca1f7db5f00edd6967bb3bafce08181ca5108"
+  },
+  "schema_version": "official-client-codex-0.166.0-terminal-state/v1",
+  "target": {
+    "previous_profile_sha256": "26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681",
+    "previous_version": "0.165.0",
+    "profile_id": "codex-0.166.0-official-r1660-r1",
+    "profile_sha256": "29ec92732bf61dca01652e632dc05b2be4c86bbad4a51234918b51a2e13b1a14",
+    "version": "0.166.0"
+  },
+  "transitions": [],
+  "transitions_note": "源码与台账漂移由 docs/egress/maintenance/ 下本轮各 freeze-successor 承接，本收据不重复登记仓库级 transitions。"
+}
