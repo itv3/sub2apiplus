@@ -1616,6 +1616,44 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.input._types",
+            "value": [
+              "message"
+            ]
+          },
+          "description": "压缩之后的普通增量帧是官方形态：A21 里主线、带 previous_response_id 且已在窗口 1 的 response.create 帧，input 恰为单个 message（官方压缩后增量只带本轮新增的用户消息，不再带 additional_tools 载体或历史项；压缩帧在窗口 0、整段重放帧与预热帧没有 previous_response_id，所以只命中压缩后的增量帧；选择键只用结构身份，不依赖被验证的 input 取值）",
+          "id": "post-compaction-incremental-frame-official-form",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A21"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.thread_role",
+                "value": "main"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              },
+              {
+                "operator": "present",
+                "path": "data.shape.previous_response_id"
+              },
+              {
+                "operator": "equal",
+                "path": "data.shape._turn_metadata.window_number",
+                "value": 1
+              }
+            ]
+          }
         }
       ],
       "description": "response.create 字段遵循固定槽位和条件省略",
@@ -3784,7 +3822,7 @@
             "path": "data.body.shape.input._types",
             "value": "configuration_update"
           },
-          "description": "不带 WS 预热的 OpenAI provider（正式 HTTP 采集用，名叫 OpenAI、supports_websockets=false）首轮 input 末尾带 configuration_update；候选侧第三方入站的 HTTP 出站（画像声明 http_first_turn、目录支持该模型、请求 effort 是已知档位）同形。有 WS 预热的路径首轮不带，所以只选标了 ws_prewarm=none 的样本（数字档位样本不产生，已另有判据排除）；select 追加 turn metadata 的 thread_source 为 user，只验根线程：普通子代理请求的合成取决于模型清单是否声明 supports_reasoning_effort_updates，候选 relay 的合成清单不带该字段，清单进入后的子代理请求不合成，不能代表网关行为。",
+          "description": "不带 WS 预热的 OpenAI provider（正式 HTTP 采集用，名叫 OpenAI、supports_websockets=false）首轮 input 末尾带 configuration_update；候选侧第三方入站的 HTTP 出站（画像声明 http_first_turn、目录支持该模型、请求 effort 是已知档位）同形。有 WS 预热的路径首轮不带，所以只选标了 ws_prewarm=none 的样本（数字档位样本不产生，已另有判据排除）；select 追加 turn metadata 的 thread_source 为 user，只验根线程：选择键只依赖请求的结构身份，不依赖被验证的取值。候选 relay 的合成清单已按目录逐模型声明 supports_reasoning_effort_updates，根线程与普通子代理的 HTTP 请求都会合成该项（记忆合并请求按设计不合成），因此这条检查不再依赖首个 POST 与清单加载的先后；普通子代理与记忆合并的行为由网关单测与本机回放承担，不在这里验证。",
           "id": "configuration-update-http-first-turn",
           "select": {
             "record_type": "http_request",
