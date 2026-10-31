@@ -523,10 +523,10 @@
       },
       {
         "path": "core/src/session/session.rs",
-        "start": 735,
+        "start": 728,
         "end": 738,
-        "context_sha256": "330fae15b03d008f540c89c8be5355f7935d15ede05f1639c560df791613e818",
-        "anchor": "&& responses_metadata.parent_response_id.as_deref() == Some(parent.id.as_str())"
+        "context_sha256": "dbcf1dc9b71a42e93811d849df31458ea0e925752901adc88f8062b7db8ac63a",
+        "anchor": "if responses_metadata.subagent_header.as_deref()"
       },
       {
         "path": "core/src/client.rs",
@@ -895,6 +895,34 @@
         "end": 108,
         "context_sha256": "d795b27a18d53c3839fa36e8d0a99ddcb34d5f73a65aa8c3c3268d3dd45a3ac4",
         "anchor": "options.thread_extension_init.insert(CodexResponsesHeaders {"
+      },
+      {
+        "path": "ext/guardian-v2/src/sync_reviewer/mod.rs",
+        "start": 101,
+        "end": 108,
+        "context_sha256": "d795b27a18d53c3839fa36e8d0a99ddcb34d5f73a65aa8c3c3268d3dd45a3ac4",
+        "anchor": "options.thread_extension_init.insert(CodexResponsesHeaders {"
+      },
+      {
+        "path": "core/src/session/session.rs",
+        "start": 728,
+        "end": 738,
+        "context_sha256": "dbcf1dc9b71a42e93811d849df31458ea0e925752901adc88f8062b7db8ac63a",
+        "anchor": "if responses_metadata.subagent_header.as_deref()"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1430,
+        "end": 1449,
+        "context_sha256": "c68f3bb2dbfdeecd1794403aaff2ab98513e0093b8f1126c4cfed80fcb2dde9d",
+        "anchor": "parent_routing_affinity: Option<&codex_http_client::ChatGptRoutingAffinity>,"
+      },
+      {
+        "path": "http-client/src/chatgpt_routing_affinity.rs",
+        "start": 88,
+        "end": 110,
+        "context_sha256": "207bf5c46ae7cff79f5c446b572bfe19b0d56b69794e7ee9e6c9fe9f6fed0185",
+        "anchor": "pub fn merge_cookie_header("
       }
     ],
     "SPEC-BODY-001": [
@@ -1320,6 +1348,34 @@
         "end": 98,
         "context_sha256": "5e609c65095000189928a3c1f7ab187f9db15843ff6effed5310f35267eb99e9",
         "anchor": "pub async fn generate("
+      },
+      {
+        "path": "ext/image-generation/src/tool.rs",
+        "start": 707,
+        "end": 720,
+        "context_sha256": "ee23ee982e407ad819155f01b9912b1e72aee5a78cd92bf6828f45fc9681a613",
+        "anchor": "output_schema: Some("
+      },
+      {
+        "path": "tools/src/code_mode.rs",
+        "start": 178,
+        "end": 178,
+        "context_sha256": "b4554150c3efde801b9815a9a04ce31037680c8bfa005c52ec80181405fc2687",
+        "anchor": "output_schema: tool.output_schema.as_ref().map(ToolOutputSchema::to_value),"
+      },
+      {
+        "path": "tools/src/code_mode.rs",
+        "start": 209,
+        "end": 209,
+        "context_sha256": "838825cc0939ac8213c93a2e71bc709ee730c27105961cdc37df1a711d654f93",
+        "anchor": "output_schema: tool.output_schema.as_ref().map(ToolOutputSchema::to_value),"
+      },
+      {
+        "path": "ext/image-generation/src/backend.rs",
+        "start": 80,
+        "end": 93,
+        "context_sha256": "7f225fa4b196fe4507f9c58cc2eeae0a8c365db21a77e2b1271f1ee435abc7dd",
+        "anchor": "async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, ImageBackendError> {"
       }
     ],
     "SPEC-EP-002": [
@@ -1623,6 +1679,34 @@
         "end": 289,
         "context_sha256": "c2aff1b3776cdc9c9bcc8535a3a77e026384e13ac73017889c5ea9137f826195",
         "anchor": "pub(crate) fn current_meta_value_for_extension_request("
+      },
+      {
+        "path": "codex-api/src/search.rs",
+        "start": 36,
+        "end": 38,
+        "context_sha256": "ba82f6d9dda48f69716c6d2689b74b5b35f701a7c65e4912251ead3e771088ff",
+        "anchor": "/// Search for scientific papers. Open relevant papers and cite the primary sources you use."
+      },
+      {
+        "path": "ext/web-search/src/schema.rs",
+        "start": 23,
+        "end": 28,
+        "context_sha256": "e6864d80033785dde722dfbf70c8df519fc4d8a813a11fd97cd5d39d57c48c08",
+        "anchor": "if !supports_literature_search"
+      },
+      {
+        "path": "ext/web-search/src/extension.rs",
+        "start": 148,
+        "end": 148,
+        "context_sha256": "bc281fb8dc8f71f142d16d9c9f821798407bd6ed584bfd2bf2d53943fe78a10e",
+        "anchor": "supports_literature_search: step_store.get::<ModelInfo>().is_some_and(|model| {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 105,
+        "end": 109,
+        "context_sha256": "b7fcf77db01646f9060653a417cfa80eca04823126e64b9e9ff8da6e49e3cd08",
+        "anchor": "let (provider, auth) = self"
       }
     ],
     "SPEC-EP-019": [

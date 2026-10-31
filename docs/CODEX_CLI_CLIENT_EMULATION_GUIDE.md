@@ -494,7 +494,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   的增量项由 `get_incremental_items`（`core/src/client.rs` 第 1639-1670 行）取出，预热帧为空时整份 `request.input` 都是增量。官方单测
   `core/tests/suite/agent_websocket.rs` 的 incremental tools 用例断言预热帧 `input` 为 `[]`、业务帧续链预热响应且 `input` 含 `additional_tools`。
   整段重放的判定与构造：`core/src/client.rs:378-411`（`NonIncrementalReason`）、`core/src/client.rs:422-486`（`responses_request_properties_mismatch`）、`core/src/client.rs:1639-1670`、`core/src/client.rs:1682-1700`、`core/src/client.rs:1803-1880`（`websocket_connection` 只在 `responses_headers`／`connection_key` 变化、连接已关、认证 owner 变化时重建；0.166.0 另增 `runtime_id` 与 guardian 审阅请求的 `parent_routing_affinity` 两个重建条件，
-前者只在 `runtime_agent_instances` 特性（开发中、默认关闭，`features/src/lib.rs:2253-2257`）下非空，后者只在 guardian 审阅请求里取值（`core/src/session/session.rs:735-738`），普通会话的重建条件不变）、`core/src/client.rs:2302-2312`（全量帧构造）。官方单测 `core/tests/suite/client_websockets.rs` 第 2416-2464 行（`model_changed` 单连接）、第 2258-2303 行、第 2475-2573 行，`core/tests/suite/reasoning_effort_override.rs` 第 1017-1140 行（均为测试代码，仅作旁证）。
+前者只在 `runtime_agent_instances` 特性（开发中、默认关闭，`features/src/lib.rs:2253-2257`）下非空，后者只在 guardian 审阅请求里取值（`core/src/session/session.rs:728-738`），普通会话的重建条件不变）、`core/src/client.rs:2302-2312`（全量帧构造）。官方单测 `core/tests/suite/client_websockets.rs` 第 2416-2464 行（`model_changed` 单连接）、第 2258-2303 行、第 2475-2573 行，`core/tests/suite/reasoning_effort_override.rs` 第 1017-1140 行（均为测试代码，仅作旁证）。
 - **实测**：`clean-tool-20260728T132346Z`（R）覆盖 Lite；
   `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧；这两份 R 类样本采集版本早于 0.164.0，字段顺序以
   0.164.0 官方样本为准，只用于说明 warmup 与增量帧的条件语义（其中预热帧携带前缀是 0.163.0 及更早的形态）。0.164.0 官方样本（Campaign
@@ -685,6 +685,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   该机制在 0.149.1 不存在；0.164.0 官方样本同样未覆盖 guardian 审阅请求（`guardian-reviewer-value` 匹配 0 条，`http-guardian-absent` 匹配 1 条、`ws-guardian-absent` 匹配 5 条），头序与取值沿用 0.157.0 官方样本。
   0.165.0 复核：头的注入点（`ext/guardian-v2/src/sync_reviewer/mod.rs:101-108`，与 0.164.0 逐字节相同）与三处判定未变，仓库内 `x-codex-guardian` 字面量仍只出现在注入点、
   `classifier` 取值处与判定函数三处，没有新取值；0.165.0 新增的开发中特性 `GuardianV3` 与 `GuardianRecordedItems`（均默认关闭）不改变该头（后者只给审阅会话的 turn metadata 加键，见 SPEC-BODY-009）。
+  0.166.0 复核：注入点（`ext/guardian-v2/src/sync_reviewer/mod.rs:101-108`）与三处判定仍未变，头的取值与位置不变；新增一处握手差异——guardian 审阅请求的 WS 握手在有父会话路由亲和时
+  （亲和值取自父响应流，`core/src/session/session.rs:728-738`），`connect_websocket` 会把 `Cookie` 头里的路由 cookie（`__oailb`、`__cflb`）替换为该亲和值并排到值的末尾，其余 cookie 原样保留
+  （`core/src/client.rs:1430-1449`，`http-client/src/chatgpt_routing_affinity.rs:88-110`）；0.157.0 以后的官方样本都没有 guardian 审阅请求，这条握手 Cookie 行为未经官方抓包核实，画像尚未覆盖。
 - **实测**：0.157.0 官方 guardian 审阅 WS 握手为 `…x-codex-turn-metadata, x-codex-parent-thread-id,
   x-openai-subagent, openai-beta, x-codex-guardian, sec-websocket-extensions`，取值 `reviewer`，没有 routing hint；
   A03、A05 普通请求均不带该头。候选断言 `assert-SPEC-HDR-010` 核对取值与两类普通请求不发送。
@@ -960,6 +963,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 - **源码**：[L1] `core/src/tools/spec_plan.rs:103-104`、
   `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:80-127`、
   `ext/image-generation/src/backend.rs:130-150`、`codex-api/src/endpoint/images.rs:62-98`。
+  0.166.0 复核：生图工具声明新增返回类型 `output_schema`（`ext/image-generation/src/tool.rs:707-720`，经 `tools/src/code_mode.rs:178`、`tools/src/code_mode.rs:209` 传入 code-mode 声明），
+  Lite 的 `input.additional_tools` 里 exec 工具目录中 `image_gen__imagegen` 的返回类型由 `Promise<unknown>` 变为 `Promise<{ image_url: string; output_hint?: string; }>`；
+  画像与网关都不钉工具目录文本，独立 images 请求的 URL、header、body 不变；`client()`（`ext/image-generation/src/backend.rs:80-93`）改为 `api_provider_and_auth()` 一次取 provider 与 auth。
 - **实测**：`audit-body002-plain-20260730a`（非 Lite）、
   `clean-image-20260728T132405Z`（Lite + generations）、
   `relay-imgedit1`（edits），均含 R。
@@ -1120,6 +1126,9 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `ext/web-search/src/tool.rs:117-127`、`ext/web-search/src/tool.rs:192-202`。
   0.164.0 复核：线序与 body 未变；`x-codex-turn-metadata` 的值改由 `current_meta_value_for_extension_request` 生成（`core/src/turn_metadata.rs:282-289`），
   在原先的 MCP 模板之外带上已配置的 Responses 元数据（该元数据由嵌入宿主经 `Config` 传入，官方 CLI 默认为空），默认下键集合与 0.163.0 相同（未经官方样本核实）。
+  0.166.0 复核：线序与 body 顶层字段未变；`commands` 里新增可选键 `literature_search_query`（`codex-api/src/search.rs:36-38`，为空不序列化），`web__run` 工具声明里该属性只在模型清单的
+  `experimental_supported_tools` 含 `literature_search_query` 时保留（`ext/web-search/src/schema.rs:23-28`，能力取自 `ext/web-search/src/extension.rs:148`），内置模型清单不含，
+  所以默认请求不变，服务端清单下发后才会出现；请求构造改为 `api_provider_and_auth()` 一次取 provider 与 auth（`ext/web-search/src/tool.rs:105-109`）。
 - **实测**：`clean-search-20260728T132311Z`（R）在同一运行取得两次请求和两种 commands；0.157.0 官方
   alpha-search 样本线序为上列十一项。候选断言 `assert-SPEC-EP-015` 核对两次请求线序一致、body 顶层字段与两阶段
   command 不同；请求构造见 0.157.0 `ext/web-search/src/tool.rs` 第 113-119 行与第 193-205 行。
