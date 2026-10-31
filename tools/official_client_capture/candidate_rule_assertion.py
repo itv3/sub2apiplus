@@ -93,8 +93,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-31（0.166.0 登记集成）：指南第二部分按 0.166.0 改写（引用换版与三条不收敛理由），第二章摘要由 c7af7936… 变为 9a084313…，
 # 20 份场景／期望清单的 source_spec 摘要随之重绑（脚本断言每份差异恰为一行替换）；本常量绑定的 candidate_rule_expectations_0_149_1.json
 # 载荷审核：与改前逐行比较仅 source_spec 摘要一行不同，规则、场景、选择器与判据逐字不变。整文件摘要 90e69bf5… 变为 0b550d76…。
+# 2026-11-01（0.166.0 收尾）：指南第二部分开头段补写当前 Active 与 0.166.0 官方样本 Campaign（kit/part2-minimal-0166.py，只改开头段、不动规则正文），第二章摘要由 9a084313… 变为 74a64046…，
+# 20 份场景／期望清单的 source_spec 摘要随之重绑（脚本断言每份差异恰为一行替换）；本常量绑定的 candidate_rule_expectations_0_149_1.json
+# 载荷审核：与改前逐行比较仅 source_spec 摘要一行不同，规则、场景、选择器与判据逐字不变。整文件摘要 0b550d76… 变为 8478e2f4…。
 FROZEN_PROFILE_SHA256 = (
-    "0b550d76ec6714ca510bc5096c0493ae360ae9c52b3d87ae36ba52408aa56073"
+    "8478e2f4ef22c54996833262e5315d7c87c5ac9563d8e5ae8365e8b98d26c491"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
