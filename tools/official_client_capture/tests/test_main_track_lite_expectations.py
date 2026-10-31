@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -1294,7 +1295,7 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
     def test_ws_prewarm_label_marks_exactly_the_no_prewarm_http_samples(self) -> None:
         """ws_prewarm=none 只标官方经 openai-http-probe provider 的 A04 HTTP 作业与候选 A04 的非数字档位 HTTP 入站。"""
 
-        document = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_165_0.json").read_text(encoding="utf-8"))
+        document = json.loads((TOOL_ROOT / f"codex_upgrade_evidence_labels_{self.MANIFEST_SUFFIX}.json").read_text(encoding="utf-8"))
         marked = sorted(
             (entry["side"], entry["job_id"], tuple(rule["scenario_ids"]))
             for entry in document["entries"]
@@ -1765,6 +1766,147 @@ class Expectation0165WireChecksTests(Expectation0164WireChecksTests):
             self.assertEqual(item["select"]["where"], [{"operator": "absent", "path": "data.reset_reason"}])
 
 
+class MainTrackLiteExpectation0166Tests(MainTrackLiteExpectationTests):
+    """0.166.0 候选期望清单（由 0.165.0 终态复制）同样满足主线 Lite 的 BODY-006 检查与 EP-001 约束。"""
+
+    MANIFEST_SUFFIX = "0_166_0"
+
+
+class Expectation0166WireChecksTests(Expectation0165WireChecksTests):
+    """0.166.0 候选期望清单复用 0.165.0 落下的全部判据正反例（W1 configuration_update、W2 出站保真度、W3 整段重放与窗口、SIM-06 的 BODY-003 口径）。
+
+    清单由 0.165.0 终态机械复制：与上一版相比，把版本号换回后逐叶子完全相同（没有任何检查被增删或改动）；
+    目标断言画像校验拒绝任何含 baseline 版本字面量的字符串，所以清单里不得再出现 0.165.0。
+    本类覆盖上一版的“相对 0.164.0 的增量审计”，改为“相对 0.165.0 零差异审计”。
+    """
+
+    MANIFEST_SUFFIX = "0_166_0"
+
+    def test_other_rules_are_untouched_by_the_increment(self) -> None:
+        raw = (TOOL_ROOT / "candidate_rule_expectations_0_166_0.json").read_text(encoding="utf-8")
+        # 目标断言画像里不得出现 baseline 版本字面量（普通形态与正则转义形态）。
+        self.assertNotIn("0.165.0", raw)
+        self.assertNotIn(r"0\\.165\\.0", raw)
+        reverted = json.loads(raw.replace("0.166.0", "0.165.0").replace(r"0\\.166\\.0", r"0\\.165\\.0"))
+        old = json.loads((TOOL_ROOT / "candidate_rule_expectations_0_165_0.json").read_text(encoding="utf-8"))
+        self.assertEqual({k: v for k, v in reverted.items() if k not in {"rules", "scenarios"}}, {k: v for k, v in old.items() if k not in {"rules", "scenarios"}})
+        self.assertEqual(reverted["scenarios"], old["scenarios"])
+        self.assertEqual([r["rule_id"] for r in reverted["rules"]], [r["rule_id"] for r in old["rules"]])
+        differences = []
+        for new_rule, old_rule in zip(reverted["rules"], old["rules"]):
+            rule_id = new_rule["rule_id"]
+            # 规则级字段（含 scenario_ids）逐字不变。
+            self.assertEqual({k: v for k, v in new_rule.items() if k != "checks"}, {k: v for k, v in old_rule.items() if k != "checks"}, rule_id)
+            # 检查 ID 与顺序逐字不变，没有增删。
+            self.assertEqual([c["id"] for c in new_rule["checks"]], [c["id"] for c in old_rule["checks"]], rule_id)
+            for new_check, old_check in zip(new_rule["checks"], old_rule["checks"]):
+                if new_check != old_check:
+                    keys = sorted(k for k in set(new_check) | set(old_check) if new_check.get(k) != old_check.get(k))
+                    differences.append((rule_id, new_check["id"], tuple(keys)))
+        # 逐检查差异审计：把版本号换回后与上一版完全相同，一条差异都没有。
+        self.assertEqual(differences, [])
+        self.assertEqual(reverted, old)
+        # 叶子数与上一版相同（3321），换版本号不增不减叶子。
+        def leaves(value) -> int:
+            if isinstance(value, dict):
+                return sum(leaves(v) for v in value.values())
+            if isinstance(value, list):
+                return sum(leaves(v) for v in value)
+            return 1
+        self.assertEqual(leaves(json.loads(raw)), leaves(old))
+        # SIM-06 在两份清单里都已对齐批准画像 b2：BODY-003 main-messages-keep-passthrough 期望 1。
+        for document in (old, reverted):
+            body003 = next(rule for rule in document["rules"] if rule["rule_id"] == "SPEC-BODY-003")
+            check = next(item for item in body003["checks"] if item["id"] == "main-messages-keep-passthrough")
+            self.assertEqual(check["assertion"]["value"], 1)
+
+
+class Manifest0166AgainstPreviousTests(unittest.TestCase):
+    """0.166.0 其余五份清单（规则、事实映射、证据标签、场景、画像补丁）相对 0.165.0 终态的差异审计：只有登记允许的几类机械变化。
+
+    - 规则清单、事实映射：只有 codex_version。
+    - 证据标签：codex_version、描述、A04 数字推理等级理由里的客户端形态版本号、A20～A22 三处“从该版起”表述去掉版本号、两处源码锚点行号。
+    - 场景清单：codex_version、profile_id、四处目标版本描述、规则清单绑定（路径与摘要）、两处源码锚点行号，以及候选作业依赖多出的 0_166_0 文件名。
+    - 画像补丁：基线 0.165.0、目标 0.166.0、绑定当前 Active 画像，补丁为空。
+    """
+
+    @staticmethod
+    def load(name: str):
+        return json.loads((TOOL_ROOT / name).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def raw(name: str) -> str:
+        return (TOOL_ROOT / name).read_text(encoding="utf-8")
+
+    def test_rules_and_fact_map_differ_only_in_codex_version(self) -> None:
+        for stem in ("codex_upgrade_rules", "candidate_test_fact_map"):
+            with self.subTest(stem=stem):
+                new = self.load(f"{stem}_0_166_0.json")
+                old = self.load(f"{stem}_0_165_0.json")
+                self.assertEqual(new["codex_version"], "0.166.0")
+                self.assertEqual({**new, "codex_version": "0.165.0"}, old)
+                self.assertNotIn("0.165.0", self.raw(f"{stem}_0_166_0.json"))
+
+    def test_labels_differ_only_in_registered_mechanical_changes(self) -> None:
+        raw = self.raw("codex_upgrade_evidence_labels_0_166_0.json")
+        self.assertNotIn("0.165.0", raw)
+        old_raw = self.raw("codex_upgrade_evidence_labels_0_165_0.json")
+        # 把登记的机械变化逐类换回：版本号、三处行为起点表述、两处源码锚点行号。
+        restored = raw.replace("0.166.0", "0.165.0")
+        self.assertEqual(restored.count("（候选合成入站，不接官方客户端；与 A06 同一做法）"), 3)
+        restored = restored.replace("（候选合成入站，不接官方客户端；与 A06 同一做法）", "（0.165.0 起，候选合成入站，不接官方客户端；与 A06 同一做法）")
+        for new_anchor, old_anchor in (("core/src/session/mod.rs:1319-1332", "core/src/session/mod.rs:1317-1330"), ("features/src/lib.rs:723-725", "features/src/lib.rs:706-708")):
+            self.assertEqual(restored.count(new_anchor), 1, new_anchor)
+            restored = restored.replace(new_anchor, old_anchor)
+        self.assertEqual(json.loads(restored), json.loads(old_raw))
+        self.assertEqual(restored, old_raw)
+
+    def test_scenarios_differ_only_in_registered_mechanical_changes(self) -> None:
+        new = self.load("codex_upgrade_scenarios_0_166_0.json")
+        old = self.load("codex_upgrade_scenarios_0_165_0.json")
+        self.assertNotIn("0.165.0", self.raw("codex_upgrade_scenarios_0_166_0.json"))
+        self.assertEqual(new["rule_manifest"]["path"], "tools/official_client_capture/codex_upgrade_rules_0_166_0.json")
+        self.assertEqual(
+            new["rule_manifest"]["sha256"],
+            hashlib.sha256((TOOL_ROOT / "codex_upgrade_rules_0_166_0.json").read_bytes()).hexdigest(),
+        )
+        self.assertEqual(new["rule_manifest"]["rule_count"], old["rule_manifest"]["rule_count"])
+
+        def restore(value):
+            if isinstance(value, dict):
+                return {k: restore(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [restore(v) for v in value]
+            if isinstance(value, str):
+                return (
+                    value.replace("0.166.0", "0.165.0")
+                    .replace("core/src/session/mod.rs:1319-1332", "core/src/session/mod.rs:1317-1330")
+                    .replace("features/src/lib.rs:723-725、2216-2221", "features/src/lib.rs:706-708、2151-2156")
+                )
+            return value
+
+        restored = restore(new)
+        # 规则清单绑定：路径换回上一版文件名，摘要取上一版的。
+        restored["rule_manifest"] = dict(old["rule_manifest"])
+        # 候选作业依赖：多出的只是 0_166_0 文件名，其余与上一版逐字相同（含顺序）。
+        # 上一版清单自己的依赖也多出了 0_166_0 文件名（依赖分析器重生成），两侧比较前同样剔除。
+        for old_job in old["capture_jobs"]:
+            if "tool_dependencies" in old_job:
+                old_job["tool_dependencies"] = [name for name in old_job["tool_dependencies"] if "0_166_0" not in name]
+        for restored_job in restored["capture_jobs"]:
+            if "tool_dependencies" in restored_job:
+                restored_job["tool_dependencies"] = [name for name in restored_job["tool_dependencies"] if "0_166_0" not in name]
+        self.assertEqual(restored, old)
+
+    def test_profile_patch_manifest_is_empty_and_bound_to_the_active_profile(self) -> None:
+        new = self.load("profile_rule_patches_0_166_0.json")
+        self.assertEqual(new["baseline_version"], "0.165.0")
+        self.assertEqual(new["target_version"], "0.166.0")
+        self.assertEqual(new["rule_patches"], [])
+        active = TOOL_ROOT.parents[1] / "backend/internal/officialegress/catalogdata/runtime/profiles/0.165.0/26d4c2cee46327320feae65786e480e5b6d5fe1aecd332e1c753f9a604df3681.json"
+        self.assertEqual(new["active_profile_sha256"], hashlib.sha256(active.read_bytes()).hexdigest())
+
+
 class CandidateA06FrameLabelsTests(unittest.TestCase):
     """证据标签里每个 A06 ``frame_labels`` 选择键，在真实候选帧布局上都必须落在 response.create 消息的起始帧上。
 
@@ -1811,7 +1953,7 @@ class CandidateA06FrameLabelsTests(unittest.TestCase):
         self.assertTrue(by_index[6]["fin"] and by_index[13]["fin"] and by_index[16]["fin"])
 
     def test_declared_selectors_land_on_response_create_start_frames(self) -> None:
-        for suffix in ("0_164_0", "0_165_0"):
+        for suffix in ("0_164_0", "0_165_0", "0_166_0"):
             with self.subTest(suffix=suffix):
                 labels = self.a06_frame_labels(TOOL_ROOT / f"codex_upgrade_evidence_labels_{suffix}.json")
                 resolved = candidate_rule_assertion.resolve_frame_label_selectors(labels, self.with_opcode(self.frames), "A06")

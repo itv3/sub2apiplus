@@ -240,7 +240,7 @@ class PreflightTests(unittest.TestCase):
                  ("SPEC-EP-001", "independent-image-endpoints"), ("SPEC-EP-022", "image-header-order"),
                  ("SPEC-EP-022", "generation-background-default-opaque"), ("SPEC-EP-022", "generation-background-transparent"),
                  ("SPEC-EP-022", "edit-file-id-reference"), ("SPEC-EP-022", "edit-file-id-without-url")}
-        for version in ("0_160_0", "0_163_0", "0_164_0", "0_165_0"):
+        for version in ("0_160_0", "0_163_0", "0_164_0", "0_165_0", "0_166_0"):
             with self.subTest(version=version):
                 profile = self.module.checker.load_profile(
                     REPO_ROOT / f"tools/official_client_capture/candidate_rule_expectations_{version}.json",
