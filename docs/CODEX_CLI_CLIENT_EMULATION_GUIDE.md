@@ -51,21 +51,23 @@ Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/officia
 
 # 第二部分 Codex CLI 客户端规则画像
 
-本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述当前生产 active 0.165.0 的规则（previous 为
-0.164.0）；生产激活、精确回滚、目标恢复与 0.163.0 Runtime Catalog 退休的机器事实见
-[`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json)。各条实测中的“0.165.0
+本部分定义规则成立所需的证据标准、观测边界和 54 个编号项，描述按 0.165.0 官方样本与 0.166.0 源码复核写成的规则；当前生产 Active 为 0.166.0（previous 为
+0.165.0），生产激活、精确回滚、目标恢复与 0.164.0 Runtime Catalog 退休的机器事实见
+[`0.166 终态收据`](egress/maintenance/CODEX_CLI_0165_TO_0166_TERMINAL_STATE_RECEIPT.json)。0.166.0 的官方 VC-1 样本来自
+Campaign `c01660-formal-vc1-r1-20261031t000000z` 的 attempt `20261031T104956Z-3e3bddb7be4fda37`（52 个官方 Job 全部 complete），
+与 0.165.0 基线逐场景比对，线上字节除版本字符串外一致、43 条目标规则全部继承，其匹配数本轮没有回填到各规则正文。各条实测中的“0.165.0
 官方样本”来自 Campaign `c01650-formal-vc1-r1-20261029t000000z` 的 attempt `20261029T042703Z-54406f2fab548474`
-（本轮官方证据全部重新采集，52 个官方 Job 全部 complete）；继承规则正文里保留的“0.164.0 官方样本”（Campaign
+（0.165.0 轮官方证据全部重新采集，52 个官方 Job 全部 complete）；继承规则正文里保留的“0.164.0 官方样本”（Campaign
 `c01640-formal-vc1-r1-20261027t000000z` 的 attempt `20261027T135446Z-d8a16a8e788de81e`）、“0.163.0 官方样本”（Campaign
 `c01630-formal-vc1-r2-20261020t131500z` 的 attempt `20261021T003916Z-24ff3483a4288709`）、“0.160.0 官方样本”（Campaign
 `c01600-formal-vc1-r1-20261003t084239z` 的 attempt `20261003T102647Z-6b5390a3ddffc296`）与“0.157.0 官方样本”
 （Campaign `c01570-formal-vc1-r2-20260926t084354z` 的 attempt `20260926T094510Z-ce907a4fa1d25931`）是历史佐证；
-“候选断言”指 `c01650-formal-vc1-r1-20261029t000000z` canonical 链中的 `assert-SPEC-*`（评估基线与 evidence_level 以该链的断言结果为准）。
-本轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.165.0
+“候选断言”指 `c01650-formal-vc1-r1-20261029t000000z` canonical 链中的 `assert-SPEC-*`（评估基线与 evidence_level 以该链的断言结果为准；0.166.0 对应 `c01660-formal-vc1-r1-20261031t000000z` 的 canonical 链）。
+0.165.0 轮官方采集的主线（`gpt-6.1-sol`）与 Lite 轨（`gpt-6-astra`）都是 Lite 模型，非 Lite 分支没有 0.165.0
 官方样本（`gpt-5.5` 已在采集账号下线），相关结论以源码为准（0.164.0 源码；0.165.0 源码在该分支的请求构造代码上只有两处变化：`reasoning.summary` 增加提供方能力判断，OpenAI 默认为开；`reasoning_effort` 覆盖默认开启，只对清单标记 `supports_reasoning_effort_updates` 的 Lite 模型生效，见 SPEC-BODY-006）。
 源码字段的行号锚点以本地固化的 0.166.0 源码为准（`tools/spec_ref_anchors.json`，源码树 `local-analysis/sources/codex-cli-0.166.0`；
 0.163.0 到 0.164.0、0.164.0 到 0.165.0、0.165.0 到 0.166.0 之间有变化的引用已逐条复核（0.166.0 里文件整体未变的保持，纯平移的同步新坐标，引用范围内有改动的手工重定范围并核对内容），
-行为有差异处在对应规则里以“0.164.0 复核”“0.165.0 复核”“0.166.0 复核”标出；0.166.0 目前只做过源码复核，尚无 0.166.0 官方样本；
+行为有差异处在对应规则里以“0.164.0 复核”“0.165.0 复核”“0.166.0 复核”标出；0.166.0 的官方样本见上，规则正文未回填其匹配数，规则正文里的 0.166.0 结论以源码复核为准；
 0.165.0 官方 VC-1 样本已采集：变化规则与随版本取值的继承规则（SPEC-HDR-005、SPEC-EP-006、SPEC-EP-013）的实测给出 0.165.0 官方样本匹配数，其余继承规则的样本类证据仍是 0.164.0 及更早版本的历史佐证）；正文里 0.157.0 与 0.160.0 的
 “文件 第 N 行”坐标只是历史对照，不再由门禁复核。
 
