@@ -88,9 +88,9 @@ from tools.official_client_capture import codex_upgrade_tool_identity_policy as 
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 # 当前基线对应的 Codex 目标版本；重封换新文件名，旧基线原样保留（见模块说明第二节）。
-BASELINE_CODEX_VERSION = "0.165.0"
-BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "codex_identity_conservation_baseline_0_165_0.json"
-BASELINE_SHA256 = "5268c87bc28db8c4e7da8458e3e0efe91cd60dd8fe8e1cbfaf612517e3791c55"
+BASELINE_CODEX_VERSION = "0.166.0"
+BASELINE_PATH = Path(__file__).resolve().parent / "fixtures" / "codex_identity_conservation_baseline_0_166_0.json"
+BASELINE_SHA256 = "fc3691c5f46ee602089669059f9ccd5fd95d67d69fc93e8bc23e67fe7a3b969c"
 BASELINE_SCHEMA = "codex-identity-conservation-baseline/v1"
 # 基线的 17 个顶层键及其次序（与旧基线同构）：封存入口按这个次序写，测试按这个集合与次序校验。
 BASELINE_KEYS = (
