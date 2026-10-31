@@ -9,6 +9,7 @@ h1 探针的受控 /models 载荷、候选 relay 的合成 /models 清单、comp
 from __future__ import annotations
 
 import json
+import os
 import re
 import unittest
 from pathlib import Path
@@ -55,6 +56,16 @@ SYNTHETIC_MODEL_EXPECTED_EFFORT = {
     "gpt-5.6-luna": "medium",
     "gpt-5.5": "medium",
     "gpt-6.1-sol": "low",
+}
+# 合成清单里每个模型的 supports_reasoning_effort_updates 逐模型取值（不能一刀切）：
+# 依据官方内置目录 codex-rs/models-manager/models.json 与 0.165 真实账号清单；
+# false 的模型（尤其 gpt-5.6-sol，A22 的 NO_UPDATE_MODEL）要靠「清单声明不支持」才成立。
+SYNTHETIC_MODEL_EXPECTED_EFFORT_UPDATES = {
+    "gpt-6.1-sol": True,
+    "gpt-6-astra": True,
+    "gpt-5.6-sol": False,
+    "gpt-5.6-luna": False,
+    "gpt-5.5": False,
 }
 # 0.160.0 及更早的版本：主线模型是非 Lite 模型。
 NON_LITE_MAIN_VERSIONS = (
@@ -364,6 +375,59 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertIs(core["gpt-6.1-sol"]["use_responses_lite"], True)
         self.assertIs(aux["gpt-6.1-sol"]["use_responses_lite"], True)
         self.assertIs(core["gpt-5.5"]["use_responses_lite"], False)
+
+    def test_relay_synthetic_models_declare_reasoning_effort_updates_per_model(self) -> None:
+        """合成清单必须逐模型声明 supports_reasoning_effort_updates，并与官方内置目录一致。
+
+        网关把缺省当 false，且清单里的同名模型优先于内置表：缺字段会让 gpt-6.1-sol／
+        gpt-6-astra 在清单加载后失去 configuration_update 合成能力（候选证据随首个 POST
+        与清单加载的先后而变）；反过来一刀切全 true 则会让 A22 的 NO_UPDATE_MODEL
+        （gpt-5.6-sol）也被合成 update，A22 的「不合成」判据失去意义。
+        """
+
+        core = synthetic_models(upstream_byte_relay.SYNTHETIC_CORE_MODELS_BODY)
+        aux = synthetic_models(upstream_byte_relay.SYNTHETIC_AUX_MODELS_BODY)
+        # 模型表本身必须全部有取值：新增合成模型时这里会先红，逼着补依据。
+        self.assertEqual(set(core), set(SYNTHETIC_MODEL_EXPECTED_EFFORT_UPDATES))
+        self.assertTrue(set(aux) <= set(core))
+        for name, manifest in (("core", core), ("aux", aux)):
+            for slug, item in manifest.items():
+                self.assertIn("supports_reasoning_effort_updates", item, f"{name} 的 {slug} 缺能力位")
+                self.assertIs(
+                    item["supports_reasoning_effort_updates"],
+                    SYNTHETIC_MODEL_EXPECTED_EFFORT_UPDATES[slug],
+                    f"{name} 的 {slug} 能力位取值与已核对的目录不一致",
+                )
+        # core／aux 两份里同名模型的能力位必须一致（共用同一份元数据）。
+        for slug, item in aux.items():
+            self.assertIs(
+                item["supports_reasoning_effort_updates"],
+                core[slug]["supports_reasoning_effort_updates"],
+                slug,
+            )
+        # A22 的 NO_UPDATE_MODEL 缺省值必须是清单声明「不支持」的模型。
+        self.assertIs(core["gpt-5.6-sol"]["supports_reasoning_effort_updates"], False)
+        # 字段位置固定在既有字段之后（顺序确定，字节可复现）。
+        first = json.loads(upstream_byte_relay.SYNTHETIC_CORE_MODELS_BODY.decode())["models"][0]
+        self.assertEqual(list(first)[-1], "supports_reasoning_effort_updates")
+
+    def test_relay_synthetic_reasoning_effort_updates_match_official_bundled_catalog(self) -> None:
+        """有官方源码树时，合成能力位逐个与该版本内置目录 models.json 的同名条目比对。"""
+
+        source_root = os.environ.get("CODEX_SPEC_SOURCE_ROOT")
+        if not source_root:
+            self.skipTest("未设置 CODEX_SPEC_SOURCE_ROOT，跳过与官方内置目录的逐条比对")
+        catalog_path = Path(source_root) / "codex-rs" / "models-manager" / "models.json"
+        self.assertTrue(catalog_path.is_file(), f"官方内置目录不存在：{catalog_path}")
+        bundled = {item["slug"]: item for item in json.loads(catalog_path.read_text(encoding="utf-8"))["models"]}
+        core = synthetic_models(upstream_byte_relay.SYNTHETIC_CORE_MODELS_BODY)
+        for slug, item in core.items():
+            self.assertIn(slug, bundled, f"官方内置目录缺 {slug}")
+            self.assertIs(
+                item["supports_reasoning_effort_updates"],
+                bundled[slug]["supports_reasoning_effort_updates"],
+                f"{slug} 的合成能力位与官方内置目录不一致",
+            )
 
     def test_compaction_allowed_models_cover_both_tracks(self) -> None:
         missing = (set(MAIN_TRACK_MODELS) | set(LITE_TRACK_MODELS)) - (

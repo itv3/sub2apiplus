@@ -81,16 +81,26 @@ _SYNTHETIC_CORE_CFUV_COOKIE = (
 # Lite，VC-5 的 H1-004／EP-014 因此失败。接管后每个模型不再以 bundled 打底，
 # 缺 default_reasoning_level 即 effort 为空、缺 default_reasoning_summary 即 serde
 # 默认 auto，所以保留的每条都必须补全五个能力位。
+#
+# supports_reasoning_effort_updates（推理强度更新能力位）必须逐模型取值，不能一刀切：
+# 网关解析清单时该字段缺省为 false，且清单里的同名模型优先于内置表，所以缺字段会让
+# gpt-6.1-sol／gpt-6-astra 在清单加载后丢失「可合成 configuration_update」能力，
+# 候选证据里 A04 根线程 HTTP 请求是否带 update 就取决于首个 POST 是否赶在清单之前
+# （时序偶然）。取值依据 0.166.0 内置目录 codex-rs/models-manager/models.json
+# 与 0.165 真实账号清单（informal/catalog-supports-reasoning-effort-updates.txt）：
+#   gpt-6.1-sol、gpt-6-astra 为 true；gpt-5.6-sol、gpt-5.6-luna、gpt-5.5 为 false。
+# 其中 false 的模型不能改成 true：A22 的 NO_UPDATE_MODEL（缺省 gpt-5.6-sol，见
+# run_candidate_core_capture.sh）正是依赖「清单声明不支持」来验证网关不对其合成 update。
 # 改动必须同步 capturelib.model 的轨道政策与主线 Lite 声明；tests/test_main_track_models.py 锁定。
-_SYNTHETIC_MODEL_METADATA: tuple[tuple[str, str, bool, str], ...] = (
-    # (slug, display_name, use_responses_lite, default_reasoning_level)
-    ("gpt-6-astra", "GPT-6 Astra", True, "medium"),
-    ("gpt-5.6-sol", "GPT-5.6 Sol", True, "low"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna", True, "medium"),
-    ("gpt-5.5", "GPT-5.5", False, "medium"),
+_SYNTHETIC_MODEL_METADATA: tuple[tuple[str, str, bool, str, bool], ...] = (
+    # (slug, display_name, use_responses_lite, default_reasoning_level, supports_reasoning_effort_updates)
+    ("gpt-6-astra", "GPT-6 Astra", True, "medium", True),
+    ("gpt-5.6-sol", "GPT-5.6 Sol", True, "low", False),
+    ("gpt-5.6-luna", "GPT-5.6 Luna", True, "medium", False),
+    ("gpt-5.5", "GPT-5.5", False, "medium", False),
     # 0.163.0 起的主线模型（Lite）。default_reasoning_level 取 0.163 内置目录 models.json 的 low，
     # 与 gpt-6-astra 的合成值（medium，来自真实上游账号清单）不同，须以 VC-1 目录证据复核账号清单。
-    ("gpt-6.1-sol", "GPT-6.1 Sol", True, "low"),
+    ("gpt-6.1-sol", "GPT-6.1 Sol", True, "low", True),
 )
 _SYNTHETIC_CORE_MODEL_SLUGS = (
     "gpt-6-astra",
@@ -108,7 +118,13 @@ def synthetic_models_payload(slugs: tuple[str, ...]) -> bytes:
     by_slug = {entry[0]: entry for entry in _SYNTHETIC_MODEL_METADATA}
     models = []
     for slug in slugs:
-        _, display_name, use_responses_lite, default_reasoning_level = by_slug[slug]
+        (
+            _,
+            display_name,
+            use_responses_lite,
+            default_reasoning_level,
+            supports_reasoning_effort_updates,
+        ) = by_slug[slug]
         models.append(
             {
                 "slug": slug,
@@ -119,6 +135,8 @@ def synthetic_models_payload(slugs: tuple[str, ...]) -> bytes:
                 "default_reasoning_level": default_reasoning_level,
                 "default_reasoning_summary": "none",
                 "supports_reasoning_summary_parameter": True,
+                # 追加在既有字段之后，字段顺序固定；逐模型取值，理由见上方元数据注释。
+                "supports_reasoning_effort_updates": supports_reasoning_effort_updates,
             }
         )
     return json.dumps({"models": models}, separators=(",", ":")).encode("utf-8")
