@@ -11,7 +11,7 @@
     },
     "scenarios": {
       "claude_version": "2.1.285",
-      "sha256": "01cf5f006789049933c987a7b17834fb98d8c8ca1336d922aac50eaab436281f"
+      "sha256": "74d8bc316ce734624acbd3f4cf6285581411f75d7845ed50d811456e5bd712d7"
     },
     "templates": {
       "schema_version": "claude-rule-expectation-templates/v1",

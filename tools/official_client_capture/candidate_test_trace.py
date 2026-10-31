@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_165_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_166_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_165_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_166_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -195,8 +195,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 载荷逐项审核：400 个叶子里变化的 1 处是该 sha256 叶子，非摘要叶子 0 处变化，叶子键集与列表长度不变，
 # 新值等于 openai_ws_forwarder_ingress.go 原始字节的现算 SHA-256（caef2fb9…，与冻结承接收据的 to_sha256 一致）；
 # 映射文件摘要 5a30e7d1… 变为 63d6f04d…。
+# 2026-10-31（0.166.0 版本登记）：目标版本升到 0.166.0，默认映射改指 candidate_test_fact_map_0_166_0.json；该文件由上一版映射的收尾后现状（含上面历次
+# 源码快照重绑，摘要 63d6f04d…）原样复制并替换版本号。载荷逐项审核：400 个叶子里唯一差异是 codex_version 一处（0.165.0 变 0.166.0），把新文件里的版本号换回后
+# 与上一版逐字节相同；测试、事实宇宙与源码快照不变（快照是否需要重绑，等 0.166.0 变更集改动映射已登记的生产源码后再逐个重绑）。映射文件摘要 63d6f04d… 变为 ffc03ed7…。
 FROZEN_MAPPING_SHA256 = (
-    "63d6f04dba9e82e5a33dfbf3f2c13f6029ccdc541d6f2a46b01ad000fb3c5215"
+    "ffc03ed77ce7bbd397b355ca6dd62c498ba6edc326c8f456f1fc8464a141d6c5"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -385,8 +388,14 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-10-30（0.165.0 收尾重冻）：VC-5 批准修订 b1（候选 c01650-candidate-r1 的 revisions/b1/approval-revision.json，原因：SPEC-BODY-003
 # main-session-ids-official-form 与 SPEC-BODY-006 configuration-update-http-first-turn 的选择器没有收窄到根线程，把记忆合并与普通子代理请求也选了进来）
 # 把这两条判据的 select 追加 turn metadata thread_source 等于 user；仓库期望清单与批准版本对齐，免得下次升级继承过严判据。载荷逐项审核（上次冻结点 60236c97e 的清单对当前清单）：规则 43 条不变；每条规则除 checks、scenario_ids 外的字段逐字不变；check 无删除、新增 0 个；已有 check 恰有 2 个改动（SPEC-BODY-003 main-session-ids-official-form、SPEC-BODY-006 configuration-update-http-first-turn），各自只在 select.where 末尾追加一项并更新 description，id／assertion／其余 select 键逐字不变。摘要 502e7010… 变为 8382d992…。
+# 2026-10-31（0.166.0 版本登记）：目标版本升到 0.166.0，默认断言画像改指 candidate_rule_expectations_0_166_0.json；该文件由上一版画像的收尾后现状
+# （摘要 f5708a15…，3321 个叶子）机械复制并换版本号（脚本逐叶子校验替换次数）。载荷逐项审核（上一版对新文件，叶子键集不变）：差异共 12 个叶子，规则数 43、
+# 场景 18、检查 ID、选择器、判据取值与验收契约一律不变——全部是目标版本号换新：codex_version 1、H1-004 两条官方原始字节描述 2、HDR-005 UA 前缀／后缀 3 与
+# 正则转义版本号 2、EP-006 query 值与描述 2、EP-013 query 值 1、A15 触发描述 1；上一版“从该版起”的行为起点表述上一版登记时已去掉，本版没有需要去掉版本号的表述，
+# 目标断言画像校验（_validate_assertion_profile_manifest，baseline 0.165.0）本机通过。source_spec_sha256 仍是指南第二章当前摘要，指南第二部分换到 0.166.0
+# 后由集成步骤重绑。摘要 f5708a15… 变为 625ef701…。
 FROZEN_PROFILE_SHA256 = (
-    "f5708a153625f6f6f398411f6a1570125b3d42369078aee944503e9e98970bfe"
+    "625ef7011109a6e386fd4514ca40046c29a80760e06ab7e0bc5958a4bc5fd968"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
