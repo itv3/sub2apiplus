@@ -2222,15 +2222,36 @@ class SyncHistoryTreeTagTests(SandboxCase):
         (self.root / "remote_exports.txt").write_text(exports + "\n", encoding="utf-8")
 
     def _install_ssh(self, base: str) -> None:
+        """ssh 桩：除了回答参数文件与采集主机测试树当前提交，还模拟三件“采集主机现状”，由 self.root/ssh_ctl 下的控制文件决定（缺省 = 一切正常的采集主机）：
+        * no_remote_refresh：采集主机上没有已安装的 history-tree-refresh.sh（test -f 失败，脚本会走 bootstrap 分支）；
+        * grep_rc：对已安装 refresh 脚本做“是否认得发版 tag 参数”的 grep 时的退出码（缺省 0 = 新版；1 = 旧版；255 = ssh 本身失败）；
+        * describe：采集主机历史树上 git describe 的输出（缺省 = 本机仓库 HEAD 上 git describe 的真实结果，即“tag 确实补上了”的采集主机）；
+        * describe_rc：git describe 本身的退出码（存在则直接以该码退出，模拟历史树里描述不出发版 tag 的 128）。"""
+
+        ctl = self.root / "ssh_ctl"
+        ctl.mkdir(exist_ok=True)
         _write(self.sb.bin / "ssh", f"""
             #!/bin/bash
             echo "SSH $*" >> "{self.sb.log}"
             case "$*" in
               *parse_env.py*) cat "{self.root}/remote_exports.txt" ;;
               *"rev-parse HEAD"*) echo "{base}" ;;
+              *"test -f"*) [ -e "{ctl}/no_remote_refresh" ] && exit 1 ;;
+              *"grep -qF"*) [ -f "{ctl}/grep_rc" ] && exit "$(cat "{ctl}/grep_rc")" ;;
+              *"describe --tags"*)
+                [ -f "{ctl}/describe_rc" ] && exit "$(cat "{ctl}/describe_rc")"
+                if [ -f "{ctl}/describe" ]; then cat "{ctl}/describe"
+                else git -C "{self.repo}" describe --tags --abbrev=0 --match 'v[0-9]*' HEAD; fi ;;
             esac
             exit 0
         """)
+
+    def _ctl(self, name: str, text: str = "") -> None:
+        """写一个 ssh 桩的控制文件（见 _install_ssh）。"""
+
+        ctl = self.root / "ssh_ctl"
+        ctl.mkdir(exist_ok=True)
+        (ctl / name).write_text(text, encoding="utf-8")
 
     def _sync(self, base: str) -> tuple[subprocess.CompletedProcess, str]:
         """跑一遍同步，返回（结果，传给采集主机侧 history-tree-refresh.sh 的那条命令行）。"""
@@ -2275,6 +2296,132 @@ class SyncHistoryTreeTagTests(SandboxCase):
         self.assertEqual(result.returncode, 0, result.stdout[-1500:])
         self.assertIn("测试树已在该提交", result.stdout)
         self.assertTrue(command.endswith(f"{self.c3} - refs/heads/integ v0.1.1 {self.c2}"), command)
+
+    # ---- 保护 ①：同步前核对采集主机上已安装的 refresh 脚本认得第 4、5 个参数（旧版会静默忽略它们） ----
+
+    def _refresh_mark(self) -> str:
+        """从同步脚本里取出它拿去 grep 的标记，并确认真实的 history-tree-refresh.sh 里就有这一行：两边任何一边改名，这里先红。"""
+
+        sync_text = (PIPELINE / "local" / "sync-history-tree.sh").read_text(encoding="utf-8")
+        found = re.search(r"^REFRESH_TAG_MARK='([^']+)'$", sync_text, re.MULTILINE)
+        self.assertIsNotNone(found, "sync-history-tree.sh 里找不到 REFRESH_TAG_MARK 赋值")
+        mark = found.group(1)
+        refresh_text = (PIPELINE / "history-tree-refresh.sh").read_text(encoding="utf-8")
+        self.assertIn(mark, refresh_text, "同步脚本拿去核对的标记必须真的在 history-tree-refresh.sh 里（读第 5 个参数的赋值）")
+        return mark
+
+    def test_the_marker_checked_on_the_host_really_is_in_the_refresh_script(self) -> None:
+        mark = self._refresh_mark()
+        # 标记必须是“读第 5 个参数”，不是随便一个字符串：旧版脚本（只认前 3 个参数）里不会有它。
+        self.assertRegex(mark, r"\$\{5:-\}")
+
+    def test_an_old_installed_refresh_script_is_refused_before_anything_is_touched(self) -> None:
+        mark = self._refresh_mark()
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c1)
+        self._ctl("grep_rc", "1")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 3, result.stdout[-1500:] + result.stderr[-800:])
+        self.assertIn("install-driver.sh", result.stdout, "提示要先换驱动")
+        self.assertIn("旧版", result.stdout)
+        events = self.sb.events()
+        self.assertTrue(any(f"grep -qF '{mark}'" in line and line.endswith("/history-tree-refresh.sh") for line in events), "确实用标记核对了采集主机上的脚本：" + "\n".join(events))
+        # “在改动任何东西之前”：没有上传（scp）、没有建暂存目录、没有执行 refresh 脚本，也没有走到同步后的 describe 核对。
+        self.assertFalse([line for line in events if line.startswith("SCP ")], events)
+        self.assertFalse([line for line in events if "install -d" in line], events)
+        self.assertFalse([line for line in events if "history-tree-refresh.sh " in line and "bash" in line], events)
+        self.assertFalse([line for line in events if "describe" in line], events)
+
+    def test_an_old_installed_refresh_script_is_refused_even_when_the_tree_is_already_at_the_tip(self) -> None:
+        """“树已在分支尖、只核对前端依赖”的快捷路径同样要先过这道核对，否则旧脚本照样静默忽略 tag。"""
+
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c3)
+        self._ctl("grep_rc", "1")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 3, result.stdout[-1500:])
+        self.assertFalse([line for line in self.sb.events() if "history-tree-refresh.sh " in line and "bash" in line], self.sb.events())
+
+    def test_a_failed_check_of_the_installed_script_fails_closed_with_its_own_exit_code(self) -> None:
+        """ssh 本身失败（退出码 255）= 核对不了：不能当成“新版”放行，也不能说成“旧版”误导人。"""
+
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c1)
+        self._ctl("grep_rc", "255")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 2, result.stdout[-1500:])
+        self.assertIn("退出码 255", result.stdout)
+        self.assertNotIn("旧版", result.stdout)
+        self.assertFalse([line for line in self.sb.events() if line.startswith("SCP ")], self.sb.events())
+
+    def test_without_a_tag_the_old_script_is_not_blocked(self) -> None:
+        """本机分支上没有发版 tag = 本来就不传第 4、5 个参数，旧脚本照旧能用（只有那一行警告），不做核对也不拒绝。"""
+
+        self._install_ssh(self.c1)
+        self._ctl("grep_rc", "1")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn("警告：本机分支 integ 上找不到发版 tag", result.stdout)
+        events = self.sb.events()
+        self.assertFalse([line for line in events if "grep -qF" in line], events)
+        self.assertFalse([line for line in events if "describe" in line], events)
+
+    def test_the_bootstrap_path_pushes_the_local_new_script_and_needs_no_check(self) -> None:
+        """采集主机上还没有已安装的 refresh 脚本时，传的是本机这份新脚本，不核对（也核对不了），照常补 tag。"""
+
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c1)
+        self._ctl("no_remote_refresh")
+        self._ctl("grep_rc", "1")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-800:])
+        events = self.sb.events()
+        self.assertFalse([line for line in events if "grep -qF" in line], events)
+        self.assertTrue([line for line in events if line.startswith("SCP ") and "history-tree-refresh.sh" in line], "bootstrap 把本机脚本传了过去")
+        self.assertTrue([line for line in events if "bootstrap/history-tree-refresh.sh" in line and "bash" in line and line.endswith(f"v0.1.1 {self.c2}")], events)
+
+    # ---- 保护 ②：同步后核对采集主机历史树上 git describe 等于传入的 tag ----
+
+    def test_describe_on_the_host_equal_to_the_tag_passes_and_is_reported(self) -> None:
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        result, _ = self._sync(self.c1)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn("同步后核对通过：采集主机历史树 git describe = v0.1.1", result.stdout)
+        describes = [line for line in self.sb.events() if "describe --tags --abbrev=0 --match" in line]
+        self.assertEqual(len(describes), 1, describes)
+        self.assertTrue(describes[0].endswith(" HEAD") and "-C /remote/hist" in describes[0], "在历史树上对 HEAD 做 describe：" + describes[0])
+
+    def test_describe_on_the_host_different_from_the_tag_fails_and_shows_both(self) -> None:
+        """模拟 refresh 脚本“成功”但 tag 没补到位（或被另一个更近的 tag 盖住）：采集主机 describe 给出的不是传入的 tag。"""
+
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c1)
+        self._ctl("describe", "v0.0.9\n")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 4, result.stdout[-1500:])
+        self.assertIn("v0.0.9", result.stdout)
+        self.assertIn("v0.1.1", result.stdout)
+        self.assertIn("不一致", result.stdout)
+        self.assertNotIn("同步后核对通过", result.stdout)
+
+    def test_describe_failing_on_the_host_fails_the_sync(self) -> None:
+        """采集主机上 git describe 本身失败（历史树里一个发版 tag 都描述不出，退出 128）：同步不能算成功。"""
+
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c1)
+        self._ctl("describe_rc", "128")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 4, result.stdout[-1500:])
+        self.assertIn("退出码 128", result.stdout)
+
+    def test_describe_is_also_checked_on_the_tree_already_at_the_tip_path(self) -> None:
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        self._install_ssh(self.c3)
+        self._ctl("describe", "v0.1.0\n")
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        self.assertEqual(result.returncode, 4, result.stdout[-1500:])
+        self.assertIn("测试树已在该提交", result.stdout)
+        self.assertIn("v0.1.0", result.stdout)
 
 
 class Vc6HandoffWatchTests(SandboxCase):
