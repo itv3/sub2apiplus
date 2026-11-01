@@ -1,0 +1,75 @@
+{
+  "base_commit": "9de4afc2d64b19a9623395d5e5c05b87bf6e1ac8",
+  "changed_path_count": 3,
+  "current_commit": "08576ab443782e67ea640e57f72e51bb6b700e11",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7371,
+  "frozen_path_count": 2318,
+  "identity_sha256": "86d9cdfea71a6fb7cc6ddfd2618461af33412f57224d37bbb437e69ff14c86e5",
+  "issued_at_utc": "2026-11-01T06:12:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-opt1101-l5-claude-active-receipt-20261101-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "6faa37a4f6a7a9faf628f7f8af02cc236a18829b099ef54e16bde79fbfb01a90"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（opt1101-l5-claude-active-receipt-20261101）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-b407-r01-20261010-successor.json",
+        "docs/egress/maintenance/claude-cert-docs-20261018-freeze-successor.json",
+        "docs/egress/maintenance/claude-fault-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-history-audit-removal-20261019-freeze-successor.json",
+        "docs/egress/maintenance/claude-long-chain-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-neutral-docs-tests-20261010-successor.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/claude-tool-boundaries-docs-20261010-successor.json",
+        "docs/egress/maintenance/claude-tool-engineering-final-20261010-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-document-job-local-20261009-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-guide-chain-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0165-registration-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4d23339bb5ee2b6b529cef74ee03e5da23331572f1e49bbda09c65dbc9baaa85"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/evidence_index.py",
+    "tools/official_client_capture/tests/test_claude_closeout.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
