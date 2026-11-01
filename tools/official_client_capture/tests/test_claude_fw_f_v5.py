@@ -369,5 +369,118 @@ class RunnerTests(unittest.TestCase):
                 )
 
 
+class BackgroundWorkspaceTrustTests(unittest.TestCase):
+    """``--bg`` 要求工作目录已受信：v5 只对后台场景、只在 probe 私有配置目录里预置信任，其余场景与对外请求不受影响。
+
+    不起客户端：用桩 ``subprocess.run`` 在「客户端启动的瞬间」检查磁盘状态，返回客户端拒绝启动的退出码 1
+    （这样 v4 不会进入后台会话管理流程，测试只关心启动前的预置）。
+    """
+
+    NOT_TRUSTED = subprocess.CompletedProcess(["claude"], 1, stdout="", stderr="Workspace not trusted.")
+
+    @staticmethod
+    def _layout(directory: str) -> tuple[Path, Path, dict[str, str]]:
+        """复刻中继的目录布局：``<运行根>/results`` 是结果根，``<运行根>/state/claude-oauth`` 是 probe 私有配置目录。"""
+
+        run_root = Path(directory).resolve()
+        config = run_root / "state" / "claude-oauth"
+        config.mkdir(parents=True)
+        (config / "settings.json").write_text("{}\n", encoding="utf-8")
+        environment = {"PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": str(config), "HOME": str(config)}
+        return run_root / "results", config, environment
+
+    def _run_background(self, output: Path, environment: dict[str, str], seen: list | None = None) -> dict:
+        def run(command, **kwargs):
+            if seen is not None:
+                config = Path(environment["CLAUDE_CONFIG_DIR"]) / ".claude.json"
+                seen.append({"cwd": str(kwargs["cwd"]), "state": json.loads(config.read_text(encoding="utf-8")) if config.is_file() else None})
+            return self.NOT_TRUSTED
+
+        with mock.patch.object(v4.subprocess, "run", side_effect=run):
+            return v5.run_claude_fw_f_v5_probe(
+                claude_bin="/opt/claude", model="claude-sonnet-5", probe_id="v4-background",
+                environment=environment, output_dir=output, timeout=30, known_secrets={}, version_facts=_facts(),
+            )
+
+    def test_background_probe_config_dir_gets_trust_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output, config, environment = self._layout(directory)
+            seen: list = []
+            result = self._run_background(output, environment, seen)
+            workspace = output / "workspace"
+            self.assertEqual(len(seen), 1)
+            # 客户端启动的瞬间，私有配置目录里就已经有该工作目录（字面与真实路径）的信任记录。
+            self.assertEqual(seen[0]["cwd"], str(workspace))
+            projects = seen[0]["state"]["projects"]
+            self.assertEqual(set(projects), set(v5.background_trust_paths(output)))
+            self.assertIn(str(workspace), projects)
+            self.assertIn(os.path.realpath(workspace), projects)
+            self.assertTrue(all(entry == {"hasTrustDialogAccepted": True} for entry in projects.values()))
+            # 状态文件是 0600 的普通文件，settings.json 原样保留；回执写进结果，且不含任何环境变量取值。
+            self.assertEqual(oct((config / ".claude.json").stat().st_mode & 0o777), "0o600")
+            self.assertEqual((config / "settings.json").read_text(encoding="utf-8"), "{}\n")
+            self.assertEqual(result["workspace_trust_seed"], {"state_file": ".claude.json", "seeded_paths": v5.background_trust_paths(output)})
+            saved = json.loads((output / v5.SUMMARY_FILENAME).read_text(encoding="utf-8"))
+            self.assertEqual(saved["workspace_trust_seed"], result["workspace_trust_seed"])
+
+    def test_existing_state_is_merged_not_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output, config, environment = self._layout(directory)
+            other = str(Path(directory) / "elsewhere")
+            existing = {"userID": "keep-me", "projects": {other: {"hasTrustDialogAccepted": False, "note": 1}}}
+            (config / ".claude.json").write_text(json.dumps(existing), encoding="utf-8")
+            self._run_background(output, environment)
+            state = json.loads((config / ".claude.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["userID"], "keep-me")
+            self.assertEqual(state["projects"][other], {"hasTrustDialogAccepted": False, "note": 1})
+            self.assertEqual(sum(1 for entry in state["projects"].values() if entry.get("hasTrustDialogAccepted") is True), len(v5.background_trust_paths(output)))
+
+    def test_other_probes_are_untouched(self) -> None:
+        record = {"type": "result", "subtype": "success", "result": "FW_F_V4_OK", "is_error": False}
+        completed = subprocess.CompletedProcess(["claude"], 0, stdout=json.dumps(record) + "\n", stderr="")
+        with tempfile.TemporaryDirectory() as directory:
+            output, config, environment = self._layout(directory)
+            with mock.patch.object(v4.subprocess, "run", return_value=completed):
+                result = v5.run_claude_fw_f_v5_probe(
+                    claude_bin="/opt/claude", model="claude-sonnet-5", probe_id="v4-models-privacy-state",
+                    environment=environment, output_dir=output, timeout=30, known_secrets={}, version_facts=_facts(),
+                )
+            self.assertFalse((config / ".claude.json").exists())
+            self.assertNotIn("workspace_trust_seed", result)
+        # 只有 driver 为 background 的 probe 会预置：v4 目录里恰有这一个。
+        self.assertEqual([probe_id for probe_id, probe in v5.PROBES.items() if probe.driver == "background"], ["v4-background"])
+
+    def test_refuses_unsafe_config_dir_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside_directory:
+            output, config, environment = self._layout(directory)
+            outside = Path(outside_directory).resolve()  # 运行根之外的另一个真实目录，代表「容器里别处的配置目录」
+            cases = {
+                "缺少私有 CLAUDE_CONFIG_DIR": {key: value for key, value in environment.items() if key != "CLAUDE_CONFIG_DIR"},
+                "必须是绝对路径的真实目录": {**environment, "CLAUDE_CONFIG_DIR": "relative/dir"},
+                "不在本次运行根目录内": {**environment, "CLAUDE_CONFIG_DIR": str(outside)},
+            }
+            for message, selected in cases.items():
+                with self.subTest(message=message):
+                    with mock.patch.object(v4.subprocess, "run", side_effect=AssertionError("不应启动客户端")):
+                        with self.assertRaisesRegex(v5.ClaudeFWFV5ProbeError, message):
+                            v5.run_claude_fw_f_v5_probe(
+                                claude_bin="/opt/claude", model="claude-sonnet-5", probe_id="v4-background",
+                                environment=selected, output_dir=output, timeout=30, known_secrets={}, version_facts=_facts(),
+                            )
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((config / ".claude.json").exists())
+            # 符号链接的配置目录与损坏的状态文件同样拒绝。
+            link = Path(directory) / "state" / "link-to-config"
+            link.symlink_to(config)
+            with self.assertRaisesRegex(v5.ClaudeFWFV5ProbeError, "必须是绝对路径的真实目录"):
+                v5.seed_background_workspace_trust({"CLAUDE_CONFIG_DIR": str(link)}, output)
+            (config / ".claude.json").write_text("[1]", encoding="utf-8")
+            with self.assertRaisesRegex(v5.ClaudeFWFV5ProbeError, "顶层必须是对象"):
+                v5.seed_background_workspace_trust(environment, output)
+            (config / ".claude.json").write_text("{not json", encoding="utf-8")
+            with self.assertRaisesRegex(v5.ClaudeFWFV5ProbeError, "不是合法 JSON"):
+                v5.seed_background_workspace_trust(environment, output)
+
+
 if __name__ == "__main__":
     unittest.main()

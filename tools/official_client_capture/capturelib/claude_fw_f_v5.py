@@ -44,6 +44,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -53,6 +54,7 @@ from tools.official_client_capture.capturelib.security import (
     ensure_private_directory,
     file_sha256,
     secure_write_json,
+    secure_write_text,
 )
 
 
@@ -298,6 +300,74 @@ def advisor_model_declarations(text: str, facts: Mapping[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 
 
+# 后台场景（``--bg``）的工作目录信任：客户端启动后台会话前会检查工作目录是否已被信任，未信任就报
+# ``Workspace not trusted`` 并以退出码 1 结束，根本不会发出任何请求。中继为 oauth_token 状态建的私有配置目录里只有
+# ``settings.json``，所以必须在启动前把工作目录写进该配置目录的 ``.claude.json``。
+BACKGROUND_TRUST_STATE_FILENAME = ".claude.json"
+
+
+def background_trust_paths(output_dir: Path) -> list[str]:
+    """后台场景的启动目录（v4 驱动固定为 ``<结果根>/workspace``）：按字面绝对路径与真实路径各登记一次。
+
+    客户端查信任用的是操作系统给出的启动目录（已解析符号链接的真实路径），所以两种写法都要有。这里只计算路径，
+    不创建目录——v4 的 ``_fixture_paths`` 会用不带 ``exist_ok`` 的 ``mkdir`` 建它，提前建会让驱动失败。
+    """
+
+    workspace = Path(output_dir) / "workspace"
+    paths: list[str] = []
+    for value in (os.path.normpath(os.path.abspath(workspace)), os.path.realpath(workspace)):
+        if value not in paths:
+            paths.append(value)
+    return paths
+
+
+def seed_background_workspace_trust(environment: Mapping[str, str], output_dir: Path) -> dict[str, Any]:
+    """在 probe 私有的 ``CLAUDE_CONFIG_DIR`` 里预置后台场景工作目录的信任，返回不含敏感值的预置回执。
+
+    只写文件 ``<CLAUDE_CONFIG_DIR>/.claude.json`` 里的 ``projects[<工作目录>].hasTrustDialogAccepted``，不碰进程环境、
+    不碰任何对外请求的内容。安全边界（任何一条不满足都直接失败，绝不退而写别处）：
+
+    * ``CLAUDE_CONFIG_DIR`` 必须存在、是绝对路径、是真实目录（不是符号链接）；
+    * 它必须落在本次运行根目录（结果根的上一级）之内——中继把它建在 ``<运行根>/state/claude-oauth``，每个 probe 一份，
+      因此永远不会写到容器里全局的 ``/root/.claude.json`` 或别的 probe 的目录；
+    * 目标文件若已存在，必须是普通文件且内容是 JSON 对象，信任记录合并进去，其余字段原样保留。
+    """
+
+    config_value = environment.get("CLAUDE_CONFIG_DIR")
+    if not config_value:
+        raise ClaudeFWFV5ProbeError("后台场景缺少私有 CLAUDE_CONFIG_DIR，无法预置工作目录信任")
+    config_dir = Path(config_value)
+    if not config_dir.is_absolute() or config_dir.is_symlink() or not config_dir.is_dir():
+        raise ClaudeFWFV5ProbeError("后台场景的 CLAUDE_CONFIG_DIR 必须是绝对路径的真实目录")
+    run_root = Path(output_dir).resolve().parent
+    if not config_dir.resolve().is_relative_to(run_root):
+        raise ClaudeFWFV5ProbeError("后台场景的 CLAUDE_CONFIG_DIR 不在本次运行根目录内，拒绝预置信任")
+    target = config_dir / BACKGROUND_TRUST_STATE_FILENAME
+    state: Any = {}
+    if target.is_symlink():
+        raise ClaudeFWFV5ProbeError("后台场景的配置状态文件不能是符号链接")
+    if target.exists():
+        if not target.is_file():
+            raise ClaudeFWFV5ProbeError("后台场景的配置状态文件必须是普通文件")
+        try:
+            state = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ClaudeFWFV5ProbeError("后台场景的配置状态文件不是合法 JSON") from error
+        if not isinstance(state, dict):
+            raise ClaudeFWFV5ProbeError("后台场景的配置状态文件顶层必须是对象")
+    projects = state.get("projects")
+    if not isinstance(projects, dict):
+        projects = state["projects"] = {}
+    paths = background_trust_paths(output_dir)
+    for path in paths:
+        entry = projects.get(path)
+        if not isinstance(entry, dict):
+            entry = projects[path] = {}
+        entry["hasTrustDialogAccepted"] = True
+    secure_write_text(target, json.dumps(state, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return {"state_file": BACKGROUND_TRUST_STATE_FILENAME, "seeded_paths": paths}
+
+
 def _debug_declarations(output_dir: Path, facts: Mapping[str, Any]) -> dict[str, Any]:
     """v4 驱动已把 debug 日志脱敏归档为 ``<output>/debug.log``；从中取 advisor 宣告（不改写日志）。"""
 
@@ -333,6 +403,7 @@ def run_claude_fw_f_v5_probe(
     for key, value in probe.env_dict().items():
         if environment.get(key) != value:
             raise ClaudeFWFV5ProbeError(f"{probe_id} 运行环境与冻结目录不一致：{key}")
+    background_trust: dict[str, Any] | None = None
     if probe.driver == "v3":
         inner = v4.run_v3_probe(
             claude_bin=claude_bin,
@@ -365,6 +436,10 @@ def run_claude_fw_f_v5_probe(
             known_secrets=known_secrets,
         )
     else:
+        if probe.driver == "background":
+            # ``--bg`` 要求工作目录已受信，否则客户端报 ``Workspace not trusted`` 并退出（不发任何请求）。只对后台场景、
+            # 只在 probe 私有配置目录里预置；其余 print 场景不受影响，也不改变任何对外请求的字节。
+            background_trust = seed_background_workspace_trust(environment, output_dir)
         inner = v4._run_print_probe(
             claude_bin=claude_bin,
             model=model,
@@ -402,6 +477,9 @@ def run_claude_fw_f_v5_probe(
             "sha256": file_sha256(Path(v4.__file__)),
         },
     }
+    if background_trust is not None:
+        # 仅后台场景留一条预置回执（只含文件名与目录路径，不含任何凭据），供事后核对信任确实是在私有目录里预置的。
+        result["workspace_trust_seed"] = background_trust
     secure_write_json(Path(output_dir) / SUMMARY_FILENAME, result)
     return result
 
