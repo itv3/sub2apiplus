@@ -3182,6 +3182,7 @@
   "openspec/",
   "skills/",
   "tools/arm64_capture_driver/",
+  "tools/behavior_acceptance/",
   "tools/ci/",
   "tools/official_client_capture/",
   "tools/official_client_control/",
