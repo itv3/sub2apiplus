@@ -1130,6 +1130,84 @@ P0 收据 → EvidencePackage → RuleMigrationLedger／AtomicAssertionLedger
 `claude_fw_e_complete_campaign.py`、`claude_fw_f_complete_runner.py` 与 FW-G 聚合 finalizer 只解释各自冻结的
 2.1.226 历史实例，不是后继版本入口。
 
+<a id="claude-version-registration"></a>
+## 开工准备与版本登记（VC-0 之前）
+
+Claude 轨道没有 Codex 那样的升级对表、模型表和登记生成器：目标版本只靠文件名约定定位（`claude_upgrade_plan.versioned_manifest_path`
+按目标版本拼出 `claude_upgrade_scenarios_<版本>.json` 等名字），机制代码（plan 展开、FW-F v5、中继候选模式）已经在库。
+所以“版本登记”是一次**数据登记变更集**：目标官方制品冻结（VC-0 之前的冻结与安装）完成之后、第一次受监督部署
+（发布认证）之前，一次改全；之后到本轮 Claude 链终态，受管文件零改动。登记完成前不要建 Campaign。
+
+**1. 变更集边界**
+
+| 内容 | 层 | 说明 |
+|---|---|---|
+| `claude_upgrade_scenarios_<版本>.json` | wire_producer | 场景清单：版本、三个摘要绑定、模型能力 Job、逐 Job `tool_dependencies` |
+| `claude_upgrade_rules_<版本>.json` | control | 必需规则清单：沿用基线 40 条，逐条承接 |
+| `claude_upgrade_evidence_labels_<版本>.json` | evidence_semantics | 证据标签：逐连接序列模型与实验条件标签 |
+| `capturelib/claude_fw_f_v5_version_facts_<版本>.json` | wire_producer | 版本事实：判定依赖且随版本变化的字面量，出处写明冻结二进制摘要与静态读取依据 |
+| 测试补充、本节 | 非受管／冻结文档 | 不新增测试模块（免动单元归属表）；本节随工具树部署，必须在重部署之前改完 |
+
+层归属以 `claude_tool_identity_policy.classify_path` 现算为准。**不在变更集里**（改了会连锁废认证或破 Codex 身份）：
+指南第二部分及其摘要连锁、`extract_claude_bundle` 等提取器（除非零请求静态分析证明新版 Bun 模块格式变了）、
+`claude_fw_f_v3.py`／`claude_fw_f_v4.py`（在两个客户端共用的执行源清单里，改了会改 Codex 执行源摘要；需要新驱动行为只能按 v5 先例新建文件）、
+驱动目录、`tools/ci` 钉住文件与依赖／权重／时长表、`release-catalog.json`、Go 后端、`tools/arm64_supervised_deploy.py` 的
+`CLAUDE_TARGET_SCENARIO_MANIFEST` 接线（缺清单即抛错而非跳过，由入口便宜检查核两容器的目标客户端身份）。
+上一版（现为 2.1.285）的四个文件、相关夹具与测试原样保留，等本轮走到终态后在收尾阶段统一退休，不在登记时删。
+`claude_upgrade_zero_request_smoke.py`、`claude_upgrade_atomic_rehearsal.py` 里的目标版本字面量只是合成总计划的标签，不读官方制品，不必随登记改。
+
+**2. 四个文件怎么产出**：以上一版的四个文件为模板，做结构化变换加文本替换，不手工逐行重写。需要变的只有：
+`claude_version`／`profile_id`；`rule_manifest`、`version_facts` 两个绑定的路径与文件字节摘要，以及每个步骤里的
+`--fw-f-v5-version-facts`、`--fw-f-v5-version-facts-sha256` 实参；`source_spec.sha256`（取登记当时的第二部分摘要，
+`claude_upgrade_plan.guide_section_sha256(指南, "第二部分")`）；非主模型能力 Job 的模型字面量；`required_client_bindings`；
+**最后**用 `tests/job_dependency_analyzer.py --scenario <清单>` 重算全部 Job 的 `tool_dependencies` 写回
+（`test_job_dependency_declarations` 钉死逐项相等）。登记前后各算一次第二部分摘要，必须相等。
+测试里有“新版相对上一版只允许版本、模型、版本事实摘要、第二部分摘要、模型 Job 与客户端收据登记几类差异”的精确差异审计，新版本登记时同步更新。
+
+**3. 模型集合**：主模型是 Campaign 参数（`--model`，不写进清单），非主模型逐个对应一个 `official-model-capability-<模型>` Job，
+步骤是主模型同名基础 probe 的逐字复制（只换 `--run-id`、`--output-root`、`--model`），server fallback 锁存（`v4-bash`）只取证 fable。
+主模型与非主模型不得同名；VC-3 投影策略登记的每个模型都必须有 VC-1 证据，缺一个 probe 即失败关闭，而清单属 wire_producer 层，
+Campaign 的 plan 之后不可改，所以模型集合要在登记时一次定全（宁多勿少）。账号需对这些模型有权限。
+本轮（2.1.309）：主模型 `claude-sonnet-5-5`；非主模型 `claude-opus-5-5`（16 步）、`claude-fable-5-1`（17 步，含 `v4-bash`）、
+`claude-haiku-5-5`（16 步，因其为默认小模型）。目录静态读取显示 haiku 5.5 与 opus 5.5 的 effort／adaptive thinking／
+`rejects_disabled_thinking` 能力同构，基础 probe 集合沿用，无需特殊处理。
+
+**4. 静态事实与判定假设审计**（只读，对冻结二进制与它提取出的模块做字面量读取；aarch64 ELF 在本机不可执行）。
+版本事实只放“判定依赖并随版本变化的字面量”（当前是 advisor 工具类型常量与 debug 日志宣告句式前后缀），不放观察到的行为，不冻结模型名。
+同时逐项核 v4／v5 判定与 probe 的假设：79 个 probe 注入的 21 个环境变量名和所用 CLI 旗标是否仍存在、官方变更线索是否改变其语义，
+以及 TUI 驱动依赖的界面文案。任何假设失效，先列出再处理：需要改判定或 probe 参数时，在 v5 的 `PROBE_OVERRIDES`
+登记覆盖字段（Claude 专属），不能改 v3／v4。
+
+**5. 登记前预演与标签修订**：标签文件的连接序列是 2.1.226 实测的“初始模型”（文件 `authority` 已声明），VC-1 封存时逐连接核对，
+不符即失败关闭。因此登记前建议用 ARM64 的启动探测（零请求本地替身，`client_launch_probe.py --client claude`，README「前阶段 1 的收尾段与客户端启动探测（R19）」）
+预演一次：既看 TUI 驱动能否到达首帧，也看启动连接序列。标签属 evidence_semantics 层，修订只追加评估纪元、不触发重采，
+但要走 `tool-evolution` 登记并重新受监督部署；清单与版本事实（wire_producer 层）一旦 plan 就不能再改。
+2.1.309 已知偏差：静态读取显示 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 下启动预热连接（`HEAD /api/hello`）被跳过，
+而标签初始模型仍把它放在第 1 条有效连接，其后序号整体后移；以启动探测实测定稿。
+
+**6. 与 Codex 的耦合**：候选 Job 的 `tool_dependencies` 里带有 Codex 各版本的文件名（经候选采集脚本调用共享监督器传递进来）。
+**Claude 链期间（登记起到 Claude 终态）禁止做任何 Codex 新版本登记**，否则 Claude 候选 Job 的 `tool_dependencies` 变化，
+wire_producer 摘要随之改变，发布认证作废；确需先做 Codex，就先做 Codex 再做 Claude 登记。
+新增的 Claude 文件被 Codex 策略忽略，Codex 五摘要中只有 `files_sha256` 变化，Codex 身份守恒基线不需要重封。
+
+**7. 客户端收据登记范围**：`required_client_bindings` 允许登记 `claude-desktop`、`claude-vscode` 的任意排序去重子集，可以为空
+（`claude_upgrade_plan._validate_attempt_requirements` 与 schema 同步放宽；`required_boundary_checks` 仍必须恰好两项）。
+它在 Formal plan 之前随清单冻结，事后要改就要重开 Campaign。**2.1.309 登记为空列表**：本轮验收范围不含 Desktop 与 VS Code，
+这两项登记为“未验证”，交付说明里必须这样写，**不能说成全部验收完成**；生产入口准入前必须另行补证。
+消费端（驱动 `claude_vc5.py`、seal、acceptance、evidence）都按清单内容逐项泛化处理，空登记下不会因缺客户端收据而暂停，
+也拒绝任何未登记客户端的 `--client-evidence`。若日后 Mac 取证条件具备，需要新登记（新版本清单重新写回对应客户端）并重开 Campaign。
+
+**8. 验证与提交顺序**：定向单测至少包含 `test_claude_upgrade_scenarios`、`test_claude_fw_f_v5`、`test_job_dependency_declarations`、
+`test_codex_identity_conservation`、`test_claude_tool_identity_policy`、`test_driver_client_table`，涉及客户端收据放宽时加 `test_claude_vc5_driver`、
+`test_claude_upgrade_candidate_seal*`、`test_claude_upgrade_compare_accept`。登记前后比较 Claude 工具身份五摘要
+（`claude_tool_identity_policy.compute_identity`）：`tool_files`、`wire_producer`、`evidence_semantics`、`control` 变化，`policy_sha256` 不变。
+源码提交与冻结承接收据分开提交（先用 `freeze-successor-generate --dry-run` 确认冻结命中），`docs/egress/maintenance/` 下不放 `.md`；
+所有文档改完之后才跑一次出口门禁。
+
+**9. 已知缺口**：Claude 没有重封链工具（`reseal_chain.py` 绑 Codex 守恒测试），登记值靠上面的命令手工重算；
+上一版第二部分摘要在 2.1.285 清单里是陈旧值（既有状态，测试靠冻结副本绕开，登记时不顺手修）；
+Mac 正式产品观测后端（B4-01）不在本变更集内。
+
 <a id="claude-vc-0"></a>
 ## 4.0 VC-0 冻结升级输入
 
