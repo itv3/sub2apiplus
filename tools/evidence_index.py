@@ -847,6 +847,29 @@ def _part2_by_heading(text: str, heading: str) -> str:
     return text[starts[0].start(): starts[0].end() + end_match.start()]
 
 
+# Codex 指南里“Active 终态收据坐标”的存放小节标题（第四部分 4.9）。
+# 为什么不放第二部分：第二部分是冻结章，它的“第二章摘要”被各版场景清单、规则清单和两个检查器钉住，
+# 这些文件都在受管工具 tools/official_client_capture 内；每轮升级收尾为了写明新 Active 的 Campaign 而改第二部分，
+# 就要付一整套摘要连锁（约 40 分钟）并让受管工具身份变化。第四部分不受摘要钉住，只需冻结承接收据，所以收尾只改这里。
+ACTIVE_RECEIPT_SECTION_HEADING = "## 4.9 当前 Active 终态收据坐标"
+
+
+def active_receipt_section(text: str) -> str:
+    """切出指南第四部分 4.9 小节（标题恰好出现一次，止于下一个一、二级标题或文末）。
+
+    小节里必须写明当前 Active 终态收据的版本、收据文件名、官方证据来源 Campaign 与末级 Campaign；
+    ``active_campaign_evidence`` 的 Codex 分支据此失败关闭。标题行以 ``ACTIVE_RECEIPT_SECTION_HEADING`` 开头，
+    后面允许带括号等补充说明，所以按“行首匹配前缀”定位，不要求整行相等。
+    """
+
+    starts = list(re.finditer(r"^" + re.escape(ACTIVE_RECEIPT_SECTION_HEADING) + r"[^\n]*$", text, re.M))
+    if len(starts) != 1:
+        raise ValueError(f"“{ACTIVE_RECEIPT_SECTION_HEADING}”应恰好出现 1 次，实际 {len(starts)} 次")
+    end_match = re.search(r"^#{1,2} ", text[starts[0].end():], re.M)
+    end = starts[0].end() + end_match.start() if end_match else len(text)
+    return text[starts[0].start(): end]
+
+
 def claude_campaign_evidence(text: str, root: pathlib.Path) -> CampaignEvidence | None:
     """Claude 当前生产版本的 Campaign 封存证据坐标（Claude 升级控制面设计 B5b-06）。
 
@@ -886,7 +909,7 @@ def claude_campaign_evidence(text: str, root: pathlib.Path) -> CampaignEvidence 
 def active_campaign_evidence(
     text: str, *, client: str = "codex", root: pathlib.Path | None = None
 ) -> CampaignEvidence | None:
-    """解析当前 Active 版本的终态收据；第二部分开头必须写明其 Campaign 链，否则失败关闭。
+    """解析当前 Active 版本的终态收据；Codex 指南第四部分 4.9 小节必须写明其版本、收据文件名与 Campaign 链，否则失败关闭。
 
     ``client="claude"`` 时转 ``claude_campaign_evidence``（``root`` 缺省为本仓库根，``text`` 是 Claude 指南全文）；Codex
     分支只读本仓库固定坐标，判据与改动前逐字相同，不接受 ``root``。
@@ -923,10 +946,15 @@ def active_campaign_evidence(
     canonical = str((chain[-1] if chain else {}).get("campaign_id", ""))
     if not official or not canonical:
         raise ValueError(f"Active {version} 终态收据缺少官方证据来源或末级 Campaign")
-    part = spec_status.second_part(text)
-    missing = [campaign for campaign in (*official, canonical) if campaign not in part]
+    # 校验位置：第四部分 4.9 小节（不冻结），不再是第二部分（冻结章，改它要付摘要连锁并改受管工具身份）。
+    section = active_receipt_section(text)
+    missing = [
+        item
+        for item in (version, path.name, *official, canonical)
+        if item not in section
+    ]
     if missing:
-        raise ValueError(f"第二部分未写明 Active 终态收据的 Campaign：{missing}")
+        raise ValueError(f"指南 4.9 小节未写明 Active 终态收据的版本、收据文件名或 Campaign：{missing}")
     audit = json.loads((ROOT / receipt["audit_index"]["path"]).read_text(encoding="utf-8"))
     archive = audit.get("archive") or {}
     if not archive.get("path") or not archive.get("sha256"):

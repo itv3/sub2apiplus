@@ -3,7 +3,8 @@
 * 终态合同（``tools/claude_terminal_state.py``）：真实仓库的 production_active 恰是合同生效前基线、三项全等才豁免；合成夹具
   的正负例；历史收据的目录类绑定按收据入库提交回读（临时 Git 仓库）；Go 读侧同款的 Approval 身份核对；
 * 两个门禁消费者：``check_runtime_catalog_projection`` 实检在 Codex 运行投影通过时仍按 Claude 终态缺失、损坏失败关闭，
-  stdout 只有运行投影报告；``evidence_index`` 的 Claude 分支与 Codex 分支的参数边界；
+  stdout 只有运行投影报告；``evidence_index`` 的 Claude 分支与 Codex 分支的参数边界，以及 Codex 分支的校验位置
+  （指南第四部分 4.9 小节，不再读冻结的第二部分）；
 * Claude 收尾（``codex_closeout`` 配 ``claude-upgrade-closeout/v1``）：演练仓库上 ``prepare --dry-run`` 零写入、prepare／gates／
   publish 重跑幂等，签出的终态收据通过 Claude 校验器与两个消费者；第二部分摘要连锁在隔离配对夹具上恰是三处唯一替换；
 * 材料读侧：独立解释器在受管根（合成的两棵受管树）上重放 VC-2 批准包与 VC-1 官方观测，含只读复用沿前序取证。
@@ -248,6 +249,77 @@ class ConsumerTests(unittest.TestCase):
             evidence_index.active_campaign_evidence("", root=root)
         with self.assertRaisesRegex(ValueError, "客户端或仓库根非法"):
             evidence_index.active_campaign_evidence("", client="other")
+
+    # ---- Codex 分支：Active 终态收据的 Campaign 写在指南第四部分 4.9 小节，不再要求第二部分 ----
+
+    @staticmethod
+    def codex_guide_text() -> str:
+        return (REPO_ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md").read_text(encoding="utf-8")
+
+    def test_evidence_index_codex_branch_reads_part4_section(self) -> None:
+        """真实指南：4.9 小节写明了 Active 版本、收据文件名与两个 Campaign，索引工具能解析出完整坐标。"""
+        text = self.codex_guide_text()
+        found = evidence_index.active_campaign_evidence(text)
+        section = evidence_index.active_receipt_section(text)
+        self.assertTrue(found.receipt.endswith("_TERMINAL_STATE_RECEIPT.json"), found.receipt)
+        for item in (found.version, Path(found.receipt).name, *found.official_campaigns, found.canonical_campaign):
+            self.assertIn(item, section)
+        # 小节必须落在第四部分之内（在第三部分标题之后、第五部分标题之前），不能被挪回冻结的第二部分。
+        part4_start = text.index("# 第四部分 Codex CLI 版本演进流程")
+        part5_start = text.index("# 第五部分 Codex 兼容代码退休附加门禁")
+        self.assertTrue(part4_start < text.index(section) < part5_start)
+
+    def test_evidence_index_codex_branch_ignores_second_part(self) -> None:
+        """第二部分里完全不写 Campaign 时索引照样通过（以后收尾不必为这一项改冻结的第二部分）；只在第二部分写而 4.9 缺失则失败。"""
+        text = self.codex_guide_text()
+        found = evidence_index.active_campaign_evidence(text)
+        campaigns = (*found.official_campaigns, found.canonical_campaign)
+        part2 = evidence_index.spec_status.second_part(text)
+        self.assertEqual(text.count(part2), 1)
+        stripped_part2 = part2
+        for campaign in campaigns:
+            stripped_part2 = stripped_part2.replace(campaign, "（已略）")
+        self.assertNotEqual(stripped_part2, part2)
+        without_part2_campaign = text.replace(part2, stripped_part2)
+        for campaign in campaigns:
+            self.assertNotIn(campaign, evidence_index.spec_status.second_part(without_part2_campaign))
+        self.assertEqual(evidence_index.active_campaign_evidence(without_part2_campaign), found)
+        # 反向：4.9 小节抹掉 Campaign，哪怕第二部分写着也不放行（校验位置已经移走）。
+        section = evidence_index.active_receipt_section(text)
+        stripped_section = section
+        for campaign in campaigns:
+            stripped_section = stripped_section.replace(campaign, "（已略）")
+        with self.assertRaisesRegex(ValueError, "4.9 小节未写明"):
+            evidence_index.active_campaign_evidence(text.replace(section, stripped_section))
+
+    def test_evidence_index_codex_branch_requires_version_and_receipt_name(self) -> None:
+        """4.9 小节缺 Active 版本号或收据文件名同样失败关闭，并在错误里点名缺的项。"""
+        text = self.codex_guide_text()
+        found = evidence_index.active_campaign_evidence(text)
+        section = evidence_index.active_receipt_section(text)
+        receipt_name = Path(found.receipt).name
+        no_receipt = text.replace(section, section.replace(receipt_name, "收据已略"))
+        with self.assertRaisesRegex(ValueError, "4.9 小节未写明.*" + receipt_name):
+            evidence_index.active_campaign_evidence(no_receipt)
+        no_version = text.replace(section, section.replace(found.version, "版本已略"))
+        with self.assertRaisesRegex(ValueError, "4.9 小节未写明"):
+            evidence_index.active_campaign_evidence(no_version)
+
+    def test_evidence_index_codex_section_boundaries(self) -> None:
+        """小节定位的边界：标题必须恰好一次；下一个一、二级标题之后的内容不算本节；标题后带括号说明仍能定位。"""
+        heading = evidence_index.ACTIVE_RECEIPT_SECTION_HEADING
+        body = "正文 0.9.9 收据.json c-x\n"
+        text = f"# 第四部分\n\n{heading}（补充说明）\n{body}\n### 子标题\n子节也算本节\n\n## 4.10 别的小节\n不算\n\n# 第五部分\n"
+        section = evidence_index.active_receipt_section(text)
+        self.assertIn(body, section)
+        self.assertIn("子节也算本节", section)
+        self.assertNotIn("不算", section)
+        with self.assertRaisesRegex(ValueError, "应恰好出现 1 次，实际 0 次"):
+            evidence_index.active_receipt_section("# 第四部分\n\n## 4.8 别的\n")
+        with self.assertRaisesRegex(ValueError, "应恰好出现 1 次，实际 2 次"):
+            evidence_index.active_receipt_section(text + f"\n{heading}\n重复\n")
+        # 小节是文末最后一节时止于文末。
+        self.assertEqual(evidence_index.active_receipt_section(f"{heading}\n末节\n"), f"{heading}\n末节\n")
 
 
 # ---------------------------------------------------------------------------

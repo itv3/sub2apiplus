@@ -2480,7 +2480,7 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   A04 官方样本里 exec 工具目录 `image_gen__imagegen` 的返回类型 `Promise<unknown>`→`Promise<{ image_url: string; output_hint?: string; }>` 只记事实（画像与网关不钉工具目录文本）；
   `/models` 响应无 `literature_search_query`、`auto_review_suffix`、`approved_command_prefix_saved`、`granular`，`request_permissions`／`omitted_paths`／`denied_reads` 命中数与上一版相同。
   VC-2 迁移清单 43 条必须全 inherit，这是空补丁版本的硬前提（K 路建链脚本 `fetch` 对画像摘要不符直接 exit 6）。
-- **收尾 b8 证据索引要求第二部分写明 Active 终态收据的 Campaign（0.166）**：`tools/evidence_index.py` 第 929 行校验第二部分里同时出现终态收据的官方证据来源 Campaign 与末级 Campaign；第二部分只有上一版及更早的 Campaign 时，`b8`（重建 `docs/EVIDENCE_INDEX.md`）报“第二部分未写明 Active 终态收据的 Campaign”。登记阶段若按“第二部分不动”安排，收尾会被卡在这一步：至少要改第二部分开头段，第二章摘要随之变，触发 20 份清单与 2 个检查器的连锁、冻结承接收据、身份守恒基线重封和依赖追踪（0.166 侧分支演练：改动 +9／−7，连锁约 35～40 分钟）。做法：收尾第一小时就做第二部分最小改写再跑连锁，与 ARM64 只读取回并行；规则正文（UA、`client_version`、样本匹配数）可不动，其余绑定位置下次登记统一改。连锁里的载荷审核注释由脚本写入，注释措辞要与收尾场景相符（本轮发现登记版脚本把注释写死成“登记集成”，已改收尾版副本）。证据：总账 b8 记录，`reports/C.md` 附录。
+- **收尾 b8 证据索引要求第二部分写明 Active 终态收据的 Campaign（0.166）**：`tools/evidence_index.py` 第 929 行校验第二部分里同时出现终态收据的官方证据来源 Campaign 与末级 Campaign；第二部分只有上一版及更早的 Campaign 时，`b8`（重建 `docs/EVIDENCE_INDEX.md`）报“第二部分未写明 Active 终态收据的 Campaign”。登记阶段若按“第二部分不动”安排，收尾会被卡在这一步：至少要改第二部分开头段，第二章摘要随之变，触发 20 份清单与 2 个检查器的连锁、冻结承接收据、身份守恒基线重封和依赖追踪（0.166 侧分支演练：改动 +9／−7，连锁约 35～40 分钟）。做法：收尾第一小时就做第二部分最小改写再跑连锁，与 ARM64 只读取回并行；规则正文（UA、`client_version`、样本匹配数）可不动，其余绑定位置下次登记统一改。连锁里的载荷审核注释由脚本写入，注释措辞要与收尾场景相符（本轮发现登记版脚本把注释写死成“登记集成”，已改收尾版副本）。证据：总账 b8 记录，`reports/C.md` 附录。 **更正（11-01，工具优化事项 5）：这条做法已作废。** `tools/evidence_index.py` 现在改读本文 [§4.9](#codex-active-receipt)，不再要求第二部分写明终态收据的 Campaign；升级收尾不必改第二部分，也就没有第二章摘要连锁。
 - **VC-5 库表前置的 `restore` 会把其它账号 `extra` 里的运行时键报成 unexpected（0.166）**：VC-6 后 `vc5-prereq.sh restore --key 3` 标 `ok:False`，12 处 unexpected 全是其它账号 `extra` 里随运行变化的键（`upstream_billing_probe` 计数、
   `*_balance_updated_at`、`cline_*`、`codex_credits_snapshot`），无 `status`／`schedulable`／`credentials` 变化，调度者判良性。下次登记时把这些键加进 `vc5_prereq.py` 的运行时键清单，避免恢复时靠人判断。
 - **磁盘水位（0.166）**：入口前 65%，D 路腾到 57.5%（可用 60G），VC-6 结束后升到 67%（已用 95G／可用 47G）。停线是 ≤69% 且可用 ≥40G，收尾还要放一份权威克隆和门禁工作根（0.165 的 `work-1` 约 440M、
@@ -2808,6 +2808,28 @@ python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名>
 载荷审核只含预期变化：映射只变 1 个叶子；基线只变 `evidence_semantics_sha256`、`files_sha256`、`source_commit`，受管文件条目只有映射 json 与 `candidate_test_trace.py` 两项，与 10-30 手工重封的先例（`e610f5eaf1`）形状一致。
 另一次演练里，因新增测试模块还没登记进归属表，追踪完成但新增 2 个 `unobserved`（`test_ci_gate_scope`、`test_ci_unit_ownership`），脚本判失败并停在 `trace` 步、工作树还原干净，加 `--from trace --allow-new-unobserved` 续跑几秒就提交了依赖表；这就是上面“先物化归属表”的由来。
 另外，10-31 在任务 1～4 合并后用该脚本的 `trace` 步做过一次真实重追踪（不是上面的演练）：391 个模块、未观察到 0 个、20.6 分钟，细节见 §4.8.1。
+
+<a id="codex-active-receipt"></a>
+## 4.9 当前 Active 终态收据坐标（升级收尾只改这里，不碰第二部分）
+
+**这一节是 `tools/evidence_index.py` 的校验位置。** 重建 `docs/EVIDENCE_INDEX.md`（收尾 b8）时，索引工具读取 Runtime Catalog 的 Active 版本，找到它唯一的终态收据，然后要求**本节**同时写明：Active 版本号、终态收据文件名、官方证据来源 Campaign 与末级（canonical）Campaign；缺一项即失败关闭。
+以前这项校验读的是第二部分，而第二部分是冻结章（见 §3.9“第二部分是冻结章”一段），每轮升级收尾为了写明新 Campaign 就得改它，随后付 20 份清单＋2 个检查器的第二章摘要连锁、冻结承接收据、身份守恒基线重封和依赖追踪（0.166 实测约 35～40 分钟），
+而且这些清单与检查器都在受管工具 `tools/official_client_capture` 之内，连锁会让受管工具身份变化。本节在第四部分，不被任何摘要钉住，只需要冻结承接收据，所以从 0.166 收尾之后改在这里。
+
+| 项 | 当前值（0.166.0） |
+|---|---|
+| Active／Previous | `codex-cli 0.166.0`／`codex-cli 0.165.0` |
+| 终态收据 | [`CODEX_CLI_0165_TO_0166_TERMINAL_STATE_RECEIPT.json`](egress/maintenance/CODEX_CLI_0165_TO_0166_TERMINAL_STATE_RECEIPT.json) |
+| 审计索引 | [`CODEX_CLI_0165_TO_0166_AUDIT_INDEX.json`](egress/maintenance/CODEX_CLI_0165_TO_0166_AUDIT_INDEX.json)（私有归档坐标取自它） |
+| 官方证据来源 Campaign | `c01660-formal-vc1-r1-20261031t000000z`（attempt `20261031T104956Z-3e3bddb7be4fda37`） |
+| 末级（canonical）Campaign | `c01660-formal-vc1-r1-20261031t000000z` |
+
+**升级收尾“该改哪里”清单（草稿，流程规则由事项 8 统一落笔）。**
+1. 本节：把上表五行换成新 Active 的值（版本、收据文件名、审计索引、两个 Campaign，数据取自新终态收据的 `campaign_chain` 与 `audit_index`）。校验：`python3 -B tools/evidence_index.py --check`（要在带 `local-analysis/captures` 的主检出里跑，工作树里需要把它接过去）。
+2. 文首“当前版本”横幅、第三部分 §3.2／§3.9 和第四部分的本轮实测与教训：照收尾渲染脚本的 active 绑定位置清单改，这些位置都不在第二部分。
+3. **第二部分一个字节都不改**：收尾后跑 `python3 -B tools/ci/prepush_check.py` 的 `guide-part2-digest` 项，必须在**不加** `--allow-part2-change` 的情况下为绿（第二章摘要与基点登记值相同）；收尾 `prepare --dry-run` 的 `changed_paths` 里不应出现第二章摘要连锁。
+4. 第二部分正文里仍写着“当前 Active 是某版本”的位置（开头段、权威入口表、遥测零流量判定标题，以及 UA、`client_version` 等规则取值）会比实际 Active 落后一版，这是预期现象，**以本节与 Runtime Catalog 为准**。这些位置只在下一次版本登记时统一改：登记本来就要重算第二章摘要连锁，那一次顺手改，不额外付费。
+5. 本节改动属于指南（冻结路径）的修改，收尾提交后照常补一份冻结承接收据，源码提交与收据分开提交。
 
 ---
 
