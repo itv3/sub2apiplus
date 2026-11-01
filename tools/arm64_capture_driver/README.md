@@ -52,12 +52,13 @@
 
 1. 填写本轮参数，准备干净工具提交与 bundle，受监督部署工具／文档并安装、复验驱动。
    先 `entry-dryrun.sh start <bundle> <分支> <完整提交> --opening` 在独立演练根空跑；不写正式总账、不发真实请求。
-   **版本登记之后、本 Campaign 第一次后台验证之前，重新追踪依赖追踪表**（OPT-02）：在固定到登记提交的干净检出上
-   `python3 -B tools/ci/dependency_trace.py --repo <检出> --out <结果目录> --jobs 4`（本机走重测试锁，约 30～50 分钟），再
-   `python3 -B tools/ci/unit_ownership.py dependency-table --tree <检出> --trace-dir <结果目录> --python <版本> --platform <平台>`，
-   把 `tools/ci/unit_dependencies.json` 提交进登记变更集。追踪提交必须是之后所有比对基点的祖先；**不要在 Campaign 中途换表**
-   （用依赖精度时追踪表出现在改动里，整轮不筛选）。不重新追踪不会选漏——追踪之后依赖文件变过的模块照选，
-   只是升级登记改动大，`last-passed` 轮次选出的模块和命令门禁项会越来越多，省不下时间。
+   **依赖追踪表不再随版本登记重追踪（OPT-02，11-01 更正）**：不要重追踪，也**不要把 `tools/ci/unit_dependencies.json` 放进登记变更集**——
+   用依赖精度的 `last-passed` 轮次里，依赖表出现在“基点..被测提交”的改动中就整轮不筛选（全集），正好抵消筛选省下的时间；
+   表留在上一次维护提交里即可：陈旧的表只会多选、不会漏选（追踪以来依赖文件变过的模块照选，追踪提交不在历史里时全部照选），
+   0.166 回放里旧表与新表的选择结果逐项相同（60 个模块、省 40.0 分）。重封链用 `python3 -B tools/ci/reseal_chain.py … --skip-trace`（跳过 `trace` 步，`verify` 照跑）。
+   只有“追踪提交到候选”的差距大到 `last-passed` 轮次选出的模块越来越多、省不下时间时，才在**发版之后、下一轮开工之前**单独重追踪并发一个版：
+   `python3 -B tools/ci/reseal_chain.py … --only trace`（或手工 `dependency_trace.py` 加 `unit_ownership.py dependency-table`，本机走重测试锁，实测 20.6 分钟、391 个模块）。
+   **不要在 Campaign 中途换表。**详见[指南 §4.8.1](../../docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-opt02-dependency-selection)。
 2. **新目标**：`entry.sh` 完成预检、P0 和 VC-0 原子收口，最后派发 VC-1 首批；失败重跑同一入口，账本不重建。
    **同目标官方证据复用**：`pre-a3.sh → stage1.sh → vc0-gate-target.sh → stage2.sh`，只收 `EVIDENCE_DECISION=reuse`；
    已建账本的 stage1 收尾失败仅跑 `stage1-finish.sh`。`pre-all.sh` 可替代 stage2 并继续 VC-2／VC-3。
@@ -106,7 +107,7 @@ bash driver/vc5-precheck.sh --consume
     建议在 VC-4 跑门禁期间就预览一遍并提前改好，恢复项写进收尾清单。人读摘要写标准错误，标准输出仍是 JSON。
 * `--renew --approver '批准人及依据'`：只续管理令牌。要求准入已有收据、绑定未变、待办动作恰是 `renew_token`，其余一律拒绝；就地写一份 2 小时有效、
   绑定当前 `admission_key` 的批准件后走与人工相同的 apply。`vc5-all.sh` 在目标平台门禁之后、canonical 之前先守一次准入（`vc5_admission_guard`）：消费不通过时，
-  启动前设了 `VC5_RENEW_APPROVER` 就自动续签，没设就打印 `VC5_ADMISSION_GUARD_FAILED` 与处理办法后退出 3；seal、accept、canonical 各阶段失败也都会打印
+  启动前设了 `VC5_RENEW_APPROVER` 就自动续签，没设就打印 `VC5_ADMISSION_GUARD_FAILED` 与处理办法后退出 3；`vc5-all.sh` 一进门就把该变量收回成脚本私有变量 `VC5_RENEW_APPROVER_HELD`（不再导出），到 canonical 之前才放回环境，所以 seal、accept（含 accept 里的目标平台门禁 `make test`）的子进程环境里没有它（0.166 因它泄漏白跑两次目标平台门禁）；seal、accept、canonical 各阶段失败也都会打印
   `VC5_ALL_STAGE_FAILED stage=… rc=…` 和未过滤输出的末 8 行（完整输出在 `$RUNROOT/vc5-all-<阶段>.raw`），不再静默结束。
 * 批准文件使用 `codex-vc5-admission-approval/v1`，绑定报告的 `admission_key`、完整 `actions`、
   `seal_admission=true`、`approval_id`、`approved_by`、`approved_at_utc` 与 `expires_at_utc`。
@@ -754,7 +755,7 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   同一 Campaign 内每修一次，哪怕只改几个文件也要重跑整个子集，归属表自己在改动里时更是回退全集（上一轮两次 113 分钟）。`last-passed` 取本运行根（同一 Campaign 这一轮）里
   上一个 `passed` 结论的提交作基点，选择器只看这一小段改动。**VC-5 准入接受这种子集结论**：`vc5_admission.state` 走 `check(require_passed=True, client=…)`，子集结论只拒另一客户端用，
   基点不是发版 tag 也只是在提示里写“不是发版 tag 提交”。保护：基点结论须 passed 且筛选印证无问题，基点提交必须是新提交的祖先（与逐单元承接同一套核对，含类型变化／符号链接／子模块的否决），
-  找不到可用的就拒绝、不悄悄回退（第一次验证先不带它）；解析出的具体提交登记进输入合同，来源写进结论的 `select_base_origin`。归属表或选择器自己在这段改动里时入口门禁照旧回退全集。
+  找不到可用的就拒绝、不悄悄回退（第一次验证先不带它）；解析出的具体提交登记进输入合同，来源写进结论的 `select_base_origin`。选择器本身、驱动副本、执行器文件、依赖精度下的依赖表在这段改动里时入口门禁照旧回退全集；**归属表**（`tools/ci/unit_ownership.json`）在改动里时，只有相对基点是“只会更严的增量”才不回退（见下一条），否则同样回退全集。
 * 依赖精度（OPT-02）：`--select-base last-passed`（或门禁续跑第二层取上一轮全集运行的提交）这类“基点不是发版 tag 提交”的轮次，选择器除剔除另一客户端的重模块外，
   还把依赖闭包碰不到改动的其余测试模块剔除（静态导入闭包＋测试自己精确提到的文件＋`tools/ci/unit_dependencies.json` 里实际观察到的打开与枚举），
   并按真实输入路径筛选后端／前端命令门禁项：改动与它的输入不相交，整项（连同命令单元）从清单里拿掉——后端 go test 三项读 `backend/`、`docs/egress/`、冻结台账登记的路径与后端源码
@@ -762,6 +763,22 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   `check-egress-spec` 的其余子检查、`deploy-scripts`、`capture:prerequisites` 一律照跑。跳过的决定、命中的改动与原因都登记在清单的 `selection.commands`（带自摘要），
   入口门禁总摘要的 `client_selection.commands_skipped` 回显；VC-5 准入只看 passed 与筛选摘要、不比对门禁集合，所以登记在案的跳过不会被当成缺失。
   基点是发版 tag 提交（升级后第一次验证）、改动路径不认识、回退全集时一律不筛。
+* 选择器的三处修正（11-01，`tools/ci/unit_ownership.py`）：①**归属表增量放行**：归属表在改动里时，相对基点仅当“新增测试模块、顶层其余字段不变（阈值、启用的客户端、覆盖表、钉住表、联动表、枢纽、共用内核、依赖精度配置等）、
+  已有模块的 `owner`／`rule` 不变、`codex_plan`／`claude_plan` 只会由 skip 变 run、认识的目录范围只增不减、已复核隔离表只为新模块加项”才不回退，其余任何一条不满足照旧整轮回退并写明原因；放行时 `selection.ownership_table_delta` 记新增模块数
+  （新增的测试模块文件本身在改动里，必被并入，所以不可能借此少跑基点上已有的模块）。②**测试入口文件不算“没有静态使用者”**：`tools/test_*.py` 与任何名为 `tests` 的目录里的 `test_*.py` 天然没人导入，
+  调用 `Graph.unused()` 前先剔除，不再因为改了一个测试文件就把全部重模块并回去（`tests/real_chains/` 这类更深一层目录不算，真正的孤儿库文件照旧失败关闭）。③`recognized_areas` 登记 `tools/behavior_acceptance/`，改它不再因“路径不认识”回退。
+  **落地顺序**：`unit_ownership.py` 在选择器自身路径里，改了它之后，下一轮升级的比对基点必须是**含这批改动的发版 tag**，否则首跑仍回退全集；所以这批改动随下一次上游合并发版，合并发出的版本成为新基点，落地之后到下一轮升级之前不要再改
+  `unit_ownership.py`、`entry_gates.py` 等选择器／执行器文件。后台验证两类基点的担保链：第二层续跑（`entry-gates.sh` 取“该门禁系列里已发布清单中、提交是本次祖先的最近一次全集运行”，沿途失败／没执行完的模块强制重跑）与 `last-passed`
+  （`background_validation.py::_resolve_last_passed_base`，同运行根同客户端 `passed`、`scope_problem` 无问题、是新提交祖先的最近结论）；链头是发版 tag 加归属精度，担保来自 GitHub CI 全集加收尾全集，逐级归纳成立。
+* **VC-4 门禁范围与基点**（`arm64-vc4-gates.sh`，S3）：`VC4_GATE_SCOPE` 缺省随客户端（`CT_CLIENT=codex` → `auto`，其余 → `full`），显式 `full` 强制全集、`auto` 强制筛选，别的值退出 2；新增 `VC4_SELECT_BASE`（40 位小写提交），缺省取
+  `$RUNROOT/background-validation` 里最近一份 `status=passed`、提交是 DC 真祖先（不含 DC 自己）的结论，读不到就不给 `--select-base`，由入口门禁自己取最近的发版 tag（或第二层续跑的基点）；选择器出错一律回退全集。
+  `vc5-all.sh` 对带 `client_selection` 的本地 `full-regression.gate.json`：Codex 轮次、标记 `client=codex`、`gate_scope=client-plan`、`ownership_sha256` 与 DC 提交里 `tools/ci/unit_ownership.json` 的摘要一致时放行并打印摘要，不再需要
+  `VC5_ALLOW_SUBSET_LOCAL_GATES=1`；Claude 轮次、摘要不一致、标记形状不对仍拒绝（该变量的旧语义不变）。**副作用**：VC-4 的 `full-regression.gate.json` 带 `client_selection`，但 VC-5 正式收据里 `full-regression` 的命令名仍写 `make test`
+  （`codex_upgrade_gate_receipt.py:144`），“这次只跑了 Codex 计划”只存在于被 sha 绑定的 `gate.json` 里；VC-5 目标平台门禁仍是全集 `make test`，收尾 full-gates 与 GitHub CI 仍是全集兜底。`entry-gates.sh` 头部第 39–45 行
+  “VC-4／VC-5 的 make test 保持全集”的措辞已过时（该文件是红线文件，只能随版本登记改），以本条为准。
+* **历史测试树补发版 tag**（S1，`local/sync-history-tree.sh` → `history-tree-refresh.sh`）：采集主机取 bundle 用 `--no-tags`，历史树不带 tag（ARM64 的树曾最高只到 `v0.2.13-3`），入口门禁与后台验证的“最近发版 tag”因此解析成差几个版本的旧 tag，
+  改动文件上千个、Codex 筛选必回退全集。现在 `sync-history-tree.sh` 在本机用 `git describe --tags --abbrev=0 --match 'v[0-9]*'` 取最新发版 tag 及提交，作为可选的第 4、5 个参数传给 `history-tree-refresh.sh`，后者校验名字格式（`v0.2.18`／`v0.2.18-6`）、
+  40 位小写提交、提交存在且是目标提交的祖先之后 `git tag -f`；不带参数时与旧行为相同并打警告。**部署顺序**：先把驱动受监督部署到 ARM64，再跑 `sync-history-tree.sh`（旧的 refresh 脚本会静默忽略多出来的两个参数）。验收：`git describe --tags --abbrev=0 --match 'v[0-9]*'` 在 ARM64 历史树上返回最新发版。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
@@ -1143,17 +1160,17 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 
 | 位置（`driver/pipeline/`） | 作用 |
 |---|---|
-| `vc-pipeline.sh` | VC1→VC2→VC3→VC4→BGV→VC5→VC6 无人值守编排；`--check` 只读自检，`start` 前台自检后 `setsid -f` 起运行体，状态写 `<PREP>/pipeline/vc-status.txt`，最后一行必为 `EXIT rc=N`。VC5 准入收据已存在（`--consume` 通过）时仍只读复查库表前置（`vc5-precheck.sh --dry-run` 的 `candidate_prerequisites`），被改回去则在起 `vc5-all.sh`、开采集账号之前停下，人读摘要在 `<PREP>/pipeline/vc5-admission-recheck.err`；等待日志里的失败字样时，脚本自己打印的 `=== ` 标题行不算失败 |
+| `vc-pipeline.sh` | VC1→VC2→VC3→VC4→BGV→VC5→VC6 无人值守编排；`--check` 只读自检，`start` 前台自检后 `setsid -f` 起运行体，状态写 `<PREP>/pipeline/vc-status.txt`，最后一行必为 `EXIT rc=N`。VC5 准入收据已存在（`--consume` 通过）时仍只读复查库表前置（`vc5-precheck.sh --dry-run` 的 `candidate_prerequisites`），被改回去则在起 `vc5-all.sh`、开采集账号之前停下，人读摘要在 `<PREP>/pipeline/vc5-admission-recheck.err`；等待日志里的失败字样时，脚本自己打印的 `=== ` 标题行不算失败。阶段计时下限 `PIPE_NEED_VC1`／`PIPE_NEED_VC5` 缺省仍是 90／300 分钟（“从头跑这一阶段”的保守值），首批大头做完后账本剩余自然低于它而 STOPPED 时，脚本按现场产物判进度并打印**下限调低建议**（建议值是按 0.166 实测加余量估的：VC-1 封存预览＋批准＋重放 30、VC-5 候选 run 结束后 190、seal／compare 完成后 150、accept 完成后 40 分钟）和带原参数的重起命令，只打印、绝不静默改下限，调低理由写进总账 |
 | `start-entry.sh`、`opening-env.example.sh` | 正式入口（`entry.sh`）的起跑自检（C1～C11）与后台运行；开工检查环境变量模板（复制到 `<PREP>/opening-env.sh`）。`--check` 只读、不建任何目录。C10：入口门禁 Go 编译缓存（数据根上一级 `entry-gates-work/go-build-cache`）在 tmpfs 上时总容量须 ≥10 GiB（`GO_CACHE_TMPFS_MIN_GIB`），冷启动全量重建 >4 GiB 会写满；C11：`prepare-round-inputs.sh` 的产物（P0 回退依据、基线画像）在位。`SKIP_BGV_CHECK=1`／`SKIP_CAPTURE_ACCOUNT_CHECK=1` 把 C4b／C6 的 FAIL 降为 WARN，`SKIP_CAPTURE_ACCOUNT_ON=1` 本阶段有意不打开采集账号（起跑留 WARN） |
 | `deploy-commit.sh`、`history-tree-refresh.sh`、`sync-data-root-backend.sh`、`prepare-*.sh`、`set-env-keys.sh`、`post-bgv.sh` | 受监督部署、历史测试树跟进、数据根 backend 同步、输入目录与历史门禁源码准备、参数文件定点改键、后台验证取证 |
 | `preflight-refresh.sh` | 官方采集登录态（capture-cli 的 `auth.json`）访问令牌的剩余有效期检查与直连刷新：`--remaining` 只读，`--ensure [--min N]` 不足就用官方客户端自带 app-server 的 `account/read {refreshToken:true}` 无代理直连刷新一次，失败明确退出非零。`start-entry.sh` 起跑前（C9 自检＋真起跑时 `--ensure`）和 `vc-pipeline.sh` 的 VC1 阶段（首批没开始就刷新、已在跑则明确停下）自动调用；阈值 `PIPE_TOKEN_MIN_MINUTES`，缺省 150 分钟（VC-1 预计时长＋1 小时）。采集账号开关“剩余不足 60 分钟拒绝打开”的逻辑不变 |
 | `capture-account-on.sh`／`capture-account-off.sh`、`capture_admin.py` | 采集账号开关（只改 `status`／`schedulable`，幂等）与采集专用用户／Key 建立；账号号取 `CAPTURE_ACCOUNT_ID` 或参数文件的采集账号 |
-| `vc5-prereq.sh`、`vc5_prereq.py` | VC-5 库表前置（采集账号 `model_mapping` 清空、采集分组 `allow_live` 打开、采集 Key 临时停用）的 `apply`／`restore`／`verify`／`show`，账号、分组、Key 号与备份目录都由参数给。`apply` 先把 `accounts`、`groups`、`api_keys` 三张表的全部行、全部列存成行级快照 `snapshot-before.json`；7 项摘要排除运行时列（`last_used_at`、`updated_at`、会话窗口、`rate_limited_at` 等，`extra` 里的用量快照键，`credentials` 里的令牌刷新键，Key 的用量与窗口；逐表列表见脚本说明），`apply` 与 `restore` 之后一项都不该变；`restore`／`verify` 与改前快照逐表逐行逐列比较，差异分 expected（故意改的三处）、runtime（只报告）、unexpected（其余任何列，含多出或少了的行，退出码 1），凭据与 Key 密钥的值不进报告。0.165 恢复后 7 项摘要 3 项不同、因口径带进运行时列又没有行级快照而无法核实，由此修 |
+| `vc5-prereq.sh`、`vc5_prereq.py` | VC-5 库表前置（采集账号 `model_mapping` 清空、采集分组 `allow_live` 打开、采集分组里**另一把活跃 Key** 临时停用）的 `apply`／`restore`／`verify`／`show`，账号、分组、Key 号与备份目录都由参数给。**`--key` 是“要临时关掉的另一把 Key”，不是采集 Key**（采集 Key 必须一直 active；0.166 误传过一次把它关了）：采集 Key 编号取自参数文件的 `API_KEY_ID`（或 `--capture-key N`），`apply` 在 `--key` 等于采集 Key、或取不到采集 Key 时退出 2、不碰库（失败关闭）；`restore`／`verify`／`show` 不受限（恢复被误关的采集 Key 时 `--key` 恰恰就是它）。`apply` 先把 `accounts`、`groups`、`api_keys` 三张表的全部行、全部列存成行级快照 `snapshot-before.json`；7 项摘要排除运行时列（`last_used_at`、`updated_at`、会话窗口、`rate_limited_at` 等，`extra` 里的用量快照键（含 `upstream_billing_probe`、`*_balance_updated_at`、`cline_*`、`codex_credits_snapshot` 这四类后台探测／余额服务写的键，配置开关 `upstream_billing_probe_enabled` 不在内），`credentials` 里的令牌刷新键，Key 的用量与窗口；逐表列表见脚本说明），`apply` 与 `restore` 之后一项都不该变；`restore`／`verify` 与改前快照逐表逐行逐列比较，差异分 expected（故意改的三处）、runtime（只报告）、unexpected（其余任何列，含多出或少了的行，退出码 1），凭据与 Key 密钥的值不进报告。0.165 恢复后 7 项摘要 3 项不同、因口径带进运行时列又没有行级快照而无法核实，由此修 |
 | `evolve-and-resume.sh`、`evo/` | VC-2 批准预览被拒后的“工具演进 → 对账 → 续跑”（只覆盖失败动作是 `classify-preview` 的情形） |
 | `vc2/` | VC-1 封存（`vc1-seal.sh`）、批次序号可变的 VC-2/VC-3（`vc23-seq.sh` 等，由 `gen_vc2_seq_scripts.py` 从驱动自带脚本机械生成，测试要求两者逐字一致）、人工审核标记 |
 | `vc6/` | VC-6 全套脚本、`ORDER.example.txt`（复制到 `<PREP>/vc6/ORDER.txt`）、`vc6-cleanup-execute.sh` |
 | `vc-chain.sh`、`vc-chain-vc5.sh` | 调度者串联：VC4 通过后自动续起 VC5→VC6；VC-5 恢复链批次跑完后接着起流水线 |
-| `local/` | **开发机**侧脚本（不在采集主机运行）：`vc4-handoff.sh`、`upload-and-deploy.sh`、`upload-entry-bundle.sh`、`sync-history-tree.sh`、`evo-local.sh`、`install-driver.sh`、`vc6-local-commit.sh`、`vc6-handoff-watch.sh`；轮次坐标一律 ssh 到采集主机向参数文件要，不在本机再抄一份 |
+| `local/` | **开发机**侧脚本（不在采集主机运行）：`vc4-handoff.sh`、`upload-and-deploy.sh`、`upload-entry-bundle.sh`、`sync-history-tree.sh`（同步历史测试树并补最新发版 tag）、`evo-local.sh`、`install-driver.sh`、`vc6-local-commit.sh`、`vc6-handoff-watch.sh`；轮次坐标一律 ssh 到采集主机向参数文件要，不在本机再抄一份。`vc6-handoff-watch.sh` 带 `--detach` 才脱离会话（本机 macOS **没有 `setsid`**，`setsid -f` 会静默失败）：启动前核对 `VC6_REPO` 已检出候选别名分支（参数文件的 `BUNDLE_BRANCH`）且工作树干净，否则退出 2；子命令失败但交接标记已被别处建出时按已完成处理（最多等 90 秒）；监视在跑时不要同时手工做同一个交接 |
 | `round-env.template`、`render_round_env.py` | 本轮参数文件模板与渲染器：版本号推出全部名字，`REPLACE_` 开头的值由人填；没填的 `parse_env.py` 会拒绝 |
 | `pipeline.env.example` | 流水线覆盖文件模板 |
 

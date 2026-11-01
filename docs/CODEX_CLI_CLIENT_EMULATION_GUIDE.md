@@ -1626,6 +1626,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib;from tools.official_clie
 
 
 **0.166 对三条出站已知偏差的处置（逐条核实 0.166.0 源码）。** ①Lite 标记按连接冻结：官方代码确会在同一连接上互换 Lite／非 Lite 模型并逐帧写位，但线上目录里二者不并存，官方侧不可达，不收敛；②第三方客户端窗口号恒为 0：只影响不发窗口头的第三方，网关看不到其压缩时机，不收敛；③第三方中途改档的 update 取值：官方是基线钉死加追加，我方无状态，收敛需跨实例状态存储，不收敛。三条的源码出处与不收敛理由写在第二部分对应规则里（窗口推进在 SPEC-WS-005，configuration_update 合成在 SPEC-BODY-006，Lite 标记按连接冻结在 SPEC-BODY-008）。同一轮收敛了两处候选侧缺口（合成 `/models` 清单补逐模型能力位；A21 压缩后增量帧按官方形态合成并有判据），见 §4.7 教训。触发重新评估的条件：账号 `/models` 里出现 Lite 与非 Lite 并存（①）。
+
+**11-01 工具优化批的状态（只写状态，细节在第四部分）。** 选择器三处修正、历史测试树补发版 tag、VC-4 缺省按 Codex 计划筛选、`VC5_RENEW_APPROVER` 作用域收窄、`vc5-prereq`／`vc6-handoff-watch`／阶段下限三处小缺陷、`reseal_chain --skip-trace`、`evidence_index` 改读 §4.9、收尾工具包入库，均为两次升级之间可改的工具，没有动受管工具 `tools/official_client_capture`（受管工具身份摘要改前改后相同）。它们到现在只有单测与回放证据，没有真实升级验证；第一轮真实升级收尾要做跳过清单对账，落地顺序、副作用与对账方法见 [§4.11](#codex-process-rules)。
 ---
 
 # 第四部分 Codex CLI 版本演进流程
@@ -1707,7 +1709,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib;from tools.official_clie
 编排器的受支持升级对与文件名清单、该版本的定向样本、各处源码根版本号、`tools/spec_ref_anchors.json` 与依赖清单，并对第二部分的源码引用做增量复核；
 登记完成后、建 Campaign 之前用 `test_codex_identity_conservation --seal-baseline` 重封基线（缺漏会被守恒测试拦下）；改完跑全量 `make test-capture-tools`。
 两次升级之间只能改 control 层文件；wire_producer／evidence_semantics 层（场景清单、候选采集脚本）与 `TARGET_VERIFIER_SHA256S` 钉住的 5 个
-`tools/ci` 验证器文件，只能随版本登记重封。受管驱动文件必须在 Campaign plan 之前改完。登记之后、本 Campaign 第一次后台验证之前，还要重新追踪依赖追踪表（本机约 20 分钟，规则见 [§4.8.1](#codex-opt02-dependency-selection)；事实映射重绑、基线重封、manifest 与追踪整条链用一条命令跑，见 [§4.8.6](#codex-reseal-chain)）；推 main 之前先跑一键预检（[§4.8.2](#codex-prepush-check)），登记涉及的第二章摘要连锁见 3.9 末尾的冻结章说明。
+`tools/ci` 验证器文件，只能随版本登记重封。受管驱动文件必须在 Campaign plan 之前改完。依赖追踪表（`tools/ci/unit_dependencies.json`）**不再随登记重追踪，也不要放进登记变更集**（放进去，依赖精度下整轮不筛选；陈旧的表只会多选不会漏选，规则见 [§4.8.1](#codex-opt02-dependency-selection)）；事实映射重绑、基线重封、manifest 整条链用一条命令跑并加 `--skip-trace`，见 [§4.8.6](#codex-reseal-chain)；推 main 之前先跑一键预检（[§4.8.2](#codex-prepush-check)），登记涉及的第二章摘要连锁见 3.9 末尾的冻结章说明。
 
 **登记定稿前，用上一版真实候选证据预演标签与判据。** 登记会写证据标签声明与候选期望清单；登记测试里的观测是手造的，标签错位和判据过严要到 VC-5 封存预览、
 assert-rules 才暴露，而且撞一个修一个（0.164 为此在关键路径上耗约 3 小时）。把上一版候选 attempt 与官方 attempt（连同完整原始证据根，只读拉回本机）交给预演，零写入、零请求：
@@ -2016,7 +2018,7 @@ Catalog stage 字节必须与 VC-3 一致；画像变化走批准修订／后继
 
 VC-4 跑门禁期间就手动跑一次 `vc5-precheck.sh --dry-run`，不要等流水线：报告里 `candidate_prerequisites` 是候选作业的三项库表前置（条件与改法见 [§4.7 失败矩阵](#codex-failure-matrix)；库来自生产同步时天然不满足，
 不满足时顶层 `status=blocked`，提示里写明备份、临时改法与 VC-6 之后的恢复步骤），`ttl` 是令牌与批准件的剩余有效期（令牌富余不足 2 小时会警告；真正让 canonical 前准入失效的是令牌，24 小时令牌签发 12 小时后即低于最小剩余）。
-流水线在准入收据已存在时仍会复查库表前置，被改回去则在起 `vc5-all.sh`、打开采集账号之前停下。启动 `vc5-all.sh` 时带 `VC5_RENEW_APPROVER='批准人及依据'`，canonical 前会自动只续令牌（`--renew` 只续令牌，其余一律拒绝）；
+流水线在准入收据已存在时仍会复查库表前置，被改回去则在起 `vc5-all.sh`、打开采集账号之前停下。启动 `vc5-all.sh` 时带 `VC5_RENEW_APPROVER='批准人及依据'`，canonical 前会自动只续令牌（`--renew` 只续令牌，其余一律拒绝；该变量在 `vc5-all.sh` 里只到 canonical 阶段才放进环境，seal、accept 与目标平台门禁的子进程里没有它，见 [§4.11.2](#codex-process-rules)）；
 不带则明确报错退出，不静默。
 
 JWT 按实际 `sub2api-admin-jwt/v1` 合同检查三段结构、HS256 签名及 `user_id/email/role/token_version/iat/exp/nbf`，
@@ -2286,7 +2288,7 @@ VC-6 收口后再 prepare（先 `--dry-run`）→ gates → 人工批准 → pub
 （`driver/local/local-capture-tools-receipt.sh`，约 48 分钟，不占门禁，收据上传到 `$RUNROOT/local-receipts/`）；第七项 `tui-prelaunch-receipt`：新版二进制对 compact、ws-idle-close、daemon、guardian
 以及会话内改推理强度／换模型／压缩后续聊（effort-update-ws、effort-update-http、model-switch-ws、compact-continue-ws）各 TUI 场景做过零请求启动预探且全部通过（`driver/tui-prelaunch-receipt.sh scenarios／write／verify`，绑定目标版本与登记的二进制摘要，真实请求数必须为 0）。
 两项只对 Codex 做；入口便宜检查同名两项在开工时就查。同一 Campaign 内修一次几个文件时，`background-validate.sh start … --select-base last-passed` 把比对基点取为同一 Campaign 上一个已通过的提交；
-VC-5 准入接受这种子集结论（只拒另一客户端用）。第一次验证不带。基点不是发版 tag 提交时，选择器还按依赖精度把碰不到改动的模块剔除，机制、实测与估时见 [§4.8.1](#codex-opt02-dependency-selection)。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
+VC-5 准入接受这种子集结论（只拒另一客户端用）。第一次验证不带。基点不是发版 tag 提交时，选择器还按依赖精度把碰不到改动的模块剔除，机制、实测与估时见 [§4.8.1](#codex-opt02-dependency-selection)。采集主机的历史测试树要带最新发版 tag（`sync-history-tree.sh` 自动补），否则“最近发版 tag”解析成旧版本、改动文件上千个、必回退全集，见 [§4.11.2](#codex-process-rules)。Codex 缺省按客户端计划跳过与改动无关的 Claude 重模块（`--gate-scope auto`；Codex、共用、廉价 Claude 模块
 及受改动影响的 Claude 重模块照跑；找不到发版基点或选择器出错时回退全集；Claude 轮次、`--opening`、收尾不筛选），子集结论不得冒充全集，也不能被 `reuse` 沿用。失败单元只在“命令正常退出但失败”时补跑一次：同一单元最近 5 轮补跑通过只许 1 次，
 超时、被信号终止、读集未闭合不补跑；Go 门禁先核对包清单完整，再按失败包补跑。补跑通过的单元在结论里单列，两次日志都留；
 结束时在结论目录另出核数偏差报告。
@@ -2453,36 +2455,36 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 - **整链空跑在登记很快时不要跑完整链（0.166）**：登记集成 12:25 就交回，整链空跑（`rehearse.sh`）12:34～14:28 却占了约 1 小时 54 分的关键路径：round 阶段 28 个探针通过、1 个已登记预期缺陷
   （`prior-candidate-seal-assert-replay`／SPEC-WS-005，A21 新判据对 0.165 旧证据）；之后的 full-chain 6 条只跑过 `chain-vc1-capture`、`chain-vc2-vc5-validation-only` 两条，第三条评估链跑了 48 分钟时
   被调度者叫停（它占 4 核且与全集后台验证互斥，后台验证因此拖到 14:38 才起），余下 3 条记为“未执行”、不算通过。登记很快且工具层改动不大时，空跑只跑 round 阶段；full-chain 留给工具层有实质改动的版本，
-  且不与全集后台验证抢时间。注意：本轮 VC-1～VC-6 的编排没有出现空跑本应覆盖的缺陷，但这只说明本轮没撞上，不证明省掉 full-chain 总是安全。证据：`/root/codex-0166-prep/rehearse.out`、`fullchain.out`、总账 13:38／14:28／14:41。
+  且不与全集后台验证抢时间（**已规则化**：见 [§4.11.1](#codex-process-rules) 第 1 条）。注意：本轮 VC-1～VC-6 的编排没有出现空跑本应覆盖的缺陷，但这只说明本轮没撞上，不证明省掉 full-chain 总是安全。证据：`/root/codex-0166-prep/rehearse.out`、`fullchain.out`、总账 13:38／14:28／14:41。
 - **VC-5 候选就绪的 models 探测有 3 秒预算，低带宽出口会把它撑破（0.166）**：VC-5 起跑后的第一个缺陷：候选就绪的 `GET /backend-api/codex/models?client_version=0.166.0` 两次 HTTP 500（62 字节
   `internal error`，约 3.0 秒）。F 路只读诊断（`reports/F.md`）：500 是网关自己产生的，目录取回的调用方预算 `CodexCatalogBaseFetchBudget`＝3 秒到期（后台取回另有 15 秒独立超时），排除出口连通、库表前置改动、令牌失效；
   调度者补测：官方 0.166 的 `/models` 响应体 655945 字节，容器经出口下载 519KB 中立文件实测 140～320KB/s（22:43～22:49），0.164／0.165 同探测约 2.0～2.1 秒，当晚出口带宽约 200KB/s，失败时吞吐应低于 110KB/s。
   重跑一次后通过（14:50Z 重起），同根因计数 1/2（`root_cause rc1-b0ed08e3ce0fbfba4926`）。做法：起 VC-5 前先量出口带宽（下载一个约 500KB 的中立文件），目录体 656KB 要在 3 秒内取完需要约 220KB/s 以上；失败后先做只读诊断、不要重复探测，
-  同根因计数到 2 就停采集。“带宽低是根因”是调度者实测加推断，没有逐字节抓包证实。
+  同根因计数到 2 就停采集。“带宽低是根因”是调度者实测加推断，没有逐字节抓包证实。**已规则化（11-01）**：见 [§4.11.1](#codex-process-rules) 第 2 条。
 - **目标平台门禁被流水线导出的 `VC5_RENEW_APPROVER` 弄红，白跑两次共约 3 小时（0.166）**：`tools/arm64_capture_driver/driver/pipeline/vc-pipeline.sh` 第 605 行把 `--approver` 导出为 `VC5_RENEW_APPROVER` 再起 `vc5-all`（设计目的是 canonical 前自动续管理令牌），
   而目标平台门禁（`make test-capture-tools`）就在 `vc5-all` 的 accept 阶段里跑，三个用例没有封闭进程环境、会读到这个变量：`test_arm64_capture_driver` 的
   `Vc5AllResumeTests.test_expired_admission_before_canonical_is_an_explicit_error_not_a_silent_exit`、`test_arm64_pipeline_scripts` 的 `CaptureAccountOrderTests` 两个用例，凡带 `--approver` 起 VC-5 必红。
   第一次（17:01:07Z 停，用时 1 小时 37 分）调度者先误判为自己手工 export 所致，第二次（17:06:30Z～18:30:42Z，1 小时 24 分）进程环境里确认没有手工变量、读到的是流水线自己的 `--approver` 文本才更正；
   第三次（18:34:54Z 起，不带 `--approver` 重起 `--from VC5`）通过。绕法：准入收据已 consume 通过、管理令牌离到期还有 ≥12 小时（canonical 的要求）时，不带 `--approver` 重起；
-  门禁红时先看红的用例读到了什么值，再归因。同 0.165 VC-4“测试不封闭进程环境”一类。待办（发版后）：流水线只在 canonical 阶段导出该变量，或给这三个用例 `env -u VC5_RENEW_APPROVER`。
+  门禁红时先看红的用例读到了什么值，再归因。同 0.165 VC-4“测试不封闭进程环境”一类。**已修（11-01，随下次上游合并发版）**：`vc5-all.sh` 一进门就把该变量收回成脚本私有变量 `VC5_RENEW_APPROVER_HELD`（不再导出），到 canonical 之前才放回环境，所以 seal、accept（含目标平台门禁）的子进程环境里没有它；两个测试文件的 `_run`／`Sandbox.environ` 也不再继承外层 `VC4_`／`VC5_`／`VC6_` 变量。发版之前的版本仍要用上面的绕法（不带 `--approver` 重起 `--from VC5`）。
 - **`vc5-prereq.sh` 的 `--key` 是“要临时关掉的那把 Key”，不是采集 Key（0.166）**：脚本头注释把它写成“采集 Key”，调度者第一次传了采集 Key 132，把它关了；发现后立刻 `restore`（逐列比较通过，中间没有请求经过这些 Key），
-  旧备份改名 `vc5-prereq-backup.wrong-key-132-restored`，改传 `--key 3`（分组 3 里另一把活跃 Key）重做。该脚本（`tools/arm64_capture_driver/driver/pipeline/vc5-prereq.sh`）在受管驱动目录里，注释修正只能随版本登记做。证据：总账 22:21。
+  旧备份改名 `vc5-prereq-backup.wrong-key-132-restored`，改传 `--key 3`（分组 3 里另一把活跃 Key）重做。该脚本（`tools/arm64_capture_driver/driver/pipeline/vc5-prereq.sh`）在驱动目录里，驱动目录不是受管工具、不在冻结台账，两次升级之间可以改（先例 `77647fba48`、`4e22ceb107`；此处原写“只能随版本登记做”是照抄草稿，没核实，已更正）。证据：总账 22:21。**已修（11-01）**：头注释写明 `--key` 是“要临时关掉的另一把 Key”；采集 Key 取自参数文件 `API_KEY_ID`（或 `--capture-key`），`apply` 在 `--key` 等于采集 Key、或取不到采集 Key 时退出 2、不碰库，`restore`／`verify`／`show` 不受限。
 - **#90 令牌窗口决定 VC-5／VC-6 的排期上限（0.166）**：ARM64 库里 #90 仍带 `refresh_token`，访问令牌 `exp=22:09:56Z`（北京 11-01 06:09:56）；#90 保持 active 到过期前 30 分钟，网关会提前刷新并轮换刷新令牌，
   使 DMIT 同一登录失效，所以必须在北京 05:39 前关回；`capture-account-on` 要求开启前剩余 ≥60 分钟，VC-6 里四个带采集步骤（`switch-production`／`switch-rollback`／`switch-restore`／`retire-switch`）
   最后一个必须在北京 05:09:56 前完成。本轮实况：VC-5 04:11 关回（比 05:39 早 1 小时 28 分），VC-6 最后一个带采集步骤 04:33 关（比 05:09 早 35 分钟），VC-6 本体 19 分钟（04:17～04:36）。
   两次白跑几乎吃掉全部余量。起 VC-5 之前就把两条硬线（05:09／05:39 这类时刻）和各阶段预估耗时摆在一起算余量，余量不足 3 小时就先请老板重新授权 #90，不要赌。证据：总账 11:07、23:11、04:17。
-- **本机没有 `setsid`，`vc6-handoff-watch.sh`（头注释写的是 `setsid -f`）照写会静默起不来；交接分支名要用候选别名（0.166）**：第一次起的监视其实没起来；改用 Python `start_new_session` 起（04:24），但它在 `local-retire` 前仍没触发（原因没有查明），
+- **本机没有 `setsid`，`vc6-handoff-watch.sh`（头注释写的是 `setsid -f`）照写会静默起不来；交接分支名要用候选别名（0.166）**：第一次起的监视其实没起来；改用 Python `start_new_session` 起（04:24），但它在 `local-retire` 前仍没触发（原因见本条末尾的“事后查明”），
   最后由调度者手工 `vc6-local-commit.sh retire`（12 秒）补上，PC＝`582db846d0`、RPC＝`a90fcb490b`。`sync` 第一次还因 `cand166` 不在别名分支 `codex/codex-0166-candidate-r1` 报错，切过去 24 秒完成。
-  本机后台一律用 `detach.py` 这类 Python 新会话写法；交接前核对候选工作树在别名分支上。证据：总账 04:38。
+  本机后台一律用 `detach.py` 这类 Python 新会话写法；交接前核对候选工作树在别名分支上。证据：总账 04:38。 **事后查明（11-01，其中“为什么 HEAD 不是同步提交”只是推断）**：第一次因本机没有 `setsid` 根本没起来；第二次 20:24:14Z 起，20:29:39Z 触发 `retire`，`vc6-local-commit.sh` 在“候选分支头不是同步提交 582db846d”处 rc=3，监视按“失败即退出”于 20:29:43Z 退出；HEAD 为什么不是同步提交只能推断——最可能是调度者几乎同时手工 `retire` 已把 HEAD 推进。证据在 `local-analysis/opt-0166/scratch/vc6-run/` 的 `handoff-watch.log`／`handoff-retire.log`。 **已修（11-01）**：`vc6-handoff-watch.sh --detach`（Python `start_new_session` 脱离会话，等到日志里出现“启动”行才报成功）；启动前核对 `VC6_REPO` 已在候选别名分支且工作树干净，否则退出 2；子命令失败但交接标记已被别处建出时按已完成处理，最多等 90 秒；监视在跑时不要同时手工做同一个交接。
 - **流水线阶段下限（`PIPE_NEED_VC1`／`PIPE_NEED_VC5`）在阶段预算被首批采集吃掉后会拒绝起跑（0.166）**：VC-1 首批官方采集约 67 分钟吃掉预算，剩下只是封存预览与批准，账本剩 51 分钟＜缺省 90 分钟，`vc-pipeline.sh` 首次 STOPPED，
-  改 `PIPE_NEED_VC1=30` 重起；VC-5 重起时账本剩 185 分钟＜缺省 300 分钟，先后用 `PIPE_NEED_VC5=120`、`60`，并 `deadline-extend` 把 VC-5 阶段截止延到 21:00Z。下限是保守值，首批之后按剩余步骤的真实耗时调低，调低理由写进总账。
+  改 `PIPE_NEED_VC1=30` 重起；VC-5 重起时账本剩 185 分钟＜缺省 300 分钟，先后用 `PIPE_NEED_VC5=120`、`60`，并 `deadline-extend` 把 VC-5 阶段截止延到 21:00Z。下限是保守值，首批之后按剩余步骤的真实耗时调低，调低理由写进总账。**已修（11-01）**：缺省 90／300 一个字没改；STOPPED 时 `vc-pipeline.sh` 按现场产物判进度，打印**下限调低建议**（建议值 VC-1 30、VC-5 候选 run 结束后 190、seal／compare 完成后 150、accept 完成后 40 分钟，是按 0.166 实测加余量估的，不是默认值）和带原参数的重起命令，只打印、不静默改，调低理由仍写进总账。
 - **VC-1 核对“线上字节与上一版一致”的方法（0.166，画像补丁为空的版本）**：`facts_summary` 对上一版基线与本版官方断言包逐场景比对（113 行，只有作业名、重复样本计数 34→37／19→22 与同值排序不同，请求体顶层字段序与 `input` 首项类型全部一致）；
   A04 官方样本里 exec 工具目录 `image_gen__imagegen` 的返回类型 `Promise<unknown>`→`Promise<{ image_url: string; output_hint?: string; }>` 只记事实（画像与网关不钉工具目录文本）；
   `/models` 响应无 `literature_search_query`、`auto_review_suffix`、`approved_command_prefix_saved`、`granular`，`request_permissions`／`omitted_paths`／`denied_reads` 命中数与上一版相同。
   VC-2 迁移清单 43 条必须全 inherit，这是空补丁版本的硬前提（K 路建链脚本 `fetch` 对画像摘要不符直接 exit 6）。
 - **收尾 b8 证据索引要求第二部分写明 Active 终态收据的 Campaign（0.166）**：`tools/evidence_index.py` 第 929 行校验第二部分里同时出现终态收据的官方证据来源 Campaign 与末级 Campaign；第二部分只有上一版及更早的 Campaign 时，`b8`（重建 `docs/EVIDENCE_INDEX.md`）报“第二部分未写明 Active 终态收据的 Campaign”。登记阶段若按“第二部分不动”安排，收尾会被卡在这一步：至少要改第二部分开头段，第二章摘要随之变，触发 20 份清单与 2 个检查器的连锁、冻结承接收据、身份守恒基线重封和依赖追踪（0.166 侧分支演练：改动 +9／−7，连锁约 35～40 分钟）。做法：收尾第一小时就做第二部分最小改写再跑连锁，与 ARM64 只读取回并行；规则正文（UA、`client_version`、样本匹配数）可不动，其余绑定位置下次登记统一改。连锁里的载荷审核注释由脚本写入，注释措辞要与收尾场景相符（本轮发现登记版脚本把注释写死成“登记集成”，已改收尾版副本）。证据：总账 b8 记录，`reports/C.md` 附录。 **更正（11-01，工具优化事项 5）：这条做法已作废。** `tools/evidence_index.py` 现在改读本文 [§4.9](#codex-active-receipt)，不再要求第二部分写明终态收据的 Campaign；升级收尾不必改第二部分，也就没有第二章摘要连锁。
 - **VC-5 库表前置的 `restore` 会把其它账号 `extra` 里的运行时键报成 unexpected（0.166）**：VC-6 后 `vc5-prereq.sh restore --key 3` 标 `ok:False`，12 处 unexpected 全是其它账号 `extra` 里随运行变化的键（`upstream_billing_probe` 计数、
-  `*_balance_updated_at`、`cline_*`、`codex_credits_snapshot`），无 `status`／`schedulable`／`credentials` 变化，调度者判良性。下次登记时把这些键加进 `vc5_prereq.py` 的运行时键清单，避免恢复时靠人判断。
+  `*_balance_updated_at`、`cline_*`、`codex_credits_snapshot`），无 `status`／`schedulable`／`credentials` 变化，调度者判良性。下次登记时把这些键加进 `vc5_prereq.py` 的运行时键清单，避免恢复时靠人判断。**已修（11-01）**：`upstream_billing_probe`、`*_balance_updated_at`、`cline_*`、`codex_credits_snapshot` 已进清单（配置开关 `upstream_billing_probe_enabled` 不是运行时键，不在内）；清单仍不全的范围外登记见 [§4.11.4](#codex-process-rules)。
 - **磁盘水位（0.166）**：入口前 65%，D 路腾到 57.5%（可用 60G），VC-6 结束后升到 67%（已用 95G／可用 47G）。停线是 ≤69% 且可用 ≥40G，收尾还要放一份权威克隆和门禁工作根（0.165 的 `work-1` 约 440M、
   测试树与 Go 缓存数 G），VC-6 后派 D 路再腾一轮，11-01 04:46 实测 62%（可用 55G）才开始收尾的 ARM64 写步骤（审计索引）。证据：总账 11:40、04:38，C 路 b5 记录。
 
@@ -2569,7 +2571,7 @@ Framework 与本指南是受管依赖，部署清单登记路径及完整摘要�
 <a id="codex-part4-maintenance"></a>
 ## 4.8 两次升级之间的工具与手册维护（0.165 收尾后的工具优化）
 
-本节记录 0.165 升级收尾后（10-30～10-31）落地的工具优化现状：后台验证提速、推送前预检、升级前行为验收、偶发测试登记、版本登记之后的重封链一键化，以及两条已核实的运维结论。这些工具都放在 `tools/ci/`、`tools/behavior_acceptance/` 和驱动目录，
+本节记录 0.165 升级收尾后（10-30～10-31）落地的工具优化现状：后台验证提速、推送前预检、升级前行为验收、偶发测试登记、版本登记之后的重封链一键化，以及两条已核实的运维结论。这些工具都放在 `tools/ci/`（含收尾工具包 `tools/ci/closeout/`，用法见 [§4.10](#codex-closeout-kit)）、`tools/behavior_acceptance/` 和驱动目录，
 不是 `tools/official_client_capture` 的受管文件，两次升级之间改它们不废 Campaign；但改动前仍要先查文件是否被 `TARGET_VERIFIER_SHA256S` 钉住、是否落在冻结台账里（§4.8.4 的 Go 用例文件就在台账里，改它要补冻结承接收据）。
 各节只写“何时用、怎么用、怎么看、限制”；完整参数以脚本文件头和 [驱动 README](../tools/arm64_capture_driver/README.md) 为准。
 
@@ -2590,7 +2592,7 @@ python3 -B tools/ci/unit_ownership.py select --base "$(git rev-parse <基点>)" 
 **依赖由三部分取并集。** ①静态导入闭包，传递到测试自己精确提到的文件；②依赖追踪表 `tools/ci/unit_dependencies.json`：审计钩子在真实运行里观察到的“测试模块打开了、枚举了仓库里的哪些文件和目录”
 （`schema_version` 为 `unit-dependencies/v1`，记录 `generated_at_commit` 和每个模块的 `opened`／`listed`；现表 391 个模块有记录、`unobserved` 为 0）；③做不到精确的部分一律保守，失败关闭：没有追踪记录的模块照跑；
 追踪提交以来依赖文件变过的模块照选；追踪提交不在候选提交历史里时全部照选；改动路径不在已登记范围、Python 解析失败、闭包里有解析不了的动态加载时全部照选；闭包代码访问真实 ARM64 环境的模块照跑；
-归属表、选择器或执行器自己在改动里时本轮不筛选（全集）；用依赖精度时追踪表出现在改动里，整轮不筛选。
+选择器本身、驱动副本、执行器文件（含调度策略文件）在改动里时本轮不筛选（全集）；**归属表**在改动里时，只有相对基点仅是“新增测试模块”这类只会更严的增量才不回退（见下“选择器的三处修正”），其余照旧整轮回退；用依赖精度时依赖追踪表出现在改动里，整轮不筛选。
 
 **命令门禁项筛选。** 后端 go test／lint 与前端三项、出站控制单测这些命令单元合计占去 5 千多核·秒，模块筛得再细也省不掉，所以选择器为它们按真实输入路径各登记一条决定（run／skip，写明命中的改动与原因）：
 后端 go test 三项读 `backend/`、`docs/egress/`、冻结台账登记的路径和后端源码里提到的仓库路径；后端 lint 三项读 `backend/`；前端三项读 `frontend/`、`Makefile` 与前端源码里提到的路径；出站控制单测读 `tools/official_client_control/`；
@@ -2599,15 +2601,18 @@ python3 -B tools/ci/unit_ownership.py select --base "$(git rev-parse <基点>)" 
 
 **整树模块缓存。** 有 74 个测试模块会复制或摘要整棵受管工具树，以前每个模块各扫一遍（约 3.5 千核·秒），现在测试侧共用一份受管树扫描结果，同一棵树不再被扫上千次。
 
-**重新追踪：版本登记之后做一次。** 追踪表记录的是某个提交上的真实读写，登记改动大（场景清单、事实映射、基线、驱动文件）时旧表会让越来越多模块“依赖文件变过”而照选，省不下时间；
-不重新追踪不会选漏（追踪以来变过的模块照选），只是不省时间。时机：版本登记提交之后、本 Campaign 第一次后台验证之前；**追踪提交必须是之后所有比对基点的祖先**，不要在 Campaign 中途换表。做法（在固定到登记提交的干净检出上，走本机重负载锁；`--jobs` 别超过 4）：
+**选择器的三处修正（11-01，`tools/ci/unit_ownership.py`，驱动目录副本同步）。** 此前有三处过度保守，使升级登记的改动一进来就整轮回退全集：①**归属表增量放行**：归属表在改动里时，相对基点仅当“新增测试模块、顶层其余字段不变、已有模块的 `owner`／`rule` 不变、计划状态只会由 skip 变 run、认识的目录范围只增、已复核隔离表只为新模块加项”才不回退，放行时 `selection.ownership_table_delta` 记新增模块数，任何一条不满足照旧回退并写明原因（新增模块的文件本身在改动里、必被并入，所以不可能借此少跑基点上已有的模块）；
+②**测试入口文件不算“没有静态使用者”**：`tools/test_*.py` 与任何名为 `tests` 的目录里的 `test_*.py` 天然没人导入，调用 `Graph.unused()` 前先剔除，不再因改了一个测试文件就把全部重模块并回去，真正的孤儿库文件照旧失败关闭；③`recognized_areas` 登记 `tools/behavior_acceptance/`。选择器本身、驱动副本、执行器文件、依赖精度下的依赖表在改动里仍整轮回退。落地顺序与部署顺序见 [§4.11.2](#codex-process-rules)。
+
+**重新追踪：默认不做（11-01 改）。** 追踪表记录的是某个提交上的真实读写。以前的规矩是版本登记之后、第一次后台验证之前重追踪一次并把表提交进登记变更集；现在改为**默认不追踪，也不把 `tools/ci/unit_dependencies.json` 放进登记变更集**：依赖精度下依赖表出现在“基点..被测提交”的改动里就整轮不筛选，重追踪提交进了登记变更集，正好抵消筛选省下的时间；而陈旧的表只会多选、不会漏选（追踪以来依赖文件变过的模块照选，没有追踪记录的模块照跑，追踪提交不在候选历史里时全部照选），
+0.166 回放里旧表与新表的选择结果逐项相同（60 个模块、省 40.0 分）。重封链整链运行加 `--skip-trace`（§4.8.6）。只有“追踪提交到候选”的差距大到 `last-passed` 轮次选出的模块越来越多、省不下时间时，才**在发版之后、下一轮开工之前**单独重追踪并发一个版；**追踪提交必须是之后所有比对基点的祖先，不要在 Campaign 中途换表**。做法（在固定到登记提交的干净检出上，走本机重负载锁；`--jobs` 别超过 4）：
 
 ```
 python3 -B tools/ci/dependency_trace.py --repo <检出> --out <结果目录> --jobs 4
 python3 -B tools/ci/unit_ownership.py dependency-table --tree <检出> --trace-dir <结果目录> --python <版本> --platform <平台>
 ```
 
-再把生成的 `tools/ci/unit_dependencies.json` 单独提交（重封链的 `trace` 步就是做这件事，见 §4.8.6；追踪要带 `CAPTURE_TYPESCRIPT_MODULE` 与 `CODEX_SPEC_SOURCE_ROOT`，新增测试模块后先 `unit_ownership.py materialize`）。10-31 在任务 1～4 合并后，用重封链的 `trace` 步（`tools/ci/reseal_chain.py --only trace`，`--jobs 3`，重负载锁无等待）做了一次真实重追踪：06:39:25～06:59:59，**20.6 分钟**，追踪提交 `f44b5bf47d`，依赖表提交 `aefcd515c5`，391 个模块有记录、未观察到 0 个（旧表 379 个有记录加 8 个 `unobserved`，新增 12 个模块，其中 8 个由 `unobserved` 恢复），所以估时按约 20 分钟报。追踪时退出码非 0 的模块进 `unobserved`（永远照跑），所以要先让前面的生成值落定、测试转绿，最后才追踪。
+再把生成的 `tools/ci/unit_dependencies.json` 单独提交（重封链的 `trace` 步就是做这件事：`reseal_chain.py --only trace`，见 §4.8.6；追踪要带 `CAPTURE_TYPESCRIPT_MODULE` 与 `CODEX_SPEC_SOURCE_ROOT`，新增测试模块后先 `unit_ownership.py materialize`）。10-31 在任务 1～4 合并后，用重封链的 `trace` 步（`tools/ci/reseal_chain.py --only trace`，`--jobs 3`，重负载锁无等待）做了一次真实重追踪：06:39:25～06:59:59，**20.6 分钟**，追踪提交 `f44b5bf47d`，依赖表提交 `aefcd515c5`，391 个模块有记录、未观察到 0 个（旧表 379 个有记录加 8 个 `unobserved`，新增 12 个模块，其中 8 个由 `unobserved` 恢复），所以真要追踪时估时按约 20 分钟报。追踪时退出码非 0 的模块进 `unobserved`（永远照跑），所以要先让前面的生成值落定、测试转绿，最后才追踪。
 
 **真机实测与验收口径。** 0.165 轮在 ARM64 上以全集 `3f5d62f580a5`（13:56:55Z～15:58:30Z，2 小时 01 分 35 秒，passed）为基点，对 housekeeping 驱动文件修复 `4e22ceb107` 起后台验证：16:23:25Z～17:05:17Z，**41 分 52 秒 passed，缩短 66%**。
 选择器计划为 427 个模块里 286 个运行、141 个跳过，6 个命令门禁项（后端 lint 三项与前端三项）被跳过；`backend-go-test`、`backend-unit`、`backend-integration` 三项因“后端源码里提到了 `README.md`／`manifest.json` 这类通用文件名字面量”被保留
@@ -2736,7 +2741,7 @@ S5 压缩项被拒；S6 已输出内容后再来 `error`；S7 并发（3 路 × 
 <a id="codex-reseal-chain"></a>
 ### 4.8.6 版本登记之后的“重封链”（一条命令）
 
-**为什么要有。** Codex 版本登记（或任何改了“事实映射已钉住的后端源码”“受管工具文件”的变更）之后，一串生成值必须按严格顺序重算：事实映射重绑 → 身份守恒基线重封 → 驱动 manifest 重建 → 依赖追踪表重新追踪，
+**为什么要有。** Codex 版本登记（或任何改了“事实映射已钉住的后端源码”“受管工具文件”的变更）之后，一串生成值必须按严格顺序重算：事实映射重绑 → 身份守恒基线重封 → 驱动 manifest 重建 →（可选，默认不做）依赖追踪表重新追踪，
 前两步改了冻结文件，每步之后还要补一份冻结承接收据（必须单独提交）。10-30 手工做了 3 次，顺序一错（收据 `--before` 取错、基线封在收据之前、追踪提交不是后续比对基点的祖先）就要返工。现在由 `tools/ci/reseal_chain.py` 固化，
 单元测试是 `tools/official_client_capture/tests/test_reseal_chain.py`（合成仓库，不依赖真实追踪）。
 
@@ -2746,7 +2751,7 @@ S5 压缩项被拒；S6 已输出内容后再来 `error`；S7 并发（3 路 × 
 3. 在工作分支上、工作树干净时跑；默认拒绝在 `main`／`master` 上提交（确需放行加 `--allow-main`）；不 push、不合并、不打 tag、不签字，所有修改都只落成当前分支上的提交。
 4. **新增了测试模块的话，先重新物化归属表再开链**：`python3 -B tools/ci/unit_ownership.py materialize`，并把生成的 `tools/ci/unit_ownership.json` 提交。否则归属表自检类的模块在追踪提交上是红的，追踪会把它们记进 `unobserved`
    （演练里就出现过：新增 2 个 `unobserved`，脚本判失败并停在 `trace` 步）。
-5. **追踪要带两个环境变量**：`CAPTURE_TYPESCRIPT_MODULE`（TypeScript 解析器，主检出的 `frontend/node_modules/typescript/lib/typescript.js`）与 `CODEX_SPEC_SOURCE_ROOT`（目标版本的 Codex 源码树）。脚本在计划里对没设的给出提醒；
+5. **只有确需追踪时（`--only trace`，默认整链加 `--skip-trace` 不追踪，见下）才用得上：追踪要带两个环境变量**：`CAPTURE_TYPESCRIPT_MODULE`（TypeScript 解析器，主检出的 `frontend/node_modules/typescript/lib/typescript.js`）与 `CODEX_SPEC_SOURCE_ROOT`（目标版本的 Codex 源码树）。脚本在计划里对没设的给出提醒；
    缺了它们，依赖它们的模块会在追踪时失败而被记入 `unobserved`（10-30 的旧表有 8 个，带上变量重追后为 0，具体对应关系未逐个核实）。
 
 **怎么跑。**
@@ -2755,13 +2760,16 @@ S5 压缩项被拒；S6 已输出内容后再来 `error`；S7 并发（3 路 × 
 # 先看计划与前置检查（不改文件、不提交；会对尚未提交的步骤按现状预览，并真跑一次冻结承接收据的干跑）
 python3 -B tools/ci/reseal_chain.py --log-dir <工作树外的日志目录> --dry-run
 
-# 一条命令走完整条链（追踪走重负载锁；建议脱离会话跑，日志最后一行是 EXIT=<码>）
+# 一条命令走完整条链，推荐加 --skip-trace（不追踪依赖表，也就不把它提交进登记变更集；日志最后一行是 EXIT=<码>）
+python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign --skip-trace
+
+# 确需重新追踪依赖表时（发版之后、下一轮开工之前，单独一次；追踪走重负载锁，建议脱离会话跑）
 export CAPTURE_TYPESCRIPT_MODULE=<主检出>/frontend/node_modules/typescript/lib/typescript.js
 export CODEX_SPEC_SOURCE_ROOT=<主检出>/local-analysis/sources/codex-cli-<版本>
-python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign
+python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign --only trace
 ```
 
-可选项：`--from <步骤>` 从某一步往后续跑，`--only <步骤>` 只跑一步，`--co-author "名字 <邮箱>"` 给提交加 `Co-Authored-By`（可重复），`--version` 指定 Codex 目标版本（缺省取守恒测试里的 `BASELINE_CODEX_VERSION`），
+可选项：`--skip-trace` 整链（或 `--from`）运行时跳过 `trace` 步（状态里记 `skipped`，续跑时算“前面已处理”，`verify` 照跑，续跑命令自动保留它；与 `--only trace` 矛盾，会被拒绝），`--from <步骤>` 从某一步往后续跑，`--only <步骤>` 只跑一步，`--co-author "名字 <邮箱>"` 给提交加 `Co-Authored-By`（可重复），`--version` 指定 Codex 目标版本（缺省取守恒测试里的 `BASELINE_CODEX_VERSION`），
 `--receipt-before <提交>` 覆盖第一份收据的 `--before`（缺省取 HEAD 历史里最近一次新增收据的提交），`--date` 指定日期，`--force-reseal` 守恒模块已绿时仍强制重封，`--jobs` 追踪并行数（缺省 3，别超过 4），
 `--heavy-run <路径>` 或 `--no-heavy-lock` 指定或放弃重负载锁，`--python-version`／`--platform` 写进依赖表的环境说明。**退出码**：0 全部完成；1 某一步失败（已停在原地）；2 前置条件或用法错误；130 被中断。
 
@@ -2774,11 +2782,11 @@ python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名>
 | `reseal` | 身份守恒基线 `--seal-baseline --replace`，回填 `BASELINE_SHA256`，`REGISTERED_CONTROL_CHANGES` 清空 | 1 个 |
 | `reseal-receipt` | 冻结承接收据 | 1 个，只含收据 |
 | `manifest` | 驱动 manifest 重建；本来就一致则跳过 | 0～1 个 |
-| `trace` | 重新追踪依赖表：detached 工作树 + 重负载锁 + 后台追踪；追踪提交（`generated_at_commit`）就是此刻 HEAD | 1 个 |
+| `trace` | 重新追踪依赖表：detached 工作树 + 重负载锁 + 后台追踪；追踪提交（`generated_at_commit`）就是此刻 HEAD。**默认整链运行应加 `--skip-trace` 跳过它**（依赖表进登记变更集会让依赖精度整轮不筛选，陈旧表只会多选不会漏选，§4.8.1）；确需追踪用 `--only trace` | 1 个（跳过时 0 个） |
 | `verify` | 只读：候选测试追踪两组测试 + 身份守恒测试 + manifest 校验 | 0 个 |
 
 为什么追踪放最后：追踪时退出码非 0 的模块会进 `unobserved`（永远照跑、选择精度变差）。映射和基线没重封之前，`test_candidate_test_trace`、身份守恒必然是红的，先追踪会白白多出一批 `unobserved`；
-所以先落定前面的生成值、让测试转绿，最后追踪，追踪提交之后只多一个“依赖表”提交（追踪提交是之后所有比对基点的祖先，见 §4.8.1）。没有需要做的步骤自动跳过（映射已对、守恒已绿、区间内没有冻结转移、manifest 已一致），不产生空提交。
+所以真要追踪时，先落定前面的生成值、让测试转绿，最后追踪，追踪提交之后只多一个“依赖表”提交（追踪提交是之后所有比对基点的祖先，见 §4.8.1）；默认不追踪（`--skip-trace`），这一段只在确需重追踪时适用。没有需要做的步骤自动跳过（映射已对、守恒已绿、区间内没有冻结转移、manifest 已一致），不产生空提交；`--skip-trace` 跳过的 `trace` 在状态里记 `skipped`，不产生提交，`verify` 照跑（合成仓库用例：整链 4 个提交而非 5 个，依赖表一个字节不动，追踪器根本没被调用）。
 
 **每一步前后脚本做什么。**
 - 前置断言：工作树干净、不在合并／变基中途、分支不是 main、HEAD 与上一步完成时的记录一致、没有 `__pycache__`、本步要用的文件在；追踪开跑前再复核一遍测试与 manifest，红的话不开追踪。
@@ -2804,10 +2812,10 @@ python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名>
 （`go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement'` 等）也由人安排。新增驱动文件后，驱动 manifest 按各自命令重生成。
 
 **演练实测（2026-10-31）。** 场景：对被事实映射钉住的 `openai_ws_forwarder_ingress.go` 末尾加一行无害注释并提交，补好它自己的冻结承接收据（结果 `manual_actions_required`，与 10-30 先例相同），此时 `test_candidate_test_trace` 里的钉住摘要用例红。
-一条命令（不带其它开关）约 22 分钟走完 7 步，退出码 0（追踪在重负载锁下 `--jobs 3`，机器上另有别的任务时更久）：重绑 1 个叶子 → 收据 → 基线重封 → 收据 → manifest 无变化跳过 → 追踪 388 个模块、`unobserved` 8 → 0 → 依赖表提交 → 复核三组测试全绿。
+一条命令（不带其它开关；那时还没有 `--skip-trace`）约 22 分钟走完 7 步，退出码 0（追踪在重负载锁下 `--jobs 3`，机器上另有别的任务时更久）：重绑 1 个叶子 → 收据 → 基线重封 → 收据 → manifest 无变化跳过 → 追踪 388 个模块、`unobserved` 8 → 0 → 依赖表提交 → 复核三组测试全绿。
 载荷审核只含预期变化：映射只变 1 个叶子；基线只变 `evidence_semantics_sha256`、`files_sha256`、`source_commit`，受管文件条目只有映射 json 与 `candidate_test_trace.py` 两项，与 10-30 手工重封的先例（`e610f5eaf1`）形状一致。
 另一次演练里，因新增测试模块还没登记进归属表，追踪完成但新增 2 个 `unobserved`（`test_ci_gate_scope`、`test_ci_unit_ownership`），脚本判失败并停在 `trace` 步、工作树还原干净，加 `--from trace --allow-new-unobserved` 续跑几秒就提交了依赖表；这就是上面“先物化归属表”的由来。
-另外，10-31 在任务 1～4 合并后用该脚本的 `trace` 步做过一次真实重追踪（不是上面的演练）：391 个模块、未观察到 0 个、20.6 分钟，细节见 §4.8.1。
+另外，10-31 在任务 1～4 合并后用该脚本的 `trace` 步做过一次真实重追踪（不是上面的演练）：391 个模块、未观察到 0 个、20.6 分钟，细节见 §4.8.1。加 `--skip-trace` 后整链省掉的就是这一步的约 20 分钟（按这次实测推算，没有单独对真实仓库演练；合成仓库用例只证明行为正确）。
 
 <a id="codex-active-receipt"></a>
 ## 4.9 当前 Active 终态收据坐标（升级收尾只改这里，不碰第二部分）
@@ -2824,12 +2832,61 @@ python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名>
 | 官方证据来源 Campaign | `c01660-formal-vc1-r1-20261031t000000z`（attempt `20261031T104956Z-3e3bddb7be4fda37`） |
 | 末级（canonical）Campaign | `c01660-formal-vc1-r1-20261031t000000z` |
 
-**升级收尾“该改哪里”清单（草稿，流程规则由事项 8 统一落笔）。**
-1. 本节：把上表五行换成新 Active 的值（版本、收据文件名、审计索引、两个 Campaign，数据取自新终态收据的 `campaign_chain` 与 `audit_index`）。校验：`python3 -B tools/evidence_index.py --check`（要在带 `local-analysis/captures` 的主检出里跑，工作树里需要把它接过去）。
-2. 文首“当前版本”横幅、第三部分 §3.2／§3.9 和第四部分的本轮实测与教训：照收尾渲染脚本的 active 绑定位置清单改，这些位置都不在第二部分。
+**升级收尾“该改哪里”清单。** 工具与参数见 [§4.10 收尾工具包](#codex-closeout-kit)，其余流程规则见 [§4.11](#codex-process-rules)。
+1. 本节：把上表五行换成新 Active 的值（版本、收据文件名、审计索引、两个 Campaign，数据取自新终态收据的 `campaign_chain` 与 `audit_index`）。用 `bash tools/ci/closeout/closeout.sh … b8a-active-receipt`：生成带新值表的指南副本，并用 `evidence_index` 同一校验（`active_campaign_evidence`）核对；随后 `b8-evidence-index` 重建 `docs/EVIDENCE_INDEX.md` 并 `--check`。手工校验：`python3 -B tools/evidence_index.py --check`（要在带 `local-analysis/captures` 的主检出里跑，工作树里需要把它接过去）。表的格式（表头、五个行标签及顺序）脚本会核对，不要手改结构。
+2. 文首“当前版本”横幅、第三部分 §3.1／§3.2／§3.5 和第四部分 §4.6.5～§4.6.6 的版本字样：`b9-render-guide`（`render_guide.py`）按终态事实渲染，这些位置都不在第二部分；第四部分的本轮实测、教训与时间线由 `finalize_part4.py` 并入，句子由调度者按事实撰写。
 3. **第二部分一个字节都不改**：收尾后跑 `python3 -B tools/ci/prepush_check.py` 的 `guide-part2-digest` 项，必须在**不加** `--allow-part2-change` 的情况下为绿（第二章摘要与基点登记值相同）；收尾 `prepare --dry-run` 的 `changed_paths` 里不应出现第二章摘要连锁。
-4. 第二部分正文里仍写着“当前 Active 是某版本”的位置（开头段、权威入口表、遥测零流量判定标题，以及 UA、`client_version` 等规则取值）会比实际 Active 落后一版，这是预期现象，**以本节与 Runtime Catalog 为准**。这些位置只在下一次版本登记时统一改：登记本来就要重算第二章摘要连锁，那一次顺手改，不额外付费。
-5. 本节改动属于指南（冻结路径）的修改，收尾提交后照常补一份冻结承接收据，源码提交与收据分开提交。
+4. 第二部分正文里仍写着“当前 Active 是某版本”的位置（开头段、权威入口表、遥测零流量判定标题，以及 UA、`client_version` 等规则取值）会比实际 Active 落后一版，这是预期现象，**以本节与 Runtime Catalog 为准**。这些位置只在下一次版本登记时统一改：登记本来就要重算第二章摘要连锁，那一次顺手改成不随 Active 变的写法（指向本节），以后就不再落后，不额外付费。
+5. 本节改动属于指南（冻结路径）的修改，收尾提交后照常补一份冻结承接收据，源码提交与收据分开提交（收尾 `prepare` 的冻结承接收据会覆盖）。
+6. 本轮若是第一轮用上选择器子集（第 2 项落地后的第一轮真实升级），收尾全集跑完后做“跳过清单对账”，见 [§4.11.3](#codex-process-rules)。
+
+<a id="codex-closeout-kit"></a>
+## 4.10 收尾工具包用法（`tools/ci/closeout/`）
+
+**一句话。** VC-6 PASS 之后，从“并入候选链”一路到“收尾全集门禁绿、候选备齐、等你批准推 main”的本机步骤总控；版本、Campaign 名、文件名前缀、分支名、ARM64 路径全部来自参数或总账，不再复制上一轮脚本改字面量（0.166 那一轮光改字面量就用了约 30 分钟）。第二部分一个字节不改。
+- **入口**：`bash tools/ci/closeout/closeout.sh [选项] <步骤>`，在任意目录运行；`--help` 看步骤表与选项，`steps` 看每步必需参数、是否写 ARM64。
+- **参数**：命令行 > 环境变量 `CLOSEOUT_<大写名>` > 总账 `STATUS.md` 里的 `closeout.<名> = 值` 字段行 > 派生。必需 `--version`、`--baseline-version`、`--retire-version`、`--campaign`，其余（分支名、文件名前缀、ARM64 路径等）派生；全部来源与派生规则见 `python3 -B tools/ci/closeout/closeout_params.py --help`。缺参数时报“缺哪个、怎么补”，不会带着猜测值继续。
+- **步骤顺序**（每步先核前置、失败即停，读日志，不用重试试错）：`b0-check` → `b1-worktree` → `b3b-vc6-receipt` → `b3a-postpromo-fixes` → `b3-check` → `b4-stage-receipts` → `b5-audit-index`（写 ARM64）→ `b6-commit-stage` → `b7-terminal-facts` → `b8a-active-receipt`（更新 §4.9 值表）→ `b8-evidence-index` → `b9-render-guide` → `finalize_part4.py`（并入第四部分的本轮经验与时间线）→ `b10-sync` → `b10b-prepare` → `b12-fetch-candidate` → `b13-prerun` → `b14-gates-start` → `b15-gates-status` → `b16-prepush`。`b10-pre` 可在 VC-6 结束前提前做（只需候选目录与 GitHub main 提示号，见 [§4.11.1](#codex-process-rules) 第 5 条）。
+- **写 ARM64 的步骤**（`b5`、`b10-pre`、`b10-sync`、`b10b`、`b14`）必须设 `CLOSEOUT_ARM64_WRITE=1`，否则只打印将要做什么；ARM64 只读步骤随时可跑（ssh `-n`）。
+- **`b9-render-guide` 必须带** `--behavior-summary '<一句行为概述>|@文件'`（横幅里描述本版行为变化的一句话，须按 VC-1 事实逐条核过再写）；终态事实里镜像引用没有标签时再带 `--rollback-label`。
+- **不在工具里**：批准件 `write_approvals.py`、推 main、发版都需要你明确指令；`--with-part2`（`b2-part2-lead`、`b3-regen`，旧的第二部分最小改写与摘要连锁）已作废，缺省关闭，只在 `evidence_index` 回退到读第二部分时才可能用到。
+- **验证程度**：入库时用 0.166 的实际参数回放 18 项，与原件及真实提交逐字节一致（回放核对，我未复算）；单测 `test_ci_closeout_params`／`test_ci_closeout_render`／`test_ci_closeout_scripts`。**以下步骤没在真实 ARM64 上跑过，首次真跑需留意**：`b0-check`、`b1-worktree`、`b3b-vc6-receipt`、`b3-check`、`b5-audit-index`、`b10-pre`、`b10-sync`、`b10b-prepare`、`b12`～`b16`，以及真实的 `codex_audit_index.py`、`deployment_check.py`、`gate_status.py`、`prerun.sh`。
+
+<a id="codex-process-rules"></a>
+## 4.11 升级流程规则补遗与 11-01 工具优化批的落地说明
+
+本节收口 0.166 轮暴露的流程规则，以及 11-01 工具优化批（选择器、驱动脚本、收尾工具包、重封链、证据索引）的落地顺序、副作用和首轮对账。0.166 的原始记录仍在 §4.7 失败矩阵补充里，这里只写“规则”；本节不含随 Active 变化的取值，**升级收尾不用改它**（收尾要改的只有 [§4.9](#codex-active-receipt)，工具见 [§4.10](#codex-closeout-kit)）。
+
+### 4.11.1 流程规则（按升级顺序）
+1. **登记很快时，整链空跑只跑 round 阶段。** `rehearse.sh` 的 round 阶段（约 1 小时，0.166 是 1 小时 04 分）是正常流程；full-chain（0.166 多出约 50 分钟，占 4 核、与全集后台验证互斥，最后只过 2 条就被叫停）只在工具层有实质改动的版本才跑，且不与全集后台验证抢时间。0.166 没撞上空跑本应覆盖的缺陷只说明本轮没撞上，不证明省掉总是安全。
+2. **起 VC-5 前量出口带宽，低于约 220KB/s 不起。** 候选 `/models` 响应约 656KB，网关取回目录只有 3 秒预算（`CodexCatalogBaseFetchBudget`），需要约 220KB/s 以上；0.166 当晚出口约 200KB/s，VC-5 在第一个就绪探测返回 500。做法：起 VC-5 前在网关容器里（走与候选回源同一条出口）下载一个约 500KB 的中立文件，按“字节数÷秒”算，容器里有什么下载工具用什么；低于约 220KB/s 先别起，找原因。**失败后先只读诊断，不要重复探测**；同一根因计数到 2 就停采集（`root_cause` 计数，0.166 那次是 1/2）。
+3. **起 VC-5 前核采集账号令牌余量（0.166 是 #90）。** 两条硬线（`exp` 是访问令牌到期时刻，库里读）：`exp − 60 分钟` 之后不能再开采集账号（`capture-account-on` 要求开启前剩余 ≥60 分钟，VC-6 四个带采集步骤最后一个要在此前完成）；`exp − 30 分钟` 之前必须已关回（网关会提前刷新并轮换刷新令牌，使 DMIT 上同一登录失效）。余量 = `(exp − 60 分钟) − 现在`，要装下 VC-5（0.166 实测 5 小时 55 分，其中两次目标平台门禁白跑约 3 小时，去掉白跑约 3 小时，是推算）加 VC-6 带采集步骤（0.166 本体 19 分钟）；**余量不足 3 小时先请你重新授权，不要赌**。0.166 的实况：VC-5 04:11 关回（比线早 1 小时 28 分），VC-6 最后一个带采集步骤 04:33 关（比线早 35 分钟）。
+4. **磁盘水位。** 停线仍是根盘 ≤69% 且可用 ≥40G（见 §4.7“磁盘水位”）；入口前先把根盘压到 ≤58%，VC-4 门禁期间再确认一次（0.166 入口前 65%，VC-6 后 67%，收尾又要放权威克隆与门禁工作根）；预计会超线就当场盘点腾盘，别只列不能删的。
+5. **VC-5 等待期并行做收尾准备。** VC-5 要等数小时，期间本机空着：做 `closeout.sh b10-pre`（只需候选目录与 GitHub main 提示号）、起草第四部分“本轮经验”与时间线句子、`b0-check` 之类只读步骤。本机重负载（门禁、go 全包、预跑）一次只跑一路，ARM64 上与采集互斥的满载任务（后台验证、整链空跑）不要在采集期间起。
+6. **VC-6 交接。** 交接前：`vc6-handoff-watch.sh --detach` 启动时会核对候选工作树已在候选别名分支且干净（不满足退出 2）；手工做交接前先结束监视，别两边同时做。VC-6 PASS 之后核对：PC（生产晋升提交，`$RUNROOT/vc6/vc6-pc.txt`）是 RPC（退休提交，`vc6-retire-pc.txt`）的祖先，且 DC＝`git rev-parse PC^`；`closeout.sh b0-check` 只读核对“PC 是 RPC 的祖先、两者已交接到本机”，`b3b-vc6-receipt` 按 `DC＝PC^` 取 DC 并以 DC→RPC 登记冻结承接收据；`DC＝PC^` 与本轮参数里的 DC 是否同一个提交，要人工对一眼。
+7. **版本登记之后的重封链加 `--skip-trace`，依赖表不进登记变更集**（§4.8.1、§4.8.6）。
+8. **阶段下限被拒时先看脚本给的建议值**（`vc-pipeline.sh` 的“下限调低建议”），确认后用 `PIPE_NEED_VC1=…`／`PIPE_NEED_VC5=…` 重起，调低理由写进总账；带 `--approver` 起 VC-5 在新版驱动上不会再让目标平台门禁变红，旧版本仍要不带 `--approver` 重起 `--from VC5`。
+9. **第 2 项落地后的第一轮真实升级收尾，要做“跳过清单对账”**，见 §4.11.3。
+
+### 4.11.2 11-01 工具优化批：改了什么、副作用、落地与部署顺序
+- **选择器**（`tools/ci/unit_ownership.py`，驱动副本同步）：归属表增量放行、测试入口文件不算孤儿、`recognized_areas` 登记 `tools/behavior_acceptance/`，细节见 [§4.8.1](#codex-opt02-dependency-selection) 与驱动 README。依赖表不再要求、也不要放进登记变更集。
+- **历史测试树补发版 tag**（S1）：`local/sync-history-tree.sh` 取最新发版 tag 作为可选的第 4、5 个参数传给 `history-tree-refresh.sh`，后者校验后 `tag -f`；不带参数与旧行为相同并打警告。**部署顺序：先把驱动受监督部署到 ARM64，再跑 `sync-history-tree.sh`**（旧的 refresh 脚本会静默忽略多出来的两个参数）。验收：ARM64 历史树上 `git describe --tags --abbrev=0 --match 'v[0-9]*'` 返回最新发版。
+- **VC-4 门禁范围**（S3）：`VC4_GATE_SCOPE` 缺省随客户端（codex=`auto`，其余 `full`）；新增 `VC4_SELECT_BASE`，缺省取 `$RUNROOT/background-validation` 里最近一份 `status=passed` 且是 DC 真祖先的结论；`vc5-all.sh` 对带 `client_selection` 的本地门禁，Codex 轮次、`gate_scope=client-plan`、`ownership_sha256` 与 DC 树归属表一致时放行并打印摘要，不再需要 `VC5_ALLOW_SUBSET_LOCAL_GATES`，Claude 轮次保持原拒绝。**副作用**：VC-4 的 `full-regression.gate.json` 带 `client_selection`，但 VC-5 正式收据里 `full-regression` 的命令名仍写 `make test`（`codex_upgrade_gate_receipt.py` 第 144 行），“这次只跑了 Codex 计划”只存在于被 sha 绑定的 `gate.json` 里；VC-5 目标平台门禁仍是全集 `make test`（决定不做子集，只省约 31 分钟且收据含义要变），收尾 full-gates 与 GitHub CI 仍是全集兜底。`entry-gates.sh` 头部第 39～45 行“VC-4／VC-5 的 make test 保持全集”的措辞已过时（该文件在红线内，只能随版本登记改），以本条为准。
+- **`VC5_RENEW_APPROVER` 作用域**：`vc5-all.sh` 一进门把它收回成私有变量，canonical 之前才放回环境，seal／accept（含目标平台门禁）的子进程环境里没有它；测试的 `_run`／`Sandbox.environ` 不再继承外层 `VC4_`／`VC5_`／`VC6_` 变量。
+- **三处小缺陷**：`vc5-prereq.sh` 防误传采集 Key 与运行时键清单；`vc6-handoff-watch.sh --detach`、启动核对与“标记已存在按已完成”；阶段下限给调低建议（缺省 90／300 不变）。具体见 §4.7 对应条目与驱动 README。
+- **重封链与证据索引**：`reseal_chain.py --skip-trace`（§4.8.6）；`evidence_index` 改读 §4.9（不再改冻结的第二部分）；收尾工具包 `tools/ci/closeout/`（§4.10）。
+- **落地顺序**：`unit_ownership.py` 在选择器自身路径里，改了它之后，下一轮升级的比对基点必须是**含这批改动的发版 tag**，否则首跑仍回退全集；所以这批改动随下一次上游合并发版，合并发出的版本成为新基点；落地到下一轮升级之前不要再改 `unit_ownership.py`、`entry_gates.py` 等选择器／执行器文件。11-01 写作时这批改动已提交、尚未推送与发版，以发版 tag 为准。
+- **基点担保链（风险核实）**：后台验证的两类基点——第二层续跑（`entry-gates.sh` 约 585～594 行，取该门禁系列里已发布清单中、提交是本次祖先的最近一次全集运行，沿途失败／没执行完的模块强制重跑）与 `last-passed`（`background_validation.py::_resolve_last_passed_base`，同运行根同客户端 `passed`、`scope_problem` 无问题、是新提交祖先的最近结论）；链头是发版 tag 加归属精度，担保来自 GitHub CI 全集加收尾全集，逐级归纳成立。
+
+### 4.11.3 第一轮真实升级：跳过清单对账（子集可信度的唯一验证）
+选择器的子集到现在只有回放证据。第 2 项落地后的第一轮真实升级，收尾全集本来就要跑（`entry-gates.sh --profile full-gates --mode re-execute`，GitHub CI 也是全集），用它给子集验货，不额外花时间：
+1. 取前面用过选择器的那几次运行（VC-4 门禁、后台验证）的 `selection` 块与门禁清单；`python3 -B tools/ci/unit_ownership.py report --client codex` 列出 Codex 计划相对全集跳过的模块并带理由，`python3 -B tools/ci/unit_ownership.py diff-report <全集运行清单> <计划运行清单>` 核对两次运行清单的差集。
+2. 在收尾全集的单元记录里逐个核这些“被跳过的模块”：**无一红才算子集可信**。有红说明选择器漏选，记缺陷、先不要再信子集，修复前下一轮仍走全集。
+3. 对账结论写进该轮第四部分的教训。
+
+### 4.11.4 范围外登记（将来可能再冒出来的）
+- `vc5-prereq` 运行时键清单仍不全：后端 `schedulerNeutralExtraKeyPrefixes`／`schedulerNeutralExtraKeys`（`backend/internal/repository/account_repo.go` 第 54 行起）里另有 `upstream_billing_rate_sync`、`passive_usage_*`、`codex_reset_credit_*`、`ollama_cloud_usage`、`codex_referral_snapshot`、`grok_billing_snapshot`，它们不在 `vc5_prereq.py` 的清单里；据驱动改动记录，还有 `<provider>_balance` 的兄弟键（我未逐个核）。将来 `restore` 可能再因它们报 unexpected，到时按“只增运行时键、`status`／`schedulable`／`credentials` 无变化”核实后补进清单，别靠人判良性。
+- Claude 分支的 `evidence_index`（`claude_campaign_evidence`）仍要求 Claude 指南第二部分写明 Campaign；下次 Claude 升级收尾会遇到同样的摘要连锁，应照 §4.9 的做法另立一项处理。
 
 ---
 
