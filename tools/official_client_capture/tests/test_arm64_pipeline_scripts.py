@@ -2127,7 +2127,9 @@ class HistoryTreeRefreshTests(SandboxCase):
         _git_in(src, "bundle", "create", str(self.bundle), f"{self.a}..integ")
 
     def _refresh(self, *tag_args: str, bundle: str | None = None) -> subprocess.CompletedProcess:
-        return self.sb.run(["bash", str(self.sb.pipe / "history-tree-refresh.sh"), self.c, bundle or str(self.bundle), "refs/heads/integ", *tag_args])
+        # FORCE_INSTALL 清空：外层环境里设了它会强制走 docker 重装前端依赖，本组用例只关心 tag。
+        return self.sb.run(["bash", str(self.sb.pipe / "history-tree-refresh.sh"), self.c, bundle or str(self.bundle), "refs/heads/integ", *tag_args],
+                           FORCE_INSTALL="")
 
     def _describe(self) -> subprocess.CompletedProcess:
         return _git_in(self.hist, "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD", check=False)
