@@ -1341,6 +1341,130 @@ def _registered_versions() -> list[str]:
     )
 
 
+HELLO_REQUEST = "HEAD /api/hello"
+# 带 mcp_servers 双连接的 TUI probe（非 safe-mode）；其余 TUI／账号状态 probe 只有 oauth_profile。
+MCP_DOUBLE_PROBES_2_1_309 = frozenset({"v4-tui-attachment", "v4-tui-compact", "v4-tui-count-tokens", "v4-tui-usage"})
+# 2.1.309 在 essential-traffic 取证环境下的启动连接序列（ARM64 零请求启动探测实测，P3-2）：按 probe 族。
+STARTUP_SEQUENCE_2_1_309 = {
+    "sdk": ["GET /api/claude_code/settings", "GET /api/claude_code/policy_limits"],
+    "profile": ["GET /api/oauth/profile"],
+    "profile_mcp": ["GET /api/oauth/profile", "GET /v1/mcp_servers", "GET /v1/mcp_servers"],
+}
+PROFILE_PROBES_2_1_309 = frozenset({"v4-replay-tui", "v4-dispatch-account-negative", "v4-agent-usage-limit"})
+SESSION_PROBES_2_1_309 = frozenset({"v4-replay-session-fork", "v4-replay-session-resume"})
+
+
+def _revise_startup_sequences(entries: list[dict]) -> None:
+    """把 2.1.285 模板的 official 侧启动连接规则改成 2.1.309 实测序列（就地修改，只给审计用例构造期望）：
+    删除第 1 条 hello 规则并前移后续序号；-p／SDK 路径 policy_limits 与 settings 对调（连同合成干预动作）；非 safe-mode TUI
+    的 mcp_servers 复制为连续两条；--bg 无序集合去掉 hello。"""
+
+    for entry in entries:
+        if entry["side"] != "official":
+            continue
+        revised: list[dict] = []
+        index = 0
+        rules = entry["rules"]
+        while index < len(rules):
+            probe = rules[index]["labels"].get("probe")
+            run = []
+            while index < len(rules) and "connection" in rules[index] and rules[index]["labels"].get("probe") == probe:
+                run.append(rules[index])
+                index += 1
+            if not run:
+                revised.append(rules[index])
+                index += 1
+                continue
+            base = probe
+            for model in ("claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5"):
+                if probe.startswith(model + "-"):
+                    base = probe[len(model) + 1:]
+            if run[0]["connection"].get("order") == "unordered":
+                run[0]["connection"]["requests"] = [item for item in run[0]["connection"]["requests"] if item != HELLO_REQUEST]
+                revised.extend(run)
+                continue
+            if not any(rule["connection"].get("request") == HELLO_REQUEST for rule in run):
+                revised.extend(run)  # v4-oauth-refresh
+                continue
+            explicit = [rule for rule in run if "ordinal" in rule["connection"]]
+            tails = [rule for rule in run if "ordinal_from" in rule["connection"]]
+            built: list[dict] = []
+            position = 0
+            while position < len(explicit):
+                rule = explicit[position]
+                request = rule["connection"]["request"]
+                if request == HELLO_REQUEST:
+                    position += 1
+                    continue
+                following = explicit[position + 1] if position + 1 < len(explicit) else None
+                if request == "GET /api/claude_code/policy_limits" and following and following["connection"]["request"] == "GET /api/claude_code/settings":
+                    built.extend([following, rule])
+                    position += 2
+                    continue
+                built.append(rule)
+                position += 1
+                if request == "GET /v1/mcp_servers" and base in MCP_DOUBLE_PROBES_2_1_309:
+                    twin = copy.deepcopy(rule)
+                    twin["rationale"] = twin["rationale"].replace("：mcp_servers。", "：mcp_servers（2.1.309 实测连续拉取两次，第二次不带 include_additional_installs）。")
+                    built.append(twin)
+            for number, rule in enumerate(built, 1):
+                rule["connection"]["ordinal"] = number
+                rule["rationale"] = re.sub(r"第 \d+ 条连接", f"第 {number} 条连接", rule["rationale"])
+            for tail in tails:
+                tail["connection"]["ordinal_from"] = len(built) + 1
+            revised.extend([*built, *tails])
+        entry["rules"] = revised
+
+
+class StartupSequenceTests(unittest.TestCase):
+    """2.1.309 标签的启动连接序列与 ARM64 零请求启动探测实测一致：不得再有 hello 规则；各 probe 族的启动前缀逐项核对
+    （独立期望表，不由修订函数推出）。真实账号与真实上游响应下的差异留给 VC-1 逐连接核对。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        version = "2.1.309"
+        payload = plan.read_scenario_manifest(plan.scenario_manifest_path(version), expected_version=version, rules=_baseline_rules())
+        cls.labels = plan.load_evidence_labels(plan.evidence_labels_path(version), expected_version=version, scenario_payload=payload)
+
+    def test_no_hello_rule_anywhere(self) -> None:
+        for job_id, job_plans in self.labels["plans"].items():
+            for probe_id, probe_plan in job_plans.items():
+                with self.subTest(job=job_id, probe=probe_id):
+                    if probe_plan["mode"] == "unordered":
+                        self.assertNotIn(HELLO_REQUEST, probe_plan["requests"])
+                    elif probe_plan["mode"] == "ordered":
+                        self.assertNotIn(HELLO_REQUEST, [rule["request"] for _i, rule in probe_plan["explicit"]])
+
+    def test_startup_prefix_per_probe_family(self) -> None:
+        checked = 0
+        for job_id, job_plans in self.labels["plans"].items():
+            if job_id.startswith("candidate-"):
+                continue
+            for probe_id, probe_plan in job_plans.items():
+                base = probe_id
+                for model in ("claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5"):
+                    if probe_id.startswith(model + "-"):
+                        base = probe_id[len(model) + 1:]
+                if probe_plan["mode"] != "ordered" or base == "v4-oauth-refresh":
+                    continue
+                explicit = [rule["request"] for _i, rule in probe_plan["explicit"]]
+                family = "profile_mcp" if base in MCP_DOUBLE_PROBES_2_1_309 else "profile" if base in PROFILE_PROBES_2_1_309 else "sdk"
+                expected = STARTUP_SEQUENCE_2_1_309[family]
+                with self.subTest(job=job_id, probe=probe_id):
+                    if base in SESSION_PROBES_2_1_309:
+                        self.assertEqual(explicit, [*expected, "POST /v1/messages", *expected, "POST /v1/messages"])
+                    else:
+                        self.assertEqual(explicit[: len(expected)], expected)
+                        # 启动序列之后只能是 messages／count_tokens（没有任何启动端点混入）。
+                        self.assertTrue(all(item.startswith("POST /v1/messages") for item in explicit[len(expected):]))
+                        tail = probe_plan["tail"]
+                        if tail is not None:
+                            self.assertEqual(tail[1]["ordinal_from"], len(explicit) + 1)
+                    checked += 1
+        # 主模型 79 个 probe 去 --bg（无序）与 oauth-refresh；49 个非主模型 probe 去 3 个 --bg（无序）。
+        self.assertEqual(checked, (79 - 2) + (49 - 3))
+
+
 class RegisteredTargetsTests(unittest.TestCase):
     """对每个已登记的目标版本逐一校验四个登记文件，并审计新版相对上一版模板只有允许的几类差异。"""
 
@@ -1505,7 +1629,21 @@ class RegisteredTargetsTests(unittest.TestCase):
         # 证据标签：版本、模型改名，另加 haiku 条目（opus 复制）。
         labels_expected = json.loads(rename(raw(plan.evidence_labels_path(old))))
         labels_expected["entries"] = with_haiku(labels_expected["entries"], "job_id", MODEL_JOB_PREFIX)
-        self.assertEqual(labels_expected, json.loads(raw(plan.evidence_labels_path(new))))
+        labels_actual = json.loads(raw(plan.evidence_labels_path(new)))
+        # P3-2：2.1.309 的启动连接序列按 ARM64 零请求启动探测实测修订（逐项见 _revise_startup_sequences），其余逐项等于模板。
+        # 相对 2.1.285 模板新增的允许差异只有下面 4 类，全部来自实测（essential-traffic 取证环境、本地替身），每一类的原因：
+        #   1. 删除全部 official 侧的 HEAD /api/hello 规则（含 --bg 无序集合里的 hello）：2.1.309 在
+        #      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 下完全跳过启动预热，-p 与 TUI 路径都不再发 hello；
+        #   2. -p／SDK 路径的 settings 与 policy_limits 对调：实测 settings 先于 policy_limits（模板沿用了 2.1.226 的相反次序）；
+        #   3. 非 safe-mode 的 4 个 TUI probe 的 GET /v1/mcp_servers 由 1 条变成连续 2 条（查询串不同、路径相同）；
+        #   4. description／authority 第 5 条改写为“零请求启动探测实测为初始模型”。
+        # candidate 侧、v4-oauth-refresh 与所有 manifest／pcap 规则仍逐项等于模板。
+        self.assertIn("零请求启动探测", labels_actual["description"])
+        self.assertIn("零请求启动探测", labels_actual["authority"][4])
+        labels_expected["description"] = labels_actual["description"]
+        labels_expected["authority"][4] = labels_actual["authority"][4]
+        _revise_startup_sequences(labels_expected["entries"])
+        self.assertEqual(labels_expected, labels_actual)
         # 场景清单。
         current_spec = plan.guide_section_sha256(REPOSITORY_ROOT / "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md", "第二部分")
         old_text = raw(plan.scenario_manifest_path(old))
