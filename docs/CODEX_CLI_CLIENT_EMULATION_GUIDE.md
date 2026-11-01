@@ -2894,7 +2894,20 @@ python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名>
 
 ### 4.11.4 范围外登记（将来可能再冒出来的）
 - `vc5-prereq` 运行时键清单仍不全：后端 `schedulerNeutralExtraKeyPrefixes`／`schedulerNeutralExtraKeys`（`backend/internal/repository/account_repo.go` 第 54 行起）里另有 `upstream_billing_rate_sync`、`passive_usage_*`、`codex_reset_credit_*`、`ollama_cloud_usage`、`codex_referral_snapshot`、`grok_billing_snapshot`，它们不在 `vc5_prereq.py` 的清单里；据驱动改动记录，还有 `<provider>_balance` 的兄弟键（我未逐个核）。将来 `restore` 可能再因它们报 unexpected，到时按“只增运行时键、`status`／`schedulable`／`credentials` 无变化”核实后补进清单，别靠人判良性。
-- Claude 分支的 `evidence_index`（`claude_campaign_evidence`）仍要求 Claude 指南第二部分写明 Campaign；下次 Claude 升级收尾会遇到同样的摘要连锁，应照 §4.9 的做法另立一项处理。
+- Claude 分支的 `evidence_index`（`claude_campaign_evidence`）11-01 已照 §4.9 的做法迁移：改读 Claude 指南的“## 4.8 当前 Active 终态收据坐标”小节（不冻结），Claude 升级收尾只改那里，不碰 Claude 指南第二部分；受管工具身份前后相同。Claude 目前没有真实终态收据（生产版本是合同生效前的基线，由 `PRE_CONTRACT_BASELINE` 豁免，该小节如实写“无”），第一次 Claude 升级收尾签出收据后要把它换成真实值，校验方法见该小节（`evidence_index.py --check` 只覆盖 Codex 分支）。
+
+### 4.11.5 已决定不做的事（别再提）
+11-01 评估后决定不做，免得下次又被提出来：
+- **VC-5 目标平台门禁走 Codex 子集**：只省约 31 分钟（估计），而且正式收据里“目标平台＝`make test`”的含义会变成 Codex 计划（`codex_upgrade_gate_receipt.py` 的 `CANDIDATE_COMMANDS` 只认命令名，“只跑了子集”只存在于被 sha 绑定的 `gate.json`），治理代价大，要做必须老板单独批准。
+- **收尾全集和 GitHub CI 的子集化**：收尾的 `check_gate_result`（`codex_closeout.py`）要求全集，GitHub CI 的 `capture-tools` 四片也是全集；它们是子集的兜底，不能同时放松。
+- **Claude 方向的门禁筛选**（Claude 升级只跑 Claude 和共用单元）：Codex 命名的重单元合计墙钟只有约 5.6 分钟，五道门禁最多省约 30 分钟；而 Claude 重单元里 `test_claude_upgrade_vc6_batch` 一个就要 2289 秒，漏选的代价远大于收益，成本不对称，与“反过来一样”的直觉相反。
+- **归属表 `recognized_areas` 增项白名单**：选择器现在允许归属表只增不减地扩大 `recognized_areas`（候选自己加宽目录范围，可以绕过“目录不认识就失败关闭”），在非对抗性的升级流程里可接受；加白名单要再改一次选择器（又得让下一个发版 tag 成为新基点），收益很小。
+
+### 4.11.6 下次 Codex 升级的预估与回填
+以 0.166 实测端到端 21 小时 52 分为基准，前提是下一版像 0.166 一样简单、没有新缺陷、承接仍不启用：
+- **确定部分**：目标平台门禁环境泄漏约 3 小时 01 分、整链空跑只跑 round 阶段约 50 分、起 VC-5 前量出口带宽约 45 分、第二部分不再改约 35～40 分、收尾工具包约 30 分（后两项有重叠，合计按 40～60 分），合计约省 5.3～5.6 小时，下次约 **16～17 小时**。
+- **再加门禁子集**：后台验证首轮约 40 分、入口约 39 分、VC-4 约 62 分（登记变更集不夹带依赖表和共享底座时）；保守只剩 VC-4 约 1 小时，下次约 **14～15.5 小时**。
+- **证实状态**：VC-4 只有 ARM64 上用 0.166 的 DC 树出 plan 的演练（跳过 163／457 个单元，墙钟 100.1→37.7 分，没有实跑 VC-4 门禁）；后台验证和入口只有回放（“依赖表不进变更集”的场景下跳过 60 个模块，省 40.0／39.7 分）。要第一轮真实升级收尾做 §4.11.3 的对账后才算证实，**对账后用实测值回填本节**。
 
 ---
 
