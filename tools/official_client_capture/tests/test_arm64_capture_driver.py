@@ -885,6 +885,39 @@ class Vc5AllResumeTests(unittest.TestCase):
                 self.assertIn("放行条件", result.stdout + result.stderr)
                 self.assertNotIn("VC5_ALL_DONE", result.stdout)
 
+    def test_a_marker_computed_for_another_commit_or_without_head_commit_is_refused(self) -> None:
+        """gate.json 的 tree_head 等于 DC 只说明门禁跑完时树停在 DC；标记里的 head_commit 才是“跳过清单是针对哪个提交算的”。
+        不等于 DC（沿用了别的提交的子集标记）、或者字段缺失／空／类型不对（失败关闭，不能把“缺失”当通过），都必须在派发任何阶段之前拒绝。"""
+
+        def without_head(dc: str, sha: str) -> dict:
+            return {key: value for key, value in self._marker(dc, sha).items() if key != "head_commit"}
+
+        cases = {
+            "head_commit 是另一个 40 位提交": lambda dc, sha: self._marker(dc, sha, head_commit="c" * 40),
+            "head_commit 只是 DC 的前 12 位": lambda dc, sha: self._marker(dc, sha, head_commit=dc[:12]),
+            "head_commit 是 DC 的大写写法": lambda dc, sha: self._marker(dc, sha, head_commit=dc.upper()),
+            "head_commit 是空串": lambda dc, sha: self._marker(dc, sha, head_commit=""),
+            "head_commit 是 null": lambda dc, sha: self._marker(dc, sha, head_commit=None),
+            "head_commit 是数字": lambda dc, sha: self._marker(dc, sha, head_commit=1234),
+            "head_commit 缺失": without_head,
+        }
+        for label, selection_for in cases.items():
+            with self.subTest(label):
+                result, calls = self._run_with_local_gate(selection_for)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("放行条件", result.stdout + result.stderr)
+                self.assertIn("head_commit 等于 DC", result.stdout + result.stderr, "拒绝原因点明是提交对不上")
+                self.assertNotIn("VC5_ALL_DONE", result.stdout)
+                self.assertNotIn("vc5-start.sh", calls, "拒绝发生在任何阶段派发之前")
+
+    def test_a_marker_whose_head_commit_is_the_dc_is_still_accepted(self) -> None:
+        """对照：新增的核对不误伤——head_commit 恰好等于 DC（其余条件都满足）仍然放行并打印摘要，head_commit 在摘要里照常显示前 16 位。"""
+
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"head_commit=[0-9a-f]{16} ")
+        self.assertIn("VC5_ALL_DONE", result.stdout)
+
     def test_a_claude_round_keeps_refusing_any_marker_even_a_perfect_codex_one(self) -> None:
         result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha), client="claude")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -900,6 +933,11 @@ class Vc5AllResumeTests(unittest.TestCase):
         self.assertIn("按 VC5_ALLOW_SUBSET_LOCAL_GATES=1 接受", result.stdout)
         self.assertIn("VC5_ALL_DONE", result.stdout)
         result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha), client="claude", allow="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # 旧语义同样包括不核标记里的提交：head_commit 对不上、甚至缺失，也照旧无条件接受（确认接受子集的人自己担责）。
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha, head_commit="c" * 40), allow="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result, calls = self._run_with_local_gate(lambda dc, sha: {k: v for k, v in self._marker(dc, sha).items() if k != "head_commit"}, allow="1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_failed_local_gate_is_still_refused_whatever_the_marker_says(self) -> None:

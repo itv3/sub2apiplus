@@ -13,9 +13,12 @@
 #   再以同一退出码退出；目标平台门禁结束后、canonical 前先做准入守卫（vc5_admission_guard，lib.sh）：准入消费不通过时，启动前设了 VC5_RENEW_APPROVER
 #   就自动续签管理令牌（只续令牌），没设就打印 VC5_ADMISSION_GUARD_FAILED 与处理办法后退出 3。
 # 本地门禁的筛选标记（Codex 升级工具优化第 2 项 S3）：VC-4 门禁（arm64-vc4-gates.sh）在 Codex 轮次缺省按 Codex 计划筛选，full-regression.gate.json 带 client_selection
-#   标记。外部门禁注入时对带标记的本地门禁：Codex 轮次、标记里 client=codex、gate_scope=client-plan、ownership_sha256 与 DC 树（$B/test-tree 的 DC 提交）里
-#   tools/ci/unit_ownership.json 的摘要一致时放行，并打印 client_selection 摘要；其余（含 Claude 轮次、归属表摘要不一致）拒绝，VC5_ALLOW_SUBSET_LOCAL_GATES=1
-#   的旧语义不变（无条件接受带标记的本地门禁）。不带标记的全集门禁照旧。
+#   标记。外部门禁注入时对带标记的本地门禁：Codex 轮次、标记里 client=codex、gate_scope=client-plan、head_commit 等于 DC、ownership_sha256 与 DC 树（$B/test-tree 的 DC 提交）里
+#   tools/ci/unit_ownership.json 的摘要一致时放行，并打印 client_selection 摘要；其余（含 Claude 轮次、归属表摘要不一致、标记里的 head_commit 不是 DC 或缺失）拒绝，
+#   VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变（无条件接受带标记的本地门禁）。不带标记的全集门禁照旧。
+#   为什么要再核 head_commit：gate.json 的 tree_head 只证明“门禁跑完时树停在 DC”，client_selection.head_commit 才是“选择（跳过清单）是针对哪个提交算的”
+#   （unit_ownership.select 写入，经 entry_gates 回显进入口门禁总摘要，再由 vc4_gate_records 抄进 gate.json）。两者可以不同——例如沿用了别的提交的子集标记、
+#   或手工拼出来的 gate.json——此时跳过清单与 DC 对不上，不能放行。字段缺失同样按不一致处理（失败关闭），不能把“没有这个字段”当成通过。
 # 续签批准人只在 canonical 阶段才导出（Codex 升级工具优化第 1 项）：起跑时传进来的 VC5_RENEW_APPROVER 只有 canonical 前的准入守卫要用，
 #   但环境变量会一路继承给 seal、accept 的所有子进程——目标平台门禁（accept 内的 make test）里的 test_arm64_capture_driver、test_arm64_pipeline_scripts
 #   不封闭进程环境，读到它就红（上一轮带 --approver 起 VC-5，目标平台门禁白跑两次约 3 小时）。所以一进脚本就把它收回成脚本私有变量
@@ -45,7 +48,7 @@ vc5_stage() {
   fi
 }
 # 注入的本地 full-regression 门禁核对：<阶段> gate｜tree。gate（树还没核时）：退出码 0、树头是 DC；带 client_selection 标记的只放行 VC5_ALLOW_SUBSET_LOCAL_GATES=1，
-# 或 Codex 轮次 + 标记 client=codex／gate_scope=client-plan／ownership_sha256 是 64 位十六进制。tree（DC 树就位之后）：带标记且没设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 时，
+# 或 Codex 轮次 + 标记 client=codex／gate_scope=client-plan／head_commit 等于 DC（缺失也拒绝）／ownership_sha256 是 64 位十六进制。tree（DC 树就位之后）：带标记且没设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 时，
 # 标记里的 ownership_sha256 必须等于 DC 提交里 tools/ci/unit_ownership.json 的 sha256（读 git 对象，不看工作区），并打印 client_selection 摘要。
 vc5_check_local_gate() {
   python3 -B - "$1" "$G/local/full-regression.gate.json" "$DC" "${VC5_ALLOW_SUBSET_LOCAL_GATES:-}" "$CT_CLIENT" "$B/test-tree" <<'PYGATE'
@@ -58,10 +61,12 @@ refused = "本地 full-regression 是按客户端筛选的子集（client_select
 if phase == "gate":
     assert d["exit_code"] == 0 and d["tree_head"] == dc, d
     if selection is not None and allow != "1":
+        # head_commit 必须逐字等于 DC：标记里没有这个字段（None）、不是字符串、或是别的提交，一律不等于 DC，走拒绝（失败关闭）。
         ok = (client == "codex" and isinstance(selection, dict) and selection.get("client") == "codex" and selection.get("gate_scope") == "client-plan"
+              and isinstance(selection.get("head_commit"), str) and selection.get("head_commit") == dc
               and re.fullmatch(r"[0-9a-f]{64}", str(selection.get("ownership_sha256") or "")) is not None)
         if not ok:
-            sys.exit(f"{refused}（放行条件：Codex 轮次、标记 client=codex、gate_scope=client-plan、ownership_sha256 有效；本轮客户端={client or '未知'}，标记={json.dumps(selection, ensure_ascii=False)[:300]}）")
+            sys.exit(f"{refused}（放行条件：Codex 轮次、标记 client=codex、gate_scope=client-plan、head_commit 等于 DC {dc[:12]}、ownership_sha256 有效；本轮客户端={client or '未知'}，标记={json.dumps(selection, ensure_ascii=False)[:300]}）")
     print("full-regression(本机):", d["exit_code"], d["host"], d["architecture"], d["started_at_utc"], d["completed_at_utc"])
 elif selection is not None:
     if allow != "1":
