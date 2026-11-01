@@ -726,6 +726,105 @@ class TraceStepTests(ChainTestCase):
         self.assertIn("dependency_trace.py", (self.logs.parent / "wrapper-args.txt").read_text(encoding="utf-8"))
 
 
+class SkipTraceTests(ChainTestCase):
+    """``--skip-trace``：整链运行时跳过 trace 步（依赖表留在上一次维护提交里，不进登记变更集）；verify 照跑，``--only trace`` 仍可手动做。"""
+
+    def test_full_chain_with_skip_trace_makes_no_table_commit_and_never_traces(self) -> None:
+        base = change_source(self.repo)
+        table_before = (self.repo / rc.DEPENDENCY_TABLE).read_bytes()
+        code, output = self.run_chain("--skip-trace")
+        self.assertEqual(code, 0, output)
+        self.assertTrue(self.clean())
+        subjects = self.subjects(base)
+        self.assertEqual(len(subjects), 4, subjects)
+        self.assertFalse(any("重新追踪依赖表" in item for item in subjects), subjects)
+        # 依赖表一个字节没动，也不在登记变更集的任何提交里；追踪器根本没有被调用。
+        self.assertEqual((self.repo / rc.DEPENDENCY_TABLE).read_bytes(), table_before)
+        self.assertNotIn(rc.DEPENDENCY_TABLE, git(self.repo, "diff", "--name-only", f"{base}..HEAD").split())
+        self.assertFalse(self.counter.exists(), "跳过 trace 就不该起追踪")
+        steps = self.state()["steps"]
+        self.assertEqual(steps["trace"]["status"], "skipped")
+        self.assertIsNone(steps["trace"]["commit"])
+        self.assertEqual(steps["verify"]["status"], "done", "verify 照跑")
+        self.assertIn("跳过（--skip-trace）", output)
+        self.assertIn("trace          skipped", output)
+
+    def test_skip_trace_does_not_require_trace_prerequisites(self) -> None:
+        """跳过 trace 时不检查追踪的前置（重负载锁脚本等）；不跳则同一条件下前置检查失败（对照）。"""
+        common = ["--repo", str(self.repo), "--log-dir", str(self.logs / "a"), "--ack-no-campaign", "--heavy-run", "/nonexistent/heavy-run.sh",
+                  "--python-version", "3.14.0", "--platform", "p", "--dry-run"]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = rc.main(common + ["--skip-trace"])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertIn("跳过（--skip-trace）", output.getvalue())
+        output = io.StringIO()
+        common[3] = str(self.logs / "b")
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = rc.main(common)
+        self.assertEqual(code, 2, output.getvalue())
+        self.assertIn("heavy-run.sh", output.getvalue())
+
+    def test_skip_trace_contradicts_only_trace(self) -> None:
+        code, output = self.run_chain("--skip-trace", "--only", "trace", "--dry-run")
+        self.assertEqual(code, 2, output)
+        self.assertIn("矛盾", output)
+        self.assertFalse(self.counter.exists())
+
+    def test_skip_trace_with_only_other_step_is_harmless(self) -> None:
+        base = change_source(self.repo)
+        code, output = self.run_chain("--skip-trace", "--only", "rebind")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len(self.subjects(base)), 1)
+        self.assertEqual(list(self.state()["steps"]), ["rebind"], "--only 其它步骤时不涉及 trace，状态里不记它")
+
+    def test_failure_then_resume_with_from_keeps_skipping_trace(self) -> None:
+        base = change_source(self.repo)
+        code, output = self.run_chain("--skip-trace", "--receipt-before", "f" * 40)
+        self.assertEqual(code, 1, output)
+        self.assertIn("--from rebind-receipt", output)
+        self.assertIn("--skip-trace", output.split("处理后从这一步继续：", 1)[1], "续跑命令要带着 --skip-trace，别在续跑时悄悄又去追踪")
+        self.assertNotIn("trace", self.state()["steps"], "失败发生在 trace 之前，状态里还没有它")
+        code, output = self.run_chain("--skip-trace", "--from", "rebind-receipt")
+        self.assertEqual(code, 0, output)
+        subjects = self.subjects(base)
+        self.assertEqual(len(subjects), 4, subjects)
+        steps = self.state()["steps"]
+        self.assertEqual((steps["trace"]["status"], steps["verify"]["status"]), ("skipped", "done"))
+        self.assertFalse(self.counter.exists())
+
+    def test_from_trace_with_skip_runs_only_verify_and_does_not_flag_trace_missing(self) -> None:
+        code, output = self.run_chain("--skip-trace", "--from", "trace")
+        self.assertEqual(code, 0, output)
+        steps = self.state()["steps"]
+        self.assertEqual({name: record["status"] for name, record in steps.items()}, {"trace": "skipped", "verify": "done"})
+        # 缺失清单是"（"之前的那段；--from trace 起点本身不在清单里，被跳过的 trace 更不算前置缺失。
+        missing = output.split("状态里没有这些前置步骤的完成记录：", 1)[1].splitlines()[0].split("（", 1)[0]
+        self.assertEqual(missing, "rebind、rebind-receipt、reseal、reseal-receipt、manifest")
+        self.assertFalse(self.counter.exists())
+
+    def test_skipped_counts_as_done_for_later_resume_and_trace_can_still_be_done_by_hand(self) -> None:
+        base = change_source(self.repo)
+        self.assertEqual(self.run_chain("--skip-trace")[0], 0)
+        head = self.head()
+        # 以后觉得表太旧了，单独追踪（发版之后、下一轮开工之前）：状态里 skipped 被 done 覆盖，追踪表提交落在链尾。
+        code, output = self.run_chain("--only", "trace")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.state()["steps"]["trace"]["status"], "done")
+        self.assertEqual(git(self.repo, "show", "--name-only", "--format=", "HEAD").split(), [rc.DEPENDENCY_TABLE])
+        self.assertNotEqual(self.head(), head)
+        self.assertEqual(len(self.subjects(base)), 5)
+        # skipped 之后接着 --from verify 也不报"HEAD 不一致"以外的前置缺失（trace 已有记录）。
+        self.assertEqual(self.run_chain("--from", "verify", "--accept-head")[0], 0)
+
+    def test_resume_command_keeps_skip_trace(self) -> None:
+        arguments = ["--log-dir", "/x", "--skip-trace", "--from", "reseal", "--label", "a"]
+        chain = rc.Chain(rc.build_parser().parse_args(arguments), arguments)
+        command = chain.resume_command("manifest")
+        self.assertIn("--skip-trace", command)
+        self.assertTrue(command.endswith("--from manifest"))
+
+
 class HelperTests(unittest.TestCase):
     def test_detach_runs_in_its_own_session_and_writes_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

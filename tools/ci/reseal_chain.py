@@ -14,8 +14,15 @@
     reseal-receipt   冻结承接收据，单独提交                                            1 个
     manifest         驱动 manifest 重建（build-manifest；本来就一致则跳过）            0～1 个
     trace            重新追踪依赖表：detached 工作树 + 重负载锁 + 后台追踪，             1 个
-                     追踪提交（generated_at_commit）是本步之前的 HEAD
+                     追踪提交（generated_at_commit）是本步之前的 HEAD。
+                     **默认不建议做：整链运行请加 --skip-trace（见下）**
     verify           只读复核：映射／守恒／候选追踪脚本三组测试 + manifest 校验          0 个
+
+为什么推荐 ``--skip-trace``（Codex 升级工具优化第 2 项 S2 之后）：``trace`` 步会把重追踪后的 ``tools/ci/unit_dependencies.json`` 提交进
+登记变更集。后台验证用依赖精度时，依赖表出现在"基点..被测提交"的改动里就整轮不筛选（全集），正好抵消按客户端／按依赖筛选省下的时间；
+而陈旧的依赖表只会多选、不会漏选（追踪以来依赖文件变过的模块照选，追踪提交不在历史里时全部照选），0.166 回放里旧表与新表的选择结果逐项相同
+（60 个模块、省 40.0 分）。所以整链运行加 ``--skip-trace``：跳过 ``trace`` 步，状态里记"skipped"，``verify`` 照跑；确需重新追踪（登记之后
+``last-passed`` 轮次选出的模块越来越多时）再单独 ``--only trace``，并在发版之后、下一轮开工之前做（见指南 4.8.1）。
 
 为什么追踪放在最后而不是第一步：追踪时退出码非 0 的模块会被记进 ``unobserved``（永远照跑、选择精度变差）。事实映射和基线没重封之前，
 ``test_candidate_test_trace``、身份守恒等模块必然是红的，在那种状态下追踪会白白多出一批 ``unobserved``。所以先把前面的生成值全部落定、
@@ -43,9 +50,10 @@
 
 用法（在要处理的 git 工作树里；``--log-dir`` 放在工作树之外）::
 
-    python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign
+    python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign --skip-trace   # 推荐
+    python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --label <批次名> --reason "<一句话原因>" --ack-no-campaign                # 含 trace 步
     python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --dry-run          # 只看计划与前置检查
-    python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --ack-no-campaign --from trace   # 失败后续跑
+    python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --ack-no-campaign --from trace   # 失败后续跑（带 --skip-trace 时从 trace 起 = 只剩 verify）
     python3 -B tools/ci/reseal_chain.py --log-dir <日志目录> --ack-no-campaign --only manifest
 
 退出码：0 全部完成；1 某一步失败（已停在原地）；2 前置条件或用法错误；130 被中断。
@@ -1043,11 +1051,23 @@ class Chain:
                 raise ChainError(f"未知步骤 {flag}；可选：{'、'.join(STEP_NAMES)}")
         if self.options.from_step and self.options.only:
             raise ChainError("--from 与 --only 不能同时用")
+        if self.options.skip_trace and self.options.only == "trace":
+            raise ChainError("--skip-trace 与 --only trace 矛盾：要追踪就去掉 --skip-trace，不追踪就不要 --only trace")
         if self.options.only:
             return [self.options.only]
         if self.options.from_step:
             return list(STEP_NAMES[STEP_NAMES.index(self.options.from_step):])
         return list(STEP_NAMES)
+
+    def skipping_trace(self, selected: Sequence[str]) -> bool:
+        """本次运行是否按 --skip-trace 跳过 trace 步：选项开着、且 trace 在本次范围内（--only 其它步骤时不涉及 trace）。"""
+
+        return bool(self.options.skip_trace) and "trace" in selected
+
+    def runnable_steps(self, selected: Sequence[str]) -> list[str]:
+        """本次真正要执行的步骤：从 selected 里去掉被 --skip-trace 跳过的 trace。"""
+
+        return [name for name in selected if not (name == "trace" and self.skipping_trace(selected))]
 
     def check_resume(self, selected: list[str]) -> list[str]:
         """续跑前断言 HEAD 与状态记录一致；返回要提示的警告。"""
@@ -1055,11 +1075,13 @@ class Chain:
         notes: list[str] = []
         done = self.state.get("steps", {})
         first_index = STEP_NAMES.index(selected[0])
+        skip_trace = bool(self.options.skip_trace)
         if first_index == 0 and not self.options.only and not self.options.from_step and done and not self.options.dry_run:
             raise ChainError(f"--log-dir 里已有上次运行的状态（{', '.join(f'{k}={v.get('status')}' for k, v in done.items())}）："
                              "续跑用 --from <步骤>，要重新开始请换一个新的 --log-dir")
-        previous = [name for name in STEP_NAMES[:first_index] if done.get(name, {}).get("status") in ("done", "noop")]
-        missing = [name for name in STEP_NAMES[:first_index] if name not in previous]
+        # skipped（--skip-trace 跳过的 trace）和 done／noop 一样算"前面已经处理过"，它的 head_after 也参与"HEAD 与状态一致"的核对。
+        previous = [name for name in STEP_NAMES[:first_index] if done.get(name, {}).get("status") in ("done", "noop", "skipped")]
+        missing = [name for name in STEP_NAMES[:first_index] if name not in previous and not (skip_trace and name == "trace")]
         if previous:
             recorded = done[previous[-1]].get("head_after")
             head = self.head()
@@ -1079,7 +1101,10 @@ class Chain:
         self.say("重封链计划：")
         for number, name in enumerate(STEP_NAMES, 1):
             description = dict(STEPS)[name]
-            self.say(f"  {number}. {name:<15}{'<- 本次运行' if name in selected else '   （本次不跑）'}  {description}")
+            mark = "<- 本次运行" if name in selected else "   （本次不跑）"
+            if name == "trace" and self.skipping_trace(selected):
+                mark = "<- 跳过（--skip-trace）"
+            self.say(f"  {number}. {name:<15}{mark}  {description}")
 
     def resume_command(self, step: str) -> str:
         base = [item for item in self.passthrough]
@@ -1110,7 +1135,8 @@ class Chain:
             raise ChainError(f"另一个重封链进程正在使用这个 --log-dir：{self.log_dir}") from error
         self.load_state()
         selected = self.select_steps()
-        problems, notes = self.preflight(selected)
+        # --skip-trace：trace 不跑，所以它的前置（追踪脚本、重负载锁、环境变量提醒）也不检查。
+        problems, notes = self.preflight(self.runnable_steps(selected))
         if not problems:
             notes += self.check_resume(selected)
         self.describe(selected)
@@ -1141,6 +1167,14 @@ class Chain:
             head_before = self.head()
             if not self.options.dry_run and self.git("status", "--porcelain", "--untracked-files=all"):
                 raise ChainError(f"步骤 {name} 开始前工作树不干净")
+            if name == "trace" and self.skipping_trace(selected):
+                # --skip-trace：不追踪、不动依赖表、不提交；状态里记 skipped（续跑时算"前面已处理"），verify 照跑。
+                self.say("按 --skip-trace 跳过：依赖表留在上一次维护提交里（陈旧的表只会多选不会漏选）；要重新追踪，发版之后单独 --only trace")
+                if not self.options.dry_run:
+                    self.state["steps"][name] = {"status": "skipped", "head_after": self.head(), "commit": None,
+                                                 "finished": datetime.datetime.now().isoformat(timespec="seconds")}
+                    self.save_state()
+                continue
             self.current_step = name
             try:
                 result = getattr(self, "step_" + name.replace("-", "_"))()
@@ -1208,6 +1242,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="只打印计划与前置检查，不改任何文件、不提交")
     parser.add_argument("--from", dest="from_step", metavar="步骤", help="从这一步开始往后跑（失败后续跑）：" + "、".join(STEP_NAMES))
     parser.add_argument("--only", metavar="步骤", help="只跑这一步")
+    parser.add_argument("--skip-trace", action="store_true",
+                        help="整链（或 --from）运行时跳过 trace 步（推荐）：状态里记 skipped，verify 照跑；不重追踪依赖表，也就不把它提交进登记变更集。"
+                             "与 --only trace 矛盾，会被拒绝；确需追踪请单独 --only trace")
     parser.add_argument("--ack-no-campaign", action="store_true", help="确认当前没有在建的 Campaign（真实运行必需）")
     parser.add_argument("--allow-main", action="store_true", help="允许在 main／master 分支上提交（默认拒绝）")
     parser.add_argument("--accept-head", action="store_true", help="续跑时接受 HEAD 比状态记录多出的提交（你手工修好后提交的）")
