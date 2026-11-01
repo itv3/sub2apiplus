@@ -3043,6 +3043,21 @@ class Arm64GateScriptTests(unittest.TestCase):
         self.assertEqual((result.returncode, picked), (3, ["--gate-scope", "auto", "--select-base", explicit]), result.stdout + result.stderr)
         self.assertIn("VC4_SELECT_BASE 显式给定", result.stdout)
 
+    def test_an_explicit_select_base_is_accepted_by_the_real_entry_gates_command_line(self) -> None:
+        """不换入口门禁替身：真实的 entry-gates.sh 接受 --profile vc4 --gate-scope auto --select-base <40 位提交>（参数校验与清单生成都过），
+        VC-4 门禁整条链跑通。夹具的驱动目录里没有选择器，实际范围回退全集（gate_scope_info 写明请求是 auto），不影响这条参数通路的核对。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            c, dc, receipt = self._vc4_chain(fixture, work)
+            result = _run(drv / "arm64-vc4-gates.sh", env={**env, "VC4_SELECT_BASE": c}, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"比对基点：{c}（VC4_SELECT_BASE 显式给定）", result.stdout)
+            (call,) = [entry for entry in self._commands(record) if "args" in entry]
+            self.assertEqual(call["manifest"]["gate_scope_info"]["requested"], "auto")
+
     @staticmethod
     def _write_bgv(fixture: _DriverFixture, name: str, *, commit: str, completed: str = "", status: str = "passed", raw: str | None = None) -> None:
         directory = fixture.runroot / "background-validation"
