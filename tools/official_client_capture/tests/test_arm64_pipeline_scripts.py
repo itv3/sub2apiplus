@@ -1945,6 +1945,201 @@ class LocalScriptTests(SandboxCase):
 
 
 # ======================================================================================================
+# 六之二、历史测试树补发版 tag（Codex 升级工具优化第 2 项 S1）：入口门禁与后台验证的“最近发版 tag”解析自这棵树，
+# 采集主机侧取 bundle 用 --no-tags，ARM64 的树最高只到 v0.2.13-3，改动文件上千个，Codex 按客户端筛选必回退全集
+# ======================================================================================================
+def _git_in(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    """在合成仓库里跑 git（固定作者、关签名与后台维护，输出捕获）。"""
+
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
+                           "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args], check=check, capture_output=True, text=True)
+
+
+def _commit_file(repo: Path, name: str, text: str = "x\n") -> str:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text, encoding="utf-8")
+    _git_in(repo, "add", name)
+    _git_in(repo, "commit", "-q", "-m", f"add {name}")
+    return _git_in(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+class HistoryTreeRefreshTests(SandboxCase):
+    """history-tree-refresh.sh（采集主机侧）：合成仓库。源仓库有 A（侧枝 S 也从 A 分出）、B（tag v0.1.1）、C（分支 integ 的尖）；
+    历史树是源仓库在只有 A 与 S 时用 --no-tags 克隆的一份，与 ARM64 上的树同样没有任何 tag。"""
+
+    LOCK = "lockfileVersion: '9.0'\n"
+
+    def setUp(self) -> None:
+        super().setUp()
+        src = self.src = self.root / "src"
+        src.mkdir()
+        _git_in(src, "init", "-q", "-b", "integ")
+        self.a = _commit_file(src, "frontend/pnpm-lock.yaml", self.LOCK)
+        _git_in(src, "checkout", "-q", "-b", "side")
+        self.side = _commit_file(src, "side.txt")
+        _git_in(src, "checkout", "-q", "integ")
+        # 历史树：此时源仓库只有 A 与侧枝 S，克隆带上全部分支的对象但不带 tag；前端依赖已装（锁文件一致，脚本不会去起 docker）。
+        hist = self.hist = Path(self.sb.env["HISTORY_TEST_TREE"])
+        subprocess.run(["git", "clone", "-q", "--no-tags", str(src), str(hist)], check=True, capture_output=True)
+        lock = hist / "frontend" / "node_modules" / ".pnpm" / "lock.yaml"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(self.LOCK, encoding="utf-8")
+        self.b = _commit_file(src, "b.txt")
+        _git_in(src, "tag", "v0.1.1", self.b)
+        self.c = _commit_file(src, "c.txt")
+        self.bundle = self.root / "h.bundle"
+        _git_in(src, "bundle", "create", str(self.bundle), f"{self.a}..integ")
+
+    def _refresh(self, *tag_args: str, bundle: str | None = None) -> subprocess.CompletedProcess:
+        return self.sb.run(["bash", str(self.sb.pipe / "history-tree-refresh.sh"), self.c, bundle or str(self.bundle), "refs/heads/integ", *tag_args])
+
+    def _describe(self) -> subprocess.CompletedProcess:
+        return _git_in(self.hist, "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD", check=False)
+
+    def test_the_tree_starts_without_any_release_tag(self) -> None:
+        """前提：和 ARM64 上的树一样，描述不出任何发版 tag（有 tag 之前入口门禁解析不到最近发版）。"""
+
+        self.assertEqual(self._describe().returncode, 128)
+        self.assertEqual(_git_in(self.hist, "tag", "--list").stdout.strip(), "")
+
+    def test_given_a_release_tag_the_tree_gets_it_and_describe_returns_the_latest_release(self) -> None:
+        result = self._refresh("v0.1.1", self.b)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-800:])
+        self.assertIn("HISTORY_TREE_OK", result.stdout)
+        self.assertIn(f"已补发版 tag v0.1.1 → {self.b}", result.stdout)
+        self.assertNotIn("警告", result.stdout, "给了 tag 就不该再警告")
+        described = self._describe()
+        self.assertEqual((described.returncode, described.stdout.strip()), (0, "v0.1.1"))
+        self.assertEqual(_git_in(self.hist, "rev-parse", "HEAD").stdout.strip(), self.c, "树检出在目标提交")
+        self.assertEqual(_git_in(self.hist, "tag", "--list").stdout.split(), ["v0.1.1"], "只补这一个 tag，不拉别的 tag")
+
+    def test_without_tag_arguments_the_run_is_as_before_plus_one_warning(self) -> None:
+        result = self._refresh()
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-800:])
+        self.assertIn("HISTORY_TREE_OK", result.stdout)
+        self.assertIn("警告：历史测试树没有最新发版 tag", result.stdout)
+        self.assertEqual(self._describe().returncode, 128, "不给参数就不补 tag")
+        self.assertEqual(_git_in(self.hist, "tag", "--list").stdout.strip(), "")
+        self.assertEqual(_git_in(self.hist, "rev-parse", "HEAD").stdout.strip(), self.c)
+
+    def test_a_tag_whose_commit_is_not_an_ancestor_of_the_target_is_refused_and_the_tree_stays(self) -> None:
+        """侧枝 S 在树里存在，但不是目标提交 C 的祖先：补这样的 tag 会让“最近发版 tag”解析错，必须拒绝；树不动、tag 不建。"""
+
+        head_before = _git_in(self.hist, "rev-parse", "HEAD").stdout.strip()
+        result = self._refresh("v0.9.9", self.side)
+        self.assertEqual(result.returncode, 3, result.stdout[-1500:])
+        self.assertIn("不是目标提交", result.stdout)
+        self.assertNotIn("HISTORY_TREE_OK", result.stdout)
+        self.assertEqual(_git_in(self.hist, "rev-parse", "HEAD").stdout.strip(), head_before, "拒绝发生在检出之前，树停在原处")
+        self.assertEqual(_git_in(self.hist, "tag", "--list").stdout.strip(), "")
+
+    def test_malformed_or_unknown_tag_arguments_are_refused_before_the_tree_moves(self) -> None:
+        head_before = _git_in(self.hist, "rev-parse", "HEAD").stdout.strip()
+        cases = {
+            "只给 tag 名": (("v0.1.1",), 2, "必须成对"),
+            "只给提交": (("", self.b), 2, "发版 tag 名必须形如"),
+            "tag 名不是发版格式": (("latest", self.b), 2, "发版 tag 名必须形如"),
+            "带后缀的 tag 名": (("v0.1.1-rc1", self.b), 2, "发版 tag 名必须形如"),
+            "提交不是 40 位": (("v0.1.1", self.b[:12]), 2, "40 位小写十六进制"),
+            "提交在树里不存在": (("v0.1.1", "e" * 40), 3, "树里没有发版 tag"),
+        }
+        for label, (args, rc, needle) in cases.items():
+            with self.subTest(label):
+                result = self._refresh(*args)
+                self.assertEqual(result.returncode, rc, result.stdout[-800:])
+                self.assertIn(needle, result.stdout)
+                self.assertNotIn("HISTORY_TREE_OK", result.stdout)
+                self.assertEqual(_git_in(self.hist, "rev-parse", "HEAD").stdout.strip(), head_before)
+                self.assertEqual(_git_in(self.hist, "tag", "--list").stdout.strip(), "")
+
+    def test_a_stale_tag_pointing_elsewhere_is_moved_and_the_move_is_reported(self) -> None:
+        _git_in(self.hist, "tag", "v0.1.1", self.a)
+        result = self._refresh("v0.1.1", self.b)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn(f"发版 tag v0.1.1 原来指向 {self.a}，已改为 {self.b}", result.stdout)
+        self.assertEqual(_git_in(self.hist, "rev-parse", "v0.1.1^{commit}").stdout.strip(), self.b)
+
+    def test_the_tag_is_also_added_when_the_tree_already_has_the_target_commit(self) -> None:
+        """bundle 参数写 -（树里已有目标提交，只核对前端依赖）时同样补 tag。"""
+
+        _git_in(self.hist, "fetch", "-q", "--no-tags", str(self.bundle), "refs/heads/integ")
+        result = self._refresh("v0.1.1", self.b, bundle="-")
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertEqual(self._describe().stdout.strip(), "v0.1.1")
+
+
+class SyncHistoryTreeTagTests(SandboxCase):
+    """local/sync-history-tree.sh（开发机侧）：用本机分支上最近的发版 tag 作为第 4、5 个参数交给采集主机侧的 history-tree-refresh.sh。
+    ssh 换成会回答“采集主机测试树当前提交”的桩，其余只记录；本机仓库是合成的。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        repo = self.repo = self.root / "local-repo"
+        repo.mkdir()
+        _git_in(repo, "init", "-q", "-b", "integ")
+        self.c1 = _commit_file(repo, "one.txt")
+        self.c2 = _commit_file(repo, "two.txt")
+        self.c3 = _commit_file(repo, "three.txt")
+        exports = "\n".join(f"export {k}='{v}'" for k, v in {"RUNROOT": "/remote/rounds/roundA", "HISTORY_TEST_TREE": "/remote/hist"}.items())
+        (self.root / "remote_exports.txt").write_text(exports + "\n", encoding="utf-8")
+
+    def _install_ssh(self, base: str) -> None:
+        _write(self.sb.bin / "ssh", f"""
+            #!/bin/bash
+            echo "SSH $*" >> "{self.sb.log}"
+            case "$*" in
+              *parse_env.py*) cat "{self.root}/remote_exports.txt" ;;
+              *"rev-parse HEAD"*) echo "{base}" ;;
+            esac
+            exit 0
+        """)
+
+    def _sync(self, base: str) -> tuple[subprocess.CompletedProcess, str]:
+        """跑一遍同步，返回（结果，传给采集主机侧 history-tree-refresh.sh 的那条命令行）。"""
+
+        self._install_ssh(base)
+        result = self.sb.run(["bash", str(self.sb.pipe / "local" / "sync-history-tree.sh"), "integ"], PIPE_LOCAL_REPO=str(self.repo), PIPE_SSH_HOST="hostx")
+        refresh = [line for line in self.sb.events() if line.startswith("SSH ") and "history-tree-refresh.sh " in line and "bash" in line and "test -f" not in line]
+        return result, (refresh[-1] if refresh else "")
+
+    def test_the_nearest_release_tag_and_its_commit_are_handed_to_the_refresh_script(self) -> None:
+        _git_in(self.repo, "tag", "v0.1.0", self.c1)
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        result, command = self._sync(self.c1)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:] + result.stderr[-800:])
+        self.assertIn(f"发版 tag v0.1.1 → {self.c2}", result.stdout)
+        self.assertIn(f"history-tree-refresh.sh {self.c3} ", command, "第 1 个参数仍是分支尖")
+        self.assertIn(f"/stage/h-{self.c3[:12]}.bundle refs/heads/integ v0.1.1 {self.c2}", command, "增量 bundle、分支引用之后依次是 tag 名与它的提交")
+        self.assertTrue(command.endswith(f"refs/heads/integ v0.1.1 {self.c2}"), command)
+
+    def test_an_annotated_tag_resolves_to_the_commit_not_the_tag_object(self) -> None:
+        _git_in(self.repo, "tag", "-a", "v0.2.0", "-m", "release", self.c2)
+        result, command = self._sync(self.c1)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertTrue(command.endswith(f"refs/heads/integ v0.2.0 {self.c2}"), command)
+
+    def test_no_release_tag_means_no_extra_arguments_and_a_warning(self) -> None:
+        result, command = self._sync(self.c1)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn("警告：本机分支 integ 上找不到发版 tag", result.stdout)
+        self.assertTrue(command.endswith("refs/heads/integ"), "没有发版 tag 就不传第 4、5 个参数：" + command)
+
+    def test_a_tag_that_is_not_in_release_format_is_not_handed_over(self) -> None:
+        _git_in(self.repo, "tag", "v1.0.0-rc1", self.c2)
+        result, command = self._sync(self.c1)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn("警告：本机分支 integ 上找不到发版 tag（最近的 tag：v1.0.0-rc1）", result.stdout)
+        self.assertTrue(command.endswith("refs/heads/integ"), command)
+
+    def test_the_tag_also_goes_along_when_the_tree_is_already_at_the_branch_tip(self) -> None:
+        _git_in(self.repo, "tag", "v0.1.1", self.c2)
+        result, command = self._sync(self.c3)
+        self.assertEqual(result.returncode, 0, result.stdout[-1500:])
+        self.assertIn("测试树已在该提交", result.stdout)
+        self.assertTrue(command.endswith(f"{self.c3} - refs/heads/integ v0.1.1 {self.c2}"), command)
+
+
+# ======================================================================================================
 # 七、整链：VC4 阶段的 bundle 推导与构建收据路径、others_running 不把只读 preflight 当编排
 # ======================================================================================================
 class PipelineStageTests(SandboxCase):
