@@ -88,7 +88,7 @@ Campaign `c01660-formal-vc1-r1-20261031t000000z` 的 attempt `20261031T104956Z-3
 | 逐规则机器证据 | [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) |
 | 源码锚点 | [`tools/spec_ref_anchors.json`](../tools/spec_ref_anchors.json) |
 | Sub2API 实现证据 | `backend/` 与 `docs/egress/` |
-| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与 [`0.165 终态收据`](egress/maintenance/CODEX_CLI_0164_TO_0165_TERMINAL_STATE_RECEIPT.json) |
+| 当前 Active／Previous 及生产身份 | 本文 §3.2、[`Runtime Release Catalog`](../backend/internal/officialegress/catalogdata/runtime/release-catalog.json) 与本文 [§4.9 当前 Active 终态收据坐标](#codex-active-receipt)（当前 Active 的终态收据文件名与 Campaign 以该节为准） |
 
 每条规则的准入证据包必须绑定官方源码、依赖、二进制、平台、配置、账号、抓包运行号和摘要。只有能够
 重新解析的材料可以作为规则依据；R 类材料只允许等长脱敏，未脱敏材料不得离开采集机。
@@ -109,7 +109,7 @@ Campaign `c01660-formal-vc1-r1-20261031t000000z` 的 attempt `20261031T104956Z-3
 - 自定义 CA、代理和受控失败等条件样本不能外推为默认路径或自然成功链；
 - 全集、缺失和连接完整性结论必须基于无预设过滤的完整双向样本。
 
-**遥测零流量判定（当前 active 0.165.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
+**遥测零流量判定（适用于当前 Active，版本见本文 §4.9）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
 源码链均已冻结时，未产生的遥测才可排除在 strict 分母之外：
 
 | 组件 | 关闭条件与源码闭环 |
@@ -589,8 +589,8 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth。
 - **规则**：UA 为平台前缀加可选 ` ({name}; {version})` suffix。exec 使用
-  `codex_exec/0.165.0` 与 `(codex_exec; 0.165.0)`；TUI 使用
-  `codex-tui/0.165.0` 与 `(codex-tui; 0.165.0)`。启动首次 models 因进程级写入时序，
+  `codex_exec/<版本>` 与 `(codex_exec; <版本>)`；TUI 使用
+  `codex-tui/<版本>` 与 `(codex-tui; <版本>)`，其中 `<版本>` 是画像对应的当前 Active CLI 版本（取值见本文 §3.2、§4.9 与 Runtime Catalog）。启动首次 models 因进程级写入时序，
   有 suffix 和无 suffix 均属于官方观测集；TUI initialize 之后的真实插件请求必须带 `codex-tui` 前缀与同名 suffix。
   0.163.0 复核：UA、originator 与 suffix 机制未改；exec 新增 `model/list` 后，首次 `/models` 更可能带 suffix，
   规则已允许有无两种。
@@ -1039,7 +1039,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 ### SPEC-EP-006 models 的 URL 与方法
 
 - **范围**：内置 OpenAI OAuth。
-- **规则**：`GET {base}/models?client_version=0.165.0`。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
+- **规则**：`GET {base}/models?client_version=<版本>`，`<版本>` 是画像对应的当前 Active CLI 版本（取值见本文 §3.2、§4.9 与 Runtime Catalog）。0.163.0 复核：URL、方法与 query 形态不变，`client_version`
   的值随 CLI 版本；exec 新增 `model/list`（`OnlineIfUncached`），可能使冷 home 的首个 `/models` 提前发出并变为同步等待，
   请求形态不变。0.164.0 复核：`model/list` 改为用 catalog 当前快照里的 config 与 models_manager 取列表
   （`list_models_from_snapshot`），刷新策略仍是 `OnlineIfUncached`，URL、方法、query 不变。
@@ -1051,7 +1051,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
   `c01650-formal-vc1-r1-20261029t000000z`，attempt `20261029T042703Z-54406f2fab548474`；匹配数不是去重请求数）：场景 A09 的
   `models-method-path-query` 匹配 16 条，method 为 GET，path 为 `/backend-api/codex/models`，query 只有
   `client_version=0.165.0`。
-- **实现**：版本 query 与画像对应的 CLI 版本一致（0.165.0）。
+- **实现**：版本 query 与画像对应的 CLI 版本一致（即当前 Active 版本，见本文 §4.9）。
 - **状态**：✅ 源码充分；抓包充分。
 
 ### SPEC-EP-008 alpha-search 的 URL 与方法
@@ -1100,7 +1100,7 @@ ClientHello 是否随之变化未经官方抓包核实），provider 仍由
 
 - **范围**：内置 OpenAI OAuth；由 `Provider::url_for_path()` 构造的 Codex API URL。
 - **规则**：provider 级 `query_params=None`；query 只由端点自身添加。目前 models
-  添加 `client_version=0.165.0`，realtime/calls 添加 `intent` 与 `architecture`，
+  添加 `client_version=<版本>`（当前 Active 的 CLI 版本，见本文 §4.9），realtime/calls 添加 `intent` 与 `architecture`，
   普通 responses 不带 query。0.163.0 复核：行为不变，provider 级 `query_params` 仍为 `None`。
 - **源码**：[L1] `codex-client/src/provider.rs:55`、
   `model-provider-info/src/lib.rs:579`、
