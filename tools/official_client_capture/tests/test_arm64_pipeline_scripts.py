@@ -286,8 +286,13 @@ class Sandbox:
         (self.newdir / "control" / "vc" / f"vc-{number}-checkpoint.json").write_text("{}", encoding="utf-8")
 
     # ------------------------------------------------------------------ 运行
+    # 不让外层进程环境渗进被测脚本的变量前缀。VC4_／VC5_／VC6_ 是驱动脚本的控制类变量（VC5_RENEW_APPROVER、VC5_ALLOW_SUBSET_LOCAL_GATES、
+    # VC4_GATE_SCOPE、VC4_SELECT_BASE、VC6_REPO……），会改变被测脚本的行为：带 --approver 起 VC-5 时目标平台门禁（make test）的进程环境里就带着
+    # VC5_RENEW_APPROVER，本模块不封闭就必红（Codex 升级工具优化第 1 项，0.166 白跑两次）。需要的变量由用例经 extra 显式给。
+    INHERIT_BLOCKED_PREFIXES = ("PIPE_", "CAPTURE_", "ARM64_", "STUB_", "VC4_", "VC5_", "VC6_")
+
     def environ(self, **extra: str) -> dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("PIPE_", "CAPTURE_", "ARM64_", "STUB_"))}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(self.INHERIT_BLOCKED_PREFIXES)}
         env.update({
             "PATH": self.path, "PIPE_DRIVER_DIR": str(self.drv), "PIPE_PREP": str(self.prep), "ARM64_VC_ENV": str(self.env_file),
             "PIPE_RETRY_SLEEP": "0", "PIPELINE_ENV": "", "PIPE_LOCAL_REPO": str(REPO_ROOT), "HOME": str(self.root), "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(self.root),
@@ -395,6 +400,22 @@ class CaptureAccountOrderTests(SandboxCase):
 
     def test_without_any_approver_vc5_all_gets_empty_value_not_inherited_garbage(self) -> None:
         self.assertEqual(self._renew_approver_seen_by_vc5_all(), "")
+
+    def test_outer_driver_control_variables_never_leak_into_the_sandbox(self) -> None:
+        """Codex 升级工具优化第 1 项：外层进程里 export 了 VC5_RENEW_APPROVER 等控制变量（例如带 --approver 起 VC-5 时目标平台门禁的环境），
+        本模块里的用例必须照样全过——沙箱环境不继承 VC4_／VC5_／VC6_ 开头的变量，没传 --approver 时 vc5-all 看到的仍是空串。"""
+
+        before = dict(os.environ)
+        with unittest.mock.patch.dict(os.environ, {"VC5_RENEW_APPROVER": "外层批准人", "VC5_ALLOW_SUBSET_LOCAL_GATES": "1", "VC4_GATE_SCOPE": "full",
+                                                   "VC6_REPO": "/nonexistent"}):
+            environ = self.sb.environ()
+            self.assertFalse([key for key in environ if key.startswith(("VC4_", "VC5_", "VC6_"))], environ.keys())
+            self.assertEqual(self._renew_approver_seen_by_vc5_all(), "")
+        self.assertEqual(dict(os.environ), before, "不改全局环境，无需另行还原")
+
+    def test_explicit_extra_variables_still_reach_the_sandbox_after_the_blocking(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {"VC5_RENEW_APPROVER": "外层批准人"}):
+            self.assertEqual(self.sb.environ(VC5_RENEW_APPROVER="显式给的")["VC5_RENEW_APPROVER"], "显式给的")
 
     def test_premature_close_is_caught_by_this_test_mutation(self) -> None:
         """变异验证：把脚本改回上一版的错误行为（见到 KILO_DONE 就关账号），上面那条不变量必须被打破——

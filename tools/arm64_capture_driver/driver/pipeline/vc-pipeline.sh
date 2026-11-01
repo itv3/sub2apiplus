@@ -602,6 +602,8 @@ run_VC5() {
   : > "${RR}/vc5-all.out"
   # vc5-all 在 canonical 前做准入守卫（lib.sh vc5_admission_guard）：管理令牌 consume 窗口过期时，只有进程环境里有 VC5_RENEW_APPROVER 才会自动续签。
   # 起跑时传了 --approver 就是调度者授权本流水线签 VC-5 准入的同一批准人，续签沿用它；环境里已有 VC5_RENEW_APPROVER 的以环境为准；都没有则留空（守卫按“未设”处理）。
+  # 这里只负责把它交给 vc5-all 进程；vc5-all.sh 一进门就把它收回成脚本私有变量，直到 canonical 阶段才放回环境，
+  # 所以 seal、accept（含 accept 内的目标平台门禁 make test）的子进程环境里没有它（0.166 曾因它白跑两次目标平台门禁）。
   ( cd "${DRV}" && export VC5_RENEW_APPROVER="${VC5_RENEW_APPROVER:-${APPROVER}}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
   log "STEP vc5-all 已起（候选采集 → Kilo 双入口 → seal → compare → accept → canonical）"
   fi

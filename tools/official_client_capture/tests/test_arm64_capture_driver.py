@@ -111,8 +111,21 @@ def _counting_bin(root: Path) -> tuple[Path, Path]:
     return bin_dir, log
 
 
+# 驱动脚本的“控制类”环境变量前缀（Codex 升级工具优化第 1 项）：VC4_*（VC-4 门禁的范围、基点、续跑开关）、VC5_*（VC5_RENEW_APPROVER、
+# VC5_ALLOW_SUBSET_LOCAL_GATES、VC5_TARGET_*）、VC6_*（VC-6 本机交接）。这些变量会改变被测脚本的行为，不能从外层进程渗进来：
+# 带 --approver 起 VC-5 时，目标平台门禁（make test）的进程环境里就带着 VC5_RENEW_APPROVER，这里的用例不封闭环境，必红
+# （0.166 因此目标平台门禁白跑两次，约 3 小时）。需要的变量由用例经 env 参数显式给。
+SCRIPT_CONTROL_ENV_PREFIXES = ("VC4_", "VC5_", "VC6_")
+
+
+def _inherited_environ() -> dict[str, str]:
+    """本进程环境去掉驱动脚本的控制类变量后的副本（不改 ``os.environ`` 本身，所以无需还原）。"""
+
+    return {key: value for key, value in os.environ.items() if not key.startswith(SCRIPT_CONTROL_ENV_PREFIXES)}
+
+
 def _run(script: Path, *args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    merged = {**os.environ, **(env or {})}
+    merged = {**_inherited_environ(), **(env or {})}
     return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, errors="replace", env=merged, cwd=str(cwd) if cwd else None)
 
 
@@ -669,6 +682,97 @@ class Vc5AllResumeTests(unittest.TestCase):
             self.assertEqual([line.split()[0] for line in lines][-1], "vc5-canonical2.sh", "续签成功后才进 canonical")
             self.assertIn("续签成功，准入消费通过", result.stdout)
             self.assertIn("VC5_ALL_DONE", result.stdout)
+
+    def _approver_probe_driver(self, root: Path, fixture: _DriverFixture) -> tuple[Path, Path]:
+        """在 _stub_driver 之上，把准入、seal、accept、canonical 四个替身换成“记下自己看到的 VC5_RENEW_APPROVER”的版本。
+
+        每个替身往 ``approver-seen.log`` 追加一行 ``<名字> <参数> approver=<值，没有该变量时写 <unset>>``；seal 与 accept 照常补出各自的结果文件，
+        canonical 补出完成收据。准入替身沿用“令牌过期、续签后恢复”的口径（canonical 前的守卫需要续签）。
+        """
+
+        drv, calls = self._stub_driver(root, fixture, accept_creates_result=True)
+        seen = root / "approver-seen.log"
+        renewed = root / "renewed.marker"
+        probe = f"echo \"$(basename \"$0\") $* approver=${{VC5_RENEW_APPROVER-<unset>}}\" >> '{seen}'\necho \"$(basename \"$0\") $*\" >> '{calls}'\n"
+        bodies = {
+            "vc5-precheck.sh": (
+                'case "$*" in\n'
+                '  "--consume --export-parameters") exit 0 ;;\n'
+                f'  "--consume") if [ -f \'{renewed}\' ]; then exit 0; fi; echo \'{{"status": "blocked", "reason": "admission_not_ready"}}\' >&2; exit 3 ;;\n'
+                f'  --renew*) touch \'{renewed}\'; echo \'{{"status": "passed", "renewed": true}}\'; exit 0 ;;\n'
+                "esac\n"),
+            "vc5-seal.sh": f"mkdir -p '{fixture.newdir}/comparisons/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/comparisons/{fixture.cand}/result.json'\n",
+            "vc5-accept.sh": f"mkdir -p '{fixture.newdir}/acceptance/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/acceptance/{fixture.cand}/result.json'\n",
+            "vc5-canonical2.sh": (f"mkdir -p '{fixture.newdir}/control/vc/receipts/{fixture.cand}' && "
+                                  f"echo '{{}}' > '{fixture.newdir}/control/vc/receipts/{fixture.cand}/vc5-completion.json'\n"),
+        }
+        for name, body in bodies.items():
+            (drv / name).write_text("#!/bin/bash\n" + probe + body, encoding="utf-8")
+            (drv / name).chmod(0o700)
+        return drv, seen
+
+    def test_renew_approver_is_exported_only_for_the_canonical_stage_not_for_seal_and_accept(self) -> None:
+        """Codex 升级工具优化第 1 项：VC5_RENEW_APPROVER 只给 canonical 前的准入守卫与 canonical 阶段，seal、accept（accept 内是目标平台门禁
+        make test）和脚本开头的准入消费的子进程环境里一律没有它；canonical 阶段仍拿得到，自动续签照常工作（别把必需的阶段改丢）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, seen = self._approver_probe_driver(root, fixture)
+            self._prepare_stage(fixture, compare_done=False, acceptance_done=False)
+            result = _run(drv / "vc5-all.sh", env={**fixture.env, "VC5_RENEW_APPROVER": "测试批准人及依据"}, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("VC5_ALL_DONE", result.stdout)
+            rows = [line.split(" approver=") for line in seen.read_text(encoding="utf-8").splitlines()]
+            by_script: dict[str, list[str]] = {}
+            for head, value in rows:
+                by_script.setdefault(head.split()[0], []).append(value)
+            # 非 canonical 阶段：脚本开头的准入消费、seal、accept 的子进程环境里没有该变量。
+            self.assertEqual(rows[0], ["vc5-precheck.sh --consume --export-parameters", "<unset>"], rows)
+            self.assertEqual(by_script["vc5-seal.sh"], ["<unset>"], rows)
+            self.assertEqual(by_script["vc5-accept.sh"], ["<unset>"], rows)
+            # canonical 阶段：守卫的两次 --consume、--renew 与 canonical 脚本都拿得到批准人，续签的批准人原样传下去。
+            self.assertEqual(by_script["vc5-canonical2.sh"], ["测试批准人及依据"], rows)
+            self.assertIn("vc5-precheck.sh --renew --approver 测试批准人及依据 approver=测试批准人及依据", [" approver=".join(row) for row in rows])
+            self.assertIn("续签成功，准入消费通过", result.stdout)
+            order = [head.split()[0] for head, _value in rows]
+            self.assertLess(order.index("vc5-seal.sh"), order.index("vc5-accept.sh"))
+            self.assertLess(order.index("vc5-accept.sh"), order.index("vc5-canonical2.sh"))
+
+    def test_no_renew_approver_anywhere_when_the_caller_did_not_set_it(self) -> None:
+        """没设批准人时各阶段都没有该变量，canonical 前的守卫按“未设”报错退出 3（与改造前一致），不会因为收回变量而崩溃（set -u）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, seen = self._approver_probe_driver(root, fixture)
+            self._prepare_stage(fixture, compare_done=False, acceptance_done=False)
+            result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("VC5_ADMISSION_GUARD_FAILED", result.stdout)
+            rows = [line.split(" approver=") for line in seen.read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(rows and all(value == "<unset>" for _head, value in rows), rows)
+            self.assertNotIn("vc5-canonical2.sh", [head.split()[0] for head, _value in rows])
+
+    def test_the_test_helpers_do_not_inherit_driver_control_variables_from_the_outer_environment(self) -> None:
+        """外层进程里 export 了 VC5_RENEW_APPROVER（或别的 VC4_／VC5_／VC6_ 控制变量）时，本模块跑被测脚本用的环境不得带上它们；
+        需要的变量只能由用例经 env 参数显式给。"""
+
+        leaked = {"VC5_RENEW_APPROVER": "外层批准人", "VC5_ALLOW_SUBSET_LOCAL_GATES": "1", "VC4_GATE_SCOPE": "full", "VC4_SELECT_BASE": "a" * 40,
+                  "VC6_REPO": "/nonexistent"}
+        before = dict(os.environ)
+        with mock.patch.dict(os.environ, leaked):
+            inherited = _inherited_environ()
+            self.assertFalse(set(leaked) & set(inherited), "控制类变量必须被挡在被测脚本的环境之外")
+            self.assertEqual(inherited["PATH"], os.environ["PATH"], "其余变量照常继承")
+            with tempfile.TemporaryDirectory() as directory:
+                probe = Path(directory) / "probe.sh"
+                probe.write_text('#!/bin/bash\necho "approver=${VC5_RENEW_APPROVER-<unset>} explicit=${VC4_GATE_SCOPE-<unset>}"\n', encoding="utf-8")
+                result = _run(probe, env={"VC4_GATE_SCOPE": "auto"})
+                self.assertEqual(result.stdout.strip(), "approver=<unset> explicit=auto", "用例显式给的变量照常传下去")
+        self.assertEqual(dict(os.environ), before, "只复制不改全局环境，退出补丁后与进入前完全一致，无需另行还原")
 
     def test_a_failing_canonical_stage_is_reported_with_its_exit_code_and_raw_tail(self) -> None:
         """canonical 阶段带着非零退出码结束、又没有任何匹配过滤模式的输出：以前 vc5-all 静默退出，现在必须打印阶段、退出码与未过滤输出的末行。"""

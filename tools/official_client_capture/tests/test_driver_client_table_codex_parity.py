@@ -1135,6 +1135,16 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 
 
+# >>> L1 驱动脚本维护登记常量（脚本生成，可重跑）
+# Codex 升级工具优化（opt-tools-1101，L1 线）改了下面这些被本模块钉住的驱动脚本：以改动前的主线头 cd028ceb78 为基线，代入 Codex 取值后
+# 只剩登记的几处，每处 Codex 下都等价或只在显式设置时才生效：
+# * vc5-all.sh：（第 1 项）起跑时传进来的 VC5_RENEW_APPROVER 一进脚本就收回成脚本私有变量，canonical 阶段才放回环境——不设置时行为不变。
+L1_DRIVER_BASELINE = 'cd028ceb787cc7fa25ae266e992216a6ed069f30'
+L1_DRIVER_DIGESTS = {'vc5-all.sh': '41a85e2e2e692fb62c72a83687bc07ccb02bcd2e5e6b9bd22af3891cf83b32f9'}
+L1_DRIVER_RESIDUALS = {'vc5-all.sh': ['+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}',
+                '+unset VC5_RENEW_APPROVER',
+                '+  if [ -n "$VC5_RENEW_APPROVER_HELD" ]; then export VC5_RENEW_APPROVER="$VC5_RENEW_APPROVER_HELD"; fi']}
+# <<< L1 驱动脚本维护登记常量
 # >>> T2 预检登记常量（脚本生成，可重跑）
 T2_PRECHECK_BASELINE = 'b6c3cd0f049e4ab4a271bae2f976e726d07c5998'
 T2_PRECHECK_DIGESTS = {'entry-gates.sh': 'f80292303f9970da87a735b1d63f247e74b81dc7d544393054832a0b2db57186',
@@ -1672,6 +1682,9 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
     ("B5a-09-fixture-project-guard", FIXTURE_PROJECT_GUARD_BASELINE_COMMIT, FIXTURE_PROJECT_GUARD_SHELL_DIGESTS, FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS),
     ("B5a-09固定79接线", RECORDED_BRIDGE_BASELINE_COMMIT, RECORDED_BRIDGE_SHELL_DIGESTS, RECORDED_BRIDGE_SHELL_RESIDUALS),
+    # >>> L1 驱动脚本维护登记行
+    ("L1-驱动脚本维护", L1_DRIVER_BASELINE, L1_DRIVER_DIGESTS, L1_DRIVER_RESIDUALS),
+    # <<< L1 驱动脚本维护登记行
     # >>> T2 预检登记行
     ("T2-预检收据与准入续签", T2_PRECHECK_BASELINE, T2_PRECHECK_DIGESTS, T2_PRECHECK_RESIDUALS),
     # <<< T2 预检登记行

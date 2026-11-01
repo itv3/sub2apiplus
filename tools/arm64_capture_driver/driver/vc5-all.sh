@@ -12,9 +12,15 @@
 #   脚本带着非零退出码静默结束，流水线约 20 分钟后才报“进程已消失”。现在每个阶段失败都会先打印 VC5_ALL_STAGE_FAILED（阶段名、退出码、未过滤的完整输出落盘路径与末 8 行），
 #   再以同一退出码退出；目标平台门禁结束后、canonical 前先做准入守卫（vc5_admission_guard，lib.sh）：准入消费不通过时，启动前设了 VC5_RENEW_APPROVER
 #   就自动续签管理令牌（只续令牌），没设就打印 VC5_ADMISSION_GUARD_FAILED 与处理办法后退出 3。
+# 续签批准人只在 canonical 阶段才导出（Codex 升级工具优化第 1 项）：起跑时传进来的 VC5_RENEW_APPROVER 只有 canonical 前的准入守卫要用，
+#   但环境变量会一路继承给 seal、accept 的所有子进程——目标平台门禁（accept 内的 make test）里的 test_arm64_capture_driver、test_arm64_pipeline_scripts
+#   不封闭进程环境，读到它就红（0.166 带 --approver 起 VC-5，目标平台门禁白跑两次约 3 小时）。所以一进脚本就把它收回成脚本私有变量
+#   VC5_RENEW_APPROVER_HELD（不再导出），直到 canonical 阶段才放回环境；之前的阶段（外部门禁注入、start、seal、accept）的子进程环境里一律没有它。
 # 用法：[VC5_RENEW_APPROVER='批准人及依据'] ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
 set -Eeuo pipefail
 PHASE_CONTEXT_ARGS=(--mode paths)
+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}
+unset VC5_RENEW_APPROVER
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 vc5_require_admission
 # 运行一个过滤输出的阶段：<阶段名> <保留行的 grep -E 模式> <命令…>。输出边跑边过滤（进度仍实时进 vc5-all.out），同时原样落盘到
@@ -75,6 +81,8 @@ test "$ACCEPT_READY" = 1
 ls "$NEWDIR/control/vc/" | tr "\n" " "; echo
 if [ -n "$CT_VC5_CANONICAL_SCRIPT" ]; then
   # 目标平台门禁（accept 内）刚结束：准入批准件与管理令牌可能已在这两个小时里过期，canonical 前先守一次（不通过就续签或明确报错，不再静默退出）。
+  # 续签批准人到这里才放回环境（准入守卫与 canonical 阶段需要；此前所有阶段的子进程环境里都没有它，见文件头说明）。
+  if [ -n "$VC5_RENEW_APPROVER_HELD" ]; then export VC5_RENEW_APPROVER="$VC5_RENEW_APPROVER_HELD"; fi
   vc5_admission_guard canonical
   echo "=== canonical 交接 $(utc_now)"; vc5_stage canonical "review_sha256|CLI preview|一致|plan ->|===|rc=|actions:|checkpoint|import-receipt|canonical latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败" bash "$DRV/$CT_VC5_CANONICAL_SCRIPT" "$ATT"
 else
