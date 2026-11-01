@@ -512,6 +512,19 @@ else:
 ''', encoding="utf-8")
 
 
+def _use_claude_client_table(driver: Path) -> None:
+    """把驱动目录里的客户端表换成“本轮客户端是 Claude”的版本：只改 client_table.py 命令行 ``shell`` 输出里的 ``CT_CLIENT=codex`` → ``CT_CLIENT=claude``
+    （lib.sh 靠这条命令取 CT_ 表项），其余键值与被 parse_env.py 当模块加载的部分一律不动。用来测“Claude 轮次保持原样”的分支
+    （Claude 的完整参数文件很重，这些分支只关心 lib.sh 给出的 CT_CLIENT）。"""
+
+    path = driver / "client_table.py"
+    text = path.read_text(encoding="utf-8")
+    old = 'sys.stdout.write("".join(line + "\\n" for line in shell_lines(os.environ.get(CLIENT_PARAM))))'
+    assert text.count(old) == 1, "client_table.py 的 shell 输出写法变了，请同步更新这个替身"
+    path.write_text(text.replace(old, 'sys.stdout.write("".join(line.replace("CT_CLIENT=codex", "CT_CLIENT=claude") + "\\n" for line in shell_lines(os.environ.get(CLIENT_PARAM))))'),
+                    encoding="utf-8")
+
+
 class _DriverFixture:
     """一个最小的"采集主机"布局：数据根、Campaign 目录、参数文件；供脚本级用例 source lib.sh。"""
 
@@ -585,10 +598,11 @@ class Vc5AllResumeTests(unittest.TestCase):
             (drv / name).chmod(0o700)
         return drv, calls
 
-    def _prepare_stage(self, fixture: _DriverFixture, *, compare_done: bool, acceptance_done: bool) -> None:
+    def _prepare_stage(self, fixture: _DriverFixture, *, compare_done: bool, acceptance_done: bool, with_gates: bool = True) -> None:
         gates = fixture.data_root / "control" / f"{fixture.new}-candidate-gates" / "local"
-        gates.mkdir(parents=True)
-        _write_json(gates / "full-regression.gate.json", {"exit_code": 0, "tree_head": "d" * 40, "host": "h", "architecture": "a", "started_at_utc": "s", "completed_at_utc": "e"})
+        if with_gates:   # 缺省：外部门禁已注入（vc5-all 跳过注入分支）；with_gates=False 时由用例自己准备本地门禁，走注入分支
+            gates.mkdir(parents=True)
+            _write_json(gates / "full-regression.gate.json", {"exit_code": 0, "tree_head": "d" * 40, "host": "h", "architecture": "a", "started_at_utc": "s", "completed_at_utc": "e"})
         (fixture.runroot / "vc5-run-batch.out").write_text("rc=0\nRUN_BATCH_DONE 2026-09-22T00:00:00Z\n", encoding="utf-8")
         attempt = fixture.newdir / "candidates" / fixture.cand / "attempts" / "20260922T000000Z-0123456789abcdef"
         attempt.mkdir(parents=True)
@@ -773,6 +787,135 @@ class Vc5AllResumeTests(unittest.TestCase):
                 result = _run(probe, env={"VC4_GATE_SCOPE": "auto"})
                 self.assertEqual(result.stdout.strip(), "approver=<unset> explicit=auto", "用例显式给的变量照常传下去")
         self.assertEqual(dict(os.environ), before, "只复制不改全局环境，退出补丁后与进入前完全一致，无需另行还原")
+
+    # ---- Codex 升级工具优化第 2 项 S3：vc5-all 对本地 full-regression 门禁筛选标记（client_selection）的放行／拒绝判定 ----
+
+    OWNERSHIP_TABLE = '{"schema_version": "unit-ownership/v1", "modules": {"tools.official_client_capture.tests.test_x": {"owner": "codex"}}}\n'
+
+    def _inject_local_gate(self, root: Path, fixture: _DriverFixture, selection_for) -> tuple[Path, Path, dict[str, str]]:
+        """准备“外部门禁注入”分支：RUNROOT/local-gates 的六件套（full-regression.gate.json 带 ``selection_for(dc, 归属表摘要)`` 给出的标记，None 表示全集）、
+        B/test-tree（HEAD=DC，DC 提交里有归属表；工作区里的归属表另外改过，证明读的是提交里的对象）、不做事的 chown 桩（用例不是 root）。
+        返回（驱动目录, 调用日志, 带 chown 桩的 PATH 的环境）。"""
+
+        tree = fixture.candidate_dir / "test-tree"
+        table = tree / "tools" / "ci" / "unit_ownership.json"
+        table.parent.mkdir(parents=True)
+        _git(tree, "init", "-q", "-b", "main")
+        table.write_text(self.OWNERSHIP_TABLE, encoding="utf-8")
+        _git(tree, "add", "-A")
+        _git(tree, "commit", "-q", "-m", "dc")
+        dc = _git(tree, "rev-parse", "HEAD")
+        table.write_text("工作区里被改过，判定不看工作区\n", encoding="utf-8")
+        fixture.env_file.write_text(fixture.env_file.read_text(encoding="utf-8").replace('DC="' + "d" * 40 + '"', f'DC="{dc}"'), encoding="utf-8")
+        owner_sha = hashlib.sha256(self.OWNERSHIP_TABLE.encode()).hexdigest()
+        local = fixture.runroot / "local-gates"
+        local.mkdir(mode=0o700)
+        gate = {"gate_id": "full-regression", "command": ["make", "test"], "exit_code": 0, "tree_head": dc, "host": "h", "architecture": "a",
+                "started_at_utc": "s", "completed_at_utc": "e"}
+        selection = selection_for(dc, owner_sha)
+        if selection is not None:
+            gate["client_selection"] = selection
+        for gate_id in ("check-egress-spec", "full-regression"):
+            _write_json(local / f"{gate_id}.gate.json", gate if gate_id == "full-regression" else {"gate_id": gate_id, "exit_code": 0, "tree_head": dc})
+            (local / f"{gate_id}.stdout.log").write_text("", encoding="utf-8")
+            (local / f"{gate_id}.stderr.log").write_text("", encoding="utf-8")
+        drv, calls = self._stub_driver(root, fixture, accept_creates_result=True)
+        stub_bin = root / "stubbin"
+        stub_bin.mkdir(mode=0o700)
+        (stub_bin / "chown").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        (stub_bin / "chown").chmod(0o700)
+        return drv, calls, {**fixture.env, "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}"}
+
+    @staticmethod
+    def _marker(dc: str, owner_sha: str, **override) -> dict:
+        marker = {"gate_scope": "client-plan", "client": "codex", "base_commit": "b" * 40, "head_commit": dc, "selection_sha256": "5" * 64,
+                  "ownership_sha256": owner_sha, "include_claude": False, "base_release_tags": ["v0.2.18-6"], "base_is_release": True,
+                  "skipped_modules": ["tools.x"], "modules_total": 431, "modules_skipped": 151, "modules_pulled": 12, "advisories": 0}
+        marker.update(override)
+        return marker
+
+    def _run_with_local_gate(self, selection_for, *, client: str = "codex", allow: str = "") -> tuple[subprocess.CompletedProcess[str], str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls, env = self._inject_local_gate(root, fixture, selection_for)
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True, with_gates=False)
+            if client == "claude":
+                _use_claude_client_table(drv)
+            extra = {"VC5_ALLOW_SUBSET_LOCAL_GATES": allow} if allow else {}
+            result = _run(drv / "vc5-all.sh", env={**env, **extra}, cwd=root)
+            return result, calls.read_text(encoding="utf-8")
+
+    def test_a_full_set_local_gate_without_the_marker_is_accepted_exactly_as_before(self) -> None:
+        result, calls = self._run_with_local_gate(lambda dc, sha: None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("full-regression(本机): 0 h a s e", result.stdout)
+        self.assertNotIn("client_selection", result.stdout, "全集门禁不带标记，也就没有摘要行")
+        self.assertIn("VC5_ALL_DONE", result.stdout)
+
+    def test_a_codex_client_plan_marker_with_the_matching_ownership_digest_is_accepted_and_summarised(self) -> None:
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("client_selection（本机门禁是 Codex 计划的子集，归属表摘要与 DC 树一致）", result.stdout)
+        self.assertIn("modules_total=431 modules_skipped=151 modules_pulled=12", result.stdout)
+        self.assertIn("gate_scope=client-plan", result.stdout)
+        self.assertIn("VC5_ALL_DONE", result.stdout)
+
+    def test_a_marker_whose_ownership_digest_differs_from_the_dc_tree_is_refused(self) -> None:
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, "0" * 63 + "1"))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("不一致", result.stdout + result.stderr)
+        self.assertIn("ownership_sha256", result.stdout + result.stderr)
+        self.assertNotIn("VC5_ALL_DONE", result.stdout)
+        self.assertNotIn("vc5-start.sh", calls, "拒绝发生在任何阶段派发之前")
+
+    def test_markers_that_are_not_a_codex_client_plan_are_refused(self) -> None:
+        cases = {
+            "gate_scope 不是 client-plan": lambda dc, sha: self._marker(dc, sha, gate_scope="auto"),
+            "标记里的客户端不是 codex": lambda dc, sha: self._marker(dc, sha, client="claude"),
+            "缺 ownership_sha256": lambda dc, sha: {k: v for k, v in self._marker(dc, sha).items() if k != "ownership_sha256"},
+            "ownership_sha256 不是 64 位十六进制": lambda dc, sha: self._marker(dc, sha, ownership_sha256="abc"),
+            "标记不是对象": lambda dc, sha: "client-plan",
+        }
+        for label, selection_for in cases.items():
+            with self.subTest(label):
+                result, calls = self._run_with_local_gate(selection_for)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("放行条件", result.stdout + result.stderr)
+                self.assertNotIn("VC5_ALL_DONE", result.stdout)
+
+    def test_a_claude_round_keeps_refusing_any_marker_even_a_perfect_codex_one(self) -> None:
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha), client="claude")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("本轮客户端=claude", result.stdout + result.stderr)
+        self.assertIn("VC5_ALLOW_SUBSET_LOCAL_GATES=1", result.stdout + result.stderr, "拒绝口径与改造前相同：提示怎么确认接受")
+        self.assertNotIn("VC5_ALL_DONE", result.stdout)
+
+    def test_allow_subset_local_gates_keeps_its_old_meaning_of_accepting_any_marker(self) -> None:
+        """VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义：无条件接受带标记的本地门禁（哪怕归属表摘要对不上、哪怕不是 Codex 计划）。"""
+
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, "0" * 63 + "1", gate_scope="auto"), allow="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("按 VC5_ALLOW_SUBSET_LOCAL_GATES=1 接受", result.stdout)
+        self.assertIn("VC5_ALL_DONE", result.stdout)
+        result, calls = self._run_with_local_gate(lambda dc, sha: self._marker(dc, sha), client="claude", allow="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_failed_local_gate_is_still_refused_whatever_the_marker_says(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls_path, env = self._inject_local_gate(root, fixture, lambda dc, sha: self._marker(dc, sha))
+            gate_path = fixture.runroot / "local-gates" / "full-regression.gate.json"
+            gate = json.loads(gate_path.read_text(encoding="utf-8"))
+            gate["exit_code"] = 1
+            _write_json(gate_path, gate)
+            self._prepare_stage(fixture, compare_done=True, acceptance_done=True, with_gates=False)
+            result = _run(drv / "vc5-all.sh", env={**env, "VC5_ALLOW_SUBSET_LOCAL_GATES": "1"}, cwd=root)
+            self.assertNotEqual(result.returncode, 0, "门禁本身没过：带标记也不放行")
+            self.assertNotIn("VC5_ALL_DONE", result.stdout)
 
     def test_a_failing_canonical_stage_is_reported_with_its_exit_code_and_raw_tail(self) -> None:
         """canonical 阶段带着非零退出码结束、又没有任何匹配过滤模式的输出：以前 vc5-all 静默退出，现在必须打印阶段、退出码与未过滤输出的末行。"""
@@ -2705,7 +2848,8 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertEqual((args[args.index("--resume-from") + 1], args[args.index("--resume-series") + 1]), ("auto", "vc4"))
             binding = json.loads(Path(args[args.index("--resume-binding") + 1]).read_text(encoding="utf-8"))
             self.assertEqual(binding["extra"], {"vc4": {"candidate": c, "executed": dc, "receipt": receipt}}, "绑定写进候选、承接提交与收据")
-            self.assertNotIn("gate_scope_info", call["manifest"], "第二层缺省关：清单不带筛选信息，full-regression 是 make test 全集")
+            # Codex 缺省请求 auto（S3）；夹具的驱动目录里没有选择器，实际回退全集，所以 full-regression 仍是 make test 全集、门禁记录不带 client_selection。
+            self.assertEqual((call["manifest"]["gate_scope_info"]["requested"], call["manifest"]["gate_scope_info"]["applied"]), ("auto", "full"))
             gates = fixture.runroot / "local-gates"
             self.assertEqual(sorted(path.name for path in gates.iterdir()), sorted(
                 f"{gate}.{kind}" for gate in ("check-egress-spec", "full-regression") for kind in ("gate.json", "stdout.log", "stderr.log")))
@@ -2802,10 +2946,14 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertIn("ARM64_VC4_GATES_FAILED", result.stdout)
             self.assertTrue((fixture.runroot / "impl-logs" / "READY").is_file())
 
-    def test_vc4_resume_can_be_switched_off_and_the_second_layer_is_opt_in(self) -> None:
-        for name, extra, expect_resume, expect_scope in (("关闭续跑", {"VC4_RESUME": "off"}, False, False),
-                                                         ("第二层显式开启", {"VC4_GATE_SCOPE": "auto"}, True, True),
-                                                         ("环境豁免", {"VC4_RESUME_WAIVE_ENV": "换缓存目录", "VC4_RESUME_WAIVE_ENV_NAMES": "envvar:GOCACHE"}, True, False)):
+    def test_vc4_resume_can_be_switched_off_and_the_second_layer_follows_the_client(self) -> None:
+        """第二层范围缺省随客户端（Codex 升级工具优化第 2 项 S3）：Codex 缺省 auto，VC4_GATE_SCOPE=full 强制全集（此时清单不带筛选信息）。"""
+
+        for name, extra, expect_resume, expect_scope in (("关闭续跑", {"VC4_RESUME": "off"}, False, True),
+                                                         ("缺省（Codex 为 auto）", {}, True, True),
+                                                         ("显式 auto", {"VC4_GATE_SCOPE": "auto"}, True, True),
+                                                         ("显式 full 强制全集", {"VC4_GATE_SCOPE": "full"}, True, False),
+                                                         ("环境豁免", {"VC4_RESUME_WAIVE_ENV": "换缓存目录", "VC4_RESUME_WAIVE_ENV_NAMES": "envvar:GOCACHE"}, True, True)):
             with self.subTest(name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
                 root.chmod(0o700)
@@ -2819,8 +2967,131 @@ class Arm64GateScriptTests(unittest.TestCase):
                 self.assertEqual("gate_scope_info" in call["manifest"], expect_scope)
                 if "VC4_RESUME_WAIVE_ENV" in extra:
                     self.assertEqual(call["args"][call["args"].index("--resume-waive-env-names") + 1], "envvar:GOCACHE")
-                if expect_scope:
-                    self.assertIn("VC4_GATE_SCOPE=auto", result.stdout)
+                self.assertIn("VC4_GATE_SCOPE=auto" if expect_scope else "VC4_GATE_SCOPE=full", result.stdout)
+
+    # ---- Codex 升级工具优化第 2 项 S3：VC-4 缺省 Codex 子集、比对基点的来源 ----
+
+    @staticmethod
+    def _recording_entry_gates(root: Path, drv: Path) -> Path:
+        """入口门禁换成只记录命令行就退出 7 的替身：只看 arm64-vc4-gates.sh 传给它的范围参数（脚本随后因“入口门禁没有给出结论”退出 3）。"""
+
+        args_file = root / "entry-gates-args.txt"
+        (drv / "entry-gates.sh").write_text(f"#!/bin/bash\nprintf '%s\\n' \"$@\" > '{args_file}'\nexit 7\n", encoding="utf-8")
+        (drv / "entry-gates.sh").chmod(0o700)
+        return args_file
+
+    def _scope_arguments(self, *, client: str = "codex", extra: dict[str, str] | None = None, prepare=None) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        """跑一遍 VC-4 门禁，返回（结果，传给入口门禁替身的范围参数：--gate-scope 与 --select-base 及各自的取值，其余参数不返回）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            c, dc, receipt = self._vc4_chain(fixture, work)
+            args_file = self._recording_entry_gates(root, drv)
+            if client == "claude":
+                _use_claude_client_table(drv)
+            if prepare is not None:
+                prepare(fixture, work, root, c, dc)
+            result = _run(drv / "arm64-vc4-gates.sh", env={**env, **(extra or {})}, cwd=root)
+            args = args_file.read_text(encoding="utf-8").splitlines() if args_file.exists() else []
+            picked: list[str] = []
+            for flag in ("--gate-scope", "--select-base"):
+                if flag in args:
+                    picked += [flag, args[args.index(flag) + 1]]
+            self._last = {"c": c, "dc": dc}
+            return result, picked
+
+    def test_vc4_gates_ask_for_the_codex_subset_by_default_and_the_full_set_for_other_clients(self) -> None:
+        result, picked = self._scope_arguments()
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertEqual(picked, ["--gate-scope", "auto"], "Codex 缺省 auto，没有后台验证结论就不给 --select-base（由入口门禁取最近的发版 tag）")
+        self.assertIn("VC4_GATE_SCOPE=auto（codex 缺省）", result.stdout)
+        self.assertIn("没有可用的后台验证结论，不给 --select-base", result.stdout)
+        result, picked = self._scope_arguments(client="claude")
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertEqual(picked, [], "Claude 轮次缺省全集：不带 --gate-scope")
+        self.assertIn("VC4_GATE_SCOPE=full——本次 make test 保持全集（claude 缺省）", result.stdout)
+
+    def test_vc4_gate_scope_full_forces_the_full_set_and_auto_forces_the_subset(self) -> None:
+        result, picked = self._scope_arguments(extra={"VC4_GATE_SCOPE": "full", "VC4_SELECT_BASE": "a" * 40})
+        self.assertEqual((result.returncode, picked), (3, []), result.stdout + result.stderr)
+        self.assertIn("VC4_SELECT_BASE 被忽略", result.stdout)
+        self.assertIn("VC4_GATE_SCOPE 显式给定", result.stdout)
+        result, picked = self._scope_arguments(client="claude", extra={"VC4_GATE_SCOPE": "auto"})
+        self.assertEqual((result.returncode, picked), (3, ["--gate-scope", "auto"]), "显式 auto 在任何客户端都照传（入口门禁自己对非 Codex 回退全集）")
+
+    def test_vc4_gate_scope_and_select_base_values_are_validated_before_anything_runs(self) -> None:
+        for extra, needle in (({"VC4_GATE_SCOPE": "client-plan"}, "VC4_GATE_SCOPE 只认 auto 或 full"),
+                              ({"VC4_GATE_SCOPE": "AUTO"}, "VC4_GATE_SCOPE 只认 auto 或 full"),
+                              ({"VC4_SELECT_BASE": "abc123"}, "VC4_SELECT_BASE 必须是 40 位小写提交"),
+                              ({"VC4_SELECT_BASE": "A" * 40}, "VC4_SELECT_BASE 必须是 40 位小写提交")):
+            with self.subTest(extra=extra):
+                result, picked = self._scope_arguments(extra=extra)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(needle, result.stderr)
+                self.assertEqual(picked, [], "用法错误在任何副作用之前退出，入口门禁没被调用")
+                self.assertNotIn("ARM64_VC4_GATES_ABORTED", result.stdout)
+
+    def test_an_explicit_select_base_wins_over_the_background_validation_records(self) -> None:
+        explicit = "ab" * 20
+
+        def records(fixture, work, root, c, dc) -> None:
+            self._write_bgv(fixture, "aaaaaaaaaaaa-111111111111.json", commit=c, completed="2026-10-31T10:00:00Z")
+
+        result, picked = self._scope_arguments(extra={"VC4_SELECT_BASE": explicit}, prepare=records)
+        self.assertEqual((result.returncode, picked), (3, ["--gate-scope", "auto", "--select-base", explicit]), result.stdout + result.stderr)
+        self.assertIn("VC4_SELECT_BASE 显式给定", result.stdout)
+
+    @staticmethod
+    def _write_bgv(fixture: _DriverFixture, name: str, *, commit: str, completed: str = "", status: str = "passed", raw: str | None = None) -> None:
+        directory = fixture.runroot / "background-validation"
+        directory.mkdir(exist_ok=True)
+        text = raw if raw is not None else json.dumps({"schema_version": "background-validation/v1", "commit": commit, "status": status,
+                                                        **({"completed_at_utc": completed} if completed else {})})
+        (directory / name).write_text(text, encoding="utf-8")
+
+    def test_the_default_select_base_is_the_latest_passed_background_validation_that_is_a_proper_ancestor_of_dc(self) -> None:
+        """缺省基点：本轮 background-validation/*.json 里 status=passed 且提交是 DC 真祖先的最近一份（按 completed_at_utc）；
+        失败的、DC 自己、非祖先的、对象不在测试树里的、读不出来的、*.core-deviation.json 一律不取。"""
+
+        picks: dict[str, str] = {}
+
+        def records(fixture, work, root, c, dc) -> None:
+            main_tip = _git(work, "rev-parse", "main")
+            # 侧枝提交：对象在历史树里（所以 C 的测试树里也有），但不是 DC 的祖先。
+            _git(work, "checkout", "-q", "-b", "side", "main")
+            (work / "side.txt").write_text("侧枝\n", encoding="utf-8")
+            _git(work, "add", "-A")
+            _git(work, "commit", "-q", "--no-verify", "-m", "side")
+            side = _git(work, "rev-parse", "HEAD")
+            _git(work, "checkout", "-q", "codex/x")
+            _git(fixture.data_root / "candidates" / "hist", "fetch", "-q", str(work), "side:refs/heads/side-for-test")
+            picks.update(main_tip=main_tip, side=side)
+            write = lambda *a, **k: self._write_bgv(fixture, *a, **k)   # noqa: E731
+            write("111111111111-aaaaaaaaaaaa.json", commit=main_tip, completed="2026-10-30T10:00:00Z")      # 合格但较旧
+            write("222222222222-bbbbbbbbbbbb.json", commit=c, completed="2026-10-31T10:00:00Z")             # 合格且最近：应被选中
+            write("333333333333-cccccccccccc.json", commit=side, completed="2026-11-01T00:00:00Z")          # 更新，但不是 DC 的祖先
+            write("444444444444-dddddddddddd.json", commit=dc, completed="2026-11-01T01:00:00Z")            # DC 自己
+            write("555555555555-eeeeeeeeeeee.json", commit=c, completed="2026-11-02T00:00:00Z", status="failed")   # 没通过
+            write("666666666666-ffffffffffff.json", commit="", raw="{这不是 json")                           # 读不出来
+            write("777777777777-000000000000.json", commit="e" * 40, completed="2026-11-03T00:00:00Z")      # 对象不在测试树里
+            write("888888888888-111111111111.core-deviation.json", commit=main_tip, completed="2026-11-04T00:00:00Z")   # 附属文件
+            (fixture.runroot / "background-validation" / "attached").mkdir()                                  # 子目录不扫
+            self._write_bgv(fixture, "attached/999999999999-222222222222.json", commit=side, completed="2026-11-05T00:00:00Z")
+
+        result, picked = self._scope_arguments(prepare=records)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertEqual(picked, ["--gate-scope", "auto", "--select-base", self._last["c"]], result.stdout)
+        self.assertIn("本轮后台验证结论 222222222222-bbbbbbbbbbbb.json（status=passed，完成于 2026-10-31T10:00:00Z，是 DC 的祖先）", result.stdout)
+
+    def test_without_a_usable_background_validation_record_no_select_base_is_given(self) -> None:
+        def only_unusable(fixture, work, root, c, dc) -> None:
+            self._write_bgv(fixture, "111111111111-aaaaaaaaaaaa.json", commit=c, status="failed")
+            self._write_bgv(fixture, "222222222222-bbbbbbbbbbbb.json", commit="", raw="[]")
+
+        result, picked = self._scope_arguments(prepare=only_unusable)
+        self.assertEqual((result.returncode, picked), (3, ["--gate-scope", "auto"]), result.stdout + result.stderr)
 
     def test_entry_gates_hand_the_resume_arguments_to_the_executor_and_register_the_deployment_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

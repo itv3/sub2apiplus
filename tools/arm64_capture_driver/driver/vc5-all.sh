@@ -12,6 +12,10 @@
 #   脚本带着非零退出码静默结束，流水线约 20 分钟后才报“进程已消失”。现在每个阶段失败都会先打印 VC5_ALL_STAGE_FAILED（阶段名、退出码、未过滤的完整输出落盘路径与末 8 行），
 #   再以同一退出码退出；目标平台门禁结束后、canonical 前先做准入守卫（vc5_admission_guard，lib.sh）：准入消费不通过时，启动前设了 VC5_RENEW_APPROVER
 #   就自动续签管理令牌（只续令牌），没设就打印 VC5_ADMISSION_GUARD_FAILED 与处理办法后退出 3。
+# 本地门禁的筛选标记（Codex 升级工具优化第 2 项 S3）：VC-4 门禁（arm64-vc4-gates.sh）在 Codex 轮次缺省按 Codex 计划筛选，full-regression.gate.json 带 client_selection
+#   标记。外部门禁注入时对带标记的本地门禁：Codex 轮次、标记里 client=codex、gate_scope=client-plan、ownership_sha256 与 DC 树（$B/test-tree 的 DC 提交）里
+#   tools/ci/unit_ownership.json 的摘要一致时放行，并打印 client_selection 摘要；其余（含 Claude 轮次、归属表摘要不一致）拒绝，VC5_ALLOW_SUBSET_LOCAL_GATES=1
+#   的旧语义不变（无条件接受带标记的本地门禁）。不带标记的全集门禁照旧。
 # 续签批准人只在 canonical 阶段才导出（Codex 升级工具优化第 1 项）：起跑时传进来的 VC5_RENEW_APPROVER 只有 canonical 前的准入守卫要用，
 #   但环境变量会一路继承给 seal、accept 的所有子进程——目标平台门禁（accept 内的 make test）里的 test_arm64_capture_driver、test_arm64_pipeline_scripts
 #   不封闭进程环境，读到它就红（0.166 带 --approver 起 VC-5，目标平台门禁白跑两次约 3 小时）。所以一进脚本就把它收回成脚本私有变量
@@ -40,6 +44,39 @@ vc5_stage() {
     return "$rc"
   fi
 }
+# 注入的本地 full-regression 门禁核对：<阶段> gate｜tree。gate（树还没核时）：退出码 0、树头是 DC；带 client_selection 标记的只放行 VC5_ALLOW_SUBSET_LOCAL_GATES=1，
+# 或 Codex 轮次 + 标记 client=codex／gate_scope=client-plan／ownership_sha256 是 64 位十六进制。tree（DC 树就位之后）：带标记且没设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 时，
+# 标记里的 ownership_sha256 必须等于 DC 提交里 tools/ci/unit_ownership.json 的 sha256（读 git 对象，不看工作区），并打印 client_selection 摘要。
+vc5_check_local_gate() {
+  python3 -B - "$1" "$G/local/full-regression.gate.json" "$DC" "${VC5_ALLOW_SUBSET_LOCAL_GATES:-}" "$CT_CLIENT" "$B/test-tree" <<'PYGATE'
+import hashlib, json, re, subprocess, sys
+phase, path, dc, allow, client, tree = sys.argv[1:7]
+with open(path, encoding="utf-8") as handle:
+    d = json.load(handle)
+selection = d.get("client_selection")
+refused = "本地 full-regression 是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1"
+if phase == "gate":
+    assert d["exit_code"] == 0 and d["tree_head"] == dc, d
+    if selection is not None and allow != "1":
+        ok = (client == "codex" and isinstance(selection, dict) and selection.get("client") == "codex" and selection.get("gate_scope") == "client-plan"
+              and re.fullmatch(r"[0-9a-f]{64}", str(selection.get("ownership_sha256") or "")) is not None)
+        if not ok:
+            sys.exit(f"{refused}（放行条件：Codex 轮次、标记 client=codex、gate_scope=client-plan、ownership_sha256 有效；本轮客户端={client or '未知'}，标记={json.dumps(selection, ensure_ascii=False)[:300]}）")
+    print("full-regression(本机):", d["exit_code"], d["host"], d["architecture"], d["started_at_utc"], d["completed_at_utc"])
+elif selection is not None:
+    if allow != "1":
+        try:
+            blob = subprocess.run(["git", "-C", tree, "show", f"{dc}:tools/ci/unit_ownership.json"], capture_output=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError) as error:
+            sys.exit(f"{refused}（读不到 DC 树里的归属表 {tree} {dc}:tools/ci/unit_ownership.json：{error}）")
+        actual = hashlib.sha256(blob).hexdigest()
+        if selection["ownership_sha256"] != actual:
+            sys.exit(f"{refused}（标记的 ownership_sha256 {selection['ownership_sha256'][:16]}… 与 DC 树的归属表 {actual[:16]}… 不一致：筛选用的不是这个提交的归属表）")
+    keys = ("client", "gate_scope", "base_commit", "head_commit", "modules_total", "modules_skipped", "modules_pulled", "selection_sha256", "ownership_sha256")
+    print("client_selection（本机门禁是 Codex 计划的子集" + ("，归属表摘要与 DC 树一致" if allow != "1" else "，按 VC5_ALLOW_SUBSET_LOCAL_GATES=1 接受") + "）:",
+          " ".join(f"{key}={str(selection.get(key))[:16] if key.endswith('sha256') or key.endswith('commit') else selection.get(key)}" for key in keys))
+PYGATE
+}
 G=$GATE_ROOT
 LOCAL_GATES=$RUNROOT/local-gates
 if [ ! -f "$G/local/full-regression.gate.json" ]; then
@@ -47,8 +84,9 @@ if [ ! -f "$G/local/full-regression.gate.json" ]; then
   mkdir -p "$G/local"; chmod 700 "$G" "$G/local"
   for f in check-egress-spec.gate.json check-egress-spec.stdout.log check-egress-spec.stderr.log full-regression.gate.json full-regression.stdout.log full-regression.stderr.log; do test -f "$LOCAL_GATES/$f"; cp -f "$LOCAL_GATES/$f" "$G/local/"; done
   chown root:root "$G/local"/*; chmod 600 "$G/local"/*
-  python3 -c "import json; d=json.load(open('$G/local/full-regression.gate.json')); assert d['exit_code']==0 and d['tree_head']=='$DC', d; assert d.get('client_selection') is None or '${VC5_ALLOW_SUBSET_LOCAL_GATES:-}'=='1', '本地 full-regression 是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1'; print('full-regression(本机):', d['exit_code'], d['host'], d['architecture'], d['started_at_utc'], d['completed_at_utc'])"
+  vc5_check_local_gate gate
   test "$(git -C $B/test-tree rev-parse HEAD)" = "$DC" || bash "$DRV/gates.sh" prepare "$DC" 2>&1 | tail -n 3
+  vc5_check_local_gate tree
 fi
 if [ ! -f "$RUNROOT/vc5-run-batch.out" ]; then
   echo "=== VC-5 start $(utc_now)"; bash "$DRV/$CT_VC5_START_SCRIPT" 2>&1 | tail -n 12 | cut -c1-240; test -f "$RUNROOT/vc5-run-batch.out"

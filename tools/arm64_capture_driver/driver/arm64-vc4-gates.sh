@@ -8,8 +8,12 @@
 #     make check-egress-spec 本身，不再跑两遍），产物由 vc4_gate_records.py 改写成原来的六件套与实现测试日志，文件名与 gate.json 字段不变；
 #     记录库与 Go 缓存跨次运行保留（$WORK/entry-work、$(dirname $D)/unit-records），所以：
 #       - 第一层（同提交）：重跑本脚本时 DC 不变、部署绑定不变，上一轮已通过且记录完整的单元直接沿用，只重跑失败、未完成的单元（缺省开）；
-#       - 第二层（换提交）：缺省关——VC-4／VC-5 的 make test 保持全集（子集不能冒充 full-regression）。要用就显式设 VC4_GATE_SCOPE=auto，
-#         此时 full-regression.gate.json 带 client_selection 标记，vc5-all.sh 默认拒绝带标记的本地门禁（设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 才放行）；
+#       - 第二层（换提交）：范围缺省随客户端（Codex 升级工具优化第 2 项 S3）——Codex 缺省 auto（按 Codex 计划筛选，Claude 重单元不再白跑，0.166 回放省约 61 分钟），
+#         其余客户端缺省 full（Claude 没有计划，make test 保持全集）。VC4_GATE_SCOPE=full 强制全集，=auto 强制筛选；别的值拒绝（退出 2）。
+#         筛选时 full-regression.gate.json 带 client_selection 标记（子集不会冒充 make test 全集）；vc5-all.sh 对带标记的本地门禁：Codex 轮次、gate_scope=client-plan、
+#         ownership_sha256 与 DC 树的归属表一致时放行并打印标记摘要，其余（含 Claude 轮次）默认拒绝，设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变。
+#         比对基点（--select-base）：VC4_SELECT_BASE 显式给 40 位提交；没给就取本轮 $RUNROOT/background-validation/*.json 里 status=passed、提交是 DC 真祖先的最近一份
+#         （按 completed_at_utc 取最近）的提交；读不到就不给，由入口门禁自己取最近的发版 tag（或第二层续跑的基点）。选择器出错一律回退全集，不会因此变红；
 #       - 环境修复不影响已通过单元时，用 VC4_RESUME_WAIVE_ENV="理由" 与 VC4_RESUME_WAIVE_ENV_NAMES="条目名,…" 显式豁免（记入清单，点名之外的差异仍拒绝沿用）；
 #       - VC4_RESUME=off 关闭续跑沿用（整轮全集重跑）；
 #   * C（候选提交自身）上只执行 make check-egress-spec-ci 作交叉核对（impl-logs/cross-check/check-egress-spec.C-only.local.log），
@@ -41,6 +45,11 @@ if ! [[ "$RECEIPT" =~ ^docs/egress/maintenance/[A-Za-z0-9._-]+\.json$ ]]; then e
 if [[ "$BUNDLE" != /* ]] || [ -L "$BUNDLE" ] || [ ! -f "$BUNDLE" ]; then echo "BUNDLE 必须是已存在的普通文件（绝对路径）：$BUNDLE" >&2; exit 2; fi
 if ! [[ "$BUNDLE_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then echo "BUNDLE_BRANCH 只允许字母、数字与 ._/-：$BUNDLE_BRANCH" >&2; exit 2; fi
 if [[ "$NM_DIR" != /* ]]; then echo "前端依赖目录必须是绝对路径：$NM_DIR" >&2; exit 2; fi
+# 第二层范围：缺省随客户端（Codex 为 auto，其余为 full），VC4_GATE_SCOPE 显式给 auto／full 覆盖；VC4_SELECT_BASE 显式给比对基点（40 位小写提交）。
+VC4_SCOPE_DEFAULT=full; if [ "$CT_CLIENT" = codex ]; then VC4_SCOPE_DEFAULT=auto; fi
+VC4_SCOPE="${VC4_GATE_SCOPE:-$VC4_SCOPE_DEFAULT}"
+case "$VC4_SCOPE" in auto|full) ;; *) echo "VC4_GATE_SCOPE 只认 auto 或 full：${VC4_GATE_SCOPE}（缺省随客户端：codex=auto，其余=full）" >&2; exit 2 ;; esac
+if [ -n "${VC4_SELECT_BASE:-}" ] && ! [[ "$VC4_SELECT_BASE" =~ ^[0-9a-f]{40}$ ]]; then echo "VC4_SELECT_BASE 必须是 40 位小写提交：$VC4_SELECT_BASE" >&2; exit 2; fi
 WORK="$RUNROOT/arm64-vc4-gates"; TC="$WORK/wt-C"; PYCD="$WORK/pycache-D"; PYCC="$WORK/pycache-C"; EGW="$WORK/entry-work"; TD="$EGW/test-tree"
 GATES="$RUNROOT/local-gates"; IMPL="$RUNROOT/impl-logs"; OUT=""; HEARTBEAT_PID=""
 on_error() {
@@ -94,6 +103,35 @@ tree_status() { git -C "$1" status --porcelain --untracked-files=all 2>&1 | head
 echo "wt-C HEAD=$(git -C "$TC" rev-parse HEAD) status=[$(tree_status "$TC")]"
 echo "=== 树外字节码缓存（C；DC 的缓存由入口门禁自己建）$(utc_now)"
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYCC" "$TC/tools" | tail -n 1 | cut -c1-300
+# 第二层缺省比对基点：本轮后台验证结论（$RUNROOT/background-validation/<提交前 12 位>-<部署摘要前 12 位>.json）里 status=passed、提交是 DC 真祖先
+# （不含 DC 自己）的，取 completed_at_utc 最近的一份（时间相同或缺失再比文件修改时间）。读不到、没有合格的、解析不了一律什么都不打印——此时不给 --select-base，
+# 由入口门禁自己取最近的发版 tag。打印一行 `<40 位提交> <结论文件名> <完成时间>`。跳过 *.core-deviation.json 与子目录（preflight／attached 等）。
+vc4_default_select_base() {
+  python3 -B - "$RUNROOT/background-validation" "$TC" "$DC" <<'PYBASE' || true
+import glob, json, os, re, subprocess, sys
+root, tree, dc = sys.argv[1:4]
+rows = []
+for path in glob.glob(os.path.join(root, "*.json")):
+    if path.endswith(".core-deviation.json"):
+        continue
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        modified = os.path.getmtime(path)
+    except (OSError, ValueError):
+        continue
+    commit = data.get("commit") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("status") != "passed" or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit) or commit == dc:
+        continue
+    rows.append((str(data.get("completed_at_utc") or ""), modified, commit, os.path.basename(path)))
+for completed, _modified, commit, name in sorted(rows, reverse=True):
+    # 提交必须在 C 的测试树里（对象缺失时 merge-base 退出 128）而且是 DC 的祖先（退出 0）。
+    done = subprocess.run(["git", "-C", tree, "merge-base", "--is-ancestor", commit, dc], capture_output=True)
+    if done.returncode == 0:
+        print(commit, name, completed or "-")
+        break
+PYBASE
+}
 # 命令替换里一律 `|| true`：set -E 会把 ERR 陷阱带进命令替换，工具缺失或 head 截断触发的 SIGPIPE 不能把中止信息混进日志。
 host_line() { echo "host=$(uname -srm)"; echo "go: $(go version 2>&1 || true)"; echo "python: $(python3 --version 2>&1 || true)"; echo "node: $(node --version 2>&1 || true)"; }
 ISOLATION="采集主机隔离测试树（私有挂载命名空间里只读 tmpfs 遮住 /root/oauth-capture，树外只读字节码缓存）"
@@ -106,10 +144,25 @@ if [ "${VC4_RESUME:-on}" != off ]; then
   EG_ARGS+=(--resume-from auto --resume-series vc4 --resume-binding-extra "$BINDING_EXTRA")
   if [ -n "${VC4_RESUME_WAIVE_ENV:-}" ]; then EG_ARGS+=(--resume-waive-env "$VC4_RESUME_WAIVE_ENV" --resume-waive-env-names "${VC4_RESUME_WAIVE_ENV_NAMES:?环境豁免要点名变化的指纹条目（VC4_RESUME_WAIVE_ENV_NAMES）}"); fi
 fi
-# 第二层默认关：VC-4 的 make test 保持全集；显式 VC4_GATE_SCOPE=auto 才按客户端筛选（见文件头）。
-if [ "${VC4_GATE_SCOPE:-full}" = auto ]; then
-  echo "注意：VC4_GATE_SCOPE=auto——本次 full-regression 可能是 Codex 计划的子集（gate.json 带 client_selection），vc5-all.sh 默认拒绝"
+# 第二层范围（见文件头）：auto 时按客户端筛选，full-regression 可能是 Codex 计划的子集（gate.json 带 client_selection）。
+VC4_SCOPE_SOURCE="${CT_CLIENT} 缺省"; if [ -n "${VC4_GATE_SCOPE:-}" ]; then VC4_SCOPE_SOURCE="VC4_GATE_SCOPE 显式给定"; fi
+if [ "$VC4_SCOPE" = auto ]; then
+  SELECT_BASE="${VC4_SELECT_BASE:-}"; SELECT_BASE_NOTE="VC4_SELECT_BASE 显式给定"
+  if [ -z "$SELECT_BASE" ]; then
+    PICK=$(vc4_default_select_base || true)
+    if [ -n "$PICK" ]; then
+      read -r SELECT_BASE PICK_FILE PICK_AT <<< "$PICK"
+      SELECT_BASE_NOTE="本轮后台验证结论 ${PICK_FILE}（status=passed，完成于 ${PICK_AT}，是 DC 的祖先）"
+    else
+      SELECT_BASE_NOTE="没有可用的后台验证结论，不给 --select-base，由入口门禁取最近的发版 tag"
+    fi
+  fi
+  echo "注意：VC4_GATE_SCOPE=auto（${VC4_SCOPE_SOURCE}）——本次 full-regression 可能是 Codex 计划的子集（gate.json 带 client_selection）；vc5-all.sh 只放行 Codex 轮次、client-plan、归属表摘要与 DC 树一致的标记"
+  echo "比对基点：${SELECT_BASE:-（未给）}（${SELECT_BASE_NOTE}）"
   EG_ARGS+=(--gate-scope auto)
+  if [ -n "$SELECT_BASE" ]; then EG_ARGS+=(--select-base "$SELECT_BASE"); fi
+else
+  echo "VC4_GATE_SCOPE=full——本次 make test 保持全集（${VC4_SCOPE_SOURCE}）${VC4_SELECT_BASE:+；VC4_SELECT_BASE 被忽略}"
 fi
 bash "$DRV/entry-gates.sh" "${EG_ARGS[@]}" "$BUNDLE" "$BUNDLE_BRANCH" "$DC" "$NM_DIR" || EG_RC=$?
 RUN_END=$(utc_now)

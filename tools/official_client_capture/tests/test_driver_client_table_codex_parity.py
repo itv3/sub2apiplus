@@ -1138,11 +1138,58 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 # >>> L1 驱动脚本维护登记常量（脚本生成，可重跑）
 # Codex 升级工具优化（opt-tools-1101，L1 线）改了下面这些被本模块钉住的驱动脚本：以改动前的主线头 cd028ceb78 为基线，代入 Codex 取值后
 # 只剩登记的几处，每处 Codex 下都等价或只在显式设置时才生效：
-# * vc5-all.sh：（第 1 项）起跑时传进来的 VC5_RENEW_APPROVER 一进脚本就收回成脚本私有变量，canonical 阶段才放回环境——不设置时行为不变。
+# * vc5-all.sh：（第 1 项）起跑时传进来的 VC5_RENEW_APPROVER 一进脚本就收回成脚本私有变量，canonical 阶段才放回环境——不设置时行为不变；
+#   （S3）注入本地 full-regression 门禁的核对改成函数 vc5_check_local_gate（原来的一行 python3 -c 拆成函数里的 heredoc）：不带 client_selection 标记的全集门禁
+#   核对与输出逐字不变；带标记的，Codex 轮次且 gate_scope=client-plan、ownership_sha256 与 DC 树归属表一致才放行并打印摘要，其余（含 Claude 轮次）仍按原口径拒绝，
+#   VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变；DC 树就位之后多一次 tree 阶段核对（不带标记时什么都不做）。
 L1_DRIVER_BASELINE = 'cd028ceb787cc7fa25ae266e992216a6ed069f30'
-L1_DRIVER_DIGESTS = {'vc5-all.sh': '41a85e2e2e692fb62c72a83687bc07ccb02bcd2e5e6b9bd22af3891cf83b32f9'}
+L1_DRIVER_DIGESTS = {'vc5-all.sh': 'e54f812537e4fee701e2d9aa209dbaba11001fa77d6fa4edc333e4aee8f6158d'}
 L1_DRIVER_RESIDUALS = {'vc5-all.sh': ['+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}',
                 '+unset VC5_RENEW_APPROVER',
+                '+vc5_check_local_gate() {',
+                '+  python3 -B - "$1" "$G/local/full-regression.gate.json" "$DC" "${VC5_ALLOW_SUBSET_LOCAL_GATES:-}" codex "$B/test-tree" '
+                "<<'PYGATE'",
+                '+import hashlib, json, re, subprocess, sys',
+                '+phase, path, dc, allow, client, tree = sys.argv[1:7]',
+                '+with open(path, encoding="utf-8") as handle:',
+                '+    d = json.load(handle)',
+                '+selection = d.get("client_selection")',
+                '+refused = "本地 full-regression 是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1"',
+                '+if phase == "gate":',
+                '+    assert d["exit_code"] == 0 and d["tree_head"] == dc, d',
+                '+    if selection is not None and allow != "1":',
+                '+        ok = (client == "codex" and isinstance(selection, dict) and selection.get("client") == "codex" and '
+                'selection.get("gate_scope") == "client-plan"',
+                '+              and re.fullmatch(r"[0-9a-f]{64}", str(selection.get("ownership_sha256") or "")) is not None)',
+                '+        if not ok:',
+                '+            sys.exit(f"{refused}（放行条件：Codex 轮次、标记 client=codex、gate_scope=client-plan、ownership_sha256 有效；本轮客户端={client or '
+                '\'未知\'}，标记={json.dumps(selection, ensure_ascii=False)[:300]}）")',
+                '+    print("full-regression(本机):", d["exit_code"], d["host"], d["architecture"], d["started_at_utc"], d["completed_at_utc"])',
+                '+elif selection is not None:',
+                '+    if allow != "1":',
+                '+        try:',
+                '+            blob = subprocess.run(["git", "-C", tree, "show", f"{dc}:tools/ci/unit_ownership.json"], capture_output=True, '
+                'check=True).stdout',
+                '+        except (OSError, subprocess.CalledProcessError) as error:',
+                '+            sys.exit(f"{refused}（读不到 DC 树里的归属表 {tree} {dc}:tools/ci/unit_ownership.json：{error}）")',
+                '+        actual = hashlib.sha256(blob).hexdigest()',
+                '+        if selection["ownership_sha256"] != actual:',
+                '+            sys.exit(f"{refused}（标记的 ownership_sha256 {selection[\'ownership_sha256\'][:16]}… 与 DC 树的归属表 {actual[:16]}… '
+                '不一致：筛选用的不是这个提交的归属表）")',
+                '+    keys = ("client", "gate_scope", "base_commit", "head_commit", "modules_total", "modules_skipped", "modules_pulled", '
+                '"selection_sha256", "ownership_sha256")',
+                '+    print("client_selection（本机门禁是 Codex 计划的子集" + ("，归属表摘要与 DC 树一致" if allow != "1" else "，按 VC5_ALLOW_SUBSET_LOCAL_GATES=1 接受") + '
+                '"）:",',
+                '+          " ".join(f"{key}={str(selection.get(key))[:16] if key.endswith(\'sha256\') or key.endswith(\'commit\') else '
+                'selection.get(key)}" for key in keys))',
+                '+PYGATE',
+                '+}',
+                '-  python3 -c "import json; d=json.load(open(\'$G/local/full-regression.gate.json\')); assert d[\'exit_code\']==0 and '
+                "d['tree_head']=='$DC', d; assert d.get('client_selection') is None or '${VC5_ALLOW_SUBSET_LOCAL_GATES:-}'=='1', '本地 full-regression "
+                "是按客户端筛选的子集（client_selection），不是 make test 全集；确认接受请设 VC5_ALLOW_SUBSET_LOCAL_GATES=1'; print('full-regression(本机):', d['exit_code'], "
+                'd[\'host\'], d[\'architecture\'], d[\'started_at_utc\'], d[\'completed_at_utc\'])"',
+                '+  vc5_check_local_gate gate',
+                '+  vc5_check_local_gate tree',
                 '+  if [ -n "$VC5_RENEW_APPROVER_HELD" ]; then export VC5_RENEW_APPROVER="$VC5_RENEW_APPROVER_HELD"; fi']}
 # <<< L1 驱动脚本维护登记常量
 # >>> T2 预检登记常量（脚本生成，可重跑）
