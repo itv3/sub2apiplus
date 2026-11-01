@@ -34,6 +34,13 @@ ALL_STAGES=(VC1 VC2 VC3 VC4 BGV VC5 VC6)
 ZERO_DIGEST=$(printf '%064d' 0)   # 占位摘要（全 0），不在源码里写 64 位字面量
 # 本阶段预计下限（分钟，计时账本剩余不足就拒绝起跑；缺省值取自上一版真实计时账本，可在 pipeline.env 用 PIPE_NEED_<阶段> 覆盖）
 declare -A NEED=( [VC1]=${PIPE_NEED_VC1:-90} [VC2]=${PIPE_NEED_VC2:-45} [VC3]=${PIPE_NEED_VC3:-5} [VC4]=${PIPE_NEED_VC4:-160} [BGV]=${PIPE_NEED_BGV:-120} [VC5]=${PIPE_NEED_VC5:-300} [VC6]=${PIPE_NEED_VC6:-60} )
+# 下限被拒（账本剩余 < 下限）时给调低建议用的“剩余步骤估计”（分钟，已含余量；估计值，不是默认值，缺省下限一个字都没改——Codex 升级工具优化第 7 项）。
+# 缺省下限是“从头跑这一阶段”的保守值，首批大头（VC-1 官方采集约 67 分钟、VC-5 的候选采集与 seal、门禁）做完之后账本剩余自然低于它，首次起跑就 STOPPED：
+#   0.166 的 VC-1 首批吃掉预算后账本剩 51 分钟 < 缺省 90，剩下只是封存预览＋批准＋重放（实测 5.5 分钟：11:58:14Z 起跑、12:03:43Z PASS），手工改 PIPE_NEED_VC1=30 重起；
+#   VC-5 目标平台门禁红过之后重起，账本剩 185 分钟 < 缺省 300，先后手工试了 PIPE_NEED_VC5=120、60。
+# 估计依据（0.166 实测）：VC-1 封存＋批准＋重放 30（实测 5.5，留余量）；VC-5 canonical 阶段 40（实测约 10 分钟）；accept（含目标平台门禁 85～100 分钟）加 canonical 150；
+#   seal 链（约 30 分钟）加 accept 加 canonical 190。按现场产物判进度：VC-1 看有没有等待封存的 attempt 或 vc-1-checkpoint；VC-5 看 run 批次是否结束、compare／acceptance 结果是否已在。
+declare -A REMAINING_ESTIMATE=( [VC1]=30 [VC5_RUN_DONE]=190 [VC5_COMPARE_DONE]=150 [VC5_ACCEPT_DONE]=40 )
 declare -A PHASE_OF=( [VC1]=VC-1 [VC2]=VC-2 [VC3]=VC-3 [VC4]=VC-4 [BGV]=VC-5 [VC5]=VC-5 [VC6]=VC-6 )
 
 MODE=start; FROM=VC1; TO=VC6; APPROVER=""; WAIT_HANDOFF=0; BGV_ARGS="--no-dryrun"; ATTACH_VC5=0
@@ -126,17 +133,37 @@ print(d["phase"], mins(d["execution_deadline_at_utc"]), mins(d["total_deadline_a
 PY
   )
 }
+# 下限调低建议：阶段的前序大头已做完时，按剩余步骤的估计给出具体建议值与命令；进度判断不了的阶段什么都不建议（打印空串）。绝不静默改下限，
+# 只打印建议，由调度者决定是否照做（调低理由要写进总账）。$1 阶段 $2 账本可用剩余分钟。
+need_hint() {
+  local stage=$1 rem=$2 est="" progress=""
+  case "${stage}" in
+    VC1)
+      if [ -n "$(ckpt 1)" ] || vc1_awaiting_attempt >/dev/null 2>&1; then est=${REMAINING_ESTIMATE[VC1]}; progress="VC-1 首批官方采集已跑完（只剩封存预览、批准、重放）"; fi ;;
+    VC5)
+      if [ -f "${NEWDIR}/acceptance/${CAND}/result.json" ]; then est=${REMAINING_ESTIMATE[VC5_ACCEPT_DONE]}; progress="accept 已完成（只剩 canonical 交接）"
+      elif [ -f "${NEWDIR}/comparisons/${CAND}/result.json" ]; then est=${REMAINING_ESTIMATE[VC5_COMPARE_DONE]}; progress="seal／compare 已完成（剩 accept，含目标平台门禁，和 canonical）"
+      elif grep -q '^RUN_BATCH_DONE ' "${RR}/vc5-run-batch.out" 2>/dev/null; then est=${REMAINING_ESTIMATE[VC5_RUN_DONE]}; progress="候选 run 批次已结束（剩 seal、accept、canonical）"; fi ;;
+  esac
+  [ -n "${est}" ] || return 0
+  if [ "${rem}" -ge "${est}" ]; then
+    echo "下限调低建议（估计，不是默认值）：${progress}，剩余步骤估计约 ${est} 分钟，账本剩余 ${rem} 分钟够用；确认后用 PIPE_NEED_${stage}=${est} bash ${PIPE_HOME}/vc-pipeline.sh start --from ${FROM} --to ${TO} 重起（--approver／--wait-handoff 照原样带上；调低理由写进总账）"
+  else
+    echo "下限调低建议：${progress}，剩余步骤估计约 ${est} 分钟，但账本只剩 ${rem} 分钟，调低下限也不够；先 deadline-extend 再重起"
+  fi
+}
 # 阶段截止检查：不够就 STOPPED（交调度者 deadline-extend，本脚本不自动延期）。检查模式 CHECKING=1 时只打印不退出。
 stage_time_check() { # $1 阶段
-  local info ph ex tot proj paused rem need=${NEED[$1]}
+  local info ph ex tot proj paused rem need=${NEED[$1]} hint=""
   info=$(deadline_info 2>/dev/null) || { [ "${CHECKING:-0}" = 1 ] && { echo "无法读计时账本"; return 2; }; stop "$1" "读不到计时账本（effective_deadlines 失败）"; }
   read -r ph ex tot proj paused <<<"${info}"
   rem=${tot}; [ "${proj}" -lt "${rem}" ] && rem=${proj}
   if [ "${ph}" = "${PHASE_OF[$1]}" ] && [ "${ex}" -lt "${rem}" ]; then rem=${ex}; fi
   TIME_TXT="账本阶段=${ph} 本阶段所需下限=${need}分 可用剩余=${rem}分（执行层 ${ex}／总 ${tot}／项目 ${proj}，暂停范围 ${paused}）"
   if [ "${paused}" != "-" ] || [ "${rem}" -lt "${need}" ]; then
-    [ "${CHECKING:-0}" = 1 ] && return 1
-    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期（批次执行期间 deadline-extend 会被设计内的互斥拒绝，每 30～60 秒重试同一条命令，批次间隙里 preview 与 apply 紧接着做）"
+    [ "${paused}" = "-" ] && hint=$(need_hint "$1" "${rem}")
+    [ "${CHECKING:-0}" = 1 ] && { TIME_TXT="${TIME_TXT}${hint:+；${hint}}"; return 1; }
+    stop "$1" "计时账本剩余不足或已暂停：${TIME_TXT}；请调度者按 DL-vc0-extend.md 第 5 节 deadline-extend，本脚本不自动延期（批次执行期间 deadline-extend 会被设计内的互斥拒绝，每 30～60 秒重试同一条命令，批次间隙里 preview 与 apply 紧接着做）${hint:+。${hint}}"
   fi
   return 0
 }

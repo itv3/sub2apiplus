@@ -1004,7 +1004,7 @@ class Vc5PrereqTests(unittest.TestCase):
                          [("accounts", 101, "credentials.plan"), ("api_keys", 2, "key")])
 
     def test_state_guards_and_cli_exit_codes(self) -> None:
-        argv = ["apply", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", str(self.backup)]
+        argv = ["apply", "--account", "90", "--group", "3", "--key", "3", "--capture-key", "131", "--backup-dir", str(self.backup)]
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(self.mod.main(argv, database=self.db), 0)
         self.assertTrue(json.loads(out.getvalue())["ok"])
@@ -1012,9 +1012,10 @@ class Vc5PrereqTests(unittest.TestCase):
             self.assertEqual(self.mod.main(argv, database=self.db), 3)
         self.assertIn("已应用过", err.getvalue())
         with contextlib.redirect_stdout(io.StringIO()):
+            # restore／verify／show 不需要采集 Key；带不带 --capture-key 都行
             self.assertEqual(self.mod.main(["verify", *argv[1:]], database=self.db), 1, "临时值还没恢复：逐列比较不通过")
-            self.assertEqual(self.mod.main(["restore", *argv[1:]], database=self.db), 0)
-            self.assertEqual(self.mod.main(["verify", *argv[1:]], database=self.db), 0)
+            self.assertEqual(self.mod.main(["restore", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", str(self.backup)], database=self.db), 0)
+            self.assertEqual(self.mod.main(["verify", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", str(self.backup)], database=self.db), 0)
             self.assertEqual(self.mod.main(["show", *argv[1:]], database=self.db), 0)
         fresh = Path(self._tmp.name) / "never-applied"
         with contextlib.redirect_stderr(io.StringIO()) as err:
@@ -1023,6 +1024,79 @@ class Vc5PrereqTests(unittest.TestCase):
         self.assertIn("没有应用记录", err.getvalue())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.mod.main(["show", "--account", "90", "--group", "3", "--key", "3", "--backup-dir", "rel"], database=self.db), 2)
+
+    # ---- Codex 升级工具优化第 7 项：--key 是“要临时关掉的另一把 Key”，不是采集 Key（0.166 误传采集 Key 132 把它关了） ----
+
+    def _apply_cli(self, *extra: str, key: str = "3") -> tuple[int, str, str]:
+        argv = ["apply", "--account", "90", "--group", "3", "--key", key, "--backup-dir", str(self.backup), *extra]
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            code = self.mod.main(argv, database=self.db)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_apply_refuses_when_the_key_to_close_is_the_capture_key_and_touches_nothing(self) -> None:
+        before = json.loads(json.dumps(self.db.tables))
+        code, _out, err = self._apply_cli("--capture-key", "131", key="131")
+        self.assertEqual(code, 2)
+        self.assertIn("就是采集 Key，拒绝", err)
+        self.assertIn("另一把 Key", err)
+        self.assertEqual(self.db.tables, before, "拒绝发生在碰库之前：库一行没动")
+        self.assertFalse(self.backup.exists(), "也不写备份目录")
+
+    def test_apply_refuses_when_it_does_not_know_the_capture_key(self) -> None:
+        """失败关闭：取不到采集 Key（没传 --capture-key、参数文件也没解析出来）时 apply 同样拒绝，不能默认“没人传错”。"""
+
+        before = json.loads(json.dumps(self.db.tables))
+        code, _out, err = self._apply_cli()
+        self.assertEqual(code, 2)
+        self.assertIn("不知道采集 Key", err)
+        self.assertIn("--capture-key", err)
+        self.assertEqual(self.db.tables, before)
+        self.assertFalse(self.backup.exists())
+
+    def test_apply_goes_ahead_when_the_key_to_close_is_another_key(self) -> None:
+        code, out, _err = self._apply_cli("--capture-key", "131")
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(out)["ok"])
+        self.assertEqual(self.db.row("api_keys", 3)["status"], "inactive", "关掉的是 --key 那一把")
+        self.assertEqual(self.db.row("api_keys", 131)["status"], "active", "采集 Key 保持 active")
+
+    def test_restore_may_reactivate_a_capture_key_that_was_closed_by_mistake(self) -> None:
+        """0.166 的补救路径：误传采集 Key 关掉了它，之后 restore 必须能把它放回 active——restore 不受“--key 不能是采集 Key”限制，也不需要 --capture-key。"""
+
+        self.mod.apply(self.db, self.backup, account=90, group=3, key=131)    # 误把采集 Key 131 关了（直接调函数，绕过 main 的防线）
+        self.assertEqual(self.db.row("api_keys", 131)["status"], "inactive")
+        argv = ["restore", "--account", "90", "--group", "3", "--key", "131", "--backup-dir", str(self.backup)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.mod.main(argv, database=self.db), 0)
+        self.assertEqual(self.db.row("api_keys", 131)["status"], "active")
+
+    def test_balance_probe_and_credit_snapshot_keys_are_runtime_keys_so_restore_stays_ok(self) -> None:
+        """0.166 恢复后工具标 ok:False：12 处 unexpected 全是其它账号 extra 里的运行时键（upstream_billing_probe、*_balance_updated_at、cline_*、
+        codex_credits_snapshot）。这四类键由后台探测／余额服务写，不代表有人改了配置，必须只报告不判红。"""
+
+        self.mod.apply(self.db, self.backup, **self.IDS)
+        digests_before = self.digests()
+        for index, item in enumerate(self.db.tables["accounts"][1:], start=1):
+            item["extra"] = {**item["extra"], "upstream_billing_probe": {"status": "ok", "at": f"t{index}"}, "deepseek_balance_updated_at": f"2026-11-01T0{index}:00:00Z",
+                             "zhipu_balance_updated_at": "2026-11-01T00:00:00Z", "cline_credits": index * 1.5, "cline_wallet_limit_until": "2026-11-02T00:00:00Z",
+                             "codex_credits_snapshot": {"balance": index}}
+        report = self.mod.restore(self.db, self.backup, **self.IDS)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual((report["unexpected"], report["digests_changed"]), ([], []))
+        for name in ("upstream_billing_probe", "deepseek_balance_updated_at", "cline_credits", "cline_wallet_limit_until", "codex_credits_snapshot"):
+            self.assertIn(f"accounts.extra.{name}", report["runtime_columns_touched"], name)
+        self.assertEqual(self.digests(), digests_before, "七项摘要排除这些运行时键")
+
+    def test_lookalike_config_keys_are_still_unexpected_changes(self) -> None:
+        """清单是整段匹配：长得像的配置键（探测开关、没有 provider 前缀的 balance_updated_at、别的前缀）变了，仍要报 unexpected 由人判断。"""
+
+        self.mod.apply(self.db, self.backup, **self.IDS)
+        extra = self.db.row("accounts", 101)["extra"]
+        extra.update({"upstream_billing_probe_enabled": True, "balance_updated_at": "x", "xcline_note": "y", "codex_credits_snapshot_enabled": True})
+        report = self.mod.restore(self.db, self.backup, **self.IDS)
+        self.assertFalse(report["ok"])
+        self.assertEqual(sorted(item["column"] for item in report["unexpected"]),
+                         ["extra.balance_updated_at", "extra.codex_credits_snapshot_enabled", "extra.upstream_billing_probe_enabled", "extra.xcline_note"])
 
     def test_psql_statements_match_the_ones_used_on_the_host_in_the_previous_upgrade(self) -> None:
         calls = []
@@ -1058,6 +1132,68 @@ class Vc5PrereqTests(unittest.TestCase):
         text = (PIPELINE / "vc5_prereq.py").read_text(encoding="utf-8")
         for forbidden in ("= 90", "= 131", "id=90", "id=3 "):
             self.assertNotIn(forbidden, text, "账号、分组、Key 号一律来自参数，不写死")
+
+
+class Vc5PrereqWrapperTests(SandboxCase):
+    """vc5-prereq.sh（shell 入口）：从本轮参数文件的 API_KEY_ID 取采集 Key 并带上 --capture-key；--key 等于采集 Key 时 apply 在碰库之前被拒绝。
+    docker 换成只记录就失败的桩：被拒绝的调用不得碰它，通过防线的调用才会走到它（然后因桩失败退出 3，库访问失败）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.capture_key = self.sb.env["API_KEY_ID"]     # 沙箱参数文件里的采集 Key（假 parse_env 逐行导出）
+        _write(self.sb.bin / "docker", f"""
+            #!/bin/bash
+            echo "DOCKER $*" >> "{self.sb.log}"
+            exit 1
+        """)
+        self.backup = self.root / "backup" / "vc5-prereq"
+
+    def _apply(self, key: str, *extra: str, **env: str) -> subprocess.CompletedProcess:
+        return self.sb.run(["bash", str(self.sb.pipe / "vc5-prereq.sh"), "apply", "--account", "90", "--group", "3", "--key", key,
+                            "--backup-dir", str(self.backup), *extra], **env)
+
+    def _docker_calls(self) -> list[str]:
+        return [line for line in self.sb.events() if line.startswith("DOCKER")]
+
+    def test_the_capture_key_from_the_round_env_is_refused_as_the_key_to_close(self) -> None:
+        result = self._apply(self.capture_key)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(f"--key {self.capture_key} 就是采集 Key，拒绝", result.stderr)
+        self.assertEqual(self._docker_calls(), [], "拒绝发生在碰库之前")
+        self.assertFalse(self.backup.exists())
+
+    def test_another_key_passes_the_guard_and_reaches_the_database(self) -> None:
+        result = self._apply("12")
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("psql 失败", result.stderr, "通过防线后才去访问库（桩让它失败）")
+        self.assertEqual(len(self._docker_calls()), 1)
+
+    def test_an_explicit_capture_key_overrides_the_round_env(self) -> None:
+        refused = self._apply("12", "--capture-key", "12")
+        self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+        self.assertEqual(self._docker_calls(), [])
+        passed = self._apply(self.capture_key, "--capture-key", "77")     # 显式给的采集 Key 优先于参数文件
+        self.assertEqual(passed.returncode, 3, passed.stdout + passed.stderr)
+        self.assertEqual(len(self._docker_calls()), 1)
+
+    def test_apply_fails_closed_when_the_round_env_cannot_be_resolved(self) -> None:
+        result = self._apply("12", ARM64_VC_ENV="")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("不知道采集 Key", result.stderr)
+        self.assertEqual(self._docker_calls(), [])
+
+    def test_restore_and_show_do_not_need_the_capture_key(self) -> None:
+        for command in ("restore", "show"):
+            with self.subTest(command):
+                result = self.sb.run(["bash", str(self.sb.pipe / "vc5-prereq.sh"), command, "--account", "90", "--group", "3", "--key", self.capture_key,
+                                      "--backup-dir", str(self.backup)], ARM64_VC_ENV="")
+                self.assertNotEqual(result.returncode, 2, "不是用法错误")
+                self.assertNotIn("采集 Key", result.stderr)
+
+    def test_the_script_header_says_what_key_means(self) -> None:
+        text = (PIPELINE / "vc5-prereq.sh").read_text(encoding="utf-8")
+        self.assertIn("要临时关掉的另一把 Key", text)
+        self.assertIn("不是采集 Key", text)
 
 
 # ======================================================================================================
@@ -2139,6 +2275,160 @@ class SyncHistoryTreeTagTests(SandboxCase):
         self.assertTrue(command.endswith(f"{self.c3} - refs/heads/integ v0.1.1 {self.c2}"), command)
 
 
+class Vc6HandoffWatchTests(SandboxCase):
+    """local/vc6-handoff-watch.sh（开发机监视）：合成环境。ssh 换成“把远端命令原样在本机执行”的桩（远端路径都落在沙箱里），
+    vc6-local-commit.sh 换成只记事件、按开关成败的替身；候选链工作树是合成的 git 仓库。"""
+
+    BRANCH = "feature/x"
+
+    def setUp(self) -> None:
+        super().setUp()
+        sb = self.sb
+        repo = self.repo = self.root / "cand-wt"
+        repo.mkdir()
+        _git_in(repo, "init", "-q", "-b", self.BRANCH)
+        _commit_file(repo, "a.txt")
+        exports = "\n".join(f"export {k}='{v}'" for k, v in {"RUNROOT": str(sb.runroot), "BUNDLE_BRANCH": self.BRANCH}.items())
+        (self.root / "remote_exports.txt").write_text(exports + "\n", encoding="utf-8")
+        _write(sb.bin / "ssh", f"""
+            #!/bin/bash
+            echo "SSH $*" >> "{sb.log}"
+            cmd="${{@: -1}}"
+            case "$cmd" in
+              *parse_env.py*) cat "{self.root}/remote_exports.txt" ;;
+              *) bash -c "$cmd" ;;
+            esac
+        """)
+        self.done_dir = sb.prep / "pipeline" / "vc6-done"
+        self.marker_dir = sb.runroot / "handoff"
+        self.done_dir.mkdir(parents=True)
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        self.controls = self.root / "controls"
+        self.controls.mkdir()
+        # 替身：记事件；controls/fail-<模式> 存在则失败（退出 3），controls/mark-on-fail-<模式> 存在则失败的同时建标记（模拟别处同时手工做完）。
+        _write(sb.pipe / "local" / "vc6-local-commit.sh", f"""
+            #!/bin/bash
+            echo "COMMIT $1" >> "{sb.log}"
+            if [ -f "{self.controls}/fail-$1" ]; then
+              [ -f "{self.controls}/mark-on-fail-$1" ] && {{ mkdir -p "{self.marker_dir}"; : > "{self.marker_dir}/local-$1.done"; }}
+              echo "前置核对失败（替身）"; exit 3
+            fi
+            mkdir -p "{self.marker_dir}"; : > "{self.marker_dir}/local-$1.done"
+            echo "VC6_$1_DONE"
+        """)
+        self.vc6_tmp = self.root / "vc6-run"
+
+    def _run(self, *args: str, repo: Path | None = None, **extra: str) -> subprocess.CompletedProcess:
+        return self.sb.run(["bash", str(self.sb.pipe / "local" / "vc6-handoff-watch.sh"), *args], timeout=120,
+                           VC6_REPO=str(repo or self.repo), VC6_LOCAL_TMP=str(self.vc6_tmp), PIPE_REMOTE_PREP=str(self.sb.prep), PIPE_SSH_HOST="hostx", **extra)
+
+    def _log(self) -> str:
+        path = self.vc6_tmp / "handoff-watch.log"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def _commits(self) -> list[str]:
+        return [line for line in self.sb.events() if line.startswith("COMMIT ")]
+
+    def _both_ready(self) -> None:
+        (self.done_dir / "gates").write_text("", encoding="utf-8")
+        (self.done_dir / "canonical-activation").write_text("", encoding="utf-8")
+
+    def test_it_refuses_to_start_when_the_worktree_is_not_on_the_candidate_alias_branch(self) -> None:
+        """0.166：VC6_REPO 停在 cand166 分支上，监视照常启动，到 local-retire 才在前置核对里失败。现在启动前就拒绝，一行都不跑。"""
+
+        _git_in(self.repo, "checkout", "-q", "-b", "cand166")
+        self._both_ready()
+        result = self._run()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(f"当前在 cand166，不在候选别名分支 {self.BRANCH}", result.stdout)
+        self.assertIn("拒绝启动", self._log())
+        self.assertEqual(self._commits(), [], "没有跑任何交接")
+        self.assertFalse([e for e in self.sb.events() if "vc6-done" in e], "监视循环没进")
+
+    def test_it_refuses_to_start_on_a_dirty_worktree_or_a_missing_directory(self) -> None:
+        (self.repo / "untracked.txt").write_text("脏\n", encoding="utf-8")
+        result = self._run()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("工作树不干净", result.stdout)
+        result = self._run(repo=self.root / "no-such-dir")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("VC6_REPO 不是目录", result.stdout)
+
+    def test_both_handoffs_run_in_order_and_the_watch_exits_zero(self) -> None:
+        self._both_ready()
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._commits(), ["COMMIT sync", "COMMIT retire"])
+        log = self._log()
+        self.assertIn("启动：状态文件起点行", log)
+        self.assertIn("完成 sync rc=0", log)
+        self.assertIn("两次交接都已完成，退出", log)
+        self.assertTrue((self.marker_dir / "local-sync.done").is_file() and (self.marker_dir / "local-retire.done").is_file())
+
+    def test_a_failing_handoff_stops_the_watch_without_retrying(self) -> None:
+        self._both_ready()
+        (self.controls / "fail-retire").write_text("", encoding="utf-8")
+        result = self._run()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self._commits(), ["COMMIT sync", "COMMIT retire"], "失败即退出，不重试")
+        self.assertIn("失败 retire rc=3", self._log())
+        self.assertIn("本监视退出，不重试", self._log())
+        self.assertFalse((self.marker_dir / "local-retire.done").exists())
+
+    def test_a_failure_with_the_marker_already_made_elsewhere_counts_as_done(self) -> None:
+        """0.166 的 local-retire：监视触发时调度者手工 retire 刚提交，监视的前置核对（候选分支头 = 同步提交）失败退出。别处已把标记建出来
+        （手工做完了这次交接）时按已完成处理，监视照常往下走并正常退出。"""
+
+        self._both_ready()
+        (self.controls / "fail-retire").write_text("", encoding="utf-8")
+        (self.controls / "mark-on-fail-retire").write_text("", encoding="utf-8")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        log = self._log()
+        self.assertIn("交接标记 local-retire.done 已存在（别处已完成这次交接），按已完成处理", log)
+        self.assertIn("两次交接都已完成，退出", log)
+
+    def test_detach_starts_a_new_session_leader_that_keeps_watching_after_the_launcher_exits(self) -> None:
+        """--detach：用 Python start_new_session 脱离会话（这台 Mac 没有 setsid，setsid -f 静默失败）；启动器等到日志里出现“启动”行才报成功。"""
+
+        import signal
+
+        result = self._run("--detach")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        match = re.search(r"监视已在后台跑（pid (\d+)）", result.stdout)
+        self.assertIsNotNone(match, result.stdout)
+        pid = int(match.group(1))
+
+        def stop_child() -> None:
+            # 杀整个进程组，并等到组里一个进程都不剩再返回：监视是脱离会话的后台进程，不等干净的话它还在往沙箱临时目录里写文件，
+            # 随后的目录清理会撞上 “Directory not empty”。
+            import time
+
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                return
+            for _ in range(100):
+                try:
+                    os.killpg(pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    return
+                time.sleep(0.05)
+
+        self.addCleanup(stop_child)
+        self.assertEqual(os.getsid(pid), pid, "监视进程是自己会话的首进程（脱离了启动器的会话）")
+        self.assertNotEqual(os.getsid(pid), os.getsid(0), "不在测试进程的会话里")
+        self.assertIn(f"pid {pid}", self._log(), "启动行带着真实 pid，便于结束它")
+        self.assertTrue((self.vc6_tmp / "handoff-watch.out").exists())
+
+    def test_the_header_no_longer_recommends_setsid_and_documents_detach(self) -> None:
+        text = (PIPELINE / "local" / "vc6-handoff-watch.sh").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(?m)^#\s+VC6_REPO=\S+\s+setsid -f", "用法示例不再用 setsid -f（本机没有）")
+        self.assertIn("--detach", text)
+        self.assertIn("start_new_session", text)
+        self.assertIn("没有 setsid", text)
+
+
 # ======================================================================================================
 # 七、整链：VC4 阶段的 bundle 推导与构建收据路径、others_running 不把只读 preflight 当编排
 # ======================================================================================================
@@ -2167,6 +2457,102 @@ class PipelineStageTests(SandboxCase):
         self.assertIn("计时账本剩余不足或已暂停", text)
         self.assertIn("设计内的互斥拒绝", text)
         self.assertIn("每 30～60 秒重试同一条命令", text)
+
+    # ---- Codex 升级工具优化第 7 项：阶段下限被首批采集吃掉预算之后，STOPPED 时给出具体的调低建议（不静默改默认值） ----
+
+    def _ledger(self, minutes: int, phase: str, paused: str = "") -> None:
+        """计时账本替身：本阶段可用剩余约 ``minutes`` 分钟（多给 30 秒，取整后恰好是 minutes）。"""
+
+        _write(self.sb.data / "tools/official_client_capture/codex_upgrade_vc_artifacts.py", f"""
+            import datetime
+            def effective_deadlines(path):
+                soon = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes={minutes}, seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return {{"phase": "{phase}", "execution_deadline_at_utc": soon, "total_deadline_at_utc": soon,
+                        "project_deadline_at_utc": soon, "paused_scopes": [{paused!r}] if {paused!r} else []}}
+        """, 0o644)
+
+    def _stopped_text(self, *args: str) -> str:
+        result = self.sb.stage_pipeline(*args)
+        self.assertEqual(result.returncode, 1, result.stdout[-800:])
+        return "\n".join(self.sb.status_lines())
+
+    def _vc1_after_the_first_batch(self) -> None:
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(0)
+        attempt = sb.newdir / "official" / "attempts" / "20990101T000000Z-aaaa"
+        attempt.mkdir(parents=True)
+        (attempt / "attempt.json").write_text(json.dumps({"status": "awaiting_receipts"}), encoding="utf-8")
+
+    def test_vc1_stop_after_the_first_batch_suggests_the_lower_bound_and_the_command(self) -> None:
+        """0.166：VC-1 首批官方采集吃掉预算，账本剩 51 分钟 < 缺省 90，首次 STOPPED，剩下只是封存预览＋批准，手工改 PIPE_NEED_VC1=30 重起。
+        现在 STOPPED 时直接给出建议值与重起命令；缺省下限一个字不改。"""
+
+        self._vc1_after_the_first_batch()
+        self._ledger(51, "VC-1")
+        text = self._stopped_text("--from", "VC1", "--to", "VC4", "--approver", "依据")
+        self.assertIn("本阶段所需下限=90分 可用剩余=51分", text, "缺省下限仍是 90，没有被静默改动")
+        self.assertIn("下限调低建议（估计，不是默认值）：VC-1 首批官方采集已跑完", text)
+        self.assertIn("剩余步骤估计约 30 分钟，账本剩余 51 分钟够用", text)
+        self.assertIn(f"PIPE_NEED_VC1=30 bash {self.sb.pipe}/vc-pipeline.sh start --from VC1 --to VC4", text)
+        self.assertIn("调低理由写进总账", text)
+        self.assertIn("设计内的互斥拒绝", text, "原有的 deadline-extend 提示还在")
+
+    def test_vc1_stop_before_the_first_batch_is_done_gives_no_suggestion(self) -> None:
+        """首批还没跑完（没有等待封存的 attempt、没有 vc-1-checkpoint）时剩余不是那么短，不能建议调低。"""
+
+        self.sb.runroot.mkdir(parents=True, exist_ok=True)
+        self.sb.checkpoint(0)
+        self._ledger(51, "VC-1")
+        text = self._stopped_text("--from", "VC1", "--to", "VC1")
+        self.assertIn("计时账本剩余不足或已暂停", text)
+        self.assertNotIn("下限调低建议", text)
+
+    def test_vc5_restart_suggestions_follow_how_far_the_stage_got(self) -> None:
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(4)
+        (sb.runroot / "vc5-run-batch.out").write_text("RUN_BATCH_DONE 2099-01-01T00:00:00Z\n", encoding="utf-8")
+        self._ledger(185, "VC-5")      # 0.166 目标平台门禁红过之后重起：账本剩 185 分钟 < 缺省 300
+        text = self._stopped_text("--from", "VC5", "--to", "VC5")
+        self.assertIn("本阶段所需下限=300分 可用剩余=185分", text)
+        self.assertIn("候选 run 批次已结束（剩 seal、accept、canonical），剩余步骤估计约 190 分钟，但账本只剩 185 分钟，调低下限也不够；先 deadline-extend 再重起", text)
+        self.assertNotIn("PIPE_NEED_VC5=", text)
+        for stage_file, expected, progress in (("comparisons", 150, "seal／compare 已完成（剩 accept，含目标平台门禁，和 canonical）"),
+                                               ("acceptance", 40, "accept 已完成（只剩 canonical 交接）")):
+            with self.subTest(stage_file):
+                (sb.newdir / stage_file / "cand-x").mkdir(parents=True)
+                (sb.newdir / stage_file / "cand-x" / "result.json").write_text("{}", encoding="utf-8")
+                shutil.rmtree(sb.prep / "pipeline", ignore_errors=True)
+                (sb.prep / "pipeline").mkdir(parents=True)
+                text = self._stopped_text("--from", "VC5", "--to", "VC5")
+                self.assertIn(f"下限调低建议（估计，不是默认值）：{progress}，剩余步骤估计约 {expected} 分钟，账本剩余 185 分钟够用", text)
+                self.assertIn(f"PIPE_NEED_VC5={expected} bash {sb.pipe}/vc-pipeline.sh start --from VC5 --to VC5", text)
+
+    def test_no_suggestion_when_the_stage_has_made_no_progress_or_the_ledger_is_paused(self) -> None:
+        sb = self.sb
+        sb.runroot.mkdir(parents=True, exist_ok=True)
+        sb.checkpoint(4)
+        self._ledger(185, "VC-5")
+        self.assertNotIn("下限调低建议", self._stopped_text("--from", "VC5", "--to", "VC5"), "VC-5 还没跑任何东西：缺省 300 就是对的")
+        (sb.runroot / "vc5-run-batch.out").write_text("RUN_BATCH_DONE 2099-01-01T00:00:00Z\n", encoding="utf-8")
+        self._ledger(400, "VC-5", paused="VC-5")
+        shutil.rmtree(sb.prep / "pipeline", ignore_errors=True)
+        (sb.prep / "pipeline").mkdir(parents=True)
+        self.assertNotIn("下限调低建议", self._stopped_text("--from", "VC5", "--to", "VC5"), "账本被暂停时问题不在下限，不建议调低")
+
+    def test_check_mode_shows_the_suggestion_and_the_defaults_stay_untouched(self) -> None:
+        self._vc1_after_the_first_batch()
+        self._ledger(51, "VC-1")
+        result = self.sb.run(["bash", str(self.sb.pipe / "vc-pipeline.sh"), "--check", "--from", "VC1", "--to", "VC1"])
+        self.assertIn("PIPE_NEED_VC1=30", result.stdout)
+        text = (PIPELINE / "vc-pipeline.sh").read_text(encoding="utf-8")
+        self.assertIn("[VC1]=${PIPE_NEED_VC1:-90}", text)
+        self.assertIn("[VC5]=${PIPE_NEED_VC5:-300}", text)
+        self.assertRegex(text, r"declare -A NEED=\(.*\)")
+        # 环境变量照旧能覆盖：PIPE_NEED_VC1=30 时同样的账本通过检查（建议的命令真的能用）
+        result = self.sb.stage_pipeline("--from", "VC1", "--to", "VC1", PIPE_NEED_VC1="30")
+        self.assertNotIn("计时账本剩余不足", "\n".join(self.sb.status_lines()), result.stdout[-500:])
 
     def _check_vc6(self, order: str, installed: dict[str, str], *, prep_vc6_env: bool = False) -> subprocess.CompletedProcess:
         """--check --from VC6：ORDER.txt 在 <PREP>/vc6/，脚本与 vc6-env.sh 在已装驱动 pipeline/vc6/（与运行体同一口径）。"""

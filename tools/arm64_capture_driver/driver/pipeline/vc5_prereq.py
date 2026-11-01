@@ -19,7 +19,10 @@
 
 * ``accounts``：``last_used_at``、``updated_at``、``session_window_start``、``session_window_end``、``session_window_status``（会话窗口）、``rate_limited_at``、
   ``rate_limit_reset_at``、``overload_until``、``temp_unschedulable_until``、``temp_unschedulable_reason``、``error_message``；JSON 列 ``extra`` 里的用量快照键
-  （``codex_5h_*``、``codex_7d_*``、``codex_primary_*``、``codex_secondary_*``、``codex_usage_updated_at``、``model_rate_limits``）与 ``credentials`` 里令牌刷新会写的键
+  （``codex_5h_*``、``codex_7d_*``、``codex_primary_*``、``codex_secondary_*``、``codex_usage_updated_at``、``model_rate_limits``）与后台探测／余额服务会写的键
+  （``upstream_billing_probe`` 探测结果、``<provider>_balance_updated_at`` 各家余额快照时间、``cline_*`` Cline 额度与限流快照、``codex_credits_snapshot``；
+  0.166 恢复后 12 处 unexpected 全是其它账号 extra 里的这四类键，调度者判良性，据此补进清单。注意配置开关 ``upstream_billing_probe_enabled`` **不是**运行时键，
+  整段匹配不会误放过它）与 ``credentials`` 里令牌刷新会写的键
   （``access_token``、``refresh_token``、``id_token``、``expires_at``、``expires_in``、``last_refresh``、``_token_version``）。
 * ``groups``：``updated_at``。
 * ``api_keys``：``last_used_at``、``updated_at``、``quota_used``、``usage_5h``、``usage_1d``、``usage_7d``、``window_5h_start``、``window_1d_start``、``window_7d_start``。
@@ -30,9 +33,14 @@
 命令（账号、分组、Key 号一律由参数给，不写死；备份目录 0700，文件 0600）::
 
     vc5_prereq.py show    --account N --group N --key N --backup-dir D     只读，打印三项前置的当前值
-    vc5_prereq.py apply   --account N --group N --key N --backup-dir D     备份原值与行级快照 → 三处临时改动 → 核对只有这三处（外加运行时列）变了
+    vc5_prereq.py apply   --account N --group N --key N --capture-key N --backup-dir D     备份原值与行级快照 → 三处临时改动 → 核对只有这三处（外加运行时列）变了
     vc5_prereq.py restore --account N --group N --key N --backup-dir D     写回备份的原值 → 与改前快照逐列比较
     vc5_prereq.py verify  --account N --group N --key N --backup-dir D     只读：当前库与改前快照逐列比较
+
+``--key`` 是采集分组里「要临时关掉的另一把 Key」（VC-5 前置要求分组内只许采集 Key 一把活跃，所以把分组里别的活跃 Key 临时停用），**不是采集 Key**——采集 Key
+要一直保持 active。0.166 曾误把采集 Key 当 ``--key`` 传，``apply`` 把它关了（发现后立刻 restore 补救，没有请求经过）。所以 ``apply`` 必须知道采集 Key 是哪一把
+（``--capture-key``；shell 入口 vc5-prereq.sh 缺省从本轮参数文件的 ``API_KEY_ID`` 取），``--key`` 等于它就直接拒绝（退出 2，库不动、不写备份）；取不到采集 Key 也拒绝
+（失败关闭，不能默认"没人传错"）。``restore``／``verify``／``show`` 不需要它——恢复被误关的采集 Key 时 ``--key`` 恰恰就是它。
 
 数据库经 ``docker exec -i <容器> psql`` 访问（``--container`` 缺省 sub2apiplus-postgres，``--db-user`` sub2api，``--db-name`` sub2api）。
 ``apply`` 后 7 项摘要一项都不该变（每项已排除故意改的那一处），``restore`` 后同样；``verify`` 另外把“故意改的三处”也算进逐列比较，所以恢复不全会直接报 ``unexpected``。
@@ -68,7 +76,9 @@ RUNTIME_COLUMNS: Mapping[str, tuple[str, ...]] = {
 }
 # JSON 列里的运行时键（键名正则，整段匹配）。
 RUNTIME_JSON_KEYS: Mapping[tuple[str, str], tuple[str, ...]] = {
-    ("accounts", "extra"): (r"codex_(?:5h|7d|primary|secondary)_.+", r"codex_usage_updated_at", r"model_rate_limits"),
+    # 后四项是 0.166 补的：后台探测／余额服务在 VC-5 到 VC-6 之间写其它账号的 extra（见模块说明）。整段匹配，配置开关 upstream_billing_probe_enabled 不在内。
+    ("accounts", "extra"): (r"codex_(?:5h|7d|primary|secondary)_.+", r"codex_usage_updated_at", r"model_rate_limits",
+                            r"upstream_billing_probe", r".+_balance_updated_at", r"cline_.+", r"codex_credits_snapshot"),
     ("accounts", "credentials"): (r"access_token", r"refresh_token", r"id_token", r"expires_at", r"expires_in", r"last_refresh", r"_token_version"),
 }
 # 差异输出里值不打印的列（凭据、Key 密钥）。
@@ -361,7 +371,10 @@ def main(argv: list[str] | None = None, *, database: Any = None) -> int:
     parser.add_argument("command", choices=("show", "apply", "restore", "verify"))
     parser.add_argument("--account", type=int, required=True, help="采集账号 id")
     parser.add_argument("--group", type=int, required=True, help="采集分组 id")
-    parser.add_argument("--key", type=int, required=True, help="采集 Key id（分组里要被临时停用的那一把）")
+    parser.add_argument("--key", type=int, required=True,
+                        help="采集分组里「要临时关掉的另一把 Key」的 id——不是采集 Key（采集 Key 要保持 active；apply 会拒绝 --key 等于采集 Key）")
+    parser.add_argument("--capture-key", type=int, default=None,
+                        help="采集 Key 的 id（本轮参数文件的 API_KEY_ID；vc5-prereq.sh 缺省自动从参数文件带上）。apply 必须知道它，用来拒绝误传")
     parser.add_argument("--backup-dir", type=Path, required=True)
     parser.add_argument("--container", default="sub2apiplus-postgres")
     parser.add_argument("--db-user", default="sub2api")
@@ -372,6 +385,16 @@ def main(argv: list[str] | None = None, *, database: Any = None) -> int:
         return 2
     db = database if database is not None else PsqlDatabase(args.container, args.db_user, args.db_name)
     ids = {"account": args.account, "group": args.group, "key": args.key}
+    if args.command == "apply":
+        # 误传防线：--key 是要关掉的另一把 Key，不能是采集 Key。拒绝发生在碰库之前（退出 2，不写备份）。
+        if args.capture_key is None:
+            print("vc5-prereq：apply 不知道采集 Key 是哪一把，拒绝（失败关闭）：用 --capture-key N 给出，或设 ARM64_VC_ENV 让 vc5-prereq.sh 从本轮参数文件的 API_KEY_ID 取。"
+                  "--key 是采集分组里「要临时关掉的另一把 Key」，不是采集 Key", file=sys.stderr)
+            return 2
+        if args.key == args.capture_key:
+            print(f"vc5-prereq：--key {args.key} 就是采集 Key，拒绝：--key 是采集分组里「要临时关掉的另一把 Key」，采集 Key 必须保持 active。"
+                  "用 show 看分组里有哪些 Key，选另一把活跃的传 --key", file=sys.stderr)
+            return 2
     try:
         if args.command == "show":
             print("\n".join(show(db, **ids)))
