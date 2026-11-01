@@ -1,0 +1,61 @@
+{
+  "base_commit": "bef9730e99e6e91ac825f94be499fd959e4bb64a",
+  "changed_path_count": 1,
+  "current_commit": "76f8035097da363e02422b54cd9ba5c642c9a8c4",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7393,
+  "frozen_path_count": 2318,
+  "identity_sha256": "9372866809c5dacbc6ba1906ea76889bf9a3c3c1a3378dd908a8ff62aca3b7f3",
+  "issued_at_utc": "2026-11-01T11:35:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-opt-l10-guide-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "24ae5514d5cbdec8861d5c0121f2ee76156929d917744a5286ee29818e241a16"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（opt-l10-guide）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-desktop-chatgpt-login-catalog-note-20261024-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-fix-20261024-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-readme-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-registration-20261027-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "803bf3c084418ca3190885a4aa8db38b0b1a05a32f32a750e4962d12b3ea294f"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
