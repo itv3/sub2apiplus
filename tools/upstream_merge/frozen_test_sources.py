@@ -338,12 +338,17 @@ FROZEN_TEST_SOURCES: dict[str, tuple[str, ...]] = {
     "internal/service/claude_fw_g_test_transition_test.go": (
         "Claude FW-G test transition 漂移：path=",
     ),
-    # ===== 退休、闭集与运行稳定性台账（8 个文件）=====
+    # ===== 退休、闭集与运行稳定性台账（9 个文件）=====
     # 退休收据、兼容代码闭集、版本泄漏债务闭集、运行稳定性等台账里的“源码摘要”条目。
     # 失败点同样是读文件、算摘要、与登记摘要比较并允许后继边；只收源码摘要这一类信息，收据自身摘要与常量比较的信息（形如“收据漂移：got= want=”）不收。
     # 代表位置：version_leak_debt_closure_test.go 第 94～104 行、compatibility_code_retirement_closure_test.go 第 200～223 行、codex_models_unwired_transport_retirement_test.go 第 116～135 行。
     "internal/officialegress/catalog_generic_bind_retirement_test.go": (
         "Catalog 通用 binding 源码摘要漂移：path=",
+    ),
+    # catalog_retirements_test.go 只在 path 等于已校验的 Historical.Path 时输出此标记；
+    # 收据自身摘要、其他引用及 Catalog 闭集错误使用不同信息，仍按功能失败处理。
+    "internal/officialegress/catalog_retirements_test.go": (
+        "Images dead-code 退休源码摘要漂移: path=",
     ),
     "internal/officialegress/executor_one_shot_retirement_test.go": (
         "Executor 一次性兼容源码摘要漂移：path=",

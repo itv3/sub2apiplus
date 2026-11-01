@@ -142,7 +142,7 @@ func TestImagesDeadCodeRetirementReceiptIsComplete(t *testing.T) {
 		len(receipt.RequiredVerification) != 6 {
 		t.Fatalf("Images dead-code 退休闭环非法: %+v", receipt)
 	}
-	for path, want := range map[string]string{
+	for path, expectedDigest := range map[string]string{
 		receipt.Historical.Path:                       receipt.Historical.SHA256AfterRemoval,
 		receipt.RemovalReceipt.Path:                   receipt.RemovalReceipt.SHA256,
 		receipt.ScannerLockTransition.CurrentLockPath: receipt.ScannerLockTransition.CurrentLockSHA256,
@@ -151,9 +151,14 @@ func TestImagesDeadCodeRetirementReceiptIsComplete(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := sha256Hex(raw); got != want &&
-			!imagesRetirementReferenceWasSuperseded(path, want, got) {
-			t.Fatalf("Images dead-code 退休引用摘要漂移: path=%s got=%s want=%s", path, got, want)
+		if got := sha256Hex(raw); got != expectedDigest &&
+			!imagesRetirementReferenceWasSuperseded(path, expectedDigest, got) {
+			// 历史源码可以由精确的后继摘要边承接；与收据和 Catalog 约束分别报告，
+			// 让合并快线只把这一处纯源码摘要差异识别为待台账闭合。
+			if path == receipt.Historical.Path {
+				t.Fatalf("Images dead-code 退休源码摘要漂移: path=%s got=%s want=%s", path, got, expectedDigest)
+			}
+			t.Fatalf("Images dead-code 退休引用摘要漂移: path=%s got=%s want=%s", path, got, expectedDigest)
 		}
 	}
 }

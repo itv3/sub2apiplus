@@ -201,6 +201,30 @@ class FrozenRuleTest(unittest.TestCase):
         self.assertEqual(result.classification, CLASS_FROZEN_PENDING)
         self.assertEqual(result.failed_tests, ["TestUpstreamV023SourceTransitionIsFrozen"])
 
+    def test_images_retirement_source_digest_drift_is_pending(self) -> None:
+        text = go_failure(
+            "internal/officialegress",
+            "TestImagesDeadCodeRetirementReceiptIsComplete",
+            "catalog_retirements_test.go",
+            "Images dead-code 退休源码摘要漂移: path=backend/internal/service/openai_images.go got=a want=b",
+        )
+        self.assertEqual(classify_go_test_output(text).classification, CLASS_FROZEN_PENDING)
+
+    def test_images_retirement_receipt_catalog_and_other_references_stay_functional(self) -> None:
+        for message in (
+            "Images dead-code 退休收据漂移: got=a want=b",
+            "Images dead-code 退休闭环非法: missing catalog binding",
+            "Images dead-code 退休引用摘要漂移: path=backend/internal/officialegress/catalogdata/maintenance-removal-receipts.json got=a want=b",
+        ):
+            with self.subTest(message=message):
+                text = go_failure(
+                    "internal/officialegress",
+                    "TestImagesDeadCodeRetirementReceiptIsComplete",
+                    "catalog_retirements_test.go",
+                    message,
+                )
+                self.assertEqual(classify_go_test_output(text).classification, CLASS_FUNCTIONAL)
+
     def test_test_name_is_irrelevant_only_the_registered_source_and_marker_count(self) -> None:
         text = go_failure(
             "internal/officialegress", "TestAnythingAtAll", "upstream_v023_source_transition_test.go",
