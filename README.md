@@ -17,14 +17,14 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 维护原则：
 
 1. 长期跟随上游主线，发布版本按上游 release/tag 对齐。
-2. Plus 账号级开关优先放入 `account.Extra`；mimic / 三方客户端兼容走 Plus 设置页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
+2. Plus 账号级开关优先放入 `account.Extra`；mimic / 三方客户端兼容走 Plus 设置页；OAuth 官方客户端出站仿真为内置能力，不提供账号级开关。
 3. Docker 更新默认只替换应用容器，不动 PostgreSQL、Redis、反向代理配置、`.env` 和数据目录。
 
 ## 1. Plus 增强功能
 
 管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”和“三方客户端兼容”两个 Tab。
 
-### 1.1 OAuth 官方客户端伪装
+### 1.1 OAuth 官方客户端出站仿真
 
 > 本节仅提供功能摘要。共享目标、运行架构、证据生命周期、升级、验收、发布与回滚合同以
 > [官方 OAuth 客户端出站仿真共享框架](docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)为准；发生冲突时以该框架为准。
