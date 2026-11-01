@@ -1,0 +1,56 @@
+{
+  "base_commit": "e84488048a7e18e5c7c393eb3d8f489365a3b974",
+  "changed_path_count": 3,
+  "current_commit": "2a35edc357877486316999ba0e9addec257d3961",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7394,
+  "frozen_path_count": 2318,
+  "identity_sha256": "a04bddcb6aa1b0b18c163263be8b9466fb50b83aa223d0c1a14aa8c8717bca44",
+  "issued_at_utc": "2026-11-01T13:52:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upstream-merge-v0219-attribution-prep-20261101-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "predecessor_sha256s": [
+        "6fd1997f5d350c02ae65029ea1ff572662b16d81d8d794c3081b3a202441d126"
+      ],
+      "reason": "建 Plan 前修复快线冻结归因：分离 Images 历史源码摘要差异与收据及 Catalog 错误，并登记精确源码失败点；仅测试与归因工具变化，客户端画像和生产出站逻辑保持不变。 path=backend/internal/officialegress/catalog_retirements_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-g-test-transition.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fafaf53de8ae17acc2c147bcd5c9a71a5e02cf15d6c854754d58d359b79b9a5d"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/upstream_merge/frozen_test_sources.py",
+    "tools/upstream_merge/tests/test_fast_attribution.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
