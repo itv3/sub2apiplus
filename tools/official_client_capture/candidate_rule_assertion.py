@@ -96,8 +96,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-11-01（0.166.0 收尾）：指南第二部分开头段补写当前 Active 与 0.166.0 官方样本 Campaign（kit/part2-minimal-0166.py，只改开头段、不动规则正文），第二章摘要由 9a084313… 变为 74a64046…，
 # 20 份场景／期望清单的 source_spec 摘要随之重绑（脚本断言每份差异恰为一行替换）；本常量绑定的 candidate_rule_expectations_0_149_1.json
 # 载荷审核：与改前逐行比较仅 source_spec 摘要一行不同，规则、场景、选择器与判据逐字不变。整文件摘要 0b550d76… 变为 8478e2f4…。
+# 2026-11-01（0.166.0 收尾）：指南第二部分里 7 处写着 0.165.0 的“当前 Active”取值（权威入口表终态收据链接、遥测零流量判定标题、SPEC-HDR-005 UA、SPEC-EP-006 与 SPEC-EP-013 的 client_version）改成版本中立写法并指向 §4.9，规则语义、SPEC 锚点与表格结构不变，第二章摘要由 74a64046… 变为 6ea13b26…，
+# 20 份场景／期望清单的 source_spec 摘要随之重绑（脚本断言每份差异恰为一行替换）；本常量绑定的 candidate_rule_expectations_0_149_1.json
+# 载荷审核：与改前逐行比较仅 source_spec 摘要一行不同，规则、场景、选择器与判据逐字不变。整文件摘要 8478e2f4… 变为 0085e5ad…。
 FROZEN_PROFILE_SHA256 = (
-    "8478e2f4ef22c54996833262e5315d7c87c5ac9563d8e5ae8365e8b98d26c491"
+    "0085e5ad6c548935f3c1ef63bf3c1c1d2ac5fbbfd8b820d097ce9a6fe24c1d52"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
