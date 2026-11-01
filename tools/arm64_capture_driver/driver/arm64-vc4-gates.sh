@@ -14,6 +14,7 @@
 #         ownership_sha256 与 DC 树的归属表一致时放行并打印标记摘要，其余（含 Claude 轮次）默认拒绝，设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变。
 #         比对基点（--select-base）：VC4_SELECT_BASE 显式给 40 位提交；没给就取本轮 $RUNROOT/background-validation/*.json 里 status=passed、提交是 DC 真祖先的最近一份
 #         （按 completed_at_utc 取最近）的提交；读不到就不给，由入口门禁自己取最近的发版 tag（或第二层续跑的基点）。选择器出错一律回退全集，不会因此变红；
+#         缺省基点不区分那份结论是全集还是子集验证，为什么仍然安全见下方 vc4_default_select_base 上面的注释；
 #       - 环境修复不影响已通过单元时，用 VC4_RESUME_WAIVE_ENV="理由" 与 VC4_RESUME_WAIVE_ENV_NAMES="条目名,…" 显式豁免（记入清单，点名之外的差异仍拒绝沿用）；
 #       - VC4_RESUME=off 关闭续跑沿用（整轮全集重跑）；
 #   * C（候选提交自身）上只执行 make check-egress-spec-ci 作交叉核对（impl-logs/cross-check/check-egress-spec.C-only.local.log），
@@ -106,6 +107,8 @@ env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYCC" "$TC/tools" | tail -n
 # 第二层缺省比对基点：本轮后台验证结论（$RUNROOT/background-validation/<提交前 12 位>-<部署摘要前 12 位>.json）里 status=passed、提交是 DC 真祖先
 # （不含 DC 自己）的，取 completed_at_utc 最近的一份（时间相同或缺失再比文件修改时间）。读不到、没有合格的、解析不了一律什么都不打印——此时不给 --select-base，
 # 由入口门禁自己取最近的发版 tag。打印一行 `<40 位提交> <结论文件名> <完成时间>`。跳过 *.core-deviation.json 与子目录（preflight／attached 等）。
+# 缺省基点的前提（有意不区分全集／子集记录）：取到的这份 passed 结论本身可能就是按客户端筛选的子集验证。归纳上仍然安全——上一份是子集通过时，被它跳过的模块
+# 在它的基点之后也未受影响；这条链的链头是发版 tag 加归属（owner）精度，最终的担保来自 GitHub CI 的全集运行与收尾阶段的全集运行，不靠本基点。
 vc4_default_select_base() {
   python3 -B - "$RUNROOT/background-validation" "$TC" "$DC" <<'PYBASE' || true
 import glob, json, os, re, subprocess, sys
