@@ -589,6 +589,27 @@
    "owner": "shared",
    "rule": "infra-prefix"
   },
+  "test_ci_closeout_params": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_closeout_render": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
+  "test_ci_closeout_scripts": {
+   "claude_plan": "run",
+   "codex_plan": "run",
+   "core_seconds": null,
+   "owner": "shared",
+   "rule": "infra-prefix"
+  },
   "test_ci_core_deviation": {
    "claude_plan": "run",
    "codex_plan": "run",
