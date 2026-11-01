@@ -36,9 +36,9 @@ ZERO_DIGEST=$(printf '%064d' 0)   # 占位摘要（全 0），不在源码里写
 declare -A NEED=( [VC1]=${PIPE_NEED_VC1:-90} [VC2]=${PIPE_NEED_VC2:-45} [VC3]=${PIPE_NEED_VC3:-5} [VC4]=${PIPE_NEED_VC4:-160} [BGV]=${PIPE_NEED_BGV:-120} [VC5]=${PIPE_NEED_VC5:-300} [VC6]=${PIPE_NEED_VC6:-60} )
 # 下限被拒（账本剩余 < 下限）时给调低建议用的“剩余步骤估计”（分钟，已含余量；估计值，不是默认值，缺省下限一个字都没改——Codex 升级工具优化第 7 项）。
 # 缺省下限是“从头跑这一阶段”的保守值，首批大头（VC-1 官方采集约 67 分钟、VC-5 的候选采集与 seal、门禁）做完之后账本剩余自然低于它，首次起跑就 STOPPED：
-#   0.166 的 VC-1 首批吃掉预算后账本剩 51 分钟 < 缺省 90，剩下只是封存预览＋批准＋重放（实测 5.5 分钟：11:58:14Z 起跑、12:03:43Z PASS），手工改 PIPE_NEED_VC1=30 重起；
+#   上一轮的 VC-1 首批吃掉预算后账本剩 51 分钟 < 缺省 90，剩下只是封存预览＋批准＋重放（实测 5.5 分钟：11:58:14Z 起跑、12:03:43Z PASS），手工改 PIPE_NEED_VC1=30 重起；
 #   VC-5 目标平台门禁红过之后重起，账本剩 185 分钟 < 缺省 300，先后手工试了 PIPE_NEED_VC5=120、60。
-# 估计依据（0.166 实测）：VC-1 封存＋批准＋重放 30（实测 5.5，留余量）；VC-5 canonical 阶段 40（实测约 10 分钟）；accept（含目标平台门禁 85～100 分钟）加 canonical 150；
+# 估计依据（上一轮实测）：VC-1 封存＋批准＋重放 30（实测 5.5，留余量）；VC-5 canonical 阶段 40（实测约 10 分钟）；accept（含目标平台门禁 85～100 分钟）加 canonical 150；
 #   seal 链（约 30 分钟）加 accept 加 canonical 190。按现场产物判进度：VC-1 看有没有等待封存的 attempt 或 vc-1-checkpoint；VC-5 看 run 批次是否结束、compare／acceptance 结果是否已在。
 declare -A REMAINING_ESTIMATE=( [VC1]=30 [VC5_RUN_DONE]=190 [VC5_COMPARE_DONE]=150 [VC5_ACCEPT_DONE]=40 )
 declare -A PHASE_OF=( [VC1]=VC-1 [VC2]=VC-2 [VC3]=VC-3 [VC4]=VC-4 [BGV]=VC-5 [VC5]=VC-5 [VC6]=VC-6 )
@@ -630,7 +630,7 @@ run_VC5() {
   # vc5-all 在 canonical 前做准入守卫（lib.sh vc5_admission_guard）：管理令牌 consume 窗口过期时，只有进程环境里有 VC5_RENEW_APPROVER 才会自动续签。
   # 起跑时传了 --approver 就是调度者授权本流水线签 VC-5 准入的同一批准人，续签沿用它；环境里已有 VC5_RENEW_APPROVER 的以环境为准；都没有则留空（守卫按“未设”处理）。
   # 这里只负责把它交给 vc5-all 进程；vc5-all.sh 一进门就把它收回成脚本私有变量，直到 canonical 阶段才放回环境，
-  # 所以 seal、accept（含 accept 内的目标平台门禁 make test）的子进程环境里没有它（0.166 曾因它白跑两次目标平台门禁）。
+  # 所以 seal、accept（含 accept 内的目标平台门禁 make test）的子进程环境里没有它（上一轮曾因它白跑两次目标平台门禁）。
   ( cd "${DRV}" && export VC5_RENEW_APPROVER="${VC5_RENEW_APPROVER:-${APPROVER}}" && setsid -f bash vc5-all.sh > "${RR}/vc5-all.out" 2>&1 < /dev/null )
   log "STEP vc5-all 已起（候选采集 → Kilo 双入口 → seal → compare → accept → canonical）"
   fi

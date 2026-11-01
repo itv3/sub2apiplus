@@ -21,7 +21,7 @@
   ``rate_limit_reset_at``、``overload_until``、``temp_unschedulable_until``、``temp_unschedulable_reason``、``error_message``；JSON 列 ``extra`` 里的用量快照键
   （``codex_5h_*``、``codex_7d_*``、``codex_primary_*``、``codex_secondary_*``、``codex_usage_updated_at``、``model_rate_limits``）与后台探测／余额服务会写的键
   （``upstream_billing_probe`` 探测结果、``<provider>_balance_updated_at`` 各家余额快照时间、``cline_*`` Cline 额度与限流快照、``codex_credits_snapshot``；
-  0.166 恢复后 12 处 unexpected 全是其它账号 extra 里的这四类键，调度者判良性，据此补进清单。注意配置开关 ``upstream_billing_probe_enabled`` **不是**运行时键，
+  上一轮恢复后 12 处 unexpected 全是其它账号 extra 里的这四类键，调度者判良性，据此补进清单。注意配置开关 ``upstream_billing_probe_enabled`` **不是**运行时键，
   整段匹配不会误放过它）与 ``credentials`` 里令牌刷新会写的键
   （``access_token``、``refresh_token``、``id_token``、``expires_at``、``expires_in``、``last_refresh``、``_token_version``）。
 * ``groups``：``updated_at``。
@@ -38,7 +38,7 @@
     vc5_prereq.py verify  --account N --group N --key N --backup-dir D     只读：当前库与改前快照逐列比较
 
 ``--key`` 是采集分组里「要临时关掉的另一把 Key」（VC-5 前置要求分组内只许采集 Key 一把活跃，所以把分组里别的活跃 Key 临时停用），**不是采集 Key**——采集 Key
-要一直保持 active。0.166 曾误把采集 Key 当 ``--key`` 传，``apply`` 把它关了（发现后立刻 restore 补救，没有请求经过）。所以 ``apply`` 必须知道采集 Key 是哪一把
+要一直保持 active。上一轮曾误把采集 Key 当 ``--key`` 传，``apply`` 把它关了（发现后立刻 restore 补救，没有请求经过）。所以 ``apply`` 必须知道采集 Key 是哪一把
 （``--capture-key``；shell 入口 vc5-prereq.sh 缺省从本轮参数文件的 ``API_KEY_ID`` 取），``--key`` 等于它就直接拒绝（退出 2，库不动、不写备份）；取不到采集 Key 也拒绝
 （失败关闭，不能默认"没人传错"）。``restore``／``verify``／``show`` 不需要它——恢复被误关的采集 Key 时 ``--key`` 恰恰就是它。
 
@@ -76,7 +76,7 @@ RUNTIME_COLUMNS: Mapping[str, tuple[str, ...]] = {
 }
 # JSON 列里的运行时键（键名正则，整段匹配）。
 RUNTIME_JSON_KEYS: Mapping[tuple[str, str], tuple[str, ...]] = {
-    # 后四项是 0.166 补的：后台探测／余额服务在 VC-5 到 VC-6 之间写其它账号的 extra（见模块说明）。整段匹配，配置开关 upstream_billing_probe_enabled 不在内。
+    # 后四项是 上一轮补的：后台探测／余额服务在 VC-5 到 VC-6 之间写其它账号的 extra（见模块说明）。整段匹配，配置开关 upstream_billing_probe_enabled 不在内。
     ("accounts", "extra"): (r"codex_(?:5h|7d|primary|secondary)_.+", r"codex_usage_updated_at", r"model_rate_limits",
                             r"upstream_billing_probe", r".+_balance_updated_at", r"cline_.+", r"codex_credits_snapshot"),
     ("accounts", "credentials"): (r"access_token", r"refresh_token", r"id_token", r"expires_at", r"expires_in", r"last_refresh", r"_token_version"),

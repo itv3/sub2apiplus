@@ -6,12 +6,12 @@
 # 任一子命令失败即退出、不重试（流水线会因等不到标记而 STOPPED，调度者查日志后手工处理）；例外：失败的同时交接标记已经存在（别处——例如调度者手工——
 # 已经做完了这次交接），按已完成处理，不算失败；retire 完成后退出；ARM64 状态文件在本脚本启动后出现 EXIT 行且不是 VC6 段内的交接等待，也退出。
 # 启动前核对（Codex 升级工具优化第 7 项）：VC6_REPO 必须已经检出了候选别名分支（参数文件的 BUNDLE_BRANCH）且工作树干净，否则立刻报错退出 2——
-#   0.166 的 VC6_REPO 停在 cand166 分支上，监视照常启动，到 local-retire 才在 vc6-local-commit.sh 的前置核对里失败退出（日志没人看，表现成“没触发”）。
+#   上一轮的 VC6_REPO 停在 cand166 分支上，监视照常启动，到 local-retire 才在 vc6-local-commit.sh 的前置核对里失败退出（日志没人看，表现成“没触发”）。
 #
 # 用法（这是开发机上的监视脚本，不在采集主机上跑，也不是门禁）：
 #   VC6_REPO=<候选链工作树> bash <仓库>/tools/arm64_capture_driver/driver/pipeline/local/vc6-handoff-watch.sh --detach
 #   --detach：核对通过后用 Python start_new_session 脱离当前会话在后台跑，输出写进 ${VC6_LOCAL_TMP:-${TMPDIR:-/tmp}/vc6-run}/handoff-watch.out，
-#     并等到监视日志里出现“启动”行才报成功（没出现就非零退出）。**不要用 setsid -f：** 这台 Mac 上没有 setsid，命令静默失败、没有进程也没有日志——0.166 第一次起监视
+#     并等到监视日志里出现“启动”行才报成功（没出现就非零退出）。**不要用 setsid -f：** 这台 Mac 上没有 setsid，命令静默失败、没有进程也没有日志——上一轮第一次起监视
 #     就是这样没起来，两次交接只好手工做。不带 --detach 时在前台跑（可自己放进 tmux／脱离会话的 Python）。
 #   监视在跑时不要同时手工跑同一个交接（两边抢同一个工作树的提交）；要手工处理先结束监视（kill 日志里“启动”行对应的进程）。
 set -uo pipefail
@@ -75,7 +75,7 @@ run_mode() { # $1 子命令 $2 交接名
     say "完成 $1 rc=0"
   else
     rc=$?
-    # 失败时交接标记已经在了：别处（例如调度者几乎同时手工做）已经完成这次交接，不算失败。0.166 的 local-retire 就是这样：监视触发时调度者手工 retire 刚提交，
+    # 失败时交接标记已经在了：别处（例如调度者几乎同时手工做）已经完成这次交接，不算失败。上一轮的 local-retire 就是这样：监视触发时调度者手工 retire 刚提交，
     # 监视的前置核对（候选分支头 = 同步提交）因此失败退出。给手工那一边最多 90 秒把标记建出来。
     for _ in $(seq 1 18); do
       if marked "$2"; then say "子命令 $1 失败 rc=${rc}，但交接标记 $2.done 已存在（别处已完成这次交接），按已完成处理；失败详情见 ${LOGDIR}/handoff-$1.log"; return 0; fi

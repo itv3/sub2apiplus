@@ -1143,7 +1143,7 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 #   核对与输出逐字不变；带标记的，Codex 轮次且 gate_scope=client-plan、ownership_sha256 与 DC 树归属表一致才放行并打印摘要，其余（含 Claude 轮次）仍按原口径拒绝，
 #   VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变；DC 树就位之后多一次 tree 阶段核对（不带标记时什么都不做）。
 L1_DRIVER_BASELINE = 'cd028ceb787cc7fa25ae266e992216a6ed069f30'
-L1_DRIVER_DIGESTS = {'vc5-all.sh': 'e54f812537e4fee701e2d9aa209dbaba11001fa77d6fa4edc333e4aee8f6158d'}
+L1_DRIVER_DIGESTS = {'vc5-all.sh': '94f631f64fc9d4b492f9a8ce38aca7f3dd6185e36db3af158e34b240c77259ed'}
 L1_DRIVER_RESIDUALS = {'vc5-all.sh': ['+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}',
                 '+unset VC5_RENEW_APPROVER',
                 '+vc5_check_local_gate() {',

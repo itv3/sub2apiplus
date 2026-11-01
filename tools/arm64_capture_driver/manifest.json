@@ -16,9 +16,9 @@
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
-      "sha256": "d4380caaa235e25a49e682542d86f951377047440a3df0b96bd42316f2724c39",
+      "sha256": "b51e43da44af24bcd7e7f99f4fa2c6dac3a7f1eecd17d7b9c7b8dc6effa593a7",
       "mode": "0700",
-      "bytes": 19948
+      "bytes": 19951
     },
     {
       "path": "driver/backend_dependencies.py",
@@ -496,9 +496,9 @@
     },
     {
       "path": "driver/pipeline/local/vc6-handoff-watch.sh",
-      "sha256": "8ae3e4ad0f9048dfe4c1616539bf730ebc4ade0c915e0bb3d4a6ad7a24ce2a79",
+      "sha256": "757fecd9023ed1644aa3327bb34a12c6d3d8fdfa783c55448f76b6a87fed9ed2",
       "mode": "0700",
-      "bytes": 7714
+      "bytes": 7723
     },
     {
       "path": "driver/pipeline/local/vc6-local-commit.sh",
@@ -592,9 +592,9 @@
     },
     {
       "path": "driver/pipeline/vc-pipeline.sh",
-      "sha256": "c7e53b61b9905f5240c8cb027d0b968bafa06ea24b488e5b0ba08212682c24b3",
+      "sha256": "4019497766ce687d32f5d33a78e81ddc02b815ed45d93a10f4f083ebb31e43dd",
       "mode": "0700",
-      "bytes": 67738
+      "bytes": 67747
     },
     {
       "path": "driver/pipeline/vc2/gen_vc1_seal_plans.py",
@@ -634,15 +634,15 @@
     },
     {
       "path": "driver/pipeline/vc5-prereq.sh",
-      "sha256": "40e868c41af3c3769449c4536b50c9a29e4115dea865d4861309753ee742cf8f",
+      "sha256": "596a5ac0ebf4d57b0ced51a13324b65ac2a271ab9da81255a8d1e7a1fa2f6eac",
       "mode": "0700",
-      "bytes": 1894
+      "bytes": 1897
     },
     {
       "path": "driver/pipeline/vc5_prereq.py",
-      "sha256": "664f43eac39e6cb6f04802412e458128fe407381c0dc81ada4a41fa6c574fa6b",
+      "sha256": "baedfa844c86b412adf57806ac7506f7fd0f21ffc7cf3824412549b833945ebd",
       "mode": "0700",
-      "bytes": 27055
+      "bytes": 27064
     },
     {
       "path": "driver/pipeline/vc6/ORDER.example.txt",
@@ -1066,9 +1066,9 @@
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "e54f812537e4fee701e2d9aa209dbaba11001fa77d6fa4edc333e4aee8f6158d",
+      "sha256": "94f631f64fc9d4b492f9a8ce38aca7f3dd6185e36db3af158e34b240c77259ed",
       "mode": "0700",
-      "bytes": 11341
+      "bytes": 11344
     },
     {
       "path": "driver/vc5-canonical2.sh",
@@ -1179,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "fd78a948c29e926d28161d043032a1f1d05a16ce2108d4c5369f57e41cdeada8"
+  "manifest_sha256": "4269005b4744bdab5ec04d8a6e38eb12c52727fef32e8963af99f5b43582a501"
 }

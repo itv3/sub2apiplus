@@ -18,7 +18,7 @@
 #   的旧语义不变（无条件接受带标记的本地门禁）。不带标记的全集门禁照旧。
 # 续签批准人只在 canonical 阶段才导出（Codex 升级工具优化第 1 项）：起跑时传进来的 VC5_RENEW_APPROVER 只有 canonical 前的准入守卫要用，
 #   但环境变量会一路继承给 seal、accept 的所有子进程——目标平台门禁（accept 内的 make test）里的 test_arm64_capture_driver、test_arm64_pipeline_scripts
-#   不封闭进程环境，读到它就红（0.166 带 --approver 起 VC-5，目标平台门禁白跑两次约 3 小时）。所以一进脚本就把它收回成脚本私有变量
+#   不封闭进程环境，读到它就红（上一轮带 --approver 起 VC-5，目标平台门禁白跑两次约 3 小时）。所以一进脚本就把它收回成脚本私有变量
 #   VC5_RENEW_APPROVER_HELD（不再导出），直到 canonical 阶段才放回环境；之前的阶段（外部门禁注入、start、seal、accept）的子进程环境里一律没有它。
 # 用法：[VC5_RENEW_APPROVER='批准人及依据'] ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
 set -Eeuo pipefail

@@ -8,7 +8,7 @@
 #     make check-egress-spec 本身，不再跑两遍），产物由 vc4_gate_records.py 改写成原来的六件套与实现测试日志，文件名与 gate.json 字段不变；
 #     记录库与 Go 缓存跨次运行保留（$WORK/entry-work、$(dirname $D)/unit-records），所以：
 #       - 第一层（同提交）：重跑本脚本时 DC 不变、部署绑定不变，上一轮已通过且记录完整的单元直接沿用，只重跑失败、未完成的单元（缺省开）；
-#       - 第二层（换提交）：范围缺省随客户端（Codex 升级工具优化第 2 项 S3）——Codex 缺省 auto（按 Codex 计划筛选，Claude 重单元不再白跑，0.166 回放省约 61 分钟），
+#       - 第二层（换提交）：范围缺省随客户端（Codex 升级工具优化第 2 项 S3）——Codex 缺省 auto（按 Codex 计划筛选，Claude 重单元不再白跑，上一轮回放省约 61 分钟），
 #         其余客户端缺省 full（Claude 没有计划，make test 保持全集）。VC4_GATE_SCOPE=full 强制全集，=auto 强制筛选；别的值拒绝（退出 2）。
 #         筛选时 full-regression.gate.json 带 client_selection 标记（子集不会冒充 make test 全集）；vc5-all.sh 对带标记的本地门禁：Codex 轮次、gate_scope=client-plan、
 #         ownership_sha256 与 DC 树的归属表一致时放行并打印标记摘要，其余（含 Claude 轮次）默认拒绝，设 VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变。
