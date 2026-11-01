@@ -1136,15 +1136,19 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
 
 
 # >>> L1 驱动脚本维护登记常量（脚本生成，可重跑）
-# Codex 升级工具优化（opt-tools-1101，L1 线）改了下面这些被本模块钉住的驱动脚本：以改动前的主线头 cd028ceb78 为基线，代入 Codex 取值后
+# Codex 升级工具优化（opt-tools-1101，L1／L7 线）改了下面这些被本模块钉住的驱动脚本：以改动前的主线头 cd028ceb78 为基线，代入 Codex 取值后
 # 只剩登记的几处，每处 Codex 下都等价或只在显式设置时才生效：
 # * vc5-all.sh：（第 1 项）起跑时传进来的 VC5_RENEW_APPROVER 一进脚本就收回成脚本私有变量，canonical 阶段才放回环境——不设置时行为不变；
 #   （S3）注入本地 full-regression 门禁的核对改成函数 vc5_check_local_gate（原来的一行 python3 -c 拆成函数里的 heredoc）：不带 client_selection 标记的全集门禁
 #   核对与输出逐字不变；带标记的，Codex 轮次且 gate_scope=client-plan、标记里的 head_commit 等于 DC（缺失也拒绝）、ownership_sha256 与 DC 树归属表一致才放行并打印摘要，其余（含 Claude 轮次）仍按原口径拒绝，
 #   VC5_ALLOW_SUBSET_LOCAL_GATES=1 的旧语义不变；DC 树就位之后多一次 tree 阶段核对（不带标记时什么都不做）。
+# * entry-gates.sh：（任务文档第 2 项）只改了头部与正文里“按客户端筛选”的说明注释（VC-4 缺省走 Codex 子集、VC-5 目标平台门禁与收尾 full-gates 仍是全集等），
+#   非注释行逐字不变——代入 Codex 取值后与基线没有任何非注释差异，所以它在本批的残差为空。
 L1_DRIVER_BASELINE = 'cd028ceb787cc7fa25ae266e992216a6ed069f30'
-L1_DRIVER_DIGESTS = {'vc5-all.sh': 'eb5125a639c5352bed2bcf3ec9e1487eee1b34f2967de0d4dcf70c92a7a10166'}
-L1_DRIVER_RESIDUALS = {'vc5-all.sh': ['+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}',
+L1_DRIVER_DIGESTS = {'entry-gates.sh': '50daecd980424409fbb83b53d160aab88b3a4c80f0db9a7728a2976f99334f9b',
+ 'vc5-all.sh': 'eb5125a639c5352bed2bcf3ec9e1487eee1b34f2967de0d4dcf70c92a7a10166'}
+L1_DRIVER_RESIDUALS = {'entry-gates.sh': [],
+ 'vc5-all.sh': ['+VC5_RENEW_APPROVER_HELD=${VC5_RENEW_APPROVER:-}',
                 '+unset VC5_RENEW_APPROVER',
                 '+vc5_check_local_gate() {',
                 '+  python3 -B - "$1" "$G/local/full-regression.gate.json" "$DC" "${VC5_ALLOW_SUBSET_LOCAL_GATES:-}" codex "$B/test-tree" '
