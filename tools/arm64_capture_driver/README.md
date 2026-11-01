@@ -774,8 +774,8 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   `$RUNROOT/background-validation` 里最近一份 `status=passed`、提交是 DC 真祖先（不含 DC 自己）的结论，读不到就不给 `--select-base`，由入口门禁自己取最近的发版 tag（或第二层续跑的基点）；选择器出错一律回退全集。
   `vc5-all.sh` 对带 `client_selection` 的本地 `full-regression.gate.json`：Codex 轮次、标记 `client=codex`、`gate_scope=client-plan`、`ownership_sha256` 与 DC 提交里 `tools/ci/unit_ownership.json` 的摘要一致时放行并打印摘要，不再需要
   `VC5_ALLOW_SUBSET_LOCAL_GATES=1`；Claude 轮次、摘要不一致、标记形状不对仍拒绝（该变量的旧语义不变）。**副作用**：VC-4 的 `full-regression.gate.json` 带 `client_selection`，但 VC-5 正式收据里 `full-regression` 的命令名仍写 `make test`
-  （`codex_upgrade_gate_receipt.py:144`），“这次只跑了 Codex 计划”只存在于被 sha 绑定的 `gate.json` 里；VC-5 目标平台门禁仍是全集 `make test`，收尾 full-gates 与 GitHub CI 仍是全集兜底。`entry-gates.sh` 头部第 39–45 行
-  “VC-4／VC-5 的 make test 保持全集”的措辞已过时（该文件是红线文件，只能随版本登记改），以本条为准。
+  （`codex_upgrade_gate_receipt.py:144`），“这次只跑了 Codex 计划”只存在于被 sha 绑定的 `gate.json` 里；VC-5 目标平台门禁仍是全集 `make test`，收尾 full-gates 与 GitHub CI 仍是全集兜底。`entry-gates.sh` 头部原来过时的
+  “VC-4／VC-5 的 make test 保持全集”等措辞，11-01 已赶在下一个发版 tag 之前改成现状（只改注释），以该脚本头部说明为准；该文件是执行器文件，以后再改它必须赶在下一个发版 tag 之前，否则选择器整轮回退全集。
 * **历史测试树补发版 tag**（S1，`local/sync-history-tree.sh` → `history-tree-refresh.sh`）：采集主机取 bundle 用 `--no-tags`，历史树不带 tag（ARM64 的树曾最高只到 `v0.2.13-3`），入口门禁与后台验证的“最近发版 tag”因此解析成差几个版本的旧 tag，
   改动文件上千个、Codex 筛选必回退全集。现在 `sync-history-tree.sh` 在本机用 `git describe --tags --abbrev=0 --match 'v[0-9]*'` 取最新发版 tag 及提交，作为可选的第 4、5 个参数传给 `history-tree-refresh.sh`，后者校验名字格式（`v0.2.18`／`v0.2.18-6`）、
   40 位小写提交、提交存在且是目标提交的祖先之后 `git tag -f`；不带参数时与旧行为相同并打警告。**部署顺序**：先把驱动换到 ARM64（`install-driver.sh`），再跑 `sync-history-tree.sh`——旧的 refresh 脚本会静默忽略多出来的两个参数。现在同步脚本自带两道保护（本次要传 tag 时才生效）：①同步前（动任何东西之前）核对采集主机上已安装的 `history-tree-refresh.sh` 含读第 5 个参数的赋值 `TAG_COMMIT=${5:-}`，旧版以退出码 3 拒绝并提示先换驱动（ssh／grep 自身失败退出码 2，失败关闭）；②同步后在采集主机历史树上跑 `git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD`，必须等于传入的 tag，不一致或命令失败以退出码 4 失败并打印两者。验收：同一条 `git describe` 在 ARM64 历史树上返回最新发版。
