@@ -1,0 +1,16 @@
+{
+  "schema_version": "claude-code-fw-f-v5-version-facts/v1",
+  "claude_version": "2.1.309",
+  "advisor": {
+    "tool_type": "advisor_20260301",
+    "model_declaration": {
+      "prefix": "[AdvisorTool] Server-side tool enabled with ",
+      "suffix": " as the advisor model"
+    }
+  },
+  "provenance": {
+    "binary_platform": "linux/arm64",
+    "binary_sha256": "9796dd26899337f687739a0b39a7353b639f062a3436a7b941fcf19a1b757a9b",
+    "basis": "取自冻结的官方 2.1.309 linux-arm64 二进制（freeze-20261101t1702z；该文件是 aarch64 ELF，本机不可执行，只做只读静态读取）的字面量，读取对象是二进制全文与它提取出的内嵌 JS 模块：二进制全文的字面量扫描里 advisor_20 开头的类型常量只有 advisor_20260301 一种，共 3 处（内嵌 JS 里 var j9t=\"advisor_20260301\" 的声明占 2 处，字符串数据区 1 处）。启用 advisor 时，messages 请求的 tools 里推入一个 type 为该常量、name 为 advisor、model 为解析出的 advisor 模型的描述符（另有可选字段 defer_loading，由一个运行时布尔条件决定是否带）；同一个模型在 debug 日志里以「[AdvisorTool] Server-side tool enabled with <模型> as the advisor model」宣告（前缀与后缀在二进制全文各出现 2 处：内嵌 JS 的模板字面量 1 处、字符串数据区 1 处）。启用手段仍是环境变量 CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL（真值时跳过 advisor 排名核对）加设置项 advisorModel。2.1.309 的 fable 别名默认解析到 claude-fable-5-1（目录别名表读取所得），所以版本事实只冻结工具类型与宣告句式，不冻结模型名。"
+  }
+}

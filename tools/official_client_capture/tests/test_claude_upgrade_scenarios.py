@@ -22,6 +22,7 @@ import contextlib
 import copy
 import io
 import json
+import re
 import tempfile
 import shutil
 import unittest
@@ -373,7 +374,11 @@ class ScenarioManifestTests(unittest.TestCase):
                 lambda p: [job for job in _candidate_jobs(p) if job["id"] == "candidate-tui"][0].update(required=False),
                 "没有覆盖 VC-3 ScenarioPlan 场景",
             ),
-            "缺 Mac 客户端收据要求": (lambda p: p["required_client_bindings"].pop(), "required_client_bindings"),
+            # 客户端收据字段已放宽为词表子集（可为空），所以“少一项”不再是拒绝条件；改测未排序与重复。
+            "客户端收据未排序": (lambda p: p["required_client_bindings"].reverse(), "required_client_bindings"),
+            "客户端收据重复": (
+                lambda p: p.update(required_client_bindings=["claude-desktop", "claude-desktop"]), "required_client_bindings",
+            ),
             "未登记的客户端收据": (
                 lambda p: p.update(required_client_bindings=["claude-desktop", "claude-vscode", "kilo-compatible"]),
                 "required_client_bindings",
@@ -1203,6 +1208,345 @@ class CandidateMirrorTests(unittest.TestCase):
                     self.assertNotIn("{credentials_file}", step["argv"])
 
 
+class ClientBindingSubsetTests(unittest.TestCase):
+    """required_client_bindings 放宽为词表子集（可为空）：校验器、schema 与各消费端对空列表／单项都泛化处理。
+
+    本轮（2.1.309）清单登记空列表，代表验收范围不含 Desktop／VS Code；2.1.285 仍恰好两项，必须继续通过。
+    """
+
+    def _validate(self, bindings: list) -> None:
+        payload = copy.deepcopy(_scenario_payload())
+        payload["required_client_bindings"] = bindings
+        plan.validate_scenario_manifest(payload)
+
+    def test_empty_single_and_both_pass(self) -> None:
+        for bindings in ([], ["claude-desktop"], ["claude-vscode"], ["claude-desktop", "claude-vscode"]):
+            with self.subTest(bindings=bindings):
+                self._validate(bindings)
+
+    def test_unknown_unsorted_duplicate_and_wrong_type_rejected(self) -> None:
+        cases = {
+            "未知客户端名": ["claude-desktop", "kilo-compatible"],
+            "只有未知客户端名": ["kilo-compatible"],
+            "未排序": ["claude-vscode", "claude-desktop"],
+            "重复": ["claude-desktop", "claude-desktop"],
+            "含空串": [""],
+            "不是列表": "claude-desktop",
+        }
+        for label, bindings in cases.items():
+            with self.subTest(label=label), self.assertRaisesRegex(ConfigurationError, "required_client_bindings"):
+                self._validate(bindings)
+
+    def test_boundary_checks_stay_exact(self) -> None:
+        """放宽只针对客户端收据：边界核对字段仍必须恰好两项，不得为空或缺一。"""
+
+        for boundary in ([], ["third-party-ingress-rejection"]):
+            payload = copy.deepcopy(_scenario_payload())
+            payload["required_boundary_checks"] = boundary
+            with self.subTest(boundary=boundary), self.assertRaisesRegex(ConfigurationError, "required_boundary_checks"):
+                plan.validate_scenario_manifest(payload)
+
+    def test_schema_allows_empty_subset_of_the_vocabulary(self) -> None:
+        schema = json.loads((TOOL_ROOT / "claude_upgrade_scenarios.schema.json").read_text(encoding="utf-8"))
+        clients = schema["properties"]["required_client_bindings"]
+        self.assertEqual((clients["minItems"], clients["maxItems"], clients["uniqueItems"]), (0, 2, True))
+        boundary = schema["properties"]["required_boundary_checks"]
+        self.assertEqual((boundary["minItems"], boundary["maxItems"]), (2, 2))
+
+    def test_registered_manifests_still_pass_read(self) -> None:
+        """2.1.285（恰好两项）与 2.1.309（空列表）都能经正式读取入口；2.1.285 的来源章节摘要是既有陈旧值，走冻结副本。"""
+
+        rules = _baseline_rules()
+        with tempfile.TemporaryDirectory() as directory:
+            inputs = freeze_current_scenario_inputs(plan.scenario_manifest_path("2.1.285"), Path(directory).resolve() / "inputs")
+            old = plan.read_scenario_manifest(inputs.manifest_path, expected_version="2.1.285", rules=rules)
+        self.assertEqual(old["required_client_bindings"], ["claude-desktop", "claude-vscode"])
+        new = plan.read_scenario_manifest(plan.scenario_manifest_path("2.1.309"), expected_version="2.1.309", rules=rules)
+        self.assertEqual(new["required_client_bindings"], [])
+
+    def test_consumers_handle_empty_client_bindings(self) -> None:
+        """逐个核对消费端对空客户端收据登记的行为：不暂停、不拒绝合法输入，只拒绝清单没登记的 --client-evidence。"""
+
+        from tools.official_client_capture import claude_upgrade_acceptance as acceptance
+        from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
+        from tools.official_client_capture import claude_upgrade_evidence as evidence
+
+        scenarios = {"required_client_bindings": [], "required_boundary_checks": []}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            # seal：没有登记的客户端不允许带 --client-evidence。
+            self.assertEqual(candidate_seal._client_evidence(root, scenarios, []), {"client_bindings": {}, "boundary_checks": {}})
+            with self.assertRaisesRegex(ConfigurationError, "不在场景清单登记"):
+                candidate_seal._client_evidence(root, scenarios, [f"claude-desktop={root / 'x.json'}"])
+            # acceptance：两边皆空通过；候选给出多余的客户端收据即不一致。
+            manifest = {"campaign_id": "c1"}
+            candidate = {"candidate_id": "cand", "client_evidence": {"client_bindings": {}, "boundary_checks": {}}}
+            attempt = {"attempt_id": "a1", "run_nonce": "n1"}
+            frozen = root / "scenarios.json"
+            frozen.write_text(json.dumps(scenarios), encoding="utf-8")
+            with mock.patch.object(acceptance.claude_upgrade_seal, "_frozen_input", return_value=frozen):
+                self.assertEqual(
+                    acceptance.client_receipts(root, manifest, candidate, attempt),
+                    {"client_bindings": {}, "boundary_checks": {}},
+                )
+                candidate["client_evidence"]["client_bindings"] = {"claude-desktop": {"path": "x", "sha256": "0" * 64}}
+                with self.assertRaisesRegex(ConfigurationError, "client_bindings 与场景清单登记的不一致"):
+                    acceptance.client_receipts(root, manifest, candidate, attempt)
+        # evidence：空登记下没有客户端缺失原因；多给未登记的客户端收据失败关闭。
+        view = {
+            "scenarios": scenarios, "attempt": {"attempt_id": "a1", "run_nonce": "n1"}, "campaign_id": "c1", "candidate_id": "cand",
+            "client_evidence": {"client_bindings": {}, "boundary_checks": {}},
+        }
+        self.assertEqual(
+            evidence._candidate_client_evidence(view),
+            {"client_bindings": {}, "boundary_checks": {}, "reasons": []},
+        )
+        view["scenarios"] = {"required_client_bindings": [], "required_boundary_checks": ["third-party-ingress-rejection"]}
+        self.assertEqual(evidence._candidate_client_evidence(view)["reasons"], ["boundary_check_missing"])
+        view["client_evidence"]["client_bindings"] = {"claude-desktop": {"path": "x", "payload": {}}}
+        with self.assertRaisesRegex(evidence.SealEvidenceError, "没有登记"):
+            evidence._candidate_client_evidence(view)
+
+
+# 已登记的目标版本：新增登记必须同步补这张表（否则下面的逐版校验会失败并提示），避免新登记绕过逐项审计。
+REGISTERED_TARGETS = ("2.1.285", "2.1.309")
+# 各版本的非主模型能力取证 Job（顺序即清单顺序）；主模型是 Campaign 变量，不在清单里。
+EXPECTED_MODEL_JOBS = {
+    "2.1.285": ("claude-opus-5", "claude-fable-5"),
+    "2.1.309": ("claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5"),
+}
+# 各版本的客户端收据登记：2.1.309 本轮验收范围不含 Desktop／VS Code（登记为未验证）。
+EXPECTED_CLIENT_BINDINGS = {"2.1.285": ["claude-desktop", "claude-vscode"], "2.1.309": []}
+# 冻结的官方二进制摘要（版本事实出处的 binary_sha256）。
+EXPECTED_BINARY_SHA256 = {
+    "2.1.285": "24fac77749bed3d91365d6b6915aa4b824e14318ecb6bc17adbc192f01c9173d",
+    "2.1.309": "9796dd26899337f687739a0b39a7353b639f062a3436a7b941fcf19a1b757a9b",
+}
+# server fallback 锁存只在 fable 上取证（Active 投影策略的 server_fallbacks）。
+SERVER_FALLBACK_PROBE = "v4-bash"
+
+
+def _underscored(version: str) -> str:
+    return version.replace(".", "_")
+
+
+def _facts_relative(version: str) -> str:
+    return f"capturelib/claude_fw_f_v5_version_facts_{_underscored(version)}.json"
+
+
+def _registered_versions() -> list[str]:
+    prefix = plan.SCENARIO_PREFIX
+    return sorted(
+        path.name[len(prefix):-len(".json")].replace("_", ".") for path in TOOL_ROOT.glob(f"{prefix}[0-9]*.json")
+    )
+
+
+class RegisteredTargetsTests(unittest.TestCase):
+    """对每个已登记的目标版本逐一校验四个登记文件，并审计新版相对上一版模板只有允许的几类差异。"""
+
+    def test_registered_set_is_known(self) -> None:
+        self.assertEqual(_registered_versions(), sorted(REGISTERED_TARGETS), "新增登记请同步 REGISTERED_TARGETS 等期望表与差异审计")
+
+    def _model_base_probes(self) -> list[str]:
+        policy, _binding = release.active_projection_policy(BASELINE)
+        capability = (wire_projection.PROBE_COUNT_TOKENS, wire_projection.PROBE_THINKING_DISABLED,
+                      *(wire_projection.effort_probe(effort) for effort in policy["efforts"]))
+        return sorted({*wire_projection.MODEL_SCENARIO_PROBES, *capability})
+
+    def _load(self, version: str) -> tuple[dict, dict]:
+        rules = _baseline_rules()
+        if version == "2.1.285":
+            # 2.1.285 清单内的来源章节摘要是既有陈旧值，走冻结副本读取（与其余 2.1.285 测试一致）。
+            with tempfile.TemporaryDirectory() as directory:
+                inputs = freeze_current_scenario_inputs(plan.scenario_manifest_path(version), Path(directory).resolve() / "inputs")
+                payload = plan.read_scenario_manifest(inputs.manifest_path, expected_version=version, rules=rules)
+        else:
+            # 其他版本按正式严格模式读取：必须钉住当前第二部分摘要。
+            payload = plan.read_scenario_manifest(plan.scenario_manifest_path(version), expected_version=version, rules=rules)
+        labels = plan.load_evidence_labels(plan.evidence_labels_path(version), expected_version=version, scenario_payload=payload)
+        return payload, labels
+
+    def test_each_registered_target(self) -> None:
+        rules = _baseline_rules()
+        base_probes = self._model_base_probes()
+        for version in REGISTERED_TARGETS:
+            with self.subTest(version=version):
+                payload, labels = self._load(version)
+                u = _underscored(version)
+                # 四个登记文件与版本命名。
+                for path in (
+                    plan.scenario_manifest_path(version), plan.rule_manifest_path(version), plan.evidence_labels_path(version),
+                    TOOL_ROOT / _facts_relative(version),
+                ):
+                    self.assertTrue(path.is_file(), path)
+                self.assertEqual((payload["claude_version"], payload["profile_id"]), (version, f"claude-code-{version}"))
+                # 规则清单：40 条逐条承接基线，绑定文件摘要。
+                target_rules = plan.load_target_rules(
+                    plan.rule_manifest_path(version), target_version=version, baseline_rules=rules,
+                    baseline_manifest=plan.baseline_rule_manifest_path(BASELINE),
+                )
+                self.assertEqual(target_rules, rules)
+                self.assertEqual(payload["rule_manifest"]["sha256"], plan.file_sha256(plan.rule_manifest_path(version)))
+                # 版本事实：文件、摘要、出处二进制摘要、advisor 事实，每个步骤逐字携带同一绑定。
+                facts_path = TOOL_ROOT / _facts_relative(version)
+                binding = payload["version_facts"]
+                self.assertEqual(binding, {"path": f"tools/official_client_capture/{_facts_relative(version)}", "sha256": plan.file_sha256(facts_path)})
+                facts, _loaded = v5.load_version_facts(facts_path.resolve(), binding["sha256"], expected_version=version)
+                self.assertEqual(facts["provenance"]["binary_sha256"], EXPECTED_BINARY_SHA256[version])
+                self.assertEqual(facts["advisor"]["tool_type"], "advisor_20260301")
+                self.assertEqual(facts["advisor"]["model_declaration"], {
+                    "prefix": "[AdvisorTool] Server-side tool enabled with ", "suffix": " as the advisor model"})
+                for job in payload["capture_jobs"]:
+                    self.assertIn(f"capturelib/{facts_path.name}", job["tool_dependencies"])
+                    for step in job["steps"]:
+                        argv = step["argv"]
+                        self.assertEqual(argv[argv.index("--fw-f-v5-version-facts") + 1], f"{{capture_tool_root}}/{_facts_relative(version)}")
+                        self.assertEqual(argv[argv.index("--fw-f-v5-version-facts-sha256") + 1], binding["sha256"])
+                # 其他已登记版本的专属文件名不得出现在本版四个文件里（描述、路径都不带上一版版本号）。
+                for other in REGISTERED_TARGETS:
+                    if other == version:
+                        continue
+                    for path in (plan.scenario_manifest_path(version), plan.rule_manifest_path(version),
+                                 plan.evidence_labels_path(version), facts_path):
+                        text = path.read_text(encoding="utf-8")
+                        self.assertNotIn(other, text, f"{path.name} 带有 {other}")
+                        self.assertNotIn(_underscored(other), text, f"{path.name} 带有 {_underscored(other)}")
+                # 作业结构：12 个主模型 Job + 非主模型 Job + 12 个候选 Job（候选排在最后）。
+                models = EXPECTED_MODEL_JOBS[version]
+                official, candidate = _official_jobs(payload), _candidate_jobs(payload)
+                self.assertEqual((len(official), len(candidate)), (12 + len(models), 12))
+                self.assertEqual(payload["capture_jobs"][: len(official)], official)
+                self.assertEqual([job["id"] for job in official if job["id"].startswith(MODEL_JOB_PREFIX)],
+                                 [f"{MODEL_JOB_PREFIX}{model}" for model in models])
+                self.assertEqual(payload["required_client_bindings"], EXPECTED_CLIENT_BINDINGS[version])
+                self.assertEqual(payload["required_boundary_checks"], ["codex-final-wire-isolation", "third-party-ingress-rejection"])
+                # 非主模型 Job 的 probe：每个模型一套基础 probe，fable 另加 server fallback 锁存。
+                all_capability: list[str] = []
+                for model in models:
+                    job = next(item for item in official if item["id"] == f"{MODEL_JOB_PREFIX}{model}")
+                    expected = sorted(f"{model}-{probe}" for probe in base_probes)
+                    if "fable" in model:
+                        expected = sorted([*expected, f"{model}-{SERVER_FALLBACK_PROBE}"])
+                    self.assertEqual(sorted(step["probe_id"] for step in job["steps"]), expected, model)
+                    all_capability.extend(expected)
+                scenario = next(item for item in payload["evidence_scenarios"] if item["scenario_id"] == plan.MODEL_CAPABILITY_SCENARIO)
+                self.assertEqual(scenario["probe_ids"], sorted(all_capability))
+                self.assertEqual(scenario["covers"], [])
+                self.assertIn(f"执行 {len(all_capability)} 个冻结 probe", scenario["trigger"])
+                for model in models:
+                    self.assertIn(model, scenario["trigger"])
+                # 标签：每个 Job 都有；非主模型标签照主模型同名基础 probe 复制（同 2.1.285 的复制公式）。
+                self.assertEqual(set(labels["plans"]), {job["id"] for job in payload["capture_jobs"]})
+                self._assert_model_labels_follow_primary(labels)
+
+    @staticmethod
+    def _assert_model_labels_follow_primary(labels: dict) -> None:
+        entries = labels["document"]["entries"]
+        primary: dict[str, list[dict]] = {}
+        for entry in entries:
+            if entry["side"] == "official" and not entry["job_id"].startswith(MODEL_JOB_PREFIX):
+                for rule in entry["rules"]:
+                    primary.setdefault(rule["labels"]["probe"], []).append(rule)
+        for entry in entries:
+            if not entry["job_id"].startswith(MODEL_JOB_PREFIX):
+                continue
+            model = entry["job_id"][len(MODEL_JOB_PREFIX):]
+            by_probe: dict[str, list[dict]] = {}
+            for rule in entry["rules"]:
+                by_probe.setdefault(rule["labels"]["probe"], []).append(rule)
+            for probe_id, rules in by_probe.items():
+                base = probe_id[len(model) + 1:]
+                expected = []
+                for rule in primary[base]:
+                    copied = copy.deepcopy(rule)
+                    copied["glob"] = f"{probe_id}/" + rule["glob"][len(base) + 1:]
+                    copied["scenario_ids"] = [plan.MODEL_CAPABILITY_SCENARIO]
+                    copied["labels"] = {**rule["labels"], "probe": probe_id, "model": model}
+                    copied["rationale"] = f"{model} 模型能力取证，照主模型 {base} 的规则：{rule['rationale']}"
+                    expected.append(copied)
+                assert rules == expected, probe_id
+
+    def test_2_1_309_differs_from_2_1_285_only_in_allowed_ways(self) -> None:
+        """精确差异审计：把 2.1.285 的四个文件按“版本、模型、facts 摘要、第二部分摘要、模型 Job、客户端收据登记”做允许的
+        变换，结果必须与 2.1.309 的文件逐项相等；tool_dependencies 单独核对（只允许版本事实文件名这一处不同）。
+        2.1.285 退休时删除本用例。"""
+
+        old, new = "2.1.285", "2.1.309"
+        ou, nu = _underscored(old), _underscored(new)
+
+        def raw(path: Path) -> str:
+            return path.read_text(encoding="utf-8")
+
+        def rename(text: str) -> str:
+            text = text.replace(old, new).replace(ou, nu)
+            for before, after in (("claude-opus-5", "claude-opus-5-5"), ("claude-fable-5", "claude-fable-5-1")):
+                text = re.sub(re.escape(before) + r"\b", after, text)
+            return text
+
+        def with_haiku(items: list[dict], key: str, prefix_key: str) -> list[dict]:
+            """在第一个候选项之前插入由 opus 条目复制并换模型名的 haiku 条目（标签与清单共用）。"""
+
+            opus = next(item for item in items if item[key] == f"{prefix_key}claude-opus-5-5")
+            haiku = json.loads(json.dumps(opus).replace("claude-opus-5-5", "claude-haiku-5-5"))
+            position = next(index for index, item in enumerate(items) if item[key].startswith("candidate-"))
+            return [*items[:position], haiku, *items[position:]]
+
+        # facts：只有版本、出处二进制摘要与出处说明不同。
+        facts_old = json.loads(raw(TOOL_ROOT / _facts_relative(old)))
+        facts_new = json.loads(raw(TOOL_ROOT / _facts_relative(new)))
+        for field in ("schema_version", "advisor"):
+            self.assertEqual(facts_old[field], facts_new[field])
+        self.assertEqual(facts_old["provenance"]["binary_platform"], facts_new["provenance"]["binary_platform"])
+        self.assertEqual(facts_new["claude_version"], new)
+        facts_sha_old, facts_sha_new = plan.file_sha256(TOOL_ROOT / _facts_relative(old)), plan.file_sha256(TOOL_ROOT / _facts_relative(new))
+        # 规则清单：只有版本与描述里的版本号不同。
+        self.assertEqual(json.loads(rename(raw(plan.rule_manifest_path(old)))), json.loads(raw(plan.rule_manifest_path(new))))
+        rules_sha_old, rules_sha_new = plan.file_sha256(plan.rule_manifest_path(old)), plan.file_sha256(plan.rule_manifest_path(new))
+        # 证据标签：版本、模型改名，另加 haiku 条目（opus 复制）。
+        labels_expected = json.loads(rename(raw(plan.evidence_labels_path(old))))
+        labels_expected["entries"] = with_haiku(labels_expected["entries"], "job_id", MODEL_JOB_PREFIX)
+        self.assertEqual(labels_expected, json.loads(raw(plan.evidence_labels_path(new))))
+        # 场景清单。
+        current_spec = plan.guide_section_sha256(REPOSITORY_ROOT / "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md", "第二部分")
+        old_text = raw(plan.scenario_manifest_path(old))
+        old_payload = json.loads(old_text)
+        for before, after in ((facts_sha_old, facts_sha_new), (rules_sha_old, rules_sha_new), (old_payload["source_spec"]["sha256"], current_spec)):
+            old_text = old_text.replace(before, after)
+        expected = json.loads(rename(old_text))
+        expected["capture_jobs"] = with_haiku(expected["capture_jobs"], "id", MODEL_JOB_PREFIX)
+        expected["required_client_bindings"] = EXPECTED_CLIENT_BINDINGS[new]
+        capability = next(item for item in expected["evidence_scenarios"] if item["scenario_id"] == plan.MODEL_CAPABILITY_SCENARIO)
+        capability_probes = sorted(
+            step["probe_id"] for job in expected["capture_jobs"] if job["id"].startswith(MODEL_JOB_PREFIX) for step in job["steps"]
+        )
+        capability["probe_ids"] = capability_probes
+        actual = json.loads(raw(plan.scenario_manifest_path(new)))
+        actual_capability = next(item for item in actual["evidence_scenarios"] if item["scenario_id"] == plan.MODEL_CAPABILITY_SCENARIO)
+        # trigger 与前置条件第三条是描述文字：只核对模型清单与数量，再对齐后做整体相等。
+        self.assertIn("执行 49 个冻结 probe", actual_capability["trigger"])
+        self.assertEqual(len(capability_probes), 49)
+        self.assertEqual(actual_capability["preconditions"][:2], capability["preconditions"][:2])
+        capability["trigger"] = actual_capability["trigger"]
+        capability["preconditions"] = actual_capability["preconditions"]
+        self.assertIn("、".join(EXPECTED_MODEL_JOBS[new]), actual_capability["trigger"])
+        self.assertIn("、".join(EXPECTED_MODEL_JOBS[new]), actual_capability["preconditions"][2])
+        # tool_dependencies 另行核对：与 2.1.285 对应 Job 相比，只换版本事实文件名（模型 Job 对照 opus 的 2.1.285 Job）。
+        deps_old = {job["id"]: job["tool_dependencies"] for job in old_payload["capture_jobs"]}
+        for job in actual["capture_jobs"]:
+            template_id = job["id"]
+            if template_id.startswith(MODEL_JOB_PREFIX):
+                template_id = f"{MODEL_JOB_PREFIX}claude-opus-5"
+            self.assertEqual(
+                sorted(job["tool_dependencies"]),
+                sorted(_facts_relative(new) if item == _facts_relative(old) else item for item in deps_old[template_id]),
+                job["id"],
+            )
+        for source in (expected, actual):
+            for job in source["capture_jobs"]:
+                job["tool_dependencies"] = None
+        self.assertEqual(expected, actual)
+
+
 class IdentityLayerTests(unittest.TestCase):
     """新文件按 Claude 策略归层；wire 根经 claude_upgrade_plan 按符号进入 Claude wire 闭包。"""
 
@@ -1212,6 +1556,11 @@ class IdentityLayerTests(unittest.TestCase):
             "claude_upgrade_scenarios_2_1_285.json": "wire_producer",
             "claude_upgrade_evidence_labels_2_1_285.json": "evidence_semantics",
             "claude_upgrade_rules_2_1_285.json": "control",
+            "claude_upgrade_scenarios_2_1_309.json": "wire_producer",
+            "claude_upgrade_evidence_labels_2_1_309.json": "evidence_semantics",
+            "claude_upgrade_rules_2_1_309.json": "control",
+            "capturelib/claude_fw_f_v5_version_facts_2_1_285.json": "wire_producer",
+            "capturelib/claude_fw_f_v5_version_facts_2_1_309.json": "wire_producer",
             "claude_upgrade_plan.py": "control",
             "claude_upgrade_scenarios.schema.json": "control",
             "claude_run_candidate_capture.sh": "wire_producer",

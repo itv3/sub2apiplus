@@ -141,6 +141,44 @@ class VersionFactsTests(unittest.TestCase):
         self.assertEqual(v5.advisor_model_declarations(lines, facts), ["claude-opus-5[1m]"])
 
 
+class RegisteredVersionFactsTests(unittest.TestCase):
+    """对每个已登记目标版本的版本事实逐一校验：文件名即版本，内容是 2.1.285 模板按“版本、二进制摘要、出处说明”变换的结果。"""
+
+    # 版本 → 冻结的官方 linux-arm64 二进制摘要（出处 provenance.binary_sha256）。
+    BINARY_SHA256 = {
+        "2.1.285": "24fac77749bed3d91365d6b6915aa4b824e14318ecb6bc17adbc192f01c9173d",
+        "2.1.309": "9796dd26899337f687739a0b39a7353b639f062a3436a7b941fcf19a1b757a9b",
+    }
+
+    def test_every_registered_facts_file_loads_and_matches_template(self) -> None:
+        files = sorted((TOOL_ROOT / "capturelib").glob("claude_fw_f_v5_version_facts_*.json"))
+        versions = [path.name[len("claude_fw_f_v5_version_facts_"):-len(".json")].replace("_", ".") for path in files]
+        self.assertEqual(versions, sorted(self.BINARY_SHA256), "新增版本事实请同步本表与场景清单测试")
+        template = _facts()
+        for path, version in zip(files, versions):
+            with self.subTest(version=version):
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                facts, binding = v5.load_version_facts(path.resolve(), digest, expected_version=version)
+                self.assertEqual(binding["sha256"], digest)
+                self.assertEqual(facts["provenance"]["binary_sha256"], self.BINARY_SHA256[version])
+                self.assertEqual(facts["provenance"]["binary_platform"], "linux/arm64")
+                # 文件字节就是规范排版（两空格缩进、非 ASCII 原样、末尾换行），后续审计才能逐字节复现。
+                self.assertEqual(path.read_text(encoding="utf-8"), json.dumps(facts, indent=2, ensure_ascii=False) + "\n")
+                # 判定依赖的事实与 2.1.285 模板一致；出处说明必须点明二进制来源与读取方式，且不带其他版本号。
+                self.assertEqual(facts["advisor"], template["advisor"])
+                self.assertIn(f"官方 {version} linux-arm64", facts["provenance"]["basis"])
+                for other in versions:
+                    if other != version:
+                        self.assertNotIn(other, facts["provenance"]["basis"])
+
+    def test_debug_declaration_parses_with_every_registered_facts(self) -> None:
+        line = "2026-11-02T03:00:00.000Z [DEBUG] [AdvisorTool] Server-side tool enabled with claude-fable-5-1 as the advisor model"
+        for path in sorted((TOOL_ROOT / "capturelib").glob("claude_fw_f_v5_version_facts_*.json")):
+            with self.subTest(path=path.name):
+                facts = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(v5.advisor_model_declarations(line, facts), ["claude-fable-5-1"])
+
+
 class JudgmentTests(unittest.TestCase):
     """判定：advisor 正例按 debug 宣告比对；灰度 Header 与用量查询只记录；模型目录与 beta 等其余判定沿用 v4。"""
 

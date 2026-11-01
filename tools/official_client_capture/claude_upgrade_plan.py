@@ -844,20 +844,26 @@ def _validate_attempt_requirements(payload: Mapping[str, Any]) -> None:
     """attempt 级证据要求（B4-01）：三官方客户端正例里的 Mac 两项走客户端收据，边界核对两项走 attempt 级收据。
 
     两个字段在 Formal plan 之前随清单冻结；词表闭合，必需项缺一即失败关闭（产出方与核对方分别在候选驱动、seal 与 accept）。
+
+    客户端收据字段（required_client_bindings）允许登记词表的任意排序去重子集，包括空列表：Mac 侧正式取证条件不具备的
+    版本登记为空，代表本轮验收范围不含 Desktop／VS Code（这两项在交付说明里登记为“未验证”），消费端（驱动、seal、
+    acceptance、evidence）都是按清单内容逐项泛化处理的；边界核对字段（required_boundary_checks）仍必须恰好是词表全集。
+    子集放宽不改变“清单内出现的名字必须在词表内”这一闭合性。
     """
 
-    for field, required in (
-        ("required_client_bindings", REQUIRED_CLIENT_BINDINGS),
-        ("required_boundary_checks", REQUIRED_BOUNDARY_CHECKS),
+    for field, required, exact in (
+        ("required_client_bindings", REQUIRED_CLIENT_BINDINGS, False),
+        ("required_boundary_checks", REQUIRED_BOUNDARY_CHECKS, True),
     ):
         value = payload.get(field)
         if (
-            not _unique_strings(value)
+            not _unique_strings(value, allow_empty=not exact)
             or any(not SAFE_ID_RE.fullmatch(item) for item in value)
             or value != sorted(value)
-            or set(value) != required
+            or (set(value) != required if exact else not set(value) <= required)
         ):
-            raise ConfigurationError(f"场景清单 {field} 必须是排序去重的 {sorted(required)}。")
+            expectation = f"恰好是 {sorted(required)}" if exact else f"{sorted(required)} 的子集（可以为空）"
+            raise ConfigurationError(f"场景清单 {field} 必须是排序去重的列表，且{expectation}。")
 
 
 # ---------------------------------------------------------------------------

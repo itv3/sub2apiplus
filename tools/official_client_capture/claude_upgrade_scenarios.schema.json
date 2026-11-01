@@ -45,10 +45,10 @@
       "items": {"$ref": "#/$defs/captureJob"}
     },
     "required_client_bindings": {
-      "description": "B4-01：三官方客户端正例里只能在 Mac 上驱动的两个，按 Codex 第三方客户端收据机制由 Mac 侧 claude_drive_desktop.py 驱动并产出收据，候选 seal 用 --client-evidence 核对；CLI 正例由候选 Job 承担。排序去重，恰好是这两项。",
+      "description": "B4-01：三官方客户端正例里只能在 Mac 上驱动的两个，按 Codex 第三方客户端收据机制由 Mac 侧 claude_drive_desktop.py 驱动并产出收据，候选 seal 用 --client-evidence 核对；CLI 正例由候选 Job 承担。排序去重，是这两项的任意子集，可以为空：空列表表示该版本的验收范围不含 Desktop／VS Code（登记为未验证），日后条件具备时由新版本清单重新登记。",
       "type": "array",
       "items": {"enum": ["claude-desktop", "claude-vscode"]},
-      "minItems": 2,
+      "minItems": 0,
       "maxItems": 2,
       "uniqueItems": true
     },
