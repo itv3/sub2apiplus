@@ -195,7 +195,9 @@ b3-check)
   # manifest 校验经管道 tail 丢了退出码，整步永远退出 0。11-01 对着真实环境冒烟时（工作树是游离 HEAD）发现。
   B3_BAD=0
   say "== 重封链干跑（只读，看每一步是否‘无变化’）"
-  python3 -B tools/ci/reseal_chain.py --repo . --log-dir "${LOGS}/reseal-dry" --version "${TARGET_VERSION}" --label closeout --reason "收尾判定" --ack-no-campaign --dry-run > "${LOGS}/reseal-dry.txt" 2>&1; RESEAL_RC=$?
+  # --skip-trace：收尾不重新追踪依赖表（现行规则，见重封链头注释），所以干跑也别把 trace 算进计划——不加的话 trace 的前置检查会硬找
+  # <主检出>/local-analysis/<上一轮目录>/heavy-run.sh，下一轮那个目录一换名，干跑就因“找不到重负载锁脚本”失败，而且计划里还印着“将执行：后台追踪”。
+  python3 -B tools/ci/reseal_chain.py --repo . --log-dir "${LOGS}/reseal-dry" --version "${TARGET_VERSION}" --label closeout --reason "收尾判定" --ack-no-campaign --skip-trace --dry-run > "${LOGS}/reseal-dry.txt" 2>&1; RESEAL_RC=$?
   grep -E '无变化|无需|不需要|将执行|仍然成立' "${LOGS}/reseal-dry.txt" | cut -c1-160
   if [ "${RESEAL_RC}" != "0" ]; then
     say "!! 重封链干跑没跑成（退出码 ${RESEAL_RC}）：上面没有“无变化”不等于无变化。日志 ${LOGS}/reseal-dry.txt 末尾："

@@ -367,6 +367,7 @@ class CloseoutShell(unittest.TestCase):
         wt = ws.root / "wt"
         write(wt / "tools/ci/reseal_chain.py",
               "import os, sys\n"
+              "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reseal-argv.txt'), 'w').write(' '.join(sys.argv[1:]))\n"
               "if os.environ.get('STUB_RESEAL') == 'fail':\n"
               "    print('前置检查未通过：\\n  - HEAD 是游离的（不在任何分支上）')\n"
               "    sys.exit(2)\n"
@@ -401,6 +402,17 @@ class CloseoutShell(unittest.TestCase):
         self.assertNotIn("!!", result.stdout)
         self.assertIn("本步无变化", result.stdout)
         self.assertNotIn("预期红", result.stdout, "固定顺序里 b3a 在 b3-check 之前，不再有“预期红”")
+
+    def test_b3_check_reseal_dry_run_skips_trace(self) -> None:
+        """收尾不重新追踪依赖表：干跑必须带 --skip-trace（否则 trace 的前置检查会硬找上一轮目录里的重负载锁脚本，下一轮就失败）。"""
+
+        ws = Workspace(self)
+        wt = self.b3_workspace(ws)
+        result = self.run_b3(ws, wt, "test_stub_green")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = (wt / "tools/ci/reseal-argv.txt").read_text().split()
+        for flag in ("--dry-run", "--skip-trace", "--ack-no-campaign"):
+            self.assertIn(flag, argv)
 
     def test_b3_check_reseal_dry_run_failure_is_visible_and_fails_the_step(self) -> None:
         ws = Workspace(self)
