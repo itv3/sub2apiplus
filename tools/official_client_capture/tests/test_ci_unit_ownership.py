@@ -518,6 +518,36 @@ class UnresolvedDynamicLoadTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(sorted(uo.Graph(self.world(text).root).unresolved_dynamic), [f"{TESTS}/test_claude_dynamic_e.py"])
 
+    def test_a_changed_test_entry_file_is_not_an_unused_file(self) -> None:
+        """测试入口文件天然没人导入：被改的测试模块（由规则 2 并入自己）、tools 根目录的测试脚本、任何 tests 目录里的 test_*.py 都不触发失败关闭。"""
+
+        world = self.world(self.LOADER, {"tools/test_standalone.py": "import unittest\n", "tools/ci/aux/tests/test_other.py": "import unittest\n"})
+        selection = world.select((f"{TESTS}/test_codex_thing.py", "from tools.official_client_capture import codex_only\nDATA = 'x'\n"),
+                                 (f"{TESTS}/test_ci_shared_thing.py", "from tools.official_client_capture import kernel_util\nY = 2\n"),
+                                 ("tools/test_standalone.py", "import unittest\nX = 1\n"),
+                                 ("tools/ci/aux/tests/test_other.py", "import unittest\nX = 1\n"))
+        self.assertEqual(selection["fail_closed"], [])
+        self.assertNotIn("test_claude_dynamic_e", pulled(selection), "动态加载点可达，但改的都是测试入口文件：不并入")
+        self.assertEqual(skipped(selection), sorted([*HEAVY_MODULES, "test_claude_dynamic_e"]))
+
+    def test_the_test_entry_file_exception_is_narrow(self) -> None:
+        """例外只给测试入口：非 test_ 开头的 tests 目录文件（夹具）、更深一层目录（如 real_chains）、tools 根目录的非测试脚本照旧算“没有使用者”。"""
+
+        for rel in (f"{TESTS}/test_x.py", "tools/test_x.py", "tools/upstream_merge/tests/test_x.py", "tools/official_client_control/tests/test_x.py"):
+            with self.subTest(rel):
+                self.assertTrue(uo.is_test_entry_file(rel))
+        for rel in (f"{TESTS}/claude_fixture.py", f"{TESTS}/real_chains/test_x.py", "tools/ci/test_helper_tool.py", "tools/brand_new_tool.py",
+                    f"{TESTS}/test_x.json", "tools/upstream_merge/tests/helper.py"):
+            with self.subTest(rel):
+                self.assertFalse(uo.is_test_entry_file(rel))
+
+    def test_a_changed_fixture_or_orphan_library_file_still_fails_closed(self) -> None:
+        world = self.world(self.LOADER, {f"{TESTS}/real_chains/test_real_chain.py": "X = 1\n"})
+        selection = world.select((f"{TESTS}/real_chains/test_real_chain.py", "X = 2\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_dynamic_e"], "更深一层目录里的 test_ 文件不在例外里")
+        selection = self.world(self.LOADER).select((self.ORPHAN, "X = 5\n"))
+        self.assertEqual(sorted(pulled(selection)), ["test_claude_dynamic_e"], "孤儿库文件照旧失败关闭")
+
     def test_the_real_tree_exposure_is_the_two_reviewed_table_driven_loads(self) -> None:
         # 现状核对：真实树里重模块可达的、解析不了目标的动态加载点只有这两处（都是按客户端表的行加载编排器／账本模块）。以后谁再加一个，这条会红，
         # 提醒评审看清楚它加载什么、值不值得并入。
@@ -525,6 +555,201 @@ class UnresolvedDynamicLoadTests(unittest.TestCase):
         self.assertEqual(selector.exposed(), {
             "test_claude_sealed_gate_materials": ["tools/arm64_capture_driver/driver/vc5_admission.py"],
             "test_claude_vc4_driver": ["tools/arm64_capture_driver/driver/vc4_client.py"]})
+
+
+class OwnershipTableDeltaTests(unittest.TestCase):
+    """EVAL2 S2：升级登记的变更集里归属表是重新生成的。相对基点只是"登记新增的测试模块"这类只会更严的增量时不回退全集；
+    其余任何改法（改既有模块的归属／规则、run 改 skip、顶层字段变、认识的目录范围变少、选择器本身变）照旧回退。"""
+
+    NEW = f"{TESTS}/test_ci_brand_new.py"
+
+    def edit(self, world: World, calibration: dict[str, float] | None = None, base: dict | None = None) -> None:
+        """按当前树重新物化归属表写回工作树（不提交），等价于升级登记里 ``materialize`` 之后的状态。"""
+
+        world.data = uo.materialize(world.root, base or base_data(), calibration or CALIBRATION)
+        world.write_data()
+
+    def assert_relaxed(self, selection: dict, delta: int) -> None:
+        self.assertEqual(selection["scope"], uo.SCOPE_CLIENT_PLAN, selection["fallback_reasons"])
+        self.assertEqual(selection["fallback_reasons"], [])
+        self.assertEqual(selection["ownership_table_delta"], delta)
+        self.assertTrue(uo.seal_ok(selection))
+
+    def assert_falls_back(self, selection: dict, why: str) -> None:
+        self.assertEqual(selection["scope"], uo.SCOPE_FULL)
+        self.assertNotIn("ownership_table_delta", selection)
+        self.assertEqual(skipped(selection), [])
+        reasons = "；".join(selection["fallback_reasons"])
+        self.assertIn("归属表或选择器本身在改动里", reasons)
+        self.assertIn(why, reasons)
+
+    def test_the_selection_has_no_delta_key_when_the_table_is_not_in_the_changes(self) -> None:
+        selection = World(self).select()
+        self.assertNotIn("ownership_table_delta", selection)
+        self.assertEqual(skipped(selection), HEAVY_MODULES)
+
+    def test_registering_a_new_test_module_keeps_the_client_plan_and_reports_the_delta(self) -> None:
+        world = World(self)
+        world.write(self.NEW, "X = 1\n")
+        self.edit(world, {**CALIBRATION, "test_ci_brand_new": 10.0})
+        selection = world.select()
+        self.assert_relaxed(selection, 1)
+        self.assertEqual(skipped(selection), HEAVY_MODULES, "已有的重模块照样剔除")
+        self.assertEqual(selection["modules"]["test_ci_brand_new"], uo.RUN)
+        self.assertEqual(selection["unclassified"], [])
+        self.assertEqual(uo.check(world.root), [], "新表本身与现推一致")
+
+    def test_a_new_heavy_module_is_added_to_the_table_and_still_runs_because_its_file_is_in_the_changes(self) -> None:
+        world = World(self)
+        world.write(f"{TESTS}/test_claude_heavy_e.py", "from tools.official_client_capture import kernel_util\n")
+        self.edit(world, {**CALIBRATION, "test_claude_heavy_e": HEAVY})
+        selection = world.select()
+        self.assert_relaxed(selection, 1)
+        self.assertEqual(world.data["modules"]["test_claude_heavy_e"]["codex_plan"], uo.SKIP, "表里它是可剔除的重模块")
+        self.assertEqual(selection["modules"]["test_claude_heavy_e"], uo.RUN, "新增的测试文件自己在改动里：规则 2 并入")
+        self.assertIn("test_claude_heavy_e", pulled(selection))
+        self.assertEqual(skipped(selection), HEAVY_MODULES)
+
+    def test_recalibration_alone_is_a_zero_delta_and_only_ever_runs_more(self) -> None:
+        world = World(self)
+        self.edit(world, {**CALIBRATION, "test_claude_heavy_a": 1.0})   # 核·秒降到廉价阈值以下：由 skip 变 run
+        world.data["calibration"] = {"run_id": "r2", "source": "重标", "note": "t"}
+        world.write_data()
+        selection = world.select()
+        self.assert_relaxed(selection, 0)
+        self.assertEqual(world.data["modules"]["test_claude_heavy_a"]["codex_plan"], uo.RUN)
+        self.assertEqual(skipped(selection), ["test_claude_heavy_b", "test_claude_heavy_c", "test_claude_heavy_d"])
+
+    def test_raising_core_seconds_so_a_module_becomes_skippable_falls_back(self) -> None:
+        world = World(self)
+        self.edit(world, {**CALIBRATION, "test_claude_cheap": HEAVY})   # run → skip：会少跑
+        self.assert_falls_back(world.select(), "只放行 skip → run")
+
+    def test_changing_the_owner_or_rule_of_an_existing_module_falls_back(self) -> None:
+        for field, value in (("owner", "codex"), ("rule", "override")):
+            with self.subTest(field):
+                world = World(self)
+                world.data["modules"]["test_claude_cheap"][field] = value
+                world.write_data()
+                self.assert_falls_back(world.select(), f"{field} 变了")
+
+    def test_a_hand_written_plan_that_does_not_match_the_owner_and_core_seconds_falls_back(self) -> None:
+        world = World(self)
+        world.write(self.NEW, "X = 1\n")
+        self.edit(world, {**CALIBRATION, "test_ci_brand_new": 10.0})
+        world.data["modules"]["test_ci_brand_new"].update(owner="claude", rule="name:claude", codex_plan="skip")   # 核·秒 10 低于阈值，不该 skip
+        world.write_data()
+        self.assert_falls_back(world.select(), "按归属与核·秒应为 run")
+
+    def test_a_module_dropped_from_the_table_falls_back(self) -> None:
+        world = World(self)
+        (world.root / TESTS / "test_claude_cheap.py").unlink()
+        self.edit(world, {key: value for key, value in CALIBRATION.items() if key != "test_claude_cheap"})
+        self.assert_falls_back(world.select(), "从表里没了")
+
+    def test_any_other_top_level_field_changing_falls_back(self) -> None:
+        for label, mutate in (
+                ("阈值", lambda data: data.update(cheap_core_seconds=31)),
+                ("启用的客户端", lambda data: data.update(enabled_clients=["codex", "claude"])),
+                ("钉住表", lambda data: data.update(pinned={"test_claude_heavy_a": "钉住"})),
+                ("覆盖表", lambda data: data["overrides"].update(test_claude_cheap={"owner": "shared", "reason": "x"})),
+                ("枢纽", lambda data: data["hubs"].append(f"{CAPTURE}/kernel_util.py")),
+                ("联动表", lambda data: data["coupled"].clear()),
+                ("说明文字", lambda data: data.update(description="改了")),
+                ("新增顶层键", lambda data: data.update(dependency={"precision": "auto", "reason": "x", "reviewed_files": {}}))):
+            with self.subTest(label):
+                world = World(self)
+                mutate(world.data)
+                world.write_data()
+                self.assert_falls_back(world.select(), "顶层" )
+
+    def test_recognized_areas_may_grow_but_never_shrink(self) -> None:
+        world = World(self)
+        world.data["recognized_areas"] = [*world.data["recognized_areas"], "tools/behavior_acceptance/"]
+        world.write_data()
+        self.assert_relaxed(world.select(), 0)
+        world = World(self)
+        world.data["recognized_areas"] = [area for area in world.data["recognized_areas"] if area != "docs/"]
+        world.write_data()
+        self.assert_falls_back(world.select(), "认识的目录范围少了")
+
+    def test_a_new_directory_fails_closed_until_it_is_registered_and_is_recognized_afterwards(self) -> None:
+        change = ("tools/behavior_acceptance/README.md", "# 行为验收\n")
+        selection = World(self).select(change)
+        self.assertEqual(selection["fail_closed"], [{"reason": "改动路径不在已登记的目录范围", "file": change[0]}])
+        self.assertEqual(skipped(selection), [], "新顶层目录：失败关闭，重模块全并入")
+        # 同一提交里把目录登记进 recognized_areas（升级登记的做法）：这次的改动按登记的范围处理。
+        world = World(self)
+        world.data["recognized_areas"] = [*world.data["recognized_areas"], "tools/behavior_acceptance/"]
+        world.write_data()
+        selection = world.select(change)
+        self.assert_relaxed(selection, 0)
+        self.assertEqual(selection["fail_closed"], [])
+        # 基点就已登记（发版后的下一轮）：同样不失败关闭。
+        base = {**base_data(), "recognized_areas": [*base_data()["recognized_areas"], "tools/behavior_acceptance/"]}
+        selection = World(self, base=base).select(("tools/behavior_acceptance/lib.py", "X = 1\n"), change)
+        self.assertEqual(selection["fail_closed"], [])
+        self.assertEqual(skipped(selection), HEAVY_MODULES)
+        self.assertNotIn("ownership_table_delta", selection)
+        # 一个没登记过的另一个新目录照旧失败关闭，即使归属表同时在做合法增量。
+        world = World(self)
+        world.data["recognized_areas"] = [*world.data["recognized_areas"], "tools/behavior_acceptance/"]
+        world.write_data()
+        selection = world.select(("tools/other_new_area/x.txt", "x\n"))
+        self.assertEqual([item["file"] for item in selection["fail_closed"]], ["tools/other_new_area/x.txt"])
+        self.assertEqual(skipped(selection), [])
+
+    def test_the_reviewed_hermetic_table_may_only_gain_entries_for_new_modules(self) -> None:
+        world = World(self)
+        world.data["reviewed_hermetic"] = {"test_codex_thing": "给已有模块加复核项"}
+        world.write_data()
+        self.assert_falls_back(world.select(), "已复核隔离表给已有模块新加了项")
+        world = World(self)
+        world.write(self.NEW, "X = 1\n")
+        self.edit(world, {**CALIBRATION, "test_ci_brand_new": 10.0})
+        world.data["reviewed_hermetic"] = {"test_ci_brand_new": "新模块的复核项"}
+        world.write_data()
+        self.assert_relaxed(world.select(), 1)
+        world = World(self, base={**base_data(), "reviewed_hermetic": {"test_codex_thing": "r"}})
+        world.data["reviewed_hermetic"] = {}
+        world.write_data()
+        self.assert_relaxed(world.select(), 0)   # 删项只会更严
+
+    def test_the_selector_itself_or_its_driver_copy_in_the_changes_still_falls_back_even_with_a_clean_delta(self) -> None:
+        for path in ("tools/ci/unit_ownership.py", "tools/arm64_capture_driver/driver/unit_ownership.py"):
+            with self.subTest(path):
+                world = World(self, {**WORLD, path: "X = 1\n"})
+                world.write(self.NEW, "X = 1\n")
+                self.edit(world, {**CALIBRATION, "test_ci_brand_new": 10.0})
+                selection = world.select((path, "X = 2\n"))
+                self.assertEqual(selection["scope"], uo.SCOPE_FULL)
+                self.assertEqual(skipped(selection), [])
+                self.assertEqual(selection["fallback_reasons"], [f"归属表或选择器本身在改动里：{path}"], "归属表的增量放行，选择器自己的回退一字不变")
+                self.assertEqual(selection["ownership_table_delta"], 1)
+
+    def test_the_executor_files_in_the_changes_still_fall_back_with_a_clean_delta(self) -> None:
+        world = World(self, {**WORLD, "tools/ci/unit_executor.py": "X = 1\n"})
+        world.write(self.NEW, "X = 1\n")
+        self.edit(world, {**CALIBRATION, "test_ci_brand_new": 10.0})
+        selection = world.select(("tools/ci/unit_executor.py", "X = 2\n"))
+        self.assertEqual(selection["scope"], uo.SCOPE_FULL)
+        self.assertEqual(selection["fallback_reasons"], ["执行器版本文件或调度策略文件在改动里：tools/ci/unit_executor.py"])
+
+    def test_a_base_without_a_readable_ownership_table_falls_back(self) -> None:
+        """基点里读不出归属表（或不合法）：无从比较，照旧回退。直接调函数核对三种坏基点。"""
+
+        world = World(self)
+        self.edit(world, {**CALIBRATION, "test_claude_heavy_a": 1.0})
+        world.commit("候选")
+        self.assertEqual(uo.ownership_table_delta(world.root, world.base, world.data, "M"), (0, None))
+        self.assertIn("只放行修改", uo.ownership_table_delta(world.root, world.base, world.data, "A")[1])
+        self.assertIn("只放行修改", uo.ownership_table_delta(world.root, world.base, world.data, "D")[1])
+        self.assertIn("基点里读不到归属表", uo.ownership_table_delta(world.root, "0" * 40, world.data, "M")[1])
+        head = git(world.root, "rev-parse", "HEAD")
+        world.write(uo.DATA_PATH, "{坏的")
+        broken = world.commit("坏表")
+        self.assertIn("基点的归属表不合法", uo.ownership_table_delta(world.root, broken, world.data, "M")[1])
+        self.assertEqual(head, git(world.root, "rev-parse", head))
 
 
 class ReviewRequirementTests(unittest.TestCase):

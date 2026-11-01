@@ -26,9 +26,14 @@ Claude 单元约占一半核·秒），Codex 升级时这些测试几乎不会�
 4. 联动文件（版本登记机械改动的 Claude 场景清单、期望画像、冻结摘要）：只并入直接验证它们的模块；
 5. 非 Python 改动：按路径字面量反向索引与受管树内数据文件的读取者并入；
 6. 失败关闭：改动路径不在已登记的目录范围、Python 文件解析失败、受管树内数据文件找不到任何读取者——并入全部重模块；
-   归属表、选择器或执行器自己（执行器的 14 个版本文件与调度策略文件，含驱动目录副本）在改动里——本轮不筛选（全集）；改动的 Python 文件**没有任何静态使用者**（导入图里没有入边、别的文件文本里也没提到它的名字），
+   归属表、选择器或执行器自己（执行器的 14 个版本文件与调度策略文件，含驱动目录副本）在改动里——本轮不筛选（全集）；
+   **例外**：归属表在改动里，但相对基点只是"登记新增的测试模块"这种只会更严的增量（见 ``ownership_table_delta``）时不回退；选择器本身、
+   驱动副本、执行器文件、依赖精度下的依赖表的回退条件一概不变。
+   改动的 Python 文件**没有任何静态使用者**（导入图里没有入边、别的文件文本里也没提到它的名字），
    而某个重模块可达的文件里有**解析不了目标的动态加载**（目标既不含像名字的字符串字面量、也不是函数参数转发、也不是绑定过字面量的名字，
    或取自数据表）——并入这些重模块：这个文件除了被它们动态加载，想不出别的用处。有静态使用者的文件按导入边处理（1 跳口径）。
+   **例外**：测试入口文件天然没人导入，不算"没有静态使用者"（它们是入口，不是被加载的对象）：``tools/test_*.py`` 与任何名为 ``tests`` 的目录里的
+   ``test_*.py``（含执行器直接发现运行的采集工具测试模块）；改动的测试模块自身仍按规则 2 并入。
 
 导入图的边除了 ``import``／``from … import``（含函数内导入）、字符串里写全的模块路径与 ``名字.py`` 脚本名，还认**按名字加载**：测试里的
 ``load_script("vc4_resume")``、``load_driver("phase_context", …)`` 这类写法，字符串字面量整串等于某个脚本的 stem（含下划线，或位于驱动目录），就算一条导入边
@@ -187,6 +192,19 @@ def is_fixture(rel: str) -> bool:
 def is_test_module(rel: str) -> bool:
     path = PurePosixPath(rel)
     return str(path.parent) == TESTS_DIR and path.name.startswith("test_") and path.suffix == ".py"
+
+
+def is_test_entry_file(rel: str) -> bool:
+    """测试入口文件：``tools/`` 根目录下自成一体的测试脚本（``tools/test_check_spec_refs.py``），或任何名为 ``tests`` 的目录里的 ``test_*.py``
+    （采集工具的测试模块 ``tools/official_client_capture/tests/test_*.py``、``tools/upstream_merge/tests/``、``tools/official_client_control/tests/`` 等）。
+
+    它们是被 ``python -m unittest`` 或执行器直接发现运行的入口，天然没有静态使用者（没人导入），也不是别的代码会动态加载的对象；
+    ``tests/real_chains/`` 这类更深一层的目录不算（保守：真实链测试由显式清单加载）。"""
+
+    path = PurePosixPath(rel)
+    if not (path.name.startswith("test_") and path.suffix == ".py"):
+        return False
+    return str(path.parent) == GRAPH_ROOT or path.parent.name == "tests"
 
 
 def is_managed(rel: str) -> bool:
@@ -997,6 +1015,76 @@ def _normalized_python(text: str | None, ignore: Sequence[str]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# 归属表的增量放行（EVAL2 S2）
+# ---------------------------------------------------------------------------
+
+# 归属表出现在改动里时，除下面四项以外的顶层字段必须与基点逐字相等才可能放行：
+# ``modules``（逐项另有规则）、``recognized_areas``（只增不减）、``calibration``（只是出处说明，选择不读）、
+# ``reviewed_hermetic``（只许为本次新增的模块加项，见 ``ownership_table_delta``）。
+OWNERSHIP_DELTA_FREE_KEYS = frozenset({"modules", "recognized_areas", "calibration", "reviewed_hermetic"})
+
+
+def ownership_table_delta(tree: Path, base: str, candidate: Mapping[str, Any], status: str) -> tuple[int, str | None]:
+    """归属表（``DATA_PATH``）在改动里时，判断相对基点是不是"只会更严的增量"：是则返回（新增模块数, None），不是返回（0, 不放行的原因）。
+
+    为什么可以放行：升级登记的变更集里，归属表是 ``materialize`` 重新生成的——新增测试模块要登记一行。旧规则把"归属表在改动里"一律当作
+    "候选提交自己改规则给自己放水"而整轮回退全集；但只新增模块行、不动已有规则时，候选不可能借此少跑任何基点上已有的模块：
+    新增的测试模块文件本身就在改动里，规则 2 会把它并入；放行条件逐条（任何一条不满足都不放行，调用方照旧记回退原因）：
+
+    * （a）顶层键集合与基点相同；除 ``OWNERSHIP_DELTA_FREE_KEYS`` 四项外，其余顶层字段逐字相等（阈值、启用的客户端、覆盖表、钉住表、联动表、
+      枢纽、共用内核、依赖精度配置等都不许变——它们每一项都会改变"谁被剔除"）；
+    * （b）``modules``：基点的每个模块都还在；已有模块的 ``owner``、``rule`` 不变；``codex_plan``／``claude_plan`` 不变或只由 skip 变 run（只会多跑）；
+      新增模块不限制（它的文件在改动里，必被并入）；``core_seconds`` 允许重标，但**所有**模块的两个计划状态必须与"归属＋核·秒＋阈值＋钉住"
+      推出的结果一致（候选不能手写一个与核·秒对不上的 skip；这与 ``check`` 同口径，选择时先自检一遍，不等测试跑完）；
+    * （c）``recognized_areas`` 只增不减（认识的目录范围只许扩大）；
+    * （d）``reviewed_hermetic`` 里新增的项只许属于本次新增的模块（已复核隔离表会让依赖精度不再因 ARM64 环境字面量强制照跑，给已有模块新加项等于放水）；
+      删项只会更严，不限制。
+
+    基点的归属表读不出来、不合法、或状态不是"修改"（新增／删除）一律不放行。"""
+
+    if status != "M":
+        return 0, f"归属表在改动里的状态是 {status}，只放行修改"
+    text = _git_show(tree, base, DATA_PATH)
+    if text is None:
+        return 0, "基点里读不到归属表"
+    try:
+        before = validate_data(json.loads(text))
+    except (ValueError, TypeError, KeyError) as error:
+        return 0, f"基点的归属表不合法：{error}"
+    if set(before) != set(candidate):
+        return 0, f"顶层键集合变了：多 {sorted(set(candidate) - set(before))}，少 {sorted(set(before) - set(candidate))}"
+    for key in sorted(set(before) - OWNERSHIP_DELTA_FREE_KEYS):
+        if before[key] != candidate[key]:
+            return 0, f"顶层字段 {key} 变了（只放行模块表、认识的目录范围、标定出处与已复核隔离表的增量）"
+    old_rows, new_rows = before["modules"], candidate["modules"]
+    removed = sorted(set(old_rows) - set(new_rows))
+    if removed:
+        return 0, f"基点已有的模块从表里没了：{removed[:5]}"
+    for module, old in old_rows.items():
+        new = new_rows[module]
+        for field in ("owner", "rule"):
+            if new[field] != old[field]:
+                return 0, f"模块 {module} 的 {field} 变了：{old[field]!r} → {new[field]!r}"
+        for field in ("codex_plan", "claude_plan"):
+            if new[field] != old[field] and not (old[field] == SKIP and new[field] == RUN):
+                return 0, f"模块 {module} 的 {field} 由 {old[field]} 变成 {new[field]}（只放行 skip → run）"
+    cheap = candidate["cheap_core_seconds"]
+    for module, row in new_rows.items():
+        for client in CLIENTS:
+            want = plan_state(row, client, cheap=cheap, pinned=module in candidate["pinned"])
+            if row[f"{client}_plan"] != want:
+                return 0, f"模块 {module} 的 {client}_plan 写的是 {row[f'{client}_plan']}，按归属与核·秒应为 {want}"
+    lost = sorted(set(before["recognized_areas"]) - set(candidate["recognized_areas"]))
+    if lost:
+        return 0, f"认识的目录范围少了：{lost[:5]}"
+    added = sorted(set(new_rows) - set(old_rows))
+    loose = sorted(set(candidate["reviewed_hermetic"]) - set(before["reviewed_hermetic"]) - set(added))
+    if loose:
+        return 0, f"已复核隔离表给已有模块新加了项：{loose[:5]}"
+    return len(added), None
+
+
+# ---------------------------------------------------------------------------
 # 选择（select）
 # ---------------------------------------------------------------------------
 
@@ -1163,8 +1251,15 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         advisories[hub] = sorted(set(advisories[hub]) | set(modules))
 
     heavy = set(selector.heavy)
+    table_delta: int | None = None   # 归属表在改动里且被放行时的新增模块数；None＝归属表不在改动里（或没放行）
     for status, path in changes:
-        if path in SELF_PATHS:
+        if path == DATA_PATH:
+            added, why_not = ownership_table_delta(tree, base, data, status)
+            if why_not is None:
+                table_delta = added
+            else:
+                fallback.append(f"归属表或选择器本身在改动里：{path}（不满足增量放行条件：{why_not}）")
+        elif path in SELF_PATHS:
             fallback.append(f"归属表或选择器本身在改动里：{path}")
         elif path == DEPENDENCY_TABLE_PATH and effective_precision == PRECISION_DEPENDENCY:
             fallback.append(f"依赖追踪表在改动里（依赖精度的选择规则之一）：{path}")
@@ -1178,8 +1273,10 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
     if not fallback and not include_claude:
         # 动态加载的失败关闭：改动的 Python 文件没有任何静态使用者，而重模块可达的文件里有解析不了目标的动态加载点——这个文件可能就是被它们加载的。
         exposed = selector.exposed()
+        # 测试入口文件（见 ``is_test_entry_file``）天然没人导入，不算"没有使用者"。被改的测试模块自身已由规则 2 并入；
+        # 真正的"孤儿"（既不是入口、也没人用的库文件／数据加载目标）照旧触发失败关闭。
         unused = sorted(selector.graph.unused(path for status, path in changes if status != "D" and path.endswith(".py")
-                                              and path.startswith(GRAPH_ROOT + "/"))) if exposed else []
+                                              and path.startswith(GRAPH_ROOT + "/") and not is_test_entry_file(path))) if exposed else []
         if unused:
             for module, sites in exposed.items():
                 fail_closed.append({"reason": f"改动的 Python 文件没有任何静态使用者，而重模块 {module} 可达的 {sites[0]} 里有解析不了目标的动态加载，它可能被加载",
@@ -1238,6 +1335,9 @@ def select(tree: Path, *, client: str, base: str, head: str | None = None, data:
         "fail_closed": sorted(fail_closed, key=lambda item: (item["file"], item["reason"])),
         "fallback_reasons": sorted(fallback),
     }
+    if table_delta is not None:
+        # 归属表在改动里但相对基点只是增量（见 ``ownership_table_delta``）：记下新增了几个模块，评审一眼看出这次到底放行了多大的增量。
+        selection["ownership_table_delta"] = table_delta
     if forced:
         selection["force_modules"] = forced
         selection["force_modules_unknown"] = sorted(name for name in forced if name not in present)

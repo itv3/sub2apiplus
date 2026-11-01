@@ -25,7 +25,7 @@ from tools.ci import unit_executor as ue
 from tools.ci import unit_ownership as uo
 from tools.ci import unit_records as ur
 from tools.official_client_capture.tests import test_ci_entry_gates as entry_gates_tests
-from tools.official_client_capture.tests.unit_ownership_world import CALIBRATION, CAPTURE, TESTS, WORLD, World, git, pulled
+from tools.official_client_capture.tests.unit_ownership_world import CALIBRATION, CAPTURE, TESTS, WORLD, World, base_data, git, pulled
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR = REPO_ROOT / "tools" / "ci" / "unit_executor.py"
@@ -215,6 +215,30 @@ class AutoScopeTests(unittest.TestCase):
         self.assertEqual((info["applied"], manifest["selection"]["scope"]), ("full", "full"))
         self.assertIn("归属表或选择器本身在改动里", info["fallback_reason"])
         self.assertEqual(set(manifest["selection"]["modules"].values()), {"run"})
+
+    def test_registering_a_new_test_module_in_the_ownership_table_keeps_the_filtering_in_auto_mode(self) -> None:
+        """EVAL2 S2：候选只是把新增的测试模块登记进归属表（升级登记的常态），auto 照样筛选，且记下新增了几个模块；
+        同一次改动里再动阈值（会改变谁被剔除）就回退全集。"""
+
+        world = self.world()
+        world.write(f"{TESTS}/test_ci_new.py", module_text("test_ci_new"))
+        world.data = uo.materialize(world.root, base_data(), {**MINI_CALIBRATION, "test_ci_new": 10.0})
+        world.write_data()
+        world.commit("候选：新增测试模块并登记")
+        manifest = self.plan(world, select_base=world.base)
+        info = manifest["gate_scope_info"]
+        self.assertEqual((info["applied"], manifest["selection"]["scope"]), ("client-plan", "client-plan"), info)
+        self.assertNotIn("fallback_reason", info)
+        self.assertEqual(manifest["selection"]["ownership_table_delta"], 1)
+        self.assertEqual(manifest["selection"]["modules"]["test_claude_big"], "skip")
+        self.assertEqual(manifest["selection"]["modules"]["test_ci_new"], "run")
+        self.assertTrue(uo.seal_ok(manifest["selection"]))
+        world.data["cheap_core_seconds"] = 31
+        world.write_data()
+        world.commit("候选：又改了阈值")
+        fallback = self.plan(world, select_base=world.base)
+        self.assertEqual(fallback["gate_scope_info"]["applied"], "full")
+        self.assertIn("顶层字段 cheap_core_seconds 变了", fallback["gate_scope_info"]["fallback_reason"])
 
     def test_unclassified_and_stale_modules_are_reported_and_never_skipped(self) -> None:
         world = self.world()
