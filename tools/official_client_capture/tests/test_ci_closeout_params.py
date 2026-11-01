@@ -18,6 +18,8 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
+import os
 import re
 import subprocess
 import sys
@@ -203,6 +205,62 @@ class MissingParameters(unittest.TestCase):
             code = cp.main(["emit", "--version", "0.166.0", "--main", "/m", "b7-terminal-facts"], env={}, cwd=Path("/"))
         self.assertEqual(code, 2)
         self.assertIn("缺少参数 baseline_version", err.getvalue())
+
+
+class MainCheckoutFromScriptLocation(unittest.TestCase):
+    """主检出从“脚本所在的仓库”推出，与运行时的当前目录无关（closeout.sh 约定“在任意目录运行”）。
+
+    11-01 对着真实环境冒烟时发现：旧实现取进程当前目录推主检出，在别的 git 仓库里运行会悄悄把那个仓库当成主检出
+    （产物目录、收尾工作树、Codex 源码树路径全错且不报错），在非 git 目录里运行则直接报“推不出主检出”。
+    """
+
+    ARGV = ["show", "--version", "0.166.0", "--baseline-version", "0.165.0", "--retire-version", "0.164.0", "b15-gates-status"]
+
+    def expected_main(self) -> str:
+        common = subprocess.run(["git", "-C", str(KIT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+        return str(Path(common).parent)
+
+    def show_from(self, cwd: str) -> tuple[int, dict]:
+        """切到 cwd 后调用 main（不传 cwd 参数，走生产路径），返回（退出码，show 的 JSON）。"""
+
+        previous = os.getcwd()
+        os.chdir(cwd)
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cp.main(list(self.ARGV), env={})
+        finally:
+            os.chdir(previous)
+        return code, (json.loads(out.getvalue()) if out.getvalue().strip() else {"stderr": err.getvalue()})
+
+    def test_non_git_directory_still_finds_main(self) -> None:
+        with tempfile.TemporaryDirectory() as plain:
+            code, shown = self.show_from(plain)
+        self.assertEqual(code, 0, shown)
+        self.assertEqual(shown["values"]["main"], self.expected_main())
+
+    def test_other_git_repository_is_not_taken_for_main(self) -> None:
+        with tempfile.TemporaryDirectory() as other:
+            subprocess.run(["git", "init", "-q", other], check=True, capture_output=True)
+            code, shown = self.show_from(other)
+            self.assertEqual(code, 0, shown)
+            self.assertEqual(shown["values"]["main"], self.expected_main())
+            self.assertNotIn(Path(other).name, shown["values"]["out_dir"])
+            self.assertNotIn(Path(other).name, shown["values"]["wt"])
+
+    def test_explicit_main_still_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as plain:
+            previous = os.getcwd()
+            os.chdir(plain)
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = cp.main([*self.ARGV[:-1], "--main", "/explicit/main", self.ARGV[-1]], env={})
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["values"]["main"], "/explicit/main")
 
 
 class CommandLine(unittest.TestCase):

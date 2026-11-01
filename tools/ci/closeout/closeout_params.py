@@ -27,7 +27,7 @@
     * 激活事实文件名 ``fact_name``：<ctag>-production-activation-fact.json；
     * 收尾 tag ``closeout_tag``：codex-<ctag 去掉 c>-closeout-<日期>；VC-6 Catalog 承接收据 tag：codex-<…>-vc6-catalog-promotion-retire-<日期>；
     * 分支约定：收尾分支 reg<目标标记>/closeout，集成分支 reg<目标标记>/integration，候选别名分支 codex/codex-<目标标记>-candidate-<轮次>；
-    * 本机路径：主检出由 ``git rev-parse --git-common-dir`` 推出（``--main`` 可改），收尾工作树 <主检出同级>/<主检出名>-wt/closeout<目标标记去前导 0>，
+    * 本机路径：主检出由 ``git rev-parse --git-common-dir`` 从“本脚本所在的仓库”推出（与运行时的当前目录无关；``--main`` 可改），收尾工作树 <主检出同级>/<主检出名>-wt/closeout<目标标记去前导 0>，
       产物目录 <主检出>/local-analysis/closeout-<目标版本>/{facts,logs}。
     这些“约定默认值”只是上一轮的命名习惯，轮次命名变了就用对应选项覆盖，不要改代码。
 
@@ -366,7 +366,10 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     head, step, rest = split_command_line(raw)
     args = build_parser().parse_args(head)
     env = os.environ if env is None else env
-    cwd = cwd or Path.cwd()
+    # 主检出必须从“本脚本所在的仓库”推出，而不是从当前目录推出：closeout.sh 的约定是“在任意目录运行”。
+    # 以前取 Path.cwd()，在别的 git 仓库里运行会悄悄把那个仓库当成主检出（产物目录、收尾工作树、源码树路径全错），
+    # 在非 git 目录里运行则直接报“推不出主检出”。调用方（测试）显式传 cwd 时仍按传入值。
+    cwd = cwd or Path(__file__).resolve().parent
     if args.command == "steps":
         for item in STEPS:
             marks = ("[ARM64 写]" if item.arm64_write else "") + ("[可选 --with-part2]" if item.part2 else "")
