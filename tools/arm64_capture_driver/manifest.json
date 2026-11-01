@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "bcf42744129fd2e09c1c5fb16fe11817b07a46fa5f7f515e4f5ab4a0571fe533",
+      "sha256": "36f3e7439687491afdc47d698551685892e4ca6362c51efb4ed30414b58904e2",
       "mode": "0600",
-      "bytes": 171485
+      "bytes": 172342
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -16,9 +16,9 @@
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
-      "sha256": "b51e43da44af24bcd7e7f99f4fa2c6dac3a7f1eecd17d7b9c7b8dc6effa593a7",
+      "sha256": "08c56171bae7d15755377eb4d4dd69e9cb5d46c50c98cada2f22bc0c02b54950",
       "mode": "0700",
-      "bytes": 19951
+      "bytes": 20529
     },
     {
       "path": "driver/backend_dependencies.py",
@@ -472,9 +472,9 @@
     },
     {
       "path": "driver/pipeline/local/sync-history-tree.sh",
-      "sha256": "6766c14d498fcf4e2d8d4140b53feacd61af2887acb9a178985b9e35c4f6cdd9",
+      "sha256": "4ed052c2a1e22ab89106154252a2cb184635cdaaa58ffe2f4ddecae270a167b4",
       "mode": "0700",
-      "bytes": 3691
+      "bytes": 7189
     },
     {
       "path": "driver/pipeline/local/upload-and-deploy.sh",
@@ -1066,9 +1066,9 @@
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "94f631f64fc9d4b492f9a8ce38aca7f3dd6185e36db3af158e34b240c77259ed",
+      "sha256": "eb5125a639c5352bed2bcf3ec9e1487eee1b34f2967de0d4dcf70c92a7a10166",
       "mode": "0700",
-      "bytes": 11344
+      "bytes": 12376
     },
     {
       "path": "driver/vc5-canonical2.sh",
@@ -1179,5 +1179,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "4269005b4744bdab5ec04d8a6e38eb12c52727fef32e8963af99f5b43582a501"
+  "manifest_sha256": "6198fc70b93d7e9f5eebb3ef291dc372084ba59007a0fbe8bdf0d196649d9604"
 }
