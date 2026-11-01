@@ -778,7 +778,7 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
   “VC-4／VC-5 的 make test 保持全集”的措辞已过时（该文件是红线文件，只能随版本登记改），以本条为准。
 * **历史测试树补发版 tag**（S1，`local/sync-history-tree.sh` → `history-tree-refresh.sh`）：采集主机取 bundle 用 `--no-tags`，历史树不带 tag（ARM64 的树曾最高只到 `v0.2.13-3`），入口门禁与后台验证的“最近发版 tag”因此解析成差几个版本的旧 tag，
   改动文件上千个、Codex 筛选必回退全集。现在 `sync-history-tree.sh` 在本机用 `git describe --tags --abbrev=0 --match 'v[0-9]*'` 取最新发版 tag 及提交，作为可选的第 4、5 个参数传给 `history-tree-refresh.sh`，后者校验名字格式（`v0.2.18`／`v0.2.18-6`）、
-  40 位小写提交、提交存在且是目标提交的祖先之后 `git tag -f`；不带参数时与旧行为相同并打警告。**部署顺序**：先把驱动受监督部署到 ARM64，再跑 `sync-history-tree.sh`（旧的 refresh 脚本会静默忽略多出来的两个参数）。验收：`git describe --tags --abbrev=0 --match 'v[0-9]*'` 在 ARM64 历史树上返回最新发版。
+  40 位小写提交、提交存在且是目标提交的祖先之后 `git tag -f`；不带参数时与旧行为相同并打警告。**部署顺序**：先把驱动换到 ARM64（`install-driver.sh`），再跑 `sync-history-tree.sh`——旧的 refresh 脚本会静默忽略多出来的两个参数。现在同步脚本自带两道保护（本次要传 tag 时才生效）：①同步前（动任何东西之前）核对采集主机上已安装的 `history-tree-refresh.sh` 含读第 5 个参数的赋值 `TAG_COMMIT=${5:-}`，旧版以退出码 3 拒绝并提示先换驱动（ssh／grep 自身失败退出码 2，失败关闭）；②同步后在采集主机历史树上跑 `git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD`，必须等于传入的 tag，不一致或命令失败以退出码 4 失败并打印两者。验收：同一条 `git describe` 在 ARM64 历史树上返回最新发版。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
