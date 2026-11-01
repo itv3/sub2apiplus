@@ -587,32 +587,34 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// OAuth 账号：创建后通过唯一的自动入口异步设置隐私。
-	// 使用独立快照避免后台 Ensure 与 Handler 响应并发访问同一个 map；
-	// 持久化仍由 Ensure 写入仓储，显式管理端重试继续使用 Force。
-	if account.Type == AccountTypeOAuth {
-		privacyAccount := cloneAccountForAsyncPrivacy(account)
-		switch account.Platform {
-		case PlatformOpenAI:
-			go func(privacyAccount *Account) {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_openai_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
-					}
-				}()
-				s.EnsureOpenAIPrivacy(context.Background(), privacyAccount)
-			}(privacyAccount)
-		case PlatformAntigravity:
-			go func(privacyAccount *Account) {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
-					}
-				}()
-				s.EnsureAntigravityPrivacy(context.Background(), privacyAccount)
-			}(privacyAccount)
+	AfterAccountCommit(ctx, func(_ context.Context) {
+		// OAuth 账号：创建后通过唯一的自动入口异步设置隐私。
+		// 使用独立快照避免后台 Ensure 与 Handler 响应并发访问同一个 map；
+		// 持久化仍由 Ensure 写入仓储，显式管理端重试继续使用 Force。
+		if account.Type == AccountTypeOAuth {
+			privacyAccount := cloneAccountForAsyncPrivacy(account)
+			switch account.Platform {
+			case PlatformOpenAI:
+				go func(privacyAccount *Account) {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("create_account_openai_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
+						}
+					}()
+					s.EnsureOpenAIPrivacy(context.Background(), privacyAccount)
+				}(privacyAccount)
+			case PlatformAntigravity:
+				go func(privacyAccount *Account) {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("create_account_antigravity_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
+						}
+					}()
+					s.EnsureAntigravityPrivacy(context.Background(), privacyAccount)
+				}(privacyAccount)
+			}
 		}
-	}
+	})
 
 	return account, nil
 }
@@ -846,6 +848,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSessionExpiresAtExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+		// 目录观察和能力 metadata 只由同步写入。表单里的旧值或注入值不能进入本次更新。
+		delete(normalizedExtra, grokObservedModelsExtraKey)
+		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -854,6 +859,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			"quota_weekly_used",
 			"quota_weekly_start",
 			grokBillingExtraKey,
+			grokObservedModelsExtraKey,
+			UpstreamModelMetadataExtraKey,
 			UpstreamBillingProbeEnabledExtraKey,
 			UpstreamBillingRateSyncEnabledExtraKey,
 			UpstreamBillingProbeExtraKey,
@@ -1534,10 +1541,16 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, id); err != nil {
 		return nil, err
 	}
-	if s.runtimeBlocker != nil {
-		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	return s.accountRepo.GetByID(ctx, id)
+	AfterAccountCommit(ctx, func(context.Context) {
+		if s.runtimeBlocker != nil {
+			s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+		}
+	})
+	return account, nil
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {

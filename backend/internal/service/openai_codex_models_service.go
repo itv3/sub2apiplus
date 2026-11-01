@@ -660,6 +660,9 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 			Description: "Maximum reasoning with automatic task delegation",
 		})
 	}
+	if openai.IsGPT61TerraModelSpelling(modelID) {
+		levels = append([]configuredCodexReasoningLevel{{Effort: "none", Description: "No reasoning"}}, levels...)
+	}
 	return levels
 }
 
@@ -2046,17 +2049,13 @@ func (s *OpenAIGatewayService) fetchCachedOpenAIModels(ctx context.Context, requ
 
 func (s *OpenAIGatewayService) refreshCachedOpenAIModels(cacheKey string, request openAIModelsRequest, fetch func(ctx context.Context, ifNoneMatch string) (*OpenAIModelsResponse, error)) <-chan singleflight.Result {
 	return s.openAIModelsCache.refresh.DoChan(cacheKey, func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), codexModelsManifestRequestTimeout)
-		defer cancel()
 		cached, state := s.openAIModelsCache.get(cacheKey, time.Now())
-		// 调用方在进入 singleflight 之前是先看缓存、再排队合并的两步，中间没有锁。
-		// 若上一轮合并调用恰好在这两步之间完成（结果已写入缓存、key 已释放），
-		// 后来者会把自己当成新一轮的领头者，重复打一次上游。这里在领头者内部
-		// 再看一次缓存：已被他人刷新到新鲜状态就直接复用，不再请求上游。
-		// 过期但仍可用（stale）与未命中的情形不受影响，照常刷新。
+		// 调用方读缓存之后、进入 singleflight 之前，上一轮刷新可能已写入新鲜结果：直接复用，不重复请求上游。
 		if state == openAIModelsCacheFresh && cached != nil {
 			return cached, nil
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), codexModelsManifestRequestTimeout)
+		defer cancel()
 		ifNoneMatch := ""
 		if cached != nil {
 			ifNoneMatch = cached.upstreamETag

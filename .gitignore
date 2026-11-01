@@ -156,6 +156,7 @@ docs/egress/**/.DS_Store
 !docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md
 !docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md
 !docs/EVIDENCE_INDEX.md
+!docs/admin-api-keys.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

@@ -2114,13 +2114,20 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 	releaseMode := string(runtimeState.CodexReleaseMode)
+	beginUpstreamResponseModelObservation(c)
+	SetOpsUpstreamModel(c, requestModel)
+	uploadParts := make([]string, 0, len(parsed.Uploads))
+	for _, upload := range parsed.Uploads {
+		uploadParts = append(uploadParts, fmt.Sprintf("%s:%d", upload.ContentType, len(upload.Data)))
+	}
 	logger.LegacyPrintf(
 		"service.openai_gateway",
-		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s uploads=%d",
+		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s uploads=%d upload_parts=%v",
 		requestModel,
 		parsed.Endpoint,
 		account.Type,
 		len(parsed.Uploads),
+		uploadParts,
 	)
 	if len(parsed.InputImageFileIDs) > 0 && !openAICodexImagesAllowFileID(releaseMode) {
 		return nil, rejectOpenAIImagesFileIDReferences(c)
@@ -2259,20 +2266,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		if err != nil {
 			if imageCount > 0 {
 				return &OpenAIForwardResult{
-					RequestID:        resp.Header.Get("x-request-id"),
-					UpstreamHeaders:  resp.Header,
-					Usage:            usage,
-					Model:            requestModel,
-					UpstreamModel:    requestModel,
-					Stream:           parsed.Stream,
-					ResponseHeaders:  resp.Header.Clone(),
-					Duration:         time.Since(startTime),
-					FirstTokenMs:     firstTokenMs,
-					ImageCount:       imageCount,
-					ImageSize:        parsed.SizeTier,
-					ImageInputSize:   parsed.Size,
-					ImageOutputSizes: imageOutputSizes,
-					UpstreamEndpoint: endpointProfile.Path,
+					RequestID:                     resp.Header.Get("x-request-id"),
+					UpstreamHeaders:               resp.Header,
+					Usage:                         usage,
+					Model:                         requestModel,
+					UpstreamModel:                 requestModel,
+					UpstreamEndpoint:              endpointProfile.Path,
+					UpstreamResponseModel:         observedUpstreamResponseModel(c),
+					UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+					Stream:                        parsed.Stream,
+					ResponseHeaders:               resp.Header.Clone(),
+					Duration:                      time.Since(startTime),
+					FirstTokenMs:                  firstTokenMs,
+					ImageEndpoint:                 true,
+					ImageCount:                    imageCount,
+					ImageSize:                     parsed.SizeTier,
+					ImageInputSize:                parsed.Size,
+					ImageOutputSizes:              imageOutputSizes,
 				}, err
 			}
 			return nil, s.handleOpenAIImagesOAuthResponseError(
@@ -2301,21 +2311,25 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 		}
 	}
+	imageCount = resolveBillableImageCount(imageCount, parsed.N, imageCountBillingEnabled(getAPIKeyFromContext(c)))
 	return &OpenAIForwardResult{
-		RequestID:        resp.Header.Get("x-request-id"),
-		UpstreamHeaders:  resp.Header,
-		Usage:            usage,
-		Model:            requestModel,
-		UpstreamModel:    requestModel,
-		Stream:           parsed.Stream,
-		ResponseHeaders:  resp.Header.Clone(),
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ImageCount:       imageCount,
-		ImageSize:        parsed.SizeTier,
-		ImageInputSize:   parsed.Size,
-		ImageOutputSizes: imageOutputSizes,
-		UpstreamEndpoint: endpointProfile.Path,
+		RequestID:                     resp.Header.Get("x-request-id"),
+		UpstreamHeaders:               resp.Header,
+		Usage:                         usage,
+		Model:                         requestModel,
+		UpstreamModel:                 requestModel,
+		UpstreamEndpoint:              endpointProfile.Path,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        parsed.Stream,
+		ResponseHeaders:               resp.Header.Clone(),
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ImageEndpoint:                 true,
+		ImageCount:                    imageCount,
+		ImageSize:                     parsed.SizeTier,
+		ImageInputSize:                parsed.Size,
+		ImageOutputSizes:              imageOutputSizes,
 	}, nil
 }
 
