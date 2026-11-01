@@ -1,0 +1,2510 @@
+{
+  "base_commit": "940e892b8498fe09deb014b6af661575027b93b3",
+  "changed_path_count": 257,
+  "current_commit": "e841133fb43d509931453076857a4c3aa55a9854",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 7396,
+  "frozen_path_count": 2318,
+  "identity_sha256": "0333bb2740512cc32bd2086d17a62ffa1f86e5bad0a7350f9120af1485b60dd0",
+  "issued_at_utc": "2026-11-01T14:32:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0.2.19-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".gitignore",
+      "predecessor_sha256s": [
+        "88b159d1561535b169be0e91c51b9da1ddde15d8b9346309d97325c6264c7b6f"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=.gitignore",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-known-flaky-tests-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-history-audit-removal-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fcc502e0097aa668764fba0c43207404b7bf8f75a93e7e5da1e2ca4a47598c41"
+    },
+    {
+      "old_path": "",
+      "path": "README_CN.md",
+      "predecessor_sha256s": [
+        "bf03409654c42bf7492805e8343f5c7f75503930e76535fe655b706a867b563a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=README_CN.md",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3eea9dbe2a71c980795524c80b3cdb474708ddd87e927a61cadded95c67d586a"
+    },
+    {
+      "old_path": "",
+      "path": "README_JA.md",
+      "predecessor_sha256s": [
+        "75c2bf2d56f6cba7d189329e2df5f8f18d636a636cbd31b538704ebd25748f95"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=README_JA.md",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c9162146449b4f78a575d81e834303bf972f1fc8af0dbf7f656994911ae42c42"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "80a7782acf725c0f5356ab1810549ce7b86ce9c04b83e55aa4a3797898db4944"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/chat-completions-id-20261005-freeze-successor.json",
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-10-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-11-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-5-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.18-6-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "d8f3e6b0f7817c4ad634608dc673833c04c255c7ad2ef87ece9a443579553d25"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256s": [
+        "d4fa500bf12360f1674b17fea3e8a007b1778a126d5ccaaafcab78063856d148"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/cmd/server/wire_gen.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "8ca9c949eb43605c582c45e1d1f3e9cef4c0638006a0aceebac752d4a773cf01"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/group.go",
+      "predecessor_sha256s": [
+        "b3a11800c771fa93fd19749f6b359004476e7149aff806530df54200061e3c8a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "928c4dbf3609d1e62686847cdccbde439df7ccb95d2e7e5d8ea2637d8173dae0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/group/group.go",
+      "predecessor_sha256s": [
+        "ec4a26a1b8556d77450e9a98a5a607032d98a99e962152e61829d9415a0b8897"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/group/group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d6da7b243ec5135194181102f2cec9258626bd77ea221afbd556e0f070d3a33b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/group/where.go",
+      "predecessor_sha256s": [
+        "d956d377e0628a799cdd50c7eb0205037579283f0c4ef4e6686e3bb546e1c8b1"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/group/where.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "56d61c81913a0ae6ff28c06dc731ccab64fda7adb9c80c2f5a6f402d8fbc824a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/group_create.go",
+      "predecessor_sha256s": [
+        "75401091f26e713b654fa8afbfaf458f67609c158078a2606ff831787e12e5de"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/group_create.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d5bcba1de3273bf8e5701cc7bf369778c108f1d7e1dea356c3c9bc7ad1bf6a32"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/group_update.go",
+      "predecessor_sha256s": [
+        "b687ed8004bf389da6e13140909546f14ee1dd6605d1fbb02a5cc2477284ec97"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/group_update.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c67381fd1bcb53a8d2e6a33833a60ea556dd8fddb69bdaf286b244541e606cc3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/migrate/schema.go",
+      "predecessor_sha256s": [
+        "fd48c3c54c5aa5833a4230e48853fa9ba27cd9a17f73ef87f896091d20a03c12"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/migrate/schema.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "20a434f96a301e1b85ac814bb3b6fccbcd7c6299cc0fb4e2a7c49c3ce7f6682c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/mutation.go",
+      "predecessor_sha256s": [
+        "a3ecc796f95167548df93de3862d4316be2ecad360990e5b2cf4ad326fade077"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/mutation.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "67b775468ec254312194229692ad729ad1bd9b2527d6beaa860eed119dae12d8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/runtime/runtime.go",
+      "predecessor_sha256s": [
+        "dfcaaa167b5bdf7cd3858802250a9065fb5f28e80b4e2c115e5fc8776c75962a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/runtime/runtime.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e469a804fd1012c138694f5257c09638f7613ab994a67688b2326c1cb3387223"
+    },
+    {
+      "old_path": "",
+      "path": "backend/ent/schema/group.go",
+      "predecessor_sha256s": [
+        "fbf96637538a97c9b34d1cdbb3616936f5fe79ec9d7d4841c44790ebd0eb657c"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/ent/schema/group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9dfdfcc663001e111dcf64a713bdf6572d81275aeaa391c93799ca2b691cb33e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256s": [
+        "f19a285db071974001e778eb096e2e1a24efcf8d5d791344c38e3eac1ba824c5"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/config/config.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-arm64-candidate-only-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b5b01b-candidate-instance-allowlist-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "62640b670cae32320c88963aca9d750f905e8c408cad6dd94d5b64fcf107dee4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config_test.go",
+      "predecessor_sha256s": [
+        "c37333f91861a60d3d47d34a3b462c7b8881684643db843c4b5bcec8558e5af7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/config/config_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-arm64-candidate-only-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b5b01b-candidate-instance-allowlist-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "584a9e9556021b12826eadc0a8255df003a037dadffc8c159770c5960b177e78"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256s": [
+        "fe16639a6622ef6d4c115beaeb4a642c09ff67892bf5d87e38d9ffbb3ee95558"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/account_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "579ddb9aa158466273a08b9108cee7b40e3d2ca8fea2c29661b63fa83cbc9337"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/admin_helpers_test.go",
+      "predecessor_sha256s": [
+        "7355693d25edfd83e4fbeac6eb130c3f9d7e00d387ec4dc3b4100f86d6a202f5"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/admin_helpers_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a8e225de4359e5b14f94130428b7a5f4a598944503a0a89bc0ccfd13e952c87c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/group_handler.go",
+      "predecessor_sha256s": [
+        "fe0644e0d256155a5128ef5dc2ec148f5d96a7c05b26a04d65a61e092b0dfb52"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/group_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "88599ec7c82176db6e03b545e15a4affaa2d0dcdcc7f3f43f3959d1ab53b7aea"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/idempotency_helper.go",
+      "predecessor_sha256s": [
+        "c485855b843714a30bcccef2c483a14cde7494ca8f2058a4c36fe4e4e37e4304"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/idempotency_helper.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "575dd57f9c702d60e44192eb73e0af2e86206cdd444a3e90cb6299cf8ea6ace3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/ops_dashboard_handler.go",
+      "predecessor_sha256s": [
+        "879b64b21dd83ce8bb37588e99d7bbc4377a331224de95dc753d24aa9f880cd7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/ops_dashboard_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9589fa0cc08ad3fd63fc611f1caef8a97e59d4d2b0d71c3eec324ed49c31e2f9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/proxy_handler.go",
+      "predecessor_sha256s": [
+        "21b9d59aa261b44b0f9e1eaa3cd55b0dc01a58e02af8c86e0a92c8ebb4bf3b4a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/proxy_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ad1b7f6093c9e35590ab675461650512925c3aca27d934373732715c61a9ed06"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/setting_handler_runtime.go",
+      "predecessor_sha256s": [
+        "84473c6abc0c731e93a082f1f5df8685cd7cf8c2e0635fc0bdfdaa5f1b250348"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/setting_handler_runtime.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "47d1f2416e1c1cd129e138ede20714a5778fd81f650731a48ac9e8268cffd7a2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/subscription_handler.go",
+      "predecessor_sha256s": [
+        "6ba507bd9d49c3c61576785d8aa67f89a3d450fd72fd09b34d744aba30a6498b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/subscription_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2166c7cf7cfce5c22afddb7d4048306bf13f94f7fc070d266da90438f5139d5e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/usage_handler.go",
+      "predecessor_sha256s": [
+        "fbd272d5540b1de6fabddaac94e8301b4de42b4434e913fd53f24d80ea0a29a0"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/usage_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "164adc37f6f9bfdfb40e88c4b766227d98b739081190e58590a7d036164ebaa2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/user_handler.go",
+      "predecessor_sha256s": [
+        "e473eaed1c9539389f8b6191b5932d82d97051a4872896cac397e611feedfc48"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/admin/user_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fe4fe110ef739c967aa339cb4df6f6aaeda0326fa6296820c07728289c73c4f4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/dto/mappers.go",
+      "predecessor_sha256s": [
+        "b654aaa63417a2fa6451638b25248a203ae32580f2f713c0f8cafd2dff83a235"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/dto/mappers.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "430c78e5e56d6fe4c2ba0435ddee721698678eb9c392e5a036698fd92b9b97b7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/dto/types.go",
+      "predecessor_sha256s": [
+        "854fdaa99c242d72d86d5a6a7b539c9ad81c95872cf57e612112a028580f7078"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/dto/types.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5e78db3c6103c22380a5013cd72bc93daf1f087a5a572d68cf64533ffb1d1a16"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_models_test.go",
+      "predecessor_sha256s": [
+        "f80013aed96514515c6bfae48c52fb26ac5e1703b4bde6d70e1207097cb45a31"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/gateway_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "22dfb8a48cfc811dc33077acdcefa9e82098bf9411d7e08175f831b004f890b2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256s": [
+        "da051f15570dda5b1018594b4365c173ae65a77faf28798739edc4a7937302be"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "90523395a6984245ff9cfa9cf8e2ef1cd75a922bd980bdacd8f8e079acb65df1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/response_transformer.go",
+      "predecessor_sha256s": [
+        "0f05486b8bdedc4b7d79911b7771fd110aed28a8b3d54abee7adedc2f6c1b47a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/pkg/antigravity/response_transformer.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6d5bb020995b8e72bcc3bcd1dcce65bed5eca63fe928c798f0d123a61c4987b2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "predecessor_sha256s": [
+        "88c8e7c36d2d282947e4705bc233727a061cd3db3b3fbf5238814d817f49bde8"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0555fca7a7114176c1cd5e74a6c3529a270c663b7364ac5c93c6ec6ac731baed"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/gemini/models.go",
+      "predecessor_sha256s": [
+        "21bba51a4281276085917a2b8853ebaecd15bcba7005a77e11466dbecaf7a349"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/pkg/gemini/models.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0a285a59ccaf61ffdd82f3aec536331b8fdab1c548b19e06d9b2b2b2ad1d16f4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/geminicli/models.go",
+      "predecessor_sha256s": [
+        "177181d77ec6dd33b3cf5442661071c36ed31d9046d32393e1c6699cc0300f5d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/pkg/geminicli/models.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "42a77e8c43810e1b07913edb2def2c44e9d689d9e74e7e0a5ff3c11198146547"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/constants.go",
+      "predecessor_sha256s": [
+        "420ea6f3185e2c13867ae4b4a7b61d14f436038bdc0a51b3b45f37ca1575a5c5"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/pkg/openai/constants.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3d1259c39da1b74b27c508d14c66ad2c287f7020e2e59045729fa08309a545b4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo.go",
+      "predecessor_sha256s": [
+        "d13ae3fbb2661c28ac785db6e1906f693cd8c948c6f662a7202f8954def7bab4"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/account_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a35d57a61614d116b2fe088ffd2e1d28ba7280928beb2b3231167fbd772ef085"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "predecessor_sha256s": [
+        "c905562ea8eb6e084a7febcf280af14eda4360e544725a691fc88ad6a1a48469"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "aaae5a5dc3b71fd6cc5a7413f45ccd31f9081b5cf702032599b55af510aef183"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "predecessor_sha256s": [
+        "d06354d1ac36686494a6dbbc612b8339f3b90194162ca837ef78c1cd15f46e83"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0f46dd77e32d0ebb92b6ae7a4851d596828e038c2fa35322c1870e6c05e653f0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_repo.go",
+      "predecessor_sha256s": [
+        "3fd4a00c904f79f965266ddb618257634d044d205335df8039d51496f8dc0e3b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/api_key_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ba51cc34dfed2fafe6ea17cbce73d3bdb5977cb28506b9e84152c7dbb6f9b5b6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/group_repo.go",
+      "predecessor_sha256s": [
+        "2fb78411ea16b142f11bd25b8eb066a644b886a4578247253042dbc3ce464dbb"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/group_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3b1cc547cb9114e1e869f643707361ede997f596118c5fccfcb93a3657563e4d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/setting_repo.go",
+      "predecessor_sha256s": [
+        "9e5a447b9686c5610298d9196cc70cf67b2748d6384c912b688f49940a89602b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/setting_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6a2b3a91d238d9ff1cd0ce98b26c995619445284dda02d7f220b2b57091677b0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/wire.go",
+      "predecessor_sha256s": [
+        "18b1dc8a2e466273f7f21d43686743002a4654912662052cd5bdb51b44a5dc35"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/repository/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ada6dd3ded93fc6249cb34a6bf1264c89caf3f29c3c42fa6a008912bc99ee256"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/api_contract_test.go",
+      "predecessor_sha256s": [
+        "f5bcbb24abaefec84143c641a7716a93b86594f4e70122eb822db68863a5e28d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/server/api_contract_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0154-closeout-ci-fixes-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d8f2b161b0a7937b35f293642db8683c49d2231ace0ce39fb16fbb3c386b70f8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/middleware/admin_auth.go",
+      "predecessor_sha256s": [
+        "f878899e7e03bda35ce8774a477800c96ad710482132a4672c8b1bfea4adf123"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/server/middleware/admin_auth.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5ef93a45f16aba7f2e171e49f66974fdd4ee17f8fc1a3888d5d0cbf48e2ccfe1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/admin.go",
+      "predecessor_sha256s": [
+        "2e5b0aa4ef4b684757265cf6296ad4c03ed28c2013659ad63f5eed5c19d9c28f"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/server/routes/admin.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7a6ea84279f270f94c694af09674fcc0bfaab0b0e5e85a2b8d3de8c70cc2fc3b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/payment.go",
+      "predecessor_sha256s": [
+        "ce85c91909d8e2c59eb292e0d88d7fed330038435f3ea200c5f144ab63edd2f2"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/server/routes/payment.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f3d544119054b635c11d1a294ebfae2df2ab92cb908e616801d357bd1a4eaef5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "129ba44f73c77c2cac4e0a1c2bb2b5bc2801d0b6d04da43d3c356d4c4bdb93ba"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/account_test_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-closeout-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-postpromo-fixes-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "835d17f136df4381885c74d43e457f788236f4733b54c87e4d08702a56bd6bc7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256s": [
+        "c88463ebede6a10979473d7e90630ea6a7a28c856d183bdaf32da18ff3794ff4"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/admin_account.go",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "fe482cdc139ff1339ceba598f57785597e20a02ed834f6a9ca8887b9e6ab51ef"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256s": [
+        "ffaf97b8657587d6ab1d5b91b43773063e2851111470d289b51a55408d2f0111"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/admin_group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4c6bad5b2e7fb66c5f2fe3dbf1ebd429e8c54a03258cc2d44403daf2a8e39ad8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_group_duplicate.go",
+      "predecessor_sha256s": [
+        "df31ffaa812f9546f61b2c8385f9f82783df57d2a856adf09dedb1adaed231cb"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/admin_group_duplicate.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d47d938d640e01147564ec8fc3f3a787b8aa1c899919c5bdcea6b08b98a5f2d5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_service.go",
+      "predecessor_sha256s": [
+        "1cfb9c626ad4d42afdfd64c8468cc4af9875c2fd000503111e1178a6194c7c9d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/admin_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "df19b6076e1951cea98dab822b4399dbe790a497b4f841e507a6aa4fe9a36d21"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_user.go",
+      "predecessor_sha256s": [
+        "85ddff633c80ed207ab931443b8d65134e5742063e9d7bace0ec08e420533f56"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/admin_user.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e8fa15859d46b7d731f25d4f0f2c1b053f1e40d13cd96ec246bf69aaf369784f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat.go",
+      "predecessor_sha256s": [
+        "9f7188480df34f829b7e775d4791f9b6e630332341837eba1d8a18b308dc1104"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/antigravity_gateway_compat.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0165-registration-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e50244b9ec5f12d26b7b8acf93548bf1b766653ef25926d16509dd6f0be871fa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256s": [
+        "07b42e1c1ca3ee7a13fc01224de90d0746ebc96b3eba76635530da2d60012fb2"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "04155611dfc0489ee3a4d5a40f03902e7709c9cb7cffe1316353c72cd8b17d21"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_streaming.go",
+      "predecessor_sha256s": [
+        "d8206d26283c650cb6a0a3dff32f1813ef656ad8d03cb67b1c581d49237b0db7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/antigravity_gateway_streaming.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5ccb0bb37c77f084c9c81f181955244583d15f09e62acf980753d88750c7e62a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/api_key_auth_cache.go",
+      "predecessor_sha256s": [
+        "8083eb14f41776c8d587c9e9f958b500a91dbc6bc32d2dd49bf65dd895ada3fb"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/api_key_auth_cache.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3a480ef8a0a8f3a6266536490b5bced427ce8a198541c5ba50a23f1d91f3e505"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/api_key_auth_cache_impl.go",
+      "predecessor_sha256s": [
+        "609de980534669d396f445fc4eeb269e1fadd20bbf77d3e3f936259f30186319"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/api_key_auth_cache_impl.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e85ae957d5e8a1bc445059b87778ed21d15fac6abb46fe908cb35efb5e0f56b9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service.go",
+      "predecessor_sha256s": [
+        "38aa6b6fc0701c04a69d22a8c260f2e7e639bd92f9536e4ead7a1c0d3253675a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/api_key_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "32b00eab0eff1fc87f0f5475cc73e8d978da89ba9014208f5815ab40225e5e96"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256s": [
+        "8ef188cb10de68c268c98e44033551bb328accfb4c611bcb59c997e88f33de0c"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/billing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "270b279c3649bafe0379f64b7d9785b16dadc489ded3d3c7b1175842d01c1ce2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256s": [
+        "c93cfb95047b2dc6fbe23dd674103c2fb0d14df7697a0f6d200484e243a7d7b8"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/billing_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9764c78f95b9d0aa02abde4c0cf0eac44f1be7f6a63781083830933e0e642af0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/channel_service.go",
+      "predecessor_sha256s": [
+        "eda599c50135ce9933665a9138c0478b22663885d9f5e8262a3cdd0d0e0f989d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/channel_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "10de00179764d394df1b9ddb0da0f0f4308cb881fc43e4df073ca373536e1818"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/deepseek_pricing_test.go",
+      "predecessor_sha256s": [
+        "e389df799da400956ccdb114e224612b8c15328000f9d4d19c05502841847a91"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/deepseek_pricing_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c5a69d2dc302894a96ee4a9ddb84ff23c6b221867c2c66bbf6c59a7a28ae8422"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_billing_header_test.go",
+      "predecessor_sha256s": [
+        "25a866fc98fe648fa8265d4ea9d188e402c8cb04aec0a468396ebc0c0e5b0264"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gateway_billing_header_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d64ece778574fa63057147eb5cd610459e361997883a2e765463f4076fa397d4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_service.go",
+      "predecessor_sha256s": [
+        "36ad2d627197b43a471c371ce5689e3c4765760cc4d001fe7fc598345b7903af"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gateway_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3cd07d53deb51bd49a08f45ecc1dff0f91977043b23a782242f06e01a7bdd223"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256s": [
+        "af51dd17aa10873313f6eb5391841e7869d7e6e7d6eb87b1075c107b991520ac"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gateway_usage_billing.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ad5e6de0c2a1165757c6fc5a43e1588ab57fea2044cbdaa336ddb5c0c868c723"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_cached_content.go",
+      "predecessor_sha256s": [
+        "a8d64ea9241035bb6fe4078476c057a019159b88204017230cec84a7902bb450"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_cached_content.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "667d836a22bf09a0319150b567a7a2afd95ca0509c8371b272eeda36918bc0a9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_cached_content_hardening_test.go",
+      "predecessor_sha256s": [
+        "9197d85e8c807ce2e79d60ccb653f5330eb344b1f14372368ae9a2f56a87f81c"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_cached_content_hardening_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "55a6b2c647d3d4decf69e13eb414d43cf41b75aa4808754d1245c251d11464ab"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_chat_completions_compat_service.go",
+      "predecessor_sha256s": [
+        "bc4fb904f0ad31c251d8aec4dbb865d9c279725f055e59dbc5b24bdb4ad697e6"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_chat_completions_compat_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "48eeb51d359ac9cf77f0cc73fd114b3f0c50c9b98c6bcd7ffa2957e9e4372aeb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_error_policy_single_check_test.go",
+      "predecessor_sha256s": [
+        "70db0fadb5d94b39520b8417f90eb50b127a1d06d37bfb2dc8b13e3fc76f4946"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_error_policy_single_check_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9f2fd6539955ff5bfe8b5b56c01cea3807ddff1b104753cd341d8d355bad76e6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_image_output_accounting_test.go",
+      "predecessor_sha256s": [
+        "b3ecc7521807f8900549a63f057ef6993cc81b43081e4236ea55d893d855dc04"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_image_output_accounting_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4cbab5f75a2fb17522fb7387d9bbff9c2f9a3627c734fa47483b28281e59b208"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service.go",
+      "predecessor_sha256s": [
+        "1309884db171c2653feeb293a62adc9c060e754d3e8e2c14b2bd7524711eaf30"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_messages_compat_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e5830beeb93c97bc82f411c3b1097d2cf1a5babfe71b9caeff0774ee26b7fad2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_models_endpoints.go",
+      "predecessor_sha256s": [
+        "70d208bfd4200149bc28368d81f1f63c7d0d84d230fa18d4c3f40a626377b400"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_models_endpoints.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "645b31339616db950a1cd97b4e3f025e8d3b8c9c692fdd2fddc2b8b252d45c02"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gemini_vertex_api_key_forward_test.go",
+      "predecessor_sha256s": [
+        "cb138a51d486c513ba6899105e3022a40fbf9abd9866edf3ec14be49df6f8bdd"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/gemini_vertex_api_key_forward_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "996de84662891c7a2d03317cb8ab20c163353bbd5388f4eeff40a58e2ef92c8f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/grok_media.go",
+      "predecessor_sha256s": [
+        "01a65460cd75263b3cb38dbcbecea2040214b53b8dc677ee50c96ea4069eae30"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/grok_media.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "118458669564b377fbeb44e2f70e46d3b0ed17db2d91ea14f08ee44025e2de53"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/grok_observed_models.go",
+      "predecessor_sha256s": [
+        "ebcef3b10eccf93ddd26e972bfb8dbf0e4f11fbb5efe65506a86a171bf9ac35b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/grok_observed_models.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5f4ee2965f5978a3b1f372370ea050d2c176aac8424e1ce630d2d0d4aca415ff"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/grok_quota_service_test.go",
+      "predecessor_sha256s": [
+        "75f1f4cecc937d60043918279f635071f46867289ad8af3a244ec1b84801667b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/grok_quota_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ef8b99e90556afaf18407fa661f98f0cfebf8ee938362fdecaec97937ed0e7d8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/group.go",
+      "predecessor_sha256s": [
+        "db2f448124076348a8781fcaee4fd6c448fadbe952cfa2708208279a7870ba15"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "91d46705a0f361fcddcaf0949c977a8be0fc0e376669bc59ec60aecf8542b9a0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/group_service.go",
+      "predecessor_sha256s": [
+        "2f71567c671f7e811ee392a4c148121d1812b52b35f5e90f7b8308724d9587dd"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/group_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7a880574d41bea5839fbc1c46146e4e5580daf5cbcc438223198e7cc9b95593e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_plaza_service.go",
+      "predecessor_sha256s": [
+        "3b00d029ade6ca0b7c19e215620dbfb494f40959ed9bc93be3433f48aa8b4bd3"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/model_plaza_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3065cb6d75d63d22710e181ce08b88cfd97a35ce7f453050b168188778e3de3a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_plaza_service_test.go",
+      "predecessor_sha256s": [
+        "fdcd6410bc23c52e0f0461ecf10bfb4b76c1d039135e4b53f1a8cc21382cd74d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/model_plaza_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0ee5b9f8d6bbd396f50341f3b74f9639be89fcb8a13c25f6a9d57a68fc208a73"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_chat_roles.go",
+      "predecessor_sha256s": [
+        "d8d843c116bba6eba09c77e51318385c4d5431fb0f2fdd8089a556d1f0886ae7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_chat_roles.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1a9635c45038b78f884b8193ad8c47b8af9719a1b96829a316caf853aaff0b6c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_chat_roles_test.go",
+      "predecessor_sha256s": [
+        "18fb78ba845de80d14c9634b970942b9c2fc3f28427aa023cd75016304fc5eb5"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_chat_roles_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "11656cd80f0c6b6d011964c4145dec34760f18f98674435982a57d842f3331ce"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256s": [
+        "2dd9a1441223c8b54297940d6c1447dc00f9ef87bb8594d1bc6cb12f9ee81894"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_codex_models_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0164-closeprep-models-cache-20261028-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "40985a44fc0d999e2eefeb2a4e7c02218310dcc72fd8517e537735fc7b8de6f2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "predecessor_sha256s": [
+        "802bf851428f87a991a017e716426217d9ae07cbda2e180c1b614dcfb65545d1"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_codex_transform.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c7b840555d314899dba026931b3a9deb96626963efd3bf27752266a345b04879"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compat_model.go",
+      "predecessor_sha256s": [
+        "3abd0206f1f53a18729e7704788e8451e80c38db2fd2daea88cc26f61d69f04f"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_compat_model.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c198f40146d64654bbeeb636ffe71a3818c3d10de319c987ca47bc254c34238d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "predecessor_sha256s": [
+        "16be53ad7179fe46ee71528267e62eaa0504d159b5b1f05b5b0523a521019c4f"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_chat_completions.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f82fa53ea03c6fd6b5fd1a63451845982528ca8cc78596b9befa579e6cd48e46"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "predecessor_sha256s": [
+        "550318723cc60d4b1f8481a8b06b102fd70e3dceaa7dd81e54dee8e49e4f1433"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a6b14708fa2de6d8e0cae5e897ae9252a79b6bd5dc9be14083d386d0c8ca8134"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_grok.go",
+      "predecessor_sha256s": [
+        "770e8a67a944e972ea629425708e9e366d55ccd2cf835810d133a5eff8c02bb0"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_grok.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7ffed186b9dbc81d71785368055d86aed9cd2b775693ff6fc20332f983e1fb0b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "predecessor_sha256s": [
+        "3b9de3f268e67184310e514425d9e619b5191ef605579a9bdf4f063926e830d6"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_messages.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1412bad00297c6ed9ff8f7d131a20784d2ed8da616a743a45e1713b86442d311"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "predecessor_sha256s": [
+        "ccbb7990e71a75f4ae02a56c7f0518e722ff5541e1b78f7c677733c5f329c058"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2e996e26adf7e1f0f9aa9d1dbc8155263a061c8c3740cbca25231993e39f1a10"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "predecessor_sha256s": [
+        "a3e54eec436ecbd6c24c466dc37e4ac60155a0c8f23a479b88e93d02797bc06a"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_response_handling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-encrypted-content-recovery-20261019-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f04101c34ef4bded1d776417a32ca03012c03750621b6be1f2dadf18e4e7f7fd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "predecessor_sha256s": [
+        "3852e6f217c4fd100c495a46a59234d981130b4d5f376746d391614178dd060b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0165-registration-20261029-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "98eb0ffc98db734033c92654056f8e025fee6afff8a3134cb8217a9fcdad2274"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "predecessor_sha256s": [
+        "d2a8c423b45a27f744ecdcc594c9e9a1dc035f27f5f7a8f56ba4a171ef292caa"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0d6ab4ded8d05d3e8ed1e4b67fbd80e4188de3f12bdc2985438aa890e8834a1f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_usage.go",
+      "predecessor_sha256s": [
+        "45e939bc6f304f25eeb4d67955840d3bb4483117520e3fe20a4b7ca856629053"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_gateway_usage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "f4803cc9cd8b52cb730575e04d56fe0c88835c252442f2a849f52ee7da5b3e01"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images.go",
+      "predecessor_sha256s": [
+        "ed879e4ff4005dba5176f5be53610021bb25987918af7d9db7341836f39b883b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_images.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1cf48c2db8ede47ea82cdacf644da771813129187fda5b49a6da301a3e28d286"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_responses.go",
+      "predecessor_sha256s": [
+        "07d5889dca6fff592394affaa3a86c72717cc90320d08132e15c3df47639e531"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_images_responses.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9f62c00f573dfba9dd36e9e4bcdcd72a1367b8388e14753627598bf04e9a17c1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_model_alias.go",
+      "predecessor_sha256s": [
+        "142aa4bdb9f2cc947867e06830001fc18bc85ab63a2371a40e26229a5b10655e"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/openai_model_alias.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9dfee1c321e0e06c36fe5a9844166a3bf4e21781777074dccbcd0a8709691229"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service.go",
+      "predecessor_sha256s": [
+        "f7da7fe24e6e2ac79a2dbc0aa1d132c60201e4bb8bc9c91a540f9ab6d6ffd0d2"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/pricing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "61f0a16c096b087033efc34c899ab9d9db9f1c92a3cd9638d988fbee469189fd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_cn_providers.go",
+      "predecessor_sha256s": [
+        "bc3637e9fd73133ef62e02ee198e1563a6fb252425ed54e04b42aa11e12de4e6"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/ratelimit_cn_providers.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "598746ebb5fa799049e5c90e5a437c3889d8db26930c646fef58e71105b7f5de"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/setting_features.go",
+      "predecessor_sha256s": [
+        "34fc314051461c1699b8be7fd779b98af8f9ee259324f0ddc50d1873e2feb56e"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/setting_features.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "125b1324733a36b54f6fe88c150529cbe73c977dbdd623d4582ceeed228cb18a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/setting_service.go",
+      "predecessor_sha256s": [
+        "2c281568b0ab4c4e3a1c238e2a476af442ff47143559d494287c9aefe856fefc"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/setting_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b629d9e5cd8e04ca4c229469cce68757505e3a7e91aa072930cbcb9653c80490"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models.go",
+      "predecessor_sha256s": [
+        "eaa1357f16aaa26b9c22624b1bf53bb82f9410af605dd28d92830c5688f3967c"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/upstream_models.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "26aa84d8d2ba166d3dcebec0d79b944bc53b6cb55e9c2938a5ff087f8b787378"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models_test.go",
+      "predecessor_sha256s": [
+        "88cd1514657f06bd8a71ff382e28415b1fb82a8d38bc0fc238d956405c53dfba"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/upstream_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f4ecb65da383c47b517fb5b7ed6eba8ea0164ca1d89cfbfb5e1fd18cd1aab071"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256s": [
+        "79fc561874b1d457bec713035166f564374bf36139055468f0f122e3d7b12da4"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/internal/service/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "87670c10c6b519e5b0b6f4e51a29fccc8d8dc730238c5b011ef3b4b50258e817"
+    },
+    {
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256s": [
+        "e092d8fe3fb6abd66ecdc1da5ac1c094d9aaadd07a8d3df752dc5f7d09997812"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00766dba3b455ddfdc3a54405f377541725eba85a8522d4c77369b0ed2d248da"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/api/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "d633c146d6db816e107d41c36f86d83f71c02613bfc8950bef1c2d8120745e05"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/api/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "afaf1a4dc371ea68837488d90572d6829b7d883eeaaee7486a9416b980ad38e0"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256s": [
+        "6b938db7c45d4b6be9e067f401cc58f6718a44fd94daec122e440c6756b2596f"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/components/account/EditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f2a9ac2e1c551ace8f858b2c6fbe9599724272f4a678be8b92c5f8445f369a27"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/ModelWhitelistSelector.vue",
+      "predecessor_sha256s": [
+        "104b26969069e00bff8d1429d23c3dffba98efdeba8e1f607f297b4979883405"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/components/account/ModelWhitelistSelector.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c05f5652ebb2b859d2c906d07c8529c55888fb7357c7e6ccbadc645d35983ddf"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "predecessor_sha256s": [
+        "a9d4f145d921ab76671eac7726316cc1d37ab8a6093a54e6de5b9a3cee94dbe3"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b316a07aff6753f0899c622bf1157d69c07f55a58ed14a1fb6c63931d50ef853"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256s": [
+        "92eba550ac020ea96b825af63eb1199fe4b08203a7e611829550b3acac9c1c8b"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/components/keys/UseKeyModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4c7db55033da0e9bd5bfb62be9c92e3e036d0c0b4373b79ab9b6c28a9d2b65be"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "predecessor_sha256s": [
+        "7fd794b8be1cc067c538018bf6165532138fcb01791813f1a6de99db95164479"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "53d4a6d2ddfdbf16f261b361dc25c951934806022f473fb05677447a7d54ec89"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "predecessor_sha256s": [
+        "22fcd4fa8189ac62cf541c06e376d352d191cab6afde4b172431b496cdd6a88c"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "44f79fa6b2846ccf4873abc90821e5bd9a6c26c4b9eb92cafe612d2f707551ac"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/useModelWhitelist.ts",
+      "predecessor_sha256s": [
+        "9e2e3dc03a72bc29473bce6786545e38a773cfc8d86a7d7ca1c4117c791e0920"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/composables/useModelWhitelist.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2aaf57d3e0bd6d8e74d79b5530a60cbb8a51c458702bb8dba43162e47a1ad289"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "b5548c6cc31a4f65f0737261fae89e145f9fa8723d439cec0f6102cbe6e83565"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "15eb71ab188e7cbfd3d269ac4bcd70a048767e2bed593b03ecb1768302736bae"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/channels.ts",
+      "predecessor_sha256s": [
+        "e760066b887d8a22de7ab77c389777c2c44a9aba79410c2bc4c4b3e78575087d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/en/admin/channels.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5d72d292caab1e1d1bd6a42265c6bb8f99f42a8d1cea6dc9e0bc89b16428bb18"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/overview.ts",
+      "predecessor_sha256s": [
+        "3843beb59e165c595c404a7b8714ead92864bb7a44804857d133f7d4e69875e7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/en/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c5b6fe00dc571168734e14e73c59c436b66bc95b0866954e77c7121c9b0461e3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "8022bb7b2fab4d1ce68f7b7e404f1f29d1c1d8dd16fd6da9c5b50217624eb821"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "c5df51a66693ca09431d3514e2f44e6e1c330a681d8f7722bbcad9fd18320476"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/channels.ts",
+      "predecessor_sha256s": [
+        "5f359c62dabd002e21c9dbcbe731cb05bed8579b15bdd063256297e7c7968705"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/zh/admin/channels.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7a0e38d792276af8da68f3e49e65c4e730d8e7bc711967ed94de3aff8404dfbb"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/overview.ts",
+      "predecessor_sha256s": [
+        "9ee60c0de3345f80fe05e99b61187e69bc8208ffb99bc892ec81bbec2322446d"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/i18n/locales/zh/admin/overview.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/custom-platform-codex-catalog-20261024-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "76d773d0d6dca64ad119f37f776a6029ea2daf86e43543bec3dbfb36d2a165a0"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256s": [
+        "7b317c615a4c3e5d071b0c3de7c9a2da045f6ae86a480f2e15c7ea79ff201255"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/types/index.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/custom-platform-candidate-pool-20261024-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/v0.2.17-11-codex-ws-catalog-ollama-20261024-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "848650e87be58102e88de3e019030297a19b226a502a244bad47bd0cfbdc9463"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/ChannelsView.vue",
+      "predecessor_sha256s": [
+        "c9a508c44593a16757c3c711758bec799ae67c8ff4993b11898337f65acde8bc"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/views/admin/ChannelsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6bfd0fad1956e20df88e9b9408ec53f4761c421405998181412b733e282813c4"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/GroupsView.vue",
+      "predecessor_sha256s": [
+        "ee5359af30863733b44eda77df6a6dd471f2760c7a9bec48e100cb02f83d23d7"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/views/admin/GroupsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.18-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.18-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "42fef6eef46f9844818d1994e85ae37a5e731527fa6a3c171dc9e718bc082d29"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "predecessor_sha256s": [
+        "243634dc0c60574d58f8c7d3a5021f3e86da98037c0973117657d94523ef5cac"
+      ],
+      "reason": "按框架 §5.2 合并上游 v0.2.19，保留官方客户端集中出站与身份边界，合入受限管理员密钥、Grok 目录和图片计费，源码与静态检查定型后一次性承接冻结摘要；历史收据只读。 path=frontend/src/views/admin/SettingsView.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fa46fb5fdc5258b29f6ec83b401ba7754d8c9e56f84d573bfbd0196c64785b6e"
+    }
+  ],
+  "unregistered_path_count": 134,
+  "unregistered_paths": [
+    "assets/partners/banners/wandapi-cn-dark.svg",
+    "assets/partners/banners/wandapi-cn.svg",
+    "assets/partners/banners/wandapi-en-dark.svg",
+    "assets/partners/banners/wandapi-en.svg",
+    "assets/partners/logos/NiuProxy.jpg",
+    "assets/partners/logos/soleapi.png",
+    "backend/internal/handler/admin/account_handler_grok_model_diagnostics_test.go",
+    "backend/internal/handler/admin/announcement_handler.go",
+    "backend/internal/handler/admin/custom_admin_key_accounts.go",
+    "backend/internal/handler/admin/custom_admin_key_accounts_test.go",
+    "backend/internal/handler/admin/custom_admin_key_codex_import.go",
+    "backend/internal/handler/admin/custom_admin_key_codex_import_test.go",
+    "backend/internal/handler/admin/custom_admin_key_commit_test.go",
+    "backend/internal/handler/admin/custom_admin_key_group_models.go",
+    "backend/internal/handler/admin/custom_admin_key_proxies.go",
+    "backend/internal/handler/admin/custom_admin_key_proxies_test.go",
+    "backend/internal/handler/admin/custom_admin_key_users.go",
+    "backend/internal/handler/admin/custom_admin_key_users_test.go",
+    "backend/internal/handler/admin/custom_admin_keys.go",
+    "backend/internal/handler/admin/custom_admin_keys_test.go",
+    "backend/internal/handler/admin/promo_handler.go",
+    "backend/internal/handler/admin/scoped_admin_content_response.go",
+    "backend/internal/handler/admin/scoped_admin_content_response_test.go",
+    "backend/internal/handler/admin/scoped_admin_subscription_response.go",
+    "backend/internal/handler/admin/scoped_admin_subscription_response_test.go",
+    "backend/internal/handler/admin/scoped_admin_usage_response.go",
+    "backend/internal/handler/admin/scoped_admin_usage_response_test.go",
+    "backend/internal/handler/dto/account_mapper_redact_test.go",
+    "backend/internal/handler/gemini_cached_content_bound_retry_test.go",
+    "backend/internal/handler/gemini_mixed_models_test.go",
+    "backend/internal/pkg/adminaccess/catalog.go",
+    "backend/internal/pkg/adminaccess/policy.go",
+    "backend/internal/pkg/adminaccess/policy_test.go",
+    "backend/internal/pkg/antigravity/response_transformer_malformed_test.go",
+    "backend/internal/pkg/gemini/models_test.go",
+    "backend/internal/pkg/geminicli/models_test.go",
+    "backend/internal/pkg/pagination/pagination.go",
+    "backend/internal/pkg/pagination/pagination_test.go",
+    "backend/internal/pkg/response/response.go",
+    "backend/internal/pkg/response/response_test.go",
+    "backend/internal/repository/account_repo_grok_managed_extra_integration_test.go",
+    "backend/internal/repository/account_repo_grok_managed_extra_test.go",
+    "backend/internal/repository/account_repo_grok_models.go",
+    "backend/internal/repository/account_repo_grok_models_integration_test.go",
+    "backend/internal/repository/account_repo_grok_models_test.go",
+    "backend/internal/repository/custom_account_proxy_selection.go",
+    "backend/internal/repository/custom_account_proxy_selection_test.go",
+    "backend/internal/repository/custom_admin_key_group_models.go",
+    "backend/internal/repository/custom_admin_key_group_models_test.go",
+    "backend/internal/repository/custom_admin_key_review_test.go",
+    "backend/internal/repository/custom_admin_key_scope.go",
+    "backend/internal/repository/custom_admin_key_scope_test.go",
+    "backend/internal/repository/custom_admin_key_transaction.go",
+    "backend/internal/repository/custom_admin_keys.go",
+    "backend/internal/repository/custom_admin_keys_postgres_test.go",
+    "backend/internal/repository/custom_admin_keys_test.go",
+    "backend/internal/repository/custom_legacy_admin_key_handler_test.go",
+    "backend/internal/repository/custom_proxy_options.go",
+    "backend/internal/repository/custom_proxy_sample_test.go",
+    "backend/internal/repository/custom_proxy_search.go",
+    "backend/internal/repository/pagination_test.go",
+    "backend/internal/securityaudit/prompt_handler.go",
+    "backend/internal/securityaudit/prompt_handler_test.go",
+    "backend/internal/server/middleware/custom_admin_key_rate_limit_test.go",
+    "backend/internal/server/middleware/custom_admin_keys_test.go",
+    "backend/internal/server/middleware/panel_rate_limit.go",
+    "backend/internal/server/routes/custom_admin_key_access_test.go",
+    "backend/internal/server/routes/custom_admin_key_group_models_test.go",
+    "backend/internal/server/routes/custom_admin_key_payment_rate_limit_test.go",
+    "backend/internal/server/routes/custom_admin_key_user_responses_test.go",
+    "backend/internal/server/routes/custom_admin_keys.go",
+    "backend/internal/server/routes/custom_admin_keys_test.go",
+    "backend/internal/service/account_test_service_gemini_test.go",
+    "backend/internal/service/admin_account_grok_catalog_test.go",
+    "backend/internal/service/admin_service_role_test.go",
+    "backend/internal/service/antigravity_gateway_nonstream_malformed_test.go",
+    "backend/internal/service/antigravity_image_test.go",
+    "backend/internal/service/channel_websearch_merge_test.go",
+    "backend/internal/service/custom_admin_key_accounts.go",
+    "backend/internal/service/custom_admin_key_accounts_test.go",
+    "backend/internal/service/custom_admin_key_codex_import.go",
+    "backend/internal/service/custom_admin_key_codex_import_test.go",
+    "backend/internal/service/custom_admin_key_group_models.go",
+    "backend/internal/service/custom_admin_key_group_models_test.go",
+    "backend/internal/service/custom_admin_key_proxy_selection.go",
+    "backend/internal/service/custom_admin_key_proxy_selection_test.go",
+    "backend/internal/service/custom_admin_key_recovery_review_test.go",
+    "backend/internal/service/custom_admin_key_testdb_test.go",
+    "backend/internal/service/custom_admin_key_transaction.go",
+    "backend/internal/service/custom_admin_key_transaction_test.go",
+    "backend/internal/service/custom_admin_keys.go",
+    "backend/internal/service/custom_admin_keys_test.go",
+    "backend/internal/service/custom_proxy_options.go",
+    "backend/internal/service/gateway_billing_block.go",
+    "backend/internal/service/gateway_billing_block_test.go",
+    "backend/internal/service/gemini_image_output_accounting.go",
+    "backend/internal/service/gemini_same_account_retries_test.go",
+    "backend/internal/service/grok_model_catalog.go",
+    "backend/internal/service/grok_model_catalog_store.go",
+    "backend/internal/service/grok_model_catalog_store_test.go",
+    "backend/internal/service/grok_model_catalog_sync_test.go",
+    "backend/internal/service/grok_model_catalog_test.go",
+    "backend/internal/service/grok_model_diagnostics.go",
+    "backend/internal/service/grok_model_diagnostics_test.go",
+    "backend/internal/service/grok_observed_models_log_test.go",
+    "backend/internal/service/grok_p2_test.go",
+    "backend/internal/service/grok_response_model_audit_test.go",
+    "backend/internal/service/image_billing_count.go",
+    "backend/internal/service/image_billing_count_test.go",
+    "backend/internal/service/image_count_billing_switch_test.go",
+    "backend/internal/service/media_price_config.go",
+    "backend/internal/service/openai_gpt61_terra_test.go",
+    "backend/internal/service/openai_images_upload_limit_test.go",
+    "backend/internal/service/openai_usage_deepseek_cache_test.go",
+    "backend/internal/service/pagination_test.go",
+    "backend/internal/service/ratelimit_cn_frequency_429_test.go",
+    "backend/internal/service/response_model_billing_test.go",
+    "backend/internal/service/upstream_response_model_test.go",
+    "backend/migrations/247_scoped_admin_api_keys.sql",
+    "backend/migrations/248_group_image_count_billing.sql",
+    "docs/admin-api-keys.md",
+    "docs/egress/maintenance/upstream-v0.2.19-egress-merge-ledger.json",
+    "frontend/src/api/__tests__/admin.accounts.grokModelDiagnostics.spec.ts",
+    "frontend/src/api/admin/adminAccessKeys.ts",
+    "frontend/src/components/account/GrokModelDiagnosticsPanel.vue",
+    "frontend/src/components/account/__tests__/EditAccountModal.grokUpstream.spec.ts",
+    "frontend/src/components/account/__tests__/GrokModelDiagnosticsPanel.spec.ts",
+    "frontend/src/components/admin/settings/AdminAccessKeysSettings.vue",
+    "frontend/src/components/admin/settings/__tests__/AdminAccessKeysSettings.spec.ts",
+    "frontend/src/i18n/locales/en/adminAccessKeys.ts",
+    "frontend/src/i18n/locales/en/index.ts",
+    "frontend/src/i18n/locales/zh/adminAccessKeys.ts",
+    "frontend/src/i18n/locales/zh/index.ts",
+    "frontend/src/views/admin/__tests__/ChannelsView.webSearchEmulation.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

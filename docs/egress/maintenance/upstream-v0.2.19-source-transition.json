@@ -1,0 +1,2072 @@
+{
+  "base_commit": "940e892b8498fe09deb014b6af661575027b93b3",
+  "base_tree": "3c8907969f358ae1e98a0fc5435078af27a688c1",
+  "chain_sequence": 1,
+  "current_commit": "e841133fb43d509931453076857a4c3aa55a9854",
+  "current_tree": "c2f3afbe5d9222568e4a7674369068f9907f23fa",
+  "entries": [
+    {
+      "current_sha256": "fcc502e0097aa668764fba0c43207404b7bf8f75a93e7e5da1e2ca4a47598c41",
+      "old_path": "",
+      "path": ".gitignore",
+      "predecessor_sha256": "88b159d1561535b169be0e91c51b9da1ddde15d8b9346309d97325c6264c7b6f",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=.gitignore",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3eea9dbe2a71c980795524c80b3cdb474708ddd87e927a61cadded95c67d586a",
+      "old_path": "",
+      "path": "README_CN.md",
+      "predecessor_sha256": "bf03409654c42bf7492805e8343f5c7f75503930e76535fe655b706a867b563a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=README_CN.md",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c9162146449b4f78a575d81e834303bf972f1fc8af0dbf7f656994911ae42c42",
+      "old_path": "",
+      "path": "README_JA.md",
+      "predecessor_sha256": "75c2bf2d56f6cba7d189329e2df5f8f18d636a636cbd31b538704ebd25748f95",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=README_JA.md",
+      "status": "M"
+    },
+    {
+      "current_sha256": "11b902a4a46437a727710f0e2e510b7a6638f3f2377b6039fc03cb093bc6ab72",
+      "old_path": "",
+      "path": "assets/partners/banners/wandapi-cn-dark.svg",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/banners/wandapi-cn-dark.svg",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1ddb7b302cf12f96acba70f3eb2c87c256cb0b5c6eca6aef9e3b2b8855b52e34",
+      "old_path": "",
+      "path": "assets/partners/banners/wandapi-cn.svg",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/banners/wandapi-cn.svg",
+      "status": "A"
+    },
+    {
+      "current_sha256": "b3566c73daabe91285afb8fb16d0bf64e5d8ce2a1c49be543ca96122c5ae95a9",
+      "old_path": "",
+      "path": "assets/partners/banners/wandapi-en-dark.svg",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/banners/wandapi-en-dark.svg",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d5f856733b685f041c5d0473a0654acd13632db429a9f9e3492b95fb5a6a2899",
+      "old_path": "",
+      "path": "assets/partners/banners/wandapi-en.svg",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/banners/wandapi-en.svg",
+      "status": "A"
+    },
+    {
+      "current_sha256": "4e0d15696a61e33006b4453c9abd83fba74dde5a2ee06fc09a1c19481ae99da7",
+      "old_path": "",
+      "path": "assets/partners/logos/NiuProxy.jpg",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/logos/NiuProxy.jpg",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ae97a3e7df538416c217b97cd71e08a57589f77446aebf90ca1f0584b49219ae",
+      "old_path": "",
+      "path": "assets/partners/logos/soleapi.png",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=assets/partners/logos/soleapi.png",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d8f3e6b0f7817c4ad634608dc673833c04c255c7ad2ef87ece9a443579553d25",
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256": "80a7782acf725c0f5356ab1810549ce7b86ce9c04b83e55aa4a3797898db4944",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/cmd/server/VERSION",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8ca9c949eb43605c582c45e1d1f3e9cef4c0638006a0aceebac752d4a773cf01",
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256": "d4fa500bf12360f1674b17fea3e8a007b1778a126d5ccaaafcab78063856d148",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/cmd/server/wire_gen.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "928c4dbf3609d1e62686847cdccbde439df7ccb95d2e7e5d8ea2637d8173dae0",
+      "old_path": "",
+      "path": "backend/ent/group.go",
+      "predecessor_sha256": "b3a11800c771fa93fd19749f6b359004476e7149aff806530df54200061e3c8a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d6da7b243ec5135194181102f2cec9258626bd77ea221afbd556e0f070d3a33b",
+      "old_path": "",
+      "path": "backend/ent/group/group.go",
+      "predecessor_sha256": "ec4a26a1b8556d77450e9a98a5a607032d98a99e962152e61829d9415a0b8897",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/group/group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "56d61c81913a0ae6ff28c06dc731ccab64fda7adb9c80c2f5a6f402d8fbc824a",
+      "old_path": "",
+      "path": "backend/ent/group/where.go",
+      "predecessor_sha256": "d956d377e0628a799cdd50c7eb0205037579283f0c4ef4e6686e3bb546e1c8b1",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/group/where.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d5bcba1de3273bf8e5701cc7bf369778c108f1d7e1dea356c3c9bc7ad1bf6a32",
+      "old_path": "",
+      "path": "backend/ent/group_create.go",
+      "predecessor_sha256": "75401091f26e713b654fa8afbfaf458f67609c158078a2606ff831787e12e5de",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/group_create.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c67381fd1bcb53a8d2e6a33833a60ea556dd8fddb69bdaf286b244541e606cc3",
+      "old_path": "",
+      "path": "backend/ent/group_update.go",
+      "predecessor_sha256": "b687ed8004bf389da6e13140909546f14ee1dd6605d1fbb02a5cc2477284ec97",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/group_update.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "20a434f96a301e1b85ac814bb3b6fccbcd7c6299cc0fb4e2a7c49c3ce7f6682c",
+      "old_path": "",
+      "path": "backend/ent/migrate/schema.go",
+      "predecessor_sha256": "fd48c3c54c5aa5833a4230e48853fa9ba27cd9a17f73ef87f896091d20a03c12",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/migrate/schema.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "67b775468ec254312194229692ad729ad1bd9b2527d6beaa860eed119dae12d8",
+      "old_path": "",
+      "path": "backend/ent/mutation.go",
+      "predecessor_sha256": "a3ecc796f95167548df93de3862d4316be2ecad360990e5b2cf4ad326fade077",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/mutation.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e469a804fd1012c138694f5257c09638f7613ab994a67688b2326c1cb3387223",
+      "old_path": "",
+      "path": "backend/ent/runtime/runtime.go",
+      "predecessor_sha256": "dfcaaa167b5bdf7cd3858802250a9065fb5f28e80b4e2c115e5fc8776c75962a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/runtime/runtime.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9dfdfcc663001e111dcf64a713bdf6572d81275aeaa391c93799ca2b691cb33e",
+      "old_path": "",
+      "path": "backend/ent/schema/group.go",
+      "predecessor_sha256": "fbf96637538a97c9b34d1cdbb3616936f5fe79ec9d7d4841c44790ebd0eb657c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/ent/schema/group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "62640b670cae32320c88963aca9d750f905e8c408cad6dd94d5b64fcf107dee4",
+      "old_path": "",
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256": "f19a285db071974001e778eb096e2e1a24efcf8d5d791344c38e3eac1ba824c5",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/config/config.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "584a9e9556021b12826eadc0a8255df003a037dadffc8c159770c5960b177e78",
+      "old_path": "",
+      "path": "backend/internal/config/config_test.go",
+      "predecessor_sha256": "c37333f91861a60d3d47d34a3b462c7b8881684643db843c4b5bcec8558e5af7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/config/config_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "579ddb9aa158466273a08b9108cee7b40e3d2ca8fea2c29661b63fa83cbc9337",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256": "fe16639a6622ef6d4c115beaeb4a642c09ff67892bf5d87e38d9ffbb3ee95558",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/account_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "15609f7d2696fd6f4640eaf3b69ccadc9f9903e55135ed362308189b8c6f3f06",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler_grok_model_diagnostics_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/account_handler_grok_model_diagnostics_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "a8e225de4359e5b14f94130428b7a5f4a598944503a0a89bc0ccfd13e952c87c",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/admin_helpers_test.go",
+      "predecessor_sha256": "7355693d25edfd83e4fbeac6eb130c3f9d7e00d387ec4dc3b4100f86d6a202f5",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/admin_helpers_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ba1121a37bae3ae2d2e7118cf7003a299e38ad077da6ce8f9eac9f7dd851174f",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/announcement_handler.go",
+      "predecessor_sha256": "3ec7a59fcf81d85c06ac06467b32a1243092377fc0addaf83e3c181ce47d8804",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/announcement_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6e6b619030c9cbcc21ad91f12dffe9aae3191601a24a89e63b1c7f2fc2dc8376",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_accounts.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_accounts.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5fbc55526f51307688a228ee24a129af2125b8582921a7d10047974db3728255",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_accounts_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_accounts_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "dbd04196fcf7ebe1dd6fbe8a576cb095e325eb5d1288f489a69ba73e12d7c14b",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_codex_import.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_codex_import.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "52367651a4721136de29a042aaf56a43cb9cae1c666e05132b3ccf19f4c30033",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_codex_import_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_codex_import_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "bcc0109569cea068dcbdbcf02ccd3a50271279ee2366fa554f93794b7068dc9b",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_commit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_commit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "707651a6eb0ea772a0a14c9012c20c77512445f3767ad91d679fc65fa688a32e",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_group_models.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_group_models.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "2f57f79128907c76309d83e9596e1a228dae2b4a3011136d498bcec25d1e8d3e",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_proxies.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_proxies.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5c882071650b6c09dbe20b26ecb8e0301ff3e0b7347c18d5d8e38e8a5ad86453",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_proxies_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_proxies_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "fbabb6edbf08f45a87ae9f2946cfa7d90e94b9642c577812670a05eed7e8e64f",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_users.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_users.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ebe3c7ee7d85a4cdeda99255e6010c56f8bf917036221c21b0e8ca09b8f45d9f",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_key_users_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_key_users_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "95ceae41fb11354109954ec74a9c99fd44374842ff43448b66f72284a01d1099",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_keys.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_keys.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "8dc59337a5b21b83dfe51b70997c4e8b22965c08ae0f6ddc32a896afef14f6ce",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/custom_admin_keys_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/custom_admin_keys_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "88599ec7c82176db6e03b545e15a4affaa2d0dcdcc7f3f43f3959d1ab53b7aea",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/group_handler.go",
+      "predecessor_sha256": "fe0644e0d256155a5128ef5dc2ec148f5d96a7c05b26a04d65a61e092b0dfb52",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/group_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "575dd57f9c702d60e44192eb73e0af2e86206cdd444a3e90cb6299cf8ea6ace3",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/idempotency_helper.go",
+      "predecessor_sha256": "c485855b843714a30bcccef2c483a14cde7494ca8f2058a4c36fe4e4e37e4304",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/idempotency_helper.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9589fa0cc08ad3fd63fc611f1caef8a97e59d4d2b0d71c3eec324ed49c31e2f9",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/ops_dashboard_handler.go",
+      "predecessor_sha256": "879b64b21dd83ce8bb37588e99d7bbc4377a331224de95dc753d24aa9f880cd7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/ops_dashboard_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "44b638006a13b539021973d68ef7c26b01ade00e095b82fb251b5f10eb1594a0",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/promo_handler.go",
+      "predecessor_sha256": "9f2a7049868cccddcb6c2c0d666ecd25dafff5f9b5c9c96b853212c09f721644",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/promo_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ad1b7f6093c9e35590ab675461650512925c3aca27d934373732715c61a9ed06",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/proxy_handler.go",
+      "predecessor_sha256": "21b9d59aa261b44b0f9e1eaa3cd55b0dc01a58e02af8c86e0a92c8ebb4bf3b4a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/proxy_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "de252c6d04179918fb96820ae3f90cd0380ac24fe42160d73053eb301f75357b",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_content_response.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_content_response.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3af1ee52e462b27b58b92948c46c3ff8180b211b9ed0013efa376c84706ecd48",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_content_response_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_content_response_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "973aa09ba2c5c05d17cecae308c9bbd56a9c0cdbfc47cb0e0a9ad0ec75c7560f",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_subscription_response.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_subscription_response.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "01f395644235e895fb7bc1fa932a7a890ea343b47adfcded9db848cafeec813e",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_subscription_response_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_subscription_response_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "7137df983fb9b26966e55571b46cf572385ea3c035fb02386804743f6d2c4252",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_usage_response.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_usage_response.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "a0f984c6a900194619b1120c7240a24625cdbf5d824c58cf15c1aa9269fc10cb",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/scoped_admin_usage_response_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/scoped_admin_usage_response_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "47d1f2416e1c1cd129e138ede20714a5778fd81f650731a48ac9e8268cffd7a2",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/setting_handler_runtime.go",
+      "predecessor_sha256": "84473c6abc0c731e93a082f1f5df8685cd7cf8c2e0635fc0bdfdaa5f1b250348",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/setting_handler_runtime.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2166c7cf7cfce5c22afddb7d4048306bf13f94f7fc070d266da90438f5139d5e",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/subscription_handler.go",
+      "predecessor_sha256": "6ba507bd9d49c3c61576785d8aa67f89a3d450fd72fd09b34d744aba30a6498b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/subscription_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "164adc37f6f9bfdfb40e88c4b766227d98b739081190e58590a7d036164ebaa2",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/usage_handler.go",
+      "predecessor_sha256": "fbd272d5540b1de6fabddaac94e8301b4de42b4434e913fd53f24d80ea0a29a0",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/usage_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fe4fe110ef739c967aa339cb4df6f6aaeda0326fa6296820c07728289c73c4f4",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/user_handler.go",
+      "predecessor_sha256": "e473eaed1c9539389f8b6191b5932d82d97051a4872896cac397e611feedfc48",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/admin/user_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1fd0558b4c88070effad24b4673c33250956352e237530e943f4134830a74584",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/account_mapper_redact_test.go",
+      "predecessor_sha256": "fad3540be3949cbe4490d0ee96ef865431f761dc5e9b9a256cca4eefd0d3eb35",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/dto/account_mapper_redact_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "430c78e5e56d6fe4c2ba0435ddee721698678eb9c392e5a036698fd92b9b97b7",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/mappers.go",
+      "predecessor_sha256": "b654aaa63417a2fa6451638b25248a203ae32580f2f713c0f8cafd2dff83a235",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/dto/mappers.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5e78db3c6103c22380a5013cd72bc93daf1f087a5a572d68cf64533ffb1d1a16",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/types.go",
+      "predecessor_sha256": "854fdaa99c242d72d86d5a6a7b539c9ad81c95872cf57e612112a028580f7078",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/dto/types.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "22dfb8a48cfc811dc33077acdcefa9e82098bf9411d7e08175f831b004f890b2",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_models_test.go",
+      "predecessor_sha256": "f80013aed96514515c6bfae48c52fb26ac5e1703b4bde6d70e1207097cb45a31",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/gateway_models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a33445b6488565b01838239dd487d4a702b666ce86bd55093636acc22c3e4533",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_cached_content_bound_retry_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/gemini_cached_content_bound_retry_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c9fa763090ca403821fc5633683f81cef509349f61390f2533dc0b43f52334ce",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_mixed_models_test.go",
+      "predecessor_sha256": "488390097738124a0a6f527471425bb0b98db73907dd085714dac68ced2145ac",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/gemini_mixed_models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "90523395a6984245ff9cfa9cf8e2ef1cd75a922bd980bdacd8f8e079acb65df1",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256": "da051f15570dda5b1018594b4365c173ae65a77faf28798739edc4a7937302be",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dbd10c772821202711b491979f2dad43fa76a348c343f51a4339e6f46b491869",
+      "old_path": "",
+      "path": "backend/internal/pkg/adminaccess/catalog.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/adminaccess/catalog.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e13586e8705ca757606b17e1552a5c578c9a6a8f9e897be0928e3cbc75d899ea",
+      "old_path": "",
+      "path": "backend/internal/pkg/adminaccess/policy.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/adminaccess/policy.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "820207c373fbaaa52ff46c73bd3a458272e1c34936adf51c409ccc5dbc672473",
+      "old_path": "",
+      "path": "backend/internal/pkg/adminaccess/policy_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/adminaccess/policy_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6d5bb020995b8e72bcc3bcd1dcce65bed5eca63fe928c798f0d123a61c4987b2",
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/response_transformer.go",
+      "predecessor_sha256": "0f05486b8bdedc4b7d79911b7771fd110aed28a8b3d54abee7adedc2f6c1b47a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/antigravity/response_transformer.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5398557de67c16aa9d92f4ce6a3518ccdeccd52a77d653d39430bc456d014992",
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/response_transformer_malformed_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/antigravity/response_transformer_malformed_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "0555fca7a7114176c1cd5e74a6c3529a270c663b7364ac5c93c6ec6ac731baed",
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "predecessor_sha256": "88c8e7c36d2d282947e4705bc233727a061cd3db3b3fbf5238814d817f49bde8",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0a285a59ccaf61ffdd82f3aec536331b8fdab1c548b19e06d9b2b2b2ad1d16f4",
+      "old_path": "",
+      "path": "backend/internal/pkg/gemini/models.go",
+      "predecessor_sha256": "21bba51a4281276085917a2b8853ebaecd15bcba7005a77e11466dbecaf7a349",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/gemini/models.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b39b25a8f29c1563be0c596876576849fb57d09f02c0624affc4b7dbb50f102a",
+      "old_path": "",
+      "path": "backend/internal/pkg/gemini/models_test.go",
+      "predecessor_sha256": "0b6102496dc31d151dd0ae5b74038745cb9505ac66596d9f9766f657465d4e10",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/gemini/models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "42a77e8c43810e1b07913edb2def2c44e9d689d9e74e7e0a5ff3c11198146547",
+      "old_path": "",
+      "path": "backend/internal/pkg/geminicli/models.go",
+      "predecessor_sha256": "177181d77ec6dd33b3cf5442661071c36ed31d9046d32393e1c6699cc0300f5d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/geminicli/models.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3c73822edb5310a2b5285fbef9fe557bcefe184f6f5f02df33cce3f0dbe1ea46",
+      "old_path": "",
+      "path": "backend/internal/pkg/geminicli/models_test.go",
+      "predecessor_sha256": "289deb0c5c5e9c2bbaff9d060aac47596d30f4bc85b044598f436aed3d0f69f0",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/geminicli/models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3d1259c39da1b74b27c508d14c66ad2c287f7020e2e59045729fa08309a545b4",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/constants.go",
+      "predecessor_sha256": "420ea6f3185e2c13867ae4b4a7b61d14f436038bdc0a51b3b45f37ca1575a5c5",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/openai/constants.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "108b16e3c348cb21d1dffba4e00abe0d19360380270543fd24154e1fc3c37e5e",
+      "old_path": "",
+      "path": "backend/internal/pkg/pagination/pagination.go",
+      "predecessor_sha256": "583098c33af1b0c9ebca6e17eb5325243d88ca22b6c55cf2c0bf7dee9063eb7d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/pagination/pagination.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "bf3df233ce94474a3e5eb8a47d76732cebc5e8154d882cbca51797d194339403",
+      "old_path": "",
+      "path": "backend/internal/pkg/pagination/pagination_test.go",
+      "predecessor_sha256": "60caf1bbbc344e77afcad30d73290e75e1bcf3b35400de71098c6f21f7b792eb",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/pagination/pagination_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "026fd87fb709b346de9f14c9d044381ea3301d7b522896bb4f91aca2ee1c297d",
+      "old_path": "",
+      "path": "backend/internal/pkg/response/response.go",
+      "predecessor_sha256": "38b5dc41d4b75111f950346f19531a95d34458756d53bc90235c81fb03de2d50",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/response/response.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9ce7ae8fe8d247177024c79ba5297b30cd0d07a19157684bca4eca00f3ad12f8",
+      "old_path": "",
+      "path": "backend/internal/pkg/response/response_test.go",
+      "predecessor_sha256": "6ec249e64a2d212543c59a28c005f3da6c11f80ac940c02e7c432b29cfdf1733",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/pkg/response/response_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a35d57a61614d116b2fe088ffd2e1d28ba7280928beb2b3231167fbd772ef085",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo.go",
+      "predecessor_sha256": "d13ae3fbb2661c28ac785db6e1906f693cd8c948c6f662a7202f8954def7bab4",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "38c92c8068c95cdbfe25c31eb325b20bfa6320a39b4eb8b1af4e32fa471b3800",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_grok_managed_extra_integration_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_grok_managed_extra_integration_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "fd9d8ab8ae19dc501ee2e533dd06502ec3a928db3910db5027fbd8fef9743bcf",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_grok_managed_extra_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_grok_managed_extra_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "43208c50abbdcb9b62cd676034ccde721b7515da3b2bf984769e6ab5f36df67d",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_grok_models.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_grok_models.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e2187504cf550bc26a02fff25b9c4d16871c90049c457d00bee126f0e8b1b37a",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_grok_models_integration_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_grok_models_integration_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "77060b205b2360f1d4a1a70d2b1d85f0c25b73545e424d66820daf20c155e785",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_grok_models_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_grok_models_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "aaae5a5dc3b71fd6cc5a7413f45ccd31f9081b5cf702032599b55af510aef183",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "predecessor_sha256": "c905562ea8eb6e084a7febcf280af14eda4360e544725a691fc88ad6a1a48469",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_opencode_go_usage_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0f46dd77e32d0ebb92b6ae7a4851d596828e038c2fa35322c1870e6c05e653f0",
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "predecessor_sha256": "d06354d1ac36686494a6dbbc612b8339f3b90194162ca837ef78c1cd15f46e83",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/account_repo_upstream_billing_probe_update_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ba51cc34dfed2fafe6ea17cbce73d3bdb5977cb28506b9e84152c7dbb6f9b5b6",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_repo.go",
+      "predecessor_sha256": "3fd4a00c904f79f965266ddb618257634d044d205335df8039d51496f8dc0e3b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/api_key_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "414ed7509f3ada07aa2e9f0c625d3326eb5b07cda2382ea2632477ff8017bf44",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_account_proxy_selection.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_account_proxy_selection.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "8677e6b7627775504db8240d1116e78135dae172c8fe826b90c1f5a2e124c94d",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_account_proxy_selection_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_account_proxy_selection_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e531f5438f41a677b5ce8a3abc6c3a62bcb2f57f70bf4b68eaf09a7f8205fe25",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_group_models.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_group_models.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "440f075b75fecef0be95e410dadf914fd26b121b89f70d0aaac2f093fa185b2f",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_group_models_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_group_models_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f1d7a246886907ac2938a988e968185e1214781f81926a7473d5704a4557bc67",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_review_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_review_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "bc4566fe6a53d5dfb4aed6a8f6f81104b718a985f0c993adcac37e0e8accb5a6",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_scope.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_scope.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "99b1de2dde0ca70932e958b10a734b4f9075a09f2079639f18bdbeb6a4adab31",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_scope_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_scope_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "2c8399f7d759b3663a745451b22f04ceb9d6ec340f1ad00588b169316c5698d0",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_key_transaction.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_key_transaction.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "8b1653674c1cd260211ad6de1abc91559117da9393cbaf2c6e151b141674d07f",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_keys.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_keys.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "235af89874c5579e132606c370204de00e29525ae66c6b7741cb9d653e794a8e",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_keys_postgres_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_keys_postgres_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "09bd837bf4e6cf06f97cc19000774979943612d6337c97131af0c1400312a4ce",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_admin_keys_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_admin_keys_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1331f3a807e693b07ccee111e73f7d014505413e8375c52951eaa60dde1ca868",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_legacy_admin_key_handler_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_legacy_admin_key_handler_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d2178fcfa31f07a74103b6ef35caaee038ee7bcb4e402509b9df0dc525be33e5",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_proxy_options.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_proxy_options.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f3933e33be3a656f0c0fd01fdce7c0ffa5318ccf031ba612029349732ea4c21c",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_proxy_sample_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_proxy_sample_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "0618d2857bc048c7c703cf6f7b2d376899ab14c3c2b5f40bf15185c92b70d044",
+      "old_path": "",
+      "path": "backend/internal/repository/custom_proxy_search.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/custom_proxy_search.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3b1cc547cb9114e1e869f643707361ede997f596118c5fccfcb93a3657563e4d",
+      "old_path": "",
+      "path": "backend/internal/repository/group_repo.go",
+      "predecessor_sha256": "2fb78411ea16b142f11bd25b8eb066a644b886a4578247253042dbc3ce464dbb",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/group_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ec01984e9d28ae6f006a782fd511e17f3f649860e554f03fab4e924b11b85f6e",
+      "old_path": "",
+      "path": "backend/internal/repository/pagination_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/pagination_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6a2b3a91d238d9ff1cd0ce98b26c995619445284dda02d7f220b2b57091677b0",
+      "old_path": "",
+      "path": "backend/internal/repository/setting_repo.go",
+      "predecessor_sha256": "9e5a447b9686c5610298d9196cc70cf67b2748d6384c912b688f49940a89602b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/setting_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ada6dd3ded93fc6249cb34a6bf1264c89caf3f29c3c42fa6a008912bc99ee256",
+      "old_path": "",
+      "path": "backend/internal/repository/wire.go",
+      "predecessor_sha256": "18b1dc8a2e466273f7f21d43686743002a4654912662052cd5bdb51b44a5dc35",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/repository/wire.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "af3e0d231e082f962554591dd833f27e411b346f9d751262e0d4b31532d85d60",
+      "old_path": "",
+      "path": "backend/internal/securityaudit/prompt_handler.go",
+      "predecessor_sha256": "08c239d2a55d085ef005d005a262636e377c272719aa38af7ecb43d4a2108426",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/securityaudit/prompt_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3e1111b6a6b023839a23946fc9dd25154e9c94ba027adb8724ee6985aed5b52f",
+      "old_path": "",
+      "path": "backend/internal/securityaudit/prompt_handler_test.go",
+      "predecessor_sha256": "349fceb6e3a34014c558ceb1501e4a47494cc37c12a3d82fe86631a4a94bea67",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/securityaudit/prompt_handler_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d8f2b161b0a7937b35f293642db8683c49d2231ace0ce39fb16fbb3c386b70f8",
+      "old_path": "",
+      "path": "backend/internal/server/api_contract_test.go",
+      "predecessor_sha256": "f5bcbb24abaefec84143c641a7716a93b86594f4e70122eb822db68863a5e28d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/api_contract_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5ef93a45f16aba7f2e171e49f66974fdd4ee17f8fc1a3888d5d0cbf48e2ccfe1",
+      "old_path": "",
+      "path": "backend/internal/server/middleware/admin_auth.go",
+      "predecessor_sha256": "f878899e7e03bda35ce8774a477800c96ad710482132a4672c8b1bfea4adf123",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/middleware/admin_auth.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "96f7ab8134bd5b690bf42789ad0c29b7696138d0f4e0cdea426cc23eeb57c8e3",
+      "old_path": "",
+      "path": "backend/internal/server/middleware/custom_admin_key_rate_limit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/middleware/custom_admin_key_rate_limit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "dceb765a9a2cf41472bb4ed86a2fb175c105ccc5ad73102c4b980cded744ab32",
+      "old_path": "",
+      "path": "backend/internal/server/middleware/custom_admin_keys_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/middleware/custom_admin_keys_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3fbe65826920dc156d59c437b15ccec571828e2c52f3526d802e37413e17b1a7",
+      "old_path": "",
+      "path": "backend/internal/server/middleware/panel_rate_limit.go",
+      "predecessor_sha256": "0fb6ac7cb5a7b44d6d3145d02937dba13cb844213d96d383e026973130fdc08a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/middleware/panel_rate_limit.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7a6ea84279f270f94c694af09674fcc0bfaab0b0e5e85a2b8d3de8c70cc2fc3b",
+      "old_path": "",
+      "path": "backend/internal/server/routes/admin.go",
+      "predecessor_sha256": "2e5b0aa4ef4b684757265cf6296ad4c03ed28c2013659ad63f5eed5c19d9c28f",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/admin.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2c2f85fe695f611e537615be22695cc4eaa9d9ebc02b73caa954091c662eb2ea",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_key_access_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_key_access_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "abc735f5063b95644ca63e3a8e5efc28da7549256c7c2cfae93ba6dd73e13b7b",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_key_group_models_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_key_group_models_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "b1a8f7fc0bd02e1424881a8d79478613702685613b718042d4ed9ec695f49b77",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_key_payment_rate_limit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_key_payment_rate_limit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "9a8f753305c0d05284f19a096688cce3c7fe17b039c2085e7fffb79d78842f8d",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_key_user_responses_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_key_user_responses_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e1404845390c73381bed490e80acac704aa505f8b5e5810266fd387b781a429e",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_keys.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_keys.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "52742628a0fe2e81d8a9a9b3613d61b67f722edd9f8f0b8946ea508919f0b8eb",
+      "old_path": "",
+      "path": "backend/internal/server/routes/custom_admin_keys_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/custom_admin_keys_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f3d544119054b635c11d1a294ebfae2df2ab92cb908e616801d357bd1a4eaef5",
+      "old_path": "",
+      "path": "backend/internal/server/routes/payment.go",
+      "predecessor_sha256": "ce85c91909d8e2c59eb292e0d88d7fed330038435f3ea200c5f144ab63edd2f2",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/server/routes/payment.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "835d17f136df4381885c74d43e457f788236f4733b54c87e4d08702a56bd6bc7",
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256": "129ba44f73c77c2cac4e0a1c2bb2b5bc2801d0b6d04da43d3c356d4c4bdb93ba",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/account_test_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "811f4b39d3f25dd83f55c58b285632f7a6ce79fc9717d5b165ee967e53ee261b",
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_gemini_test.go",
+      "predecessor_sha256": "9889839c92152c0800d1e8d3b1bcc664ae531ef52d1d1a5fd4fde48272054f13",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/account_test_service_gemini_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fe482cdc139ff1339ceba598f57785597e20a02ed834f6a9ca8887b9e6ab51ef",
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256": "c88463ebede6a10979473d7e90630ea6a7a28c856d183bdaf32da18ff3794ff4",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_account.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "578b8a3642b2cdade740d0640d289313d92e5bbf9af9cee206a2b9400a4b82c6",
+      "old_path": "",
+      "path": "backend/internal/service/admin_account_grok_catalog_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_account_grok_catalog_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "4c6bad5b2e7fb66c5f2fe3dbf1ebd429e8c54a03258cc2d44403daf2a8e39ad8",
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256": "ffaf97b8657587d6ab1d5b91b43773063e2851111470d289b51a55408d2f0111",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d47d938d640e01147564ec8fc3f3a787b8aa1c899919c5bdcea6b08b98a5f2d5",
+      "old_path": "",
+      "path": "backend/internal/service/admin_group_duplicate.go",
+      "predecessor_sha256": "df31ffaa812f9546f61b2c8385f9f82783df57d2a856adf09dedb1adaed231cb",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_group_duplicate.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "df19b6076e1951cea98dab822b4399dbe790a497b4f841e507a6aa4fe9a36d21",
+      "old_path": "",
+      "path": "backend/internal/service/admin_service.go",
+      "predecessor_sha256": "1cfb9c626ad4d42afdfd64c8468cc4af9875c2fd000503111e1178a6194c7c9d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "319d0bd709a6da49b41ee011d65e370b1b508c4e23e308fca9de71d81e57d722",
+      "old_path": "",
+      "path": "backend/internal/service/admin_service_role_test.go",
+      "predecessor_sha256": "92c812d45a7a5042a6d6e7c07109342d52cef52f1f160d1bdced1c1e7adfd0e1",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_service_role_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e8fa15859d46b7d731f25d4f0f2c1b053f1e40d13cd96ec246bf69aaf369784f",
+      "old_path": "",
+      "path": "backend/internal/service/admin_user.go",
+      "predecessor_sha256": "85ddff633c80ed207ab931443b8d65134e5742063e9d7bace0ec08e420533f56",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/admin_user.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e50244b9ec5f12d26b7b8acf93548bf1b766653ef25926d16509dd6f0be871fa",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat.go",
+      "predecessor_sha256": "9f7188480df34f829b7e775d4791f9b6e630332341837eba1d8a18b308dc1104",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/antigravity_gateway_compat.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "04155611dfc0489ee3a4d5a40f03902e7709c9cb7cffe1316353c72cd8b17d21",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256": "07b42e1c1ca3ee7a13fc01224de90d0746ebc96b3eba76635530da2d60012fb2",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "64325fb8e37a55efeef980854d2772f4cd6a3676b7cccbeb0395d128bac0b50f",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_nonstream_malformed_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/antigravity_gateway_nonstream_malformed_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5ccb0bb37c77f084c9c81f181955244583d15f09e62acf980753d88750c7e62a",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_streaming.go",
+      "predecessor_sha256": "d8206d26283c650cb6a0a3dff32f1813ef656ad8d03cb67b1c581d49237b0db7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/antigravity_gateway_streaming.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e6e0b3b4ef759489147391e7ab27a4228f3b35ecaf87be92199d94da8259bf9f",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_image_test.go",
+      "predecessor_sha256": "04bf42128c70867aa47bd73ccb8a066b6b4c86431aaef289c4f101bec7d59b2c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/antigravity_image_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3a480ef8a0a8f3a6266536490b5bced427ce8a198541c5ba50a23f1d91f3e505",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_auth_cache.go",
+      "predecessor_sha256": "8083eb14f41776c8d587c9e9f958b500a91dbc6bc32d2dd49bf65dd895ada3fb",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/api_key_auth_cache.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e85ae957d5e8a1bc445059b87778ed21d15fac6abb46fe908cb35efb5e0f56b9",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_auth_cache_impl.go",
+      "predecessor_sha256": "609de980534669d396f445fc4eeb269e1fadd20bbf77d3e3f936259f30186319",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/api_key_auth_cache_impl.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "32b00eab0eff1fc87f0f5475cc73e8d978da89ba9014208f5815ab40225e5e96",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service.go",
+      "predecessor_sha256": "38aa6b6fc0701c04a69d22a8c260f2e7e639bd92f9536e4ead7a1c0d3253675a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/api_key_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "270b279c3649bafe0379f64b7d9785b16dadc489ded3d3c7b1175842d01c1ce2",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256": "8ef188cb10de68c268c98e44033551bb328accfb4c611bcb59c997e88f33de0c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/billing_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9764c78f95b9d0aa02abde4c0cf0eac44f1be7f6a63781083830933e0e642af0",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256": "c93cfb95047b2dc6fbe23dd674103c2fb0d14df7697a0f6d200484e243a7d7b8",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/billing_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "10de00179764d394df1b9ddb0da0f0f4308cb881fc43e4df073ca373536e1818",
+      "old_path": "",
+      "path": "backend/internal/service/channel_service.go",
+      "predecessor_sha256": "eda599c50135ce9933665a9138c0478b22663885d9f5e8262a3cdd0d0e0f989d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/channel_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c48fda5b0b795e4639a4394410b17489a9e655520213577f1c08a96da69a0136",
+      "old_path": "",
+      "path": "backend/internal/service/channel_websearch_merge_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/channel_websearch_merge_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "145e76c747e3a333a182b443cfdccf602137b326cc2c667b0de27dbf75a0bb57",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_accounts.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_accounts.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1eb55771e4bb15cdeccfefb3289f5639d1359c56534027030e4419997f76a36c",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_accounts_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_accounts_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "cd2c37543c617b8d33f39c72428faf27d76f4b25d188a84f0b7b17b2c1c1db2d",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_codex_import.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_codex_import.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "34466cbc127b07d1eb154aa8b8b95746eea5a0644957445de0c0bb57db0f8e29",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_codex_import_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_codex_import_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "dfc85ba5fcf6bdd33b391bbee9b34df56361fe33c2bea79d5eea62b20cff90d5",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_group_models.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_group_models.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "4f4b43bf1cd33e0d48f072f04cfa6c7e507c915879841e836ff29b3283b8b676",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_group_models_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_group_models_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "fc26c3e451dd368fd43dbb54f15f18c0a4ec3a74be8b0b8c3eb341ec3877c958",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_proxy_selection.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_proxy_selection.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "baae8bbb62f088525e179acdc4e138fc62c20923b400f730176c1a303776be42",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_proxy_selection_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_proxy_selection_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3b39961ba26137cfe5f6bbf6e623f06842c4644b00b68596d59b01a7e9c074e4",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_recovery_review_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_recovery_review_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f3e17904a2aad57f7251f834c8534b343674ed2dffffcccbca38b28a596f74b1",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_testdb_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_testdb_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "228daed64856be7e6b35a949fdd84dfdce959a2754998fb54ab920d2e9700f00",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_transaction.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_transaction.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d9e8fe778379eb425c9b89ede533218a913baceeba5cb5443e7464e6fef7fc2f",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_key_transaction_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_key_transaction_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ba76ede3b727ba017eed75f210d057ac08537b3edf001492b60120a208d3c37d",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_keys.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_keys.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f762bd0632ce01d2207dfcbba743fc0171de8f5863be92ccc40be372fb1d11e0",
+      "old_path": "",
+      "path": "backend/internal/service/custom_admin_keys_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_admin_keys_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "30a510c9f3d8d8e741382ca3c434d840220e28cc8d6f6d258fe342efca200bda",
+      "old_path": "",
+      "path": "backend/internal/service/custom_proxy_options.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/custom_proxy_options.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c5a69d2dc302894a96ee4a9ddb84ff23c6b221867c2c66bbf6c59a7a28ae8422",
+      "old_path": "",
+      "path": "backend/internal/service/deepseek_pricing_test.go",
+      "predecessor_sha256": "e389df799da400956ccdb114e224612b8c15328000f9d4d19c05502841847a91",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/deepseek_pricing_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ca3529880a8dfa236cd820f68b277426e23924fe571cd78cf8284fe35cd286be",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_billing_block.go",
+      "predecessor_sha256": "3713dcee8cc715311d30a9af42c8e520435f71f75aefe81fafdca1e7931a870b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gateway_billing_block.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "10512a2f8ef872a07c13d89c373b336f7d1f5d57970242db18c92554204c513c",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_billing_block_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gateway_billing_block_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d64ece778574fa63057147eb5cd610459e361997883a2e765463f4076fa397d4",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_billing_header_test.go",
+      "predecessor_sha256": "25a866fc98fe648fa8265d4ea9d188e402c8cb04aec0a468396ebc0c0e5b0264",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gateway_billing_header_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3cd07d53deb51bd49a08f45ecc1dff0f91977043b23a782242f06e01a7bdd223",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_service.go",
+      "predecessor_sha256": "36ad2d627197b43a471c371ce5689e3c4765760cc4d001fe7fc598345b7903af",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gateway_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ad5e6de0c2a1165757c6fc5a43e1588ab57fea2044cbdaa336ddb5c0c868c723",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256": "af51dd17aa10873313f6eb5391841e7869d7e6e7d6eb87b1075c107b991520ac",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gateway_usage_billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "667d836a22bf09a0319150b567a7a2afd95ca0509c8371b272eeda36918bc0a9",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_cached_content.go",
+      "predecessor_sha256": "a8d64ea9241035bb6fe4078476c057a019159b88204017230cec84a7902bb450",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_cached_content.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "55a6b2c647d3d4decf69e13eb414d43cf41b75aa4808754d1245c251d11464ab",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_cached_content_hardening_test.go",
+      "predecessor_sha256": "9197d85e8c807ce2e79d60ccb653f5330eb344b1f14372368ae9a2f56a87f81c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_cached_content_hardening_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "48eeb51d359ac9cf77f0cc73fd114b3f0c50c9b98c6bcd7ffa2957e9e4372aeb",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_chat_completions_compat_service.go",
+      "predecessor_sha256": "bc4fb904f0ad31c251d8aec4dbb865d9c279725f055e59dbc5b24bdb4ad697e6",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_chat_completions_compat_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9f2fd6539955ff5bfe8b5b56c01cea3807ddff1b104753cd341d8d355bad76e6",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_error_policy_single_check_test.go",
+      "predecessor_sha256": "70db0fadb5d94b39520b8417f90eb50b127a1d06d37bfb2dc8b13e3fc76f4946",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_error_policy_single_check_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "11aee4f4c6d7e4951380b08467a3039775b1282d7fcba3b0ca6968e7fa024716",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_image_output_accounting.go",
+      "predecessor_sha256": "df59f8f55eca58640e5d31c6e48d7f969627f686d9d12ac6bf2ddceb3019972d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_image_output_accounting.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4cbab5f75a2fb17522fb7387d9bbff9c2f9a3627c734fa47483b28281e59b208",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_image_output_accounting_test.go",
+      "predecessor_sha256": "b3ecc7521807f8900549a63f057ef6993cc81b43081e4236ea55d893d855dc04",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_image_output_accounting_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e5830beeb93c97bc82f411c3b1097d2cf1a5babfe71b9caeff0774ee26b7fad2",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_messages_compat_service.go",
+      "predecessor_sha256": "1309884db171c2653feeb293a62adc9c060e754d3e8e2c14b2bd7524711eaf30",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_messages_compat_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "645b31339616db950a1cd97b4e3f025e8d3b8c9c692fdd2fddc2b8b252d45c02",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_models_endpoints.go",
+      "predecessor_sha256": "70d208bfd4200149bc28368d81f1f63c7d0d84d230fa18d4c3f40a626377b400",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_models_endpoints.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d9ccdeaf224074796db49e0b00534714b152abb1448f20cb2a04d50b39b0e9df",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_same_account_retries_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_same_account_retries_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "996de84662891c7a2d03317cb8ab20c163353bbd5388f4eeff40a58e2ef92c8f",
+      "old_path": "",
+      "path": "backend/internal/service/gemini_vertex_api_key_forward_test.go",
+      "predecessor_sha256": "cb138a51d486c513ba6899105e3022a40fbf9abd9866edf3ec14be49df6f8bdd",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/gemini_vertex_api_key_forward_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "118458669564b377fbeb44e2f70e46d3b0ed17db2d91ea14f08ee44025e2de53",
+      "old_path": "",
+      "path": "backend/internal/service/grok_media.go",
+      "predecessor_sha256": "01a65460cd75263b3cb38dbcbecea2040214b53b8dc677ee50c96ea4069eae30",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_media.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f78028a137fe38efadeccee6deaa383079eaba2a1c58f269335514e36631a250",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_catalog.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_catalog.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1df4d936d23203d12e21f68e04bc404e47a6f61d72e0af6c7cebe7d75305770d",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_catalog_store.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_catalog_store.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5376671a1af7d9c75eb4f048cbbba616660cb466d9a21e734007e4d25aeae8c2",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_catalog_store_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_catalog_store_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5ac6ca49c5094828a8334a85732e545888e578a455985095ff3c4078d03a481f",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_catalog_sync_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_catalog_sync_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "14aa3eae43bf5e2e16414f5d375ee0c8595cdba5850d9347e95a4ae9d2036ee6",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_catalog_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_catalog_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "20af0b15d7efeba577471e038e28b1b47a5ecd81ad6ec4d1ca36017aa007aff3",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_diagnostics.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_diagnostics.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "03561ef1984e921981503234ac14c7627c6926b35e47287ba660d3cb583a6124",
+      "old_path": "",
+      "path": "backend/internal/service/grok_model_diagnostics_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_model_diagnostics_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5f4ee2965f5978a3b1f372370ea050d2c176aac8424e1ce630d2d0d4aca415ff",
+      "old_path": "",
+      "path": "backend/internal/service/grok_observed_models.go",
+      "predecessor_sha256": "ebcef3b10eccf93ddd26e972bfb8dbf0e4f11fbb5efe65506a86a171bf9ac35b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_observed_models.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7974f35a82cfc993cebf2a5c0f24de5b9322bc668bdf6cd1c36391a2a630a1d3",
+      "old_path": "",
+      "path": "backend/internal/service/grok_observed_models_log_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_observed_models_log_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "b84f723fe3427b780e56d8ca692ab552758835fc3a03e44f96be52688db3a492",
+      "old_path": "",
+      "path": "backend/internal/service/grok_p2_test.go",
+      "predecessor_sha256": "cb56be8dd15aaee0bdce03efe1b3d9b4d48449e42625e9cae0fc4aa9d56068e4",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_p2_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ef8b99e90556afaf18407fa661f98f0cfebf8ee938362fdecaec97937ed0e7d8",
+      "old_path": "",
+      "path": "backend/internal/service/grok_quota_service_test.go",
+      "predecessor_sha256": "75f1f4cecc937d60043918279f635071f46867289ad8af3a244ec1b84801667b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_quota_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f37daad98f417016535cba49624df8d8ad36d9e85087069bfdac83f0ef8a6b0e",
+      "old_path": "",
+      "path": "backend/internal/service/grok_response_model_audit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/grok_response_model_audit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "91d46705a0f361fcddcaf0949c977a8be0fc0e376669bc59ec60aecf8542b9a0",
+      "old_path": "",
+      "path": "backend/internal/service/group.go",
+      "predecessor_sha256": "db2f448124076348a8781fcaee4fd6c448fadbe952cfa2708208279a7870ba15",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7a880574d41bea5839fbc1c46146e4e5580daf5cbcc438223198e7cc9b95593e",
+      "old_path": "",
+      "path": "backend/internal/service/group_service.go",
+      "predecessor_sha256": "2f71567c671f7e811ee392a4c148121d1812b52b35f5e90f7b8308724d9587dd",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/group_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a2b94e5e732b5227dd2a46f9d7fa8a7543ba3750b6e0c4d74ac3a3f979955224",
+      "old_path": "",
+      "path": "backend/internal/service/image_billing_count.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/image_billing_count.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "06a3051458ca60dd732bdd1c206277091f535a79f711f0be0f884100dd19bc92",
+      "old_path": "",
+      "path": "backend/internal/service/image_billing_count_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/image_billing_count_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e572b8f75d1abb3042f17f1e9521f98e52b132138420e44eefc5dd62ea1318bf",
+      "old_path": "",
+      "path": "backend/internal/service/image_count_billing_switch_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/image_count_billing_switch_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "6021b2f0e924c328b6162682b47c65a7719d6f3865c3e97ffcb69b981ac0b499",
+      "old_path": "",
+      "path": "backend/internal/service/media_price_config.go",
+      "predecessor_sha256": "64b071b773f163359165fb489b2aadb4b53c4bb790e88c637f75f015642bf59d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/media_price_config.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3065cb6d75d63d22710e181ce08b88cfd97a35ce7f453050b168188778e3de3a",
+      "old_path": "",
+      "path": "backend/internal/service/model_plaza_service.go",
+      "predecessor_sha256": "3b00d029ade6ca0b7c19e215620dbfb494f40959ed9bc93be3433f48aa8b4bd3",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/model_plaza_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0ee5b9f8d6bbd396f50341f3b74f9639be89fcb8a13c25f6a9d57a68fc208a73",
+      "old_path": "",
+      "path": "backend/internal/service/model_plaza_service_test.go",
+      "predecessor_sha256": "fdcd6410bc23c52e0f0461ecf10bfb4b76c1d039135e4b53f1a8cc21382cd74d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/model_plaza_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1a9635c45038b78f884b8193ad8c47b8af9719a1b96829a316caf853aaff0b6c",
+      "old_path": "",
+      "path": "backend/internal/service/openai_chat_roles.go",
+      "predecessor_sha256": "d8d843c116bba6eba09c77e51318385c4d5431fb0f2fdd8089a556d1f0886ae7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_chat_roles.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "11656cd80f0c6b6d011964c4145dec34760f18f98674435982a57d842f3331ce",
+      "old_path": "",
+      "path": "backend/internal/service/openai_chat_roles_test.go",
+      "predecessor_sha256": "18fb78ba845de80d14c9634b970942b9c2fc3f28427aa023cd75016304fc5eb5",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_chat_roles_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "40985a44fc0d999e2eefeb2a4e7c02218310dcc72fd8517e537735fc7b8de6f2",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256": "2dd9a1441223c8b54297940d6c1447dc00f9ef87bb8594d1bc6cb12f9ee81894",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_codex_models_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c7b840555d314899dba026931b3a9deb96626963efd3bf27752266a345b04879",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "predecessor_sha256": "802bf851428f87a991a017e716426217d9ae07cbda2e180c1b614dcfb65545d1",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_codex_transform.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c198f40146d64654bbeeb636ffe71a3818c3d10de319c987ca47bc254c34238d",
+      "old_path": "",
+      "path": "backend/internal/service/openai_compat_model.go",
+      "predecessor_sha256": "3abd0206f1f53a18729e7704788e8451e80c38db2fd2daea88cc26f61d69f04f",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_compat_model.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f82fa53ea03c6fd6b5fd1a63451845982528ca8cc78596b9befa579e6cd48e46",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "predecessor_sha256": "16be53ad7179fe46ee71528267e62eaa0504d159b5b1f05b5b0523a521019c4f",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a6b14708fa2de6d8e0cae5e897ae9252a79b6bd5dc9be14083d386d0c8ca8134",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "predecessor_sha256": "550318723cc60d4b1f8481a8b06b102fd70e3dceaa7dd81e54dee8e49e4f1433",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7ffed186b9dbc81d71785368055d86aed9cd2b775693ff6fc20332f983e1fb0b",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_grok.go",
+      "predecessor_sha256": "770e8a67a944e972ea629425708e9e366d55ccd2cf835810d133a5eff8c02bb0",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_grok.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1412bad00297c6ed9ff8f7d131a20784d2ed8da616a743a45e1713b86442d311",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "predecessor_sha256": "3b9de3f268e67184310e514425d9e619b5191ef605579a9bdf4f063926e830d6",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_messages.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2e996e26adf7e1f0f9aa9d1dbc8155263a061c8c3740cbca25231993e39f1a10",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "predecessor_sha256": "ccbb7990e71a75f4ae02a56c7f0518e722ff5541e1b78f7c677733c5f329c058",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f04101c34ef4bded1d776417a32ca03012c03750621b6be1f2dadf18e4e7f7fd",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "predecessor_sha256": "a3e54eec436ecbd6c24c466dc37e4ac60155a0c8f23a479b88e93d02797bc06a",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_response_handling.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "98eb0ffc98db734033c92654056f8e025fee6afff8a3134cb8217a9fcdad2274",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "predecessor_sha256": "3852e6f217c4fd100c495a46a59234d981130b4d5f376746d391614178dd060b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0d6ab4ded8d05d3e8ed1e4b67fbd80e4188de3f12bdc2985438aa890e8834a1f",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "predecessor_sha256": "d2a8c423b45a27f744ecdcc594c9e9a1dc035f27f5f7a8f56ba4a171ef292caa",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f4803cc9cd8b52cb730575e04d56fe0c88835c252442f2a849f52ee7da5b3e01",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_usage.go",
+      "predecessor_sha256": "45e939bc6f304f25eeb4d67955840d3bb4483117520e3fe20a4b7ca856629053",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gateway_usage.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5e0335fbc02d34e9ee545e4aedb14a55a8df34fa2ccdd508ecf5031b1dc2cb36",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gpt61_terra_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_gpt61_terra_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "1cf48c2db8ede47ea82cdacf644da771813129187fda5b49a6da301a3e28d286",
+      "old_path": "",
+      "path": "backend/internal/service/openai_images.go",
+      "predecessor_sha256": "ed879e4ff4005dba5176f5be53610021bb25987918af7d9db7341836f39b883b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_images.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9f62c00f573dfba9dd36e9e4bcdcd72a1367b8388e14753627598bf04e9a17c1",
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_responses.go",
+      "predecessor_sha256": "07d5889dca6fff592394affaa3a86c72717cc90320d08132e15c3df47639e531",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_images_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e6e57fbf56f046c5972f0946bfb5268d6b8d6ca371b9efb58a3ba65bc8e9099a",
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_upload_limit_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_images_upload_limit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "9dfee1c321e0e06c36fe5a9844166a3bf4e21781777074dccbcd0a8709691229",
+      "old_path": "",
+      "path": "backend/internal/service/openai_model_alias.go",
+      "predecessor_sha256": "142aa4bdb9f2cc947867e06830001fc18bc85ab63a2371a40e26229a5b10655e",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_model_alias.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f828438de4901e97c4bb3e3fc52b54b4043c4d9ed61d8ebcaa9beccfb40251ff",
+      "old_path": "",
+      "path": "backend/internal/service/openai_usage_deepseek_cache_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/openai_usage_deepseek_cache_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ce291d1cdacb3c6004cd07decdbc10c40a16d439c8dafbdf1d945d87c08ad8e1",
+      "old_path": "",
+      "path": "backend/internal/service/pagination_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/pagination_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "61f0a16c096b087033efc34c899ab9d9db9f1c92a3cd9638d988fbee469189fd",
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service.go",
+      "predecessor_sha256": "f7da7fe24e6e2ac79a2dbc0aa1d132c60201e4bb8bc9c91a540f9ab6d6ffd0d2",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/pricing_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4ad4575dee6acfd99bbe3bea79cbb57eb59bed6faa8e4f4f816dfb92a73dfa00",
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_cn_frequency_429_test.go",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/ratelimit_cn_frequency_429_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "598746ebb5fa799049e5c90e5a437c3889d8db26930c646fef58e71105b7f5de",
+      "old_path": "",
+      "path": "backend/internal/service/ratelimit_cn_providers.go",
+      "predecessor_sha256": "bc3637e9fd73133ef62e02ee198e1563a6fb252425ed54e04b42aa11e12de4e6",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/ratelimit_cn_providers.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "65453067ac5b00f32bd9efb9066ce3fc8a4822627014abcad24d2cc11db73fb7",
+      "old_path": "",
+      "path": "backend/internal/service/response_model_billing_test.go",
+      "predecessor_sha256": "ca483fba2a607702d38d2648d717f4a9d92e9f4e2df1372d71762b7fbdafbc33",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/response_model_billing_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "125b1324733a36b54f6fe88c150529cbe73c977dbdd623d4582ceeed228cb18a",
+      "old_path": "",
+      "path": "backend/internal/service/setting_features.go",
+      "predecessor_sha256": "34fc314051461c1699b8be7fd779b98af8f9ee259324f0ddc50d1873e2feb56e",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/setting_features.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b629d9e5cd8e04ca4c229469cce68757505e3a7e91aa072930cbcb9653c80490",
+      "old_path": "",
+      "path": "backend/internal/service/setting_service.go",
+      "predecessor_sha256": "2c281568b0ab4c4e3a1c238e2a476af442ff47143559d494287c9aefe856fefc",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/setting_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "26aa84d8d2ba166d3dcebec0d79b944bc53b6cb55e9c2938a5ff087f8b787378",
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models.go",
+      "predecessor_sha256": "eaa1357f16aaa26b9c22624b1bf53bb82f9410af605dd28d92830c5688f3967c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/upstream_models.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f4ecb65da383c47b517fb5b7ed6eba8ea0164ca1d89cfbfb5e1fd18cd1aab071",
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models_test.go",
+      "predecessor_sha256": "88cd1514657f06bd8a71ff382e28415b1fb82a8d38bc0fc238d956405c53dfba",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/upstream_models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f5f1f2e193f7a16ff8d46b012cadf45e863216cd1aae8d696e465ed62bae917f",
+      "old_path": "",
+      "path": "backend/internal/service/upstream_response_model_test.go",
+      "predecessor_sha256": "533e1f0f72090e6859fd63962bd27908324e9ddc530e97d3ec83e71062e0f9a2",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/upstream_response_model_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "87670c10c6b519e5b0b6f4e51a29fccc8d8dc730238c5b011ef3b4b50258e817",
+      "old_path": "",
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256": "79fc561874b1d457bec713035166f564374bf36139055468f0f122e3d7b12da4",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/internal/service/wire.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0c4c22f564f276fb305a54cf2d6c4b1a6179d748d5d8b74a3b99676282355bf6",
+      "old_path": "",
+      "path": "backend/migrations/247_scoped_admin_api_keys.sql",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/migrations/247_scoped_admin_api_keys.sql",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c91d6d31937658e71c68fa3af6a26fc47380f61243a681ac275aeb4706b242ab",
+      "old_path": "",
+      "path": "backend/migrations/248_group_image_count_billing.sql",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/migrations/248_group_image_count_billing.sql",
+      "status": "A"
+    },
+    {
+      "current_sha256": "00766dba3b455ddfdc3a54405f377541725eba85a8522d4c77369b0ed2d248da",
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256": "e092d8fe3fb6abd66ecdc1da5ac1c094d9aaadd07a8d3df752dc5f7d09997812",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6508cfbc368ec447e3a00142074f716bd527a50c318fdae48c30c1d63ea3b983",
+      "old_path": "",
+      "path": "docs/admin-api-keys.md",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=docs/admin-api-keys.md",
+      "status": "A"
+    },
+    {
+      "current_sha256": "68063ebe678da1791e2567e8b4fcc8fafc5cc9fc757811cebcb2fade263c4694",
+      "old_path": "",
+      "path": "docs/egress/maintenance/upstream-v0.2.19-egress-merge-ledger.json",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=docs/egress/maintenance/upstream-v0.2.19-egress-merge-ledger.json",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e54c9a45c1e46866587542f65c07cce866674e949d39e7b85e81f7cbced1b509",
+      "old_path": "",
+      "path": "frontend/src/api/__tests__/admin.accounts.grokModelDiagnostics.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/api/__tests__/admin.accounts.grokModelDiagnostics.spec.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "afaf1a4dc371ea68837488d90572d6829b7d883eeaaee7486a9416b980ad38e0",
+      "old_path": "",
+      "path": "frontend/src/api/admin/accounts.ts",
+      "predecessor_sha256": "d633c146d6db816e107d41c36f86d83f71c02613bfc8950bef1c2d8120745e05",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/api/admin/accounts.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "88d51dcdda6db7d7b2bfc31b394202e838fc024694147feb7937e2df00a2f4fa",
+      "old_path": "",
+      "path": "frontend/src/api/admin/adminAccessKeys.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/api/admin/adminAccessKeys.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f2a9ac2e1c551ace8f858b2c6fbe9599724272f4a678be8b92c5f8445f369a27",
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256": "6b938db7c45d4b6be9e067f401cc58f6718a44fd94daec122e440c6756b2596f",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/EditAccountModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "874aabaa97a10cfb96dd55f8a1c774b46f51d7cfa8bea418bc46fbb46c5a2cf0",
+      "old_path": "",
+      "path": "frontend/src/components/account/GrokModelDiagnosticsPanel.vue",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/GrokModelDiagnosticsPanel.vue",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c05f5652ebb2b859d2c906d07c8529c55888fb7357c7e6ccbadc645d35983ddf",
+      "old_path": "",
+      "path": "frontend/src/components/account/ModelWhitelistSelector.vue",
+      "predecessor_sha256": "104b26969069e00bff8d1429d23c3dffba98efdeba8e1f607f297b4979883405",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/ModelWhitelistSelector.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "96b921ca41d2f5cd77537cfdb78a23e13c842c6a9e18c0b171cae4ace5bea7d6",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/EditAccountModal.grokUpstream.spec.ts",
+      "predecessor_sha256": "434b6d9eee1859eade7832643048aa0027149c30e4f16271820a61bb8162d74e",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/__tests__/EditAccountModal.grokUpstream.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a67f6cc1f450df4ba1ab72f6f1ac3664ff02ce25ab6b09d4bc715e14d814b924",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/GrokModelDiagnosticsPanel.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/__tests__/GrokModelDiagnosticsPanel.spec.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "b316a07aff6753f0899c622bf1157d69c07f55a58ed14a1fb6c63931d50ef853",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "predecessor_sha256": "a9d4f145d921ab76671eac7726316cc1d37ab8a6093a54e6de5b9a3cee94dbe3",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ee49832112d8302a8b0703bb80e0613268cfa82d4bb40603c119be15bfb17760",
+      "old_path": "",
+      "path": "frontend/src/components/admin/settings/AdminAccessKeysSettings.vue",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/admin/settings/AdminAccessKeysSettings.vue",
+      "status": "A"
+    },
+    {
+      "current_sha256": "777b2b98576df88a421003bf42df25cefbced8e2d2e5fc6d014f06f3046d717a",
+      "old_path": "",
+      "path": "frontend/src/components/admin/settings/__tests__/AdminAccessKeysSettings.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/admin/settings/__tests__/AdminAccessKeysSettings.spec.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "4c7db55033da0e9bd5bfb62be9c92e3e036d0c0b4373b79ab9b6c28a9d2b65be",
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256": "92eba550ac020ea96b825af63eb1199fe4b08203a7e611829550b3acac9c1c8b",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/keys/UseKeyModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "53d4a6d2ddfdbf16f261b361dc25c951934806022f473fb05677447a7d54ec89",
+      "old_path": "",
+      "path": "frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "predecessor_sha256": "7fd794b8be1cc067c538018bf6165532138fcb01791813f1a6de99db95164479",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "44f79fa6b2846ccf4873abc90821e5bd9a6c26c4b9eb92cafe612d2f707551ac",
+      "old_path": "",
+      "path": "frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "predecessor_sha256": "22fcd4fa8189ac62cf541c06e376d352d191cab6afde4b172431b496cdd6a88c",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2aaf57d3e0bd6d8e74d79b5530a60cbb8a51c458702bb8dba43162e47a1ad289",
+      "old_path": "",
+      "path": "frontend/src/composables/useModelWhitelist.ts",
+      "predecessor_sha256": "9e2e3dc03a72bc29473bce6786545e38a773cfc8d86a7d7ca1c4117c791e0920",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/composables/useModelWhitelist.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "15eb71ab188e7cbfd3d269ac4bcd70a048767e2bed593b03ecb1768302736bae",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256": "b5548c6cc31a4f65f0737261fae89e145f9fa8723d439cec0f6102cbe6e83565",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5d72d292caab1e1d1bd6a42265c6bb8f99f42a8d1cea6dc9e0bc89b16428bb18",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/channels.ts",
+      "predecessor_sha256": "e760066b887d8a22de7ab77c389777c2c44a9aba79410c2bc4c4b3e78575087d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/en/admin/channels.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c5b6fe00dc571168734e14e73c59c436b66bc95b0866954e77c7121c9b0461e3",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/overview.ts",
+      "predecessor_sha256": "3843beb59e165c595c404a7b8714ead92864bb7a44804857d133f7d4e69875e7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/en/admin/overview.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "35bd2e3355b7a29436b1c7f18e515a48ee3de0acd8dd13688f5c2d89aa206a79",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/adminAccessKeys.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/en/adminAccessKeys.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "7a2739db6bf075aa26a85c80ee77f53aaa6394abd637f98fb93d8a15732a73d9",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/index.ts",
+      "predecessor_sha256": "1394d6e52f83a428060b71d598de46b6624dd8d78bf925d12abfb57adbf7fe0d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/en/index.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c5df51a66693ca09431d3514e2f44e6e1c330a681d8f7722bbcad9fd18320476",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256": "8022bb7b2fab4d1ce68f7b7e404f1f29d1c1d8dd16fd6da9c5b50217624eb821",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7a0e38d792276af8da68f3e49e65c4e730d8e7bc711967ed94de3aff8404dfbb",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/channels.ts",
+      "predecessor_sha256": "5f359c62dabd002e21c9dbcbe731cb05bed8579b15bdd063256297e7c7968705",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/zh/admin/channels.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "76d773d0d6dca64ad119f37f776a6029ea2daf86e43543bec3dbfb36d2a165a0",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/overview.ts",
+      "predecessor_sha256": "9ee60c0de3345f80fe05e99b61187e69bc8208ffb99bc892ec81bbec2322446d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/zh/admin/overview.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8172d4db7c26024398b5a0e40cf5f1253f22fc04e6fc15a60d9d50cd370689f8",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/adminAccessKeys.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/zh/adminAccessKeys.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "7a2739db6bf075aa26a85c80ee77f53aaa6394abd637f98fb93d8a15732a73d9",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/index.ts",
+      "predecessor_sha256": "1394d6e52f83a428060b71d598de46b6624dd8d78bf925d12abfb57adbf7fe0d",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/i18n/locales/zh/index.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "848650e87be58102e88de3e019030297a19b226a502a244bad47bd0cfbdc9463",
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256": "7b317c615a4c3e5d071b0c3de7c9a2da045f6ae86a480f2e15c7ea79ff201255",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/types/index.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6bfd0fad1956e20df88e9b9408ec53f4761c421405998181412b733e282813c4",
+      "old_path": "",
+      "path": "frontend/src/views/admin/ChannelsView.vue",
+      "predecessor_sha256": "c9a508c44593a16757c3c711758bec799ae67c8ff4993b11898337f65acde8bc",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/views/admin/ChannelsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "42fef6eef46f9844818d1994e85ae37a5e731527fa6a3c171dc9e718bc082d29",
+      "old_path": "",
+      "path": "frontend/src/views/admin/GroupsView.vue",
+      "predecessor_sha256": "ee5359af30863733b44eda77df6a6dd471f2760c7a9bec48e100cb02f83d23d7",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/views/admin/GroupsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fa46fb5fdc5258b29f6ec83b401ba7754d8c9e56f84d573bfbd0196c64785b6e",
+      "old_path": "",
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "predecessor_sha256": "243634dc0c60574d58f8c7d3a5021f3e86da98037c0973117657d94523ef5cac",
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/views/admin/SettingsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d9169ea361116a7d14b8c9616d12b8307f5f47508ea144c4a93ebdf0f6014a8a",
+      "old_path": "",
+      "path": "frontend/src/views/admin/__tests__/ChannelsView.webSearchEmulation.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "合并上游 v0.2.19：冲突按官方客户端出站框架取舍，保留隐私快照与退休入口失败关闭语义，合入受限管理员密钥、Grok 模型目录和图片计费；保留 Claude 2.1.226 与 Codex 0.166.0 身份，按 U-2/U-3 决定接受各调用边变化。 path=frontend/src/views/admin/__tests__/ChannelsView.webSearchEmulation.spec.ts",
+      "status": "A"
+    }
+  ],
+  "entry_count": 257,
+  "identity_sha256": "398eb368dc16c4f68420a15a4d9437bee5ad55c6e8e93c919abf2c6f73fe98b2",
+  "issued_at_utc": "2026-11-01T14:32:00Z",
+  "predecessor_register": null,
+  "reason_policy": "每个路径由 Git 差异确定；predecessor/current 摘要不可手填。reason 可统一提供，但官方 Persona、wire、selector 和共享控制面仍需人工补充。",
+  "result": "generated",
+  "schema_version": "official-egress-upstream-source-transition/v3"
+}
