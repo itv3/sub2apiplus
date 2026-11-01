@@ -5,7 +5,7 @@
 
 覆盖：
 * ``closeout.sh``：帮助与步骤表、缺参数报“缺哪个”并退出 2、未知步骤、可选组（--with-part2）缺省关闭而跳过、ARM64 写步骤不设 CLOSEOUT_ARM64_WRITE=1 时一次 ssh 都不发、
-  b4 经假 ssh 取回四份阶段收据、源码里没有 push／nohup；
+  b4 经假 ssh 取回四份阶段收据、b3-check 的四类检查失败都不被吞掉（用桩脚本和小测试模块）、源码里没有 push／nohup；
 * ``collect_stage_receipts.sh``：逐字节取回并核摘要，目标已存在拒绝覆盖（退出码 3），摘要不一致时删除已写文件（退出码 3）；
 * ``fetch_evidence_subset.sh``：只取需要的文件且只取最后一个检查点；
 * ``audit_index.sh``：参数校验、找不到私有归档退出码 3、调用 generate 再 check，参数原样传给审计索引工具；
@@ -356,6 +356,79 @@ class CloseoutShell(unittest.TestCase):
         self.assertIn('[ ! -e "${receipt}" ] ||', guard)
         self.assertIn('[ ! -e "${WT}/local-analysis" ] ||', guard)
         self.assertLess(guard.index('[ ! -e "${receipt}" ]'), guard.index('cp "${FACTS}/terminal-state-receipt.candidate.json"'))
+
+    # ---- b3-check：四类检查独立、失败不被吞掉、整步退出码如实反映 --------------------------------------------------------------
+    # 背景：对着真实环境冒烟时发现旧实现把所有失败都吞了——重封链干跑只 grep“无变化”字样（前置检查没通过、整条没跑成时一行都不打印），
+    # manifest 校验经管道 tail 丢了退出码，整步永远退出 0；末尾还打印一条与固定步骤顺序（b3a 在 b3-check 之前）矛盾的“预期红”。
+
+    def b3_workspace(self, ws: Workspace) -> Path:
+        """造一个只够 b3-check 跑的假工作树：三个桩脚本（行为由环境变量控制）和两个晋升后回归用的小测试模块。"""
+
+        wt = ws.root / "wt"
+        write(wt / "tools/ci/reseal_chain.py",
+              "import os, sys\n"
+              "if os.environ.get('STUB_RESEAL') == 'fail':\n"
+              "    print('前置检查未通过：\\n  - HEAD 是游离的（不在任何分支上）')\n"
+              "    sys.exit(2)\n"
+              "print('没有需要重绑的叶子，本步无变化。')\n")
+        write(wt / "tools/ci/unit_ownership.py",
+              "import os, sys\n"
+              "if os.environ.get('STUB_OWNERSHIP') == 'fail':\n"
+              "    print('归属表检查未通过：1 项')\n"
+              "    sys.exit(1)\n"
+              "print('归属表检查通过')\n")
+        write(wt / "tools/arm64_capture_driver/install.py",
+              "import os, sys\n"
+              "if os.environ.get('STUB_MANIFEST') == 'fail':\n"
+              "    print('manifest.json 与目录内容不一致，请重新 build-manifest。', file=sys.stderr)\n"
+              "    sys.exit(1)\n"
+              "print('{\"status\": \"unchanged\"}')\n")
+        write(wt / "tools/official_client_capture/tests/test_stub_green.py",
+              "import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n")
+        write(wt / "tools/official_client_capture/tests/test_stub_red.py",
+              "import unittest\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.fail('x')\n")
+        return wt
+
+    def run_b3(self, ws: Workspace, wt: Path, modules: str, **env: str) -> subprocess.CompletedProcess:
+        return self.run_closeout(ws, ["b3-check"], wt=wt, POST_PROMO_MODS=modules, **env)
+
+    def test_b3_check_all_green_exits_zero_and_says_so(self) -> None:
+        ws = Workspace(self)
+        wt = self.b3_workspace(ws)
+        result = self.run_b3(ws, wt, "test_stub_green")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("b3-check 全部通过", result.stdout)
+        self.assertNotIn("!!", result.stdout)
+        self.assertIn("本步无变化", result.stdout)
+        self.assertNotIn("预期红", result.stdout, "固定顺序里 b3a 在 b3-check 之前，不再有“预期红”")
+
+    def test_b3_check_reseal_dry_run_failure_is_visible_and_fails_the_step(self) -> None:
+        ws = Workspace(self)
+        wt = self.b3_workspace(ws)
+        result = self.run_b3(ws, wt, "test_stub_green", STUB_RESEAL="fail")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("重封链干跑没跑成（退出码 2）", result.stdout)
+        self.assertIn("HEAD 是游离的", result.stdout, "必须把日志末尾的失败原因打印出来，不能只靠 grep 无变化字样")
+        self.assertIn("test_stub_green rc=0", result.stdout, "一项没通过其余照跑，让操作者一次看全")
+        self.assertIn("没通过的项", result.stderr)
+
+    def test_b3_check_ownership_and_manifest_failures_fail_the_step(self) -> None:
+        for variable, marker in (("STUB_OWNERSHIP", "归属表检查没通过"), ("STUB_MANIFEST", "驱动 manifest 校验没通过")):
+            with self.subTest(variable=variable):
+                ws = Workspace(self)
+                wt = self.b3_workspace(ws)
+                result = self.run_b3(ws, wt, "test_stub_green", **{variable: "fail"})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(marker, result.stdout)
+
+    def test_b3_check_red_module_fails_the_step_and_names_it(self) -> None:
+        ws = Workspace(self)
+        wt = self.b3_workspace(ws)
+        result = self.run_b3(ws, wt, "test_stub_green test_stub_red")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("test_stub_red rc=1", result.stdout)
+        self.assertIn("晋升后形态回归有红", result.stdout)
+        self.assertIn("b3a 还没做", result.stdout)
 
     def test_source_has_no_push_to_github_and_no_nohup(self) -> None:
         """推 main 不在工具里；本机后台不用 nohup（会让子进程继承忽略 SIGHUP，挂断检测用例必红）。ARM64 本地镜像仓的 push（目标是 ${CLOSE}/mirror.git）不算。"""

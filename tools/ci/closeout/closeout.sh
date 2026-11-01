@@ -190,14 +190,34 @@ b2-part2-lead)
 
 b3-check)
   inwt
+  # 四类检查彼此独立：一项没通过，其余照跑（让操作者一次看全），最后统一以非零退出。
+  # 以前每一项的失败都被吞掉：重封链干跑只 grep“无变化”类字样（前置检查没通过、整条没跑成时一行都不打印，看上去像没事），
+  # manifest 校验经管道 tail 丢了退出码，整步永远退出 0。11-01 对着真实环境冒烟时（工作树是游离 HEAD）发现。
+  B3_BAD=0
   say "== 重封链干跑（只读，看每一步是否‘无变化’）"
-  python3 -B tools/ci/reseal_chain.py --repo . --log-dir "${LOGS}/reseal-dry" --version "${TARGET_VERSION}" --label closeout --reason "收尾判定" --ack-no-campaign --dry-run > "${LOGS}/reseal-dry.txt" 2>&1; grep -E '无变化|无需|不需要|将执行|仍然成立' "${LOGS}/reseal-dry.txt" | cut -c1-160
+  python3 -B tools/ci/reseal_chain.py --repo . --log-dir "${LOGS}/reseal-dry" --version "${TARGET_VERSION}" --label closeout --reason "收尾判定" --ack-no-campaign --dry-run > "${LOGS}/reseal-dry.txt" 2>&1; RESEAL_RC=$?
+  grep -E '无变化|无需|不需要|将执行|仍然成立' "${LOGS}/reseal-dry.txt" | cut -c1-160
+  if [ "${RESEAL_RC}" != "0" ]; then
+    say "!! 重封链干跑没跑成（退出码 ${RESEAL_RC}）：上面没有“无变化”不等于无变化。日志 ${LOGS}/reseal-dry.txt 末尾："
+    tail -n 12 "${LOGS}/reseal-dry.txt" | cut -c1-200
+    B3_BAD=1
+  fi
   say "== 归属表／驱动 manifest"
-  python3 -B tools/ci/unit_ownership.py check
-  python3 -B tools/arm64_capture_driver/install.py build-manifest --root tools/arm64_capture_driver --check 2>&1 | tail -1
+  python3 -B tools/ci/unit_ownership.py check || { say "!! 归属表检查没通过"; B3_BAD=1; }
+  python3 -B tools/arm64_capture_driver/install.py build-manifest --root tools/arm64_capture_driver --check > "${LOGS}/manifest-check.txt" 2>&1; MANIFEST_RC=$?
+  tail -n 1 "${LOGS}/manifest-check.txt"
+  [ "${MANIFEST_RC}" = "0" ] || { say "!! 驱动 manifest 校验没通过（退出码 ${MANIFEST_RC}）：先 build-manifest 重建并查为什么不一致"; B3_BAD=1; }
   say "== 晋升后形态定向回归（顺序跑，约 6～10 分钟，结果见 ${LOGS}/post-promo/results.txt）"
-  bash "${HERE}/post_promo_mods.sh" "${WT}" "${LOGS}/post-promo"; cut -c1-200 "${LOGS}/post-promo/results.txt"
-  say "预期红：test_claude_upgrade_boundary_codex 1 项（Active 版本断言，b3a 修）；其余红一律先查再往下走"
+  bash "${HERE}/post_promo_mods.sh" "${WT}" "${LOGS}/post-promo" || { say "!! post_promo_mods.sh 异常退出（环境变量没设？）"; B3_BAD=1; }
+  cut -c1-200 "${LOGS}/post-promo/results.txt" || B3_BAD=1
+  if grep -Eq ' rc=[1-9]' "${LOGS}/post-promo/results.txt" || ! grep -q '^ALLDONE$' "${LOGS}/post-promo/results.txt"; then
+    say "!! 晋升后形态回归有红，或没有跑到 ALLDONE。红的项："
+    grep -E ' rc=[1-9]' "${LOGS}/post-promo/results.txt" | cut -c1-200
+    say "提示：固定顺序是 b3a 在 b3-check 之前；test_claude_upgrade_boundary_codex 红说明 b3a 还没做（Active 版本断言），其余红一律先查再往下走"
+    B3_BAD=1
+  fi
+  [ "${B3_BAD}" = "0" ] || die "b3-check 有没通过的项（上面带 !! 的行）"
+  say "b3-check 全部通过"
   ;;
 
 b3-regen)
