@@ -1182,8 +1182,11 @@ Campaign 的 plan 之后不可改，所以模型集合要在登记时一次定�
 不符即失败关闭。因此登记前建议用 ARM64 的启动探测（零请求本地替身，`client_launch_probe.py --client claude`，README「前阶段 1 的收尾段与客户端启动探测（R19）」）
 预演一次：既看 TUI 驱动能否到达首帧，也看启动连接序列。标签属 evidence_semantics 层，修订只追加评估纪元、不触发重采，
 但要走 `tool-evolution` 登记并重新受监督部署；清单与版本事实（wire_producer 层）一旦 plan 就不能再改。
-2.1.309 已知偏差：静态读取显示 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 下启动预热连接（`HEAD /api/hello`）被跳过，
-而标签初始模型仍把它放在第 1 条有效连接，其后序号整体后移；以启动探测实测定稿。
+2.1.309 已知偏差（已按 ARM64 零请求启动探测实测修订，标签改动在 E 层、`--bg` 修复在 v5 的 W 层，都赶在认证之前）：
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 下启动预热连接（`HEAD /api/hello`）被跳过，标签已删除全部 hello 规则；
+`-p`／SDK 路径里 `settings` 先于 `policy_limits`；非 safe-mode 的 TUI probe 的 `GET /v1/mcp_servers` 连续两条；
+`v4-background` 的 `--bg` 要求工作目录已受信（否则 `Workspace not trusted` 退出码 1，2.1.285 二进制同样如此），
+v5 现在只对该 probe 在私有 `CLAUDE_CONFIG_DIR` 的 `.claude.json` 里预置信任。hello 证据缺口见第 9 条。
 
 **6. 与 Codex 的耦合**：候选 Job 的 `tool_dependencies` 里带有 Codex 各版本的文件名（经候选采集脚本调用共享监督器传递进来）。
 **Claude 链期间（登记起到 Claude 终态）禁止做任何 Codex 新版本登记**，否则 Claude 候选 Job 的 `tool_dependencies` 变化，
@@ -1207,6 +1210,30 @@ wire_producer 摘要随之改变，发布认证作废；确需先做 Codex，就
 **9. 已知缺口**：Claude 没有重封链工具（`reseal_chain.py` 绑 Codex 守恒测试），登记值靠上面的命令手工重算；
 上一版第二部分摘要在 2.1.285 清单里是陈旧值（既有状态，测试靠冻结副本绕开，登记时不顺手修）；
 Mac 正式产品观测后端（B4-01）不在本变更集内。
+
+**hello 证据缺口（B；调度者 11-02 决定：不新增 hello probe，VC-2 用静态证据加条件说明处理）**
+
+- **实测事实**（ARM64 零请求启动探测，135 次运行，本地替身、替身 404 口径）：隐私模式 `essential-traffic-no-telemetry`
+  （`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` 加另三个隐私变量）下，2.1.309 的 `-p`／SDK 与 TUI 两条路径**完全不发**
+  `HEAD /api/hello`。对照只去掉 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`（其余隐私变量保留）时，hello 是**第 1 条**连接
+  （UA `Bun/1.4.4`），随后是 settings、policy_limits，并**多出** `GET /api/claude_cli/bootstrap?…` 与 `GET /mcp-registry/v0/servers?…`
+  两条；这三类请求由该变量独占控制。所以 VC-1 的官方 Job（沿用 essential 取证环境）里不会有任何 hello 样本：
+  `SPEC-EP-002`（hello 生命周期探测，出现在 `agency.foreground`、`agency.subagent`、`entrypoint.sdk_cli`、`tool.agent`、`tool.bash`、
+  `transport.connection_reuse`、`transport.http` 等场景的 `covers` 里）以及 `SPEC-TLS-001/003` 范围里含 hello 连接的子项，
+  在官方侧拿不到可比对的样本。
+- **决定**：隐私模式 `essential-traffic-no-telemetry` 不变，**不**新增“不设该变量”的 hello probe。
+- **静态证据出处**（冻结二进制的静态分析提取模块）：模块 `0621-chunk-kgk1q29d.js` 里的预热函数 `R()`，在发出
+  `HEAD {base}/api/hello` 之前依次判断一次性门闩 `preconnectFired`、第一方／网关，然后是 **`if(kt())return;`**，再是代理与客户端证书环境变量；
+  `kt()` 定义在模块 `0038-chunk-tbszz4z7.js`，等价于 `kVt()==="essential-traffic"`，而该模式正是由 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+  触发。2.1.285 的同一函数没有这条判断（是 2.1.290 起的行为变化）。上面的“不设该变量时 hello 仍是第 1 条连接”的对照观测是这段代码的反向印证。
+- **VC-2 的处理方式**：分类阶段对 `SPEC-EP-002` 与 `SPEC-TLS-001/003` 的 hello 子项**不要求官方侧样本**，在分类结论里记为
+  “条件性覆盖：静态证据成立、官方 essential 取证下不可观测”，并写明限定条件——官方 Job 的环境必须设置 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`、
+  静态证据的模块与函数如上、候选侧（网关）的 hello 行为不受影响（候选 Job 本来就没有 hello 规则）。**不得**写成“已由官方实测验证”。
+  规则清单（control 层）与指南第二部分都不为此改动。
+- **风险**：若 VC-2 分类评审**不接受**这份静态证据，补救手段只有新增一个“不设 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`”的 hello 取证 probe。
+  那是 **W 层变更**（v5 目录、场景清单、环境构造），清单一改就必须**重开 Campaign、重做发布认证并重做已完成的采集与认证**（整条认证链作废，
+  按此前口径约 10 小时量级）。因此这条决定要在进入 VC-2 之前由调度者确认静态证据可被接受；该 probe 同时会带出 bootstrap、
+  mcp-registry 等真实用户路径上的请求，那一面目前在采集模式下同样观察不到。
 
 <a id="claude-vc-0"></a>
 ## 4.0 VC-0 冻结升级输入
