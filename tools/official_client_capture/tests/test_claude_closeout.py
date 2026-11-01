@@ -3,8 +3,8 @@
 * 终态合同（``tools/claude_terminal_state.py``）：真实仓库的 production_active 恰是合同生效前基线、三项全等才豁免；合成夹具
   的正负例；历史收据的目录类绑定按收据入库提交回读（临时 Git 仓库）；Go 读侧同款的 Approval 身份核对；
 * 两个门禁消费者：``check_runtime_catalog_projection`` 实检在 Codex 运行投影通过时仍按 Claude 终态缺失、损坏失败关闭，
-  stdout 只有运行投影报告；``evidence_index`` 的 Claude 分支与 Codex 分支的参数边界，以及 Codex 分支的校验位置
-  （指南第四部分 4.9 小节，不再读冻结的第二部分）；
+  stdout 只有运行投影报告；``evidence_index`` 的 Claude 分支与 Codex 分支的参数边界，以及两个分支的校验位置
+  （Codex 指南第四部分 4.9 小节、Claude 指南第四部分 4.8 小节，都不再读冻结的第二部分）；
 * Claude 收尾（``codex_closeout`` 配 ``claude-upgrade-closeout/v1``）：演练仓库上 ``prepare --dry-run`` 零写入、prepare／gates／
   publish 重跑幂等，签出的终态收据通过 Claude 校验器与两个消费者；第二部分摘要连锁在隔离配对夹具上恰是三处唯一替换；
 * 材料读侧：独立解释器在受管根（合成的两棵受管树）上重放 VC-2 批准包与 VC-1 官方观测，含只读复用沿前序取证。
@@ -91,10 +91,29 @@ def commit_all(repo: Path, message: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def claude_guide(note: str) -> str:
-    return (
+def claude_guide(note: str, receipt: str | None = None) -> str:
+    """合成的 Claude 指南。``note`` 写进第二部分（冻结章）；``receipt`` 不为 None 时再追加第四部分及其 4.8 小节
+    （``evidence_index`` Claude 分支的校验位置），其内容就是小节正文。``receipt`` 缺省时与改造前的夹具逐字相同。"""
+
+    text = (
         "# Claude Code 客户端仿真与版本演进手册\n\n# 第一部分 目标\n\n### SPEC-FIXTURE-001 别处\n原文\n\n"
         + CLAUDE_PART2 + "\n\n" + note + "\n\n### SPEC-FIXTURE-001 规则\n旧说明\n\n# 第三部分 实现\n\n结束\n"
+    )
+    if receipt is not None:
+        text += (
+            "\n# 第四部分 版本演进流程\n\n## 4.7 公共控制面\n别的小节\n\n"
+            + evidence_index.CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING + "（升级收尾只改这里）\n\n" + receipt
+            + "\n\n# 第五部分 退休\n\n结束\n"
+        )
+    return text
+
+
+def receipt_note(version: str, receipt_name: str, official: str = OFFICIAL_CAMPAIGN, final: str = FINAL_CAMPAIGN) -> str:
+    """4.8 小节的值表正文：版本、终态收据文件名、官方证据来源 Campaign 与末级 Campaign 各占一行。"""
+
+    return (
+        f"| Active | `{version}` |\n| 终态收据 | `{receipt_name}` |\n"
+        f"| 官方证据来源 Campaign | `{official}` |\n| 末级 Campaign | `{final}` |"
     )
 
 
@@ -228,7 +247,8 @@ class ConsumerTests(unittest.TestCase):
 
     def test_evidence_index_claude_branch(self) -> None:
         root, _dump, _runtime, path = self.combined("index")
-        text = claude_guide(f"官方证据 Campaign {OFFICIAL_CAMPAIGN}，末级 {FINAL_CAMPAIGN}。")
+        # 第二部分（冻结章）里不写 Campaign；坐标只写在第四部分 4.8 小节。
+        text = claude_guide("第二部分不写 Campaign", receipt_note("9.9.9", path.name))
         found = evidence_index.active_campaign_evidence(text, client="claude", root=root)
         receipt = json.loads(path.read_text())
         self.assertEqual(found.version, "9.9.9")
@@ -237,7 +257,8 @@ class ConsumerTests(unittest.TestCase):
         self.assertEqual((found.archive_path, found.archive_sha256, found.archive_bytes),
                          (receipt["evidence_archive"]["path"], receipt["evidence_archive"]["sha256"], receipt["evidence_archive"]["bytes"]))
         with self.assertRaisesRegex(ValueError, "未写明"):
-            evidence_index.active_campaign_evidence(claude_guide(f"只写了 {FINAL_CAMPAIGN}"), client="claude", root=root)
+            evidence_index.active_campaign_evidence(
+                claude_guide("x", f"只写了 {FINAL_CAMPAIGN}"), client="claude", root=root)
         path.unlink()
         with self.assertRaisesRegex(ValueError, "Claude 终态门禁失败"):
             evidence_index.active_campaign_evidence(text, client="claude", root=root)
@@ -249,6 +270,81 @@ class ConsumerTests(unittest.TestCase):
             evidence_index.active_campaign_evidence("", root=root)
         with self.assertRaisesRegex(ValueError, "客户端或仓库根非法"):
             evidence_index.active_campaign_evidence("", client="other")
+
+    # ---- Claude 分支：Active 终态收据的 Campaign 写在指南第四部分 4.8 小节，不再要求第二部分 ----
+
+    def test_evidence_index_claude_branch_ignores_second_part(self) -> None:
+        """第二部分里完全不写 Campaign 时 Claude 分支照样通过；只在第二部分写、4.8 小节缺失则失败（旧位置不再被读）。"""
+        root, _dump, _runtime, path = self.combined("claude-part2")
+        good = receipt_note("9.9.9", path.name)
+        note = "第二部分不写任何 Campaign"
+        found = evidence_index.active_campaign_evidence(claude_guide(note, good), client="claude", root=root)
+        self.assertNotIn(OFFICIAL_CAMPAIGN, note)
+        self.assertEqual((found.official_campaigns, found.canonical_campaign), ((OFFICIAL_CAMPAIGN,), FINAL_CAMPAIGN))
+        # 改动前的写法（Campaign 只写在第二部分、没有第四部分）不再放行。
+        old_style = claude_guide(f"官方证据 Campaign {OFFICIAL_CAMPAIGN}，末级 {FINAL_CAMPAIGN}，版本 9.9.9，{path.name}。")
+        with self.assertRaisesRegex(ValueError, "应恰好出现 1 次，实际 0 次"):
+            evidence_index.active_campaign_evidence(old_style, client="claude", root=root)
+        # 第二部分写全、4.8 小节里却缺 Campaign：同样失败关闭，错误点名缺的项。
+        stuffed_part2 = claude_guide(f"{OFFICIAL_CAMPAIGN} {FINAL_CAMPAIGN} 9.9.9 {path.name}", f"只有版本 9.9.9 和 {path.name}")
+        with self.assertRaisesRegex(ValueError, "Claude 指南 4.8 小节未写明") as raised:
+            evidence_index.active_campaign_evidence(stuffed_part2, client="claude", root=root)
+        self.assertIn(OFFICIAL_CAMPAIGN, str(raised.exception))
+        self.assertIn(FINAL_CAMPAIGN, str(raised.exception))
+
+    def test_evidence_index_claude_branch_requires_each_item(self) -> None:
+        """4.8 小节缺 Active 版本、收据文件名、官方证据来源 Campaign、末级 Campaign 中任一项都失败关闭，且错误点名那一项。"""
+        root, _dump, _runtime, path = self.combined("claude-items")
+        # 官方证据来源与末级 Campaign 必须是互不包含的两个串，缺一个才能被分别点名。
+        full = {"version": "9.9.9", "name": path.name, "official": OFFICIAL_CAMPAIGN, "final": FINAL_CAMPAIGN}
+        evidence_index.active_campaign_evidence(
+            claude_guide("x", receipt_note(full["version"], full["name"])), client="claude", root=root)
+        for key in full:
+            with self.subTest(missing=key):
+                parts = {**full, key: "（已略）"}
+                body = receipt_note(parts["version"], parts["name"], parts["official"], parts["final"])
+                with self.assertRaisesRegex(ValueError, "Claude 指南 4.8 小节未写明.*版本、收据文件名或 Campaign") as raised:
+                    evidence_index.active_campaign_evidence(claude_guide("x", body), client="claude", root=root)
+                self.assertIn(full[key], str(raised.exception))
+
+    def test_evidence_index_claude_section_boundaries(self) -> None:
+        """Claude 小节定位的边界：标题恰好一次；止于下一个一、二级标题；不接受 Codex 的 4.9 标题；后面小节里写的内容不算。"""
+        root, _dump, _runtime, path = self.combined("claude-bounds")
+        heading = evidence_index.CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING
+        good = receipt_note("9.9.9", path.name)
+        # 值表写在紧随其后的另一个二级小节里：不算本节，失败。
+        late = claude_guide("x", "本节什么也没写").replace(
+            "\n\n# 第五部分 退休", "\n\n## 4.9 别的小节\n" + good + "\n\n# 第五部分 退休")
+        with self.assertRaisesRegex(ValueError, "Claude 指南 4.8 小节未写明"):
+            evidence_index.active_campaign_evidence(late, client="claude", root=root)
+        # 标题出现两次：失败关闭。
+        twice = claude_guide("x", good) + f"\n{heading}\n重复\n"
+        with self.assertRaisesRegex(ValueError, "应恰好出现 1 次，实际 2 次"):
+            evidence_index.active_campaign_evidence(twice, client="claude", root=root)
+        # 只有 Codex 指南用的 4.9 标题（同名不同号）不被 Claude 分支接受。
+        codex_heading = evidence_index.ACTIVE_RECEIPT_SECTION_HEADING
+        wrong = claude_guide("x", good).replace(heading, codex_heading)
+        with self.assertRaisesRegex(ValueError, "4.8 当前 Active 终态收据坐标”应恰好出现 1 次，实际 0 次"):
+            evidence_index.active_campaign_evidence(wrong, client="claude", root=root)
+        # 小节切片本身：含值表、不含后一个小节与第五部分。
+        section = evidence_index.active_receipt_section(claude_guide("x", good), heading)
+        self.assertIn(path.name, section)
+        self.assertNotIn("退休", section)
+
+    def test_real_claude_guide_has_the_receipt_section_in_part4(self) -> None:
+        """真实 Claude 指南：4.8 小节恰有一份，落在第四部分之内（不在冻结的第二部分）；当前 Active 是合同生效前基线，无需 Campaign。"""
+        text = (REPO_ROOT / CLAUDE_GUIDE).read_text(encoding="utf-8")
+        section = evidence_index.active_receipt_section(text, evidence_index.CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING)
+        part4_start = text.index("# 第四部分 Claude Code 版本演进流程")
+        part5_start = text.index("# 第五部分 Claude 兼容代码退休附加门禁")
+        self.assertTrue(part4_start < text.index(section) < part5_start)
+        self.assertEqual(text.count(section), 1)
+        # 值表写明当前 Active 版本与“基线豁免”的事实，与 claude_terminal_state 的登记一致。
+        self.assertIn(terminal.PRE_CONTRACT_BASELINE["version"], section)
+        self.assertIn("PRE_CONTRACT_BASELINE", section)
+        # 小节不在第二部分里：第二部分切片不含这个标题。
+        part2 = text[text.index(CLAUDE_PART2): text.index("# 第三部分")]
+        self.assertNotIn(evidence_index.CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING, part2)
 
     # ---- Codex 分支：Active 终态收据的 Campaign 写在指南第四部分 4.9 小节，不再要求第二部分 ----
 
@@ -366,7 +462,8 @@ class ClaudeCloseoutTests(unittest.TestCase):
                          "classification_sha256": "a" * 64, "official_stage_sha256": "b" * 64}
         write_json(self.root / "material.json", self.material)
         write_json(self.root / "facts.json", facts)
-        self.new_guide = claude_guide(f"经审核的新规则；官方证据 Campaign {OFFICIAL_CAMPAIGN}，末级 {FINAL_CAMPAIGN}。")
+        # 第二部分有改动（触发三处摘要连锁），但 Campaign 坐标只写在第四部分 4.8 小节。
+        self.new_guide = claude_guide("经审核的新规则", receipt_note("9.9.9", Path(TERMINAL_RELATIVE).name))
         (self.root / "guide.md").write_text(self.new_guide)
         (self.root / "env.sh").write_text("# 隔离门禁参数\n")
         (self.root / "driver").mkdir()

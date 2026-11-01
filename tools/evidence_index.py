@@ -835,36 +835,34 @@ def _load_sibling(name: str, relative: str):
     return module
 
 
-def _part2_by_heading(text: str, heading: str) -> str:
-    """按客户端表登记的第二部分标题切出第二部分（边界规则与 ``spec_status.second_part`` 相同：标题恰好一次，止于第三部分）。"""
-
-    starts = list(re.finditer(r"^" + re.escape(heading) + r"\s*$", text, re.M))
-    if len(starts) != 1:
-        raise ValueError(f"“{heading}”应恰好出现 1 次，实际 {len(starts)} 次")
-    end_match = re.search(r"^# 第三部分(?:\s|$)", text[starts[0].end():], re.M)
-    if end_match is None:
-        raise ValueError("缺少第二部分之后的“# 第三部分”边界")
-    return text[starts[0].start(): starts[0].end() + end_match.start()]
-
-
 # Codex 指南里“Active 终态收据坐标”的存放小节标题（第四部分 4.9）。
 # 为什么不放第二部分：第二部分是冻结章，它的“第二章摘要”被各版场景清单、规则清单和两个检查器钉住，
 # 这些文件都在受管工具 tools/official_client_capture 内；每轮升级收尾为了写明新 Active 的 Campaign 而改第二部分，
 # 就要付一整套摘要连锁（约 40 分钟）并让受管工具身份变化。第四部分不受摘要钉住，只需冻结承接收据，所以收尾只改这里。
 ACTIVE_RECEIPT_SECTION_HEADING = "## 4.9 当前 Active 终态收据坐标"
 
+# Claude 指南里同一用途的小节标题（第四部分 4.8，紧接 4.7 之后、第五部分之前）。
+# 为什么不放第二部分：Claude 指南第二部分同样是冻结章——它的章节摘要（``source_spec_section_sha256(指南, "第二部分")``）被
+# ``claude_upgrade_scenarios_*.json`` 的 ``source_spec.sha256`` 钉住，并连锁到 ``claude_rule_expectations_*.json`` 的
+# ``generated_from.scenarios.sha256`` 与 ``claude_rule_assertion.py`` 的 ``FROZEN_PROFILE_SHA256S``，三处都在受管工具
+# ``tools/official_client_capture`` 内；每轮 Claude 升级收尾为了写明新 Active 的 Campaign 而改第二部分，就要付这一整套摘要连锁
+# 并让受管工具身份变化。第四部分不受任何章节摘要钉住（场景清单 schema 把 ``source_spec.fragment`` 限定为“第二部分”），
+# 只需冻结承接收据，所以收尾只改这里。
+CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING = "## 4.8 当前 Active 终态收据坐标"
 
-def active_receipt_section(text: str) -> str:
-    """切出指南第四部分 4.9 小节（标题恰好出现一次，止于下一个一、二级标题或文末）。
 
+def active_receipt_section(text: str, heading: str = ACTIVE_RECEIPT_SECTION_HEADING) -> str:
+    """切出指南第四部分的“Active 终态收据坐标”小节（标题恰好出现一次，止于下一个一、二级标题或文末）。
+
+    ``heading`` 缺省是 Codex 指南的 4.9 标题；Claude 指南传 ``CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING``（4.8）。
     小节里必须写明当前 Active 终态收据的版本、收据文件名、官方证据来源 Campaign 与末级 Campaign；
-    ``active_campaign_evidence`` 的 Codex 分支据此失败关闭。标题行以 ``ACTIVE_RECEIPT_SECTION_HEADING`` 开头，
+    ``active_campaign_evidence`` 的 Codex 分支与 ``claude_campaign_evidence`` 据此失败关闭。标题行以 ``heading`` 开头，
     后面允许带括号等补充说明，所以按“行首匹配前缀”定位，不要求整行相等。
     """
 
-    starts = list(re.finditer(r"^" + re.escape(ACTIVE_RECEIPT_SECTION_HEADING) + r"[^\n]*$", text, re.M))
+    starts = list(re.finditer(r"^" + re.escape(heading) + r"[^\n]*$", text, re.M))
     if len(starts) != 1:
-        raise ValueError(f"“{ACTIVE_RECEIPT_SECTION_HEADING}”应恰好出现 1 次，实际 {len(starts)} 次")
+        raise ValueError(f"“{heading}”应恰好出现 1 次，实际 {len(starts)} 次")
     end_match = re.search(r"^#{1,2} ", text[starts[0].end():], re.M)
     end = starts[0].end() + end_match.start() if end_match else len(text)
     return text[starts[0].start(): end]
@@ -874,12 +872,13 @@ def claude_campaign_evidence(text: str, root: pathlib.Path) -> CampaignEvidence 
     """Claude 当前生产版本的 Campaign 封存证据坐标（Claude 升级控制面设计 B5b-06）。
 
     按 ``tools/claude_terminal_state.py`` 的当前生产终态门禁取 production_active 的终态收据：门禁失败即失败关闭；合同生效前
-    的 2.1.226 基线精确豁免、没有终态收据与 Campaign 链，返回 None（没有 C 类证据可登记）。有收据时与 Codex 同一口径：官方
-    证据来源与末级 Campaign 必须写进 Claude 指南第二部分，私有归档坐标取收据的 ``evidence_archive``。
+    的 2.1.226 基线精确豁免、没有终态收据与 Campaign 链，返回 None（没有 C 类证据可登记）。有收据时与 Codex 同一口径：
+    Active 版本、终态收据文件名、官方证据来源与末级 Campaign 必须同时写进 Claude 指南第四部分
+    ``CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING`` 小节（4.8，不冻结），缺一项失败关闭；不再读第二部分（冻结章，改它要付章节摘要连锁
+    并改受管工具身份）。私有归档坐标取收据的 ``evidence_archive``。
     """
 
     terminal = _load_sibling("claude_terminal_state", "claude_terminal_state.py")
-    row = _load_sibling("evidence_index_client_table", "ci/client_table.py").spec("claude")
     try:
         state, current = terminal.current_terminal_receipt(root)
     except terminal.TerminalStateError as error:
@@ -890,10 +889,15 @@ def claude_campaign_evidence(text: str, root: pathlib.Path) -> CampaignEvidence 
     chain = receipt["campaign_chain"]
     official = tuple(str(link["campaign_id"]) for link in chain if link.get("role") == "official_evidence_source")
     canonical = str(chain[-1]["campaign_id"])
-    part = _part2_by_heading(text, str(row["guide_part2_heading"]))
-    missing = [campaign for campaign in (*official, canonical) if campaign not in part]
+    # 校验位置：Claude 指南第四部分 4.8 小节（不冻结），不再是第二部分。
+    section = active_receipt_section(text, CLAUDE_ACTIVE_RECEIPT_SECTION_HEADING)
+    missing = [
+        item
+        for item in (str(state["version"]), path.name, *official, canonical)
+        if item not in section
+    ]
     if missing:
-        raise ValueError(f"Claude 第二部分未写明 {state['version']} 终态收据的 Campaign：{missing}")
+        raise ValueError(f"Claude 指南 4.8 小节未写明 {state['version']} 终态收据的版本、收据文件名或 Campaign：{missing}")
     archive = receipt["evidence_archive"]
     return CampaignEvidence(
         version=str(state["version"]),

@@ -2741,6 +2741,30 @@ Framework、本指南与共享实现文档都是受管依赖。部署清单登�
 事务切换；源码修改不等于服务器已部署。部署后重新安装／复验驱动，核对 Git 可执行位、数据根和测试树的
 文档／工具／部署收据一致，详情见[共享实现文档](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
 
+<a id="claude-active-receipt"></a>
+## 4.8 当前 Active 终态收据坐标（升级收尾只改这里，不碰第二部分）
+
+**这一节是 `tools/evidence_index.py` 里 Claude 分支（`claude_campaign_evidence`）的校验位置。** 当前生产版本（Release 目录 `production_active`）有终态收据时，索引工具取该收据，然后要求**本节**同时写明：Active 版本号、终态收据文件名、官方证据来源 Campaign 与末级（最终）Campaign；缺一项即失败关闭。
+以前这项校验读的是第二部分，而第二部分是冻结章：它的章节摘要（`source_spec_section_sha256(指南, "第二部分")`）被 `claude_upgrade_scenarios_*.json` 的 `source_spec.sha256` 钉住，并连锁到 `claude_rule_expectations_*.json` 的 `generated_from.scenarios.sha256` 与 `claude_rule_assertion.py` 的 `FROZEN_PROFILE_SHA256S`，
+这三处都在受管工具 `tools/official_client_capture` 之内，所以每轮 Claude 升级收尾为了写明新 Campaign 而改第二部分，就要付这一整套摘要连锁并让受管工具身份变化。本节在第四部分，不被任何章节摘要钉住（场景清单 schema 把 `source_spec.fragment` 限定为“第二部分”），只需要冻结承接收据，所以改在这里。
+
+| 项 | 当前值（2.1.226） |
+|---|---|
+| Active／Previous | `claude-code 2.1.226`（Release 目录 `production_active`）／无登记 |
+| 终态收据 | 无：2.1.226 是合同生效前的基线，由 `tools/claude_terminal_state.py` 的 `PRE_CONTRACT_BASELINE` 精确豁免（版本、release 摘要、Approval 摘要三项全等），不补签终态收据 |
+| 审计索引 | 无（同上；私有归档坐标取新终态收据的 `evidence_archive`） |
+| 官方证据来源 Campaign | 无（同上；基线没有新控制面的 Campaign 链） |
+| 末级（最终）Campaign | 无（同上） |
+
+当前 Active 是上述豁免基线时，`claude_campaign_evidence` 直接返回“无 C 类证据可登记”，**不读本节**；第一次 Claude 升级收尾签出终态收据之后才需要按下面的清单把五行换成真实值。
+
+**Claude 升级收尾“该改哪里”清单。**
+1. 本节：把上表五行换成新 Active 的值（版本；终态收据文件名 `CLAUDE_CODE_<上一版>_TO_<新版>_TERMINAL_STATE_RECEIPT.json`；审计索引；官方证据来源 Campaign，取新终态收据 `campaign_chain` 里 `role` 为 `official_evidence_source` 的各项；末级 Campaign，取 `campaign_chain` 的最后一项）。
+   校验：在已放入新终态收据的仓库根执行 `PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import pathlib,sys; sys.path.insert(0, 'tools'); import evidence_index as e; print(e.active_campaign_evidence(pathlib.Path('docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md').read_text(encoding='utf-8'), client='claude'))"`，应打印出包含版本、收据路径、两个 Campaign 与私有归档坐标的结果（`python3 -B tools/evidence_index.py --check` 只校验 Codex 分支，不覆盖这里）。
+2. **第二部分一个字节都不改**：改完核对 `claude_upgrade_plan.guide_section_sha256(指南, "第二部分")` 仍与基点相同；摘要不变，就没有场景清单、期望清单和 `FROZEN_PROFILE_SHA256S` 的三处连锁替换，受管工具身份也不变。
+3. 第二部分正文里仍写着“当前基线是某版本”的位置会比实际 Active 落后一版，这是预期现象，**以本节与 Release 目录为准**；这些位置只在下一次 Claude 版本登记时统一改（登记本来就要重算第二部分摘要连锁，那一次顺手改，不额外付费）。
+4. 本节改动属于指南（冻结路径）的修改，收尾提交后照常补一份冻结承接收据，源码提交与收据分开提交。
+
 ---
 
 # 第五部分 Claude 兼容代码退休附加门禁
